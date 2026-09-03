@@ -78,6 +78,17 @@ def _require_strategy(name: object) -> StrategySelection:
     before ``cls(nested_strategy=...)`` because ``None`` is the dataclass's
     legitimate "no strategy override" default - without a factory-side
     check, ``strategy(None)`` would become a silent no-op.
+
+    The typed rejection is unconditional and owned by
+    ``nested_fetch.resolve_strategy`` itself: every dunder its dispatch reads
+    (``__eq__`` through the base ``str`` slot, ``__hash__`` in the registry
+    lookup, ``__repr__`` in the message, the ``plan`` attribute read) is
+    guarded there, so a hostile selection value degrades to the typed
+    ``ConfigurationError`` and no raw exception can reach this boundary to
+    be contained. This factory check keeps only its own contract: an
+    explicit ``None`` must reject here rather than resolve the
+    ``NESTED_CONNECTION_STRATEGY`` setting the way ``resolve_strategy(None)``
+    legitimately does.
     """
     if name is None:
         raise ConfigurationError(

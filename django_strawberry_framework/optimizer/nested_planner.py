@@ -29,6 +29,7 @@ from ..keyset import (
     resolve_declared_cursor_state,
 )
 from ..utils.connections import (
+    ConnectionWindowBounds,
     FetchMode,
     UnwindowableConnection,
     derive_connection_window_bounds,
@@ -36,9 +37,14 @@ from ..utils.connections import (
     has_connection_sidecar_kwargs,
     window_range_plan,
 )
+
+# Re-exported under its historical private name: the walker aliases
+# ``optimizer.walker._relay_max_results_from_info`` off this module, and
+# ``tests/optimizer/test_walker.py`` imports it from there. The dig itself now
+# has one owner in ``utils/connections.py``, shared with the resolve-time cap.
+from ..utils.connections import relay_max_results_from_info as _relay_max_results_from_info
 from ..utils.imports import import_attr_if_importable
 from ..utils.relations import instance_accessor
-from ..utils.typing import schema_config_from_info
 from . import logger
 from .hints import hint_is_skip
 from .join_taxonomy import RelationJoinDescriptor, classify_relation_join
@@ -766,22 +772,6 @@ def _connection_node_selections(
     return connection_node_children(sel, runtime_prefixes=runtime_paths, names=names)
 
 
-def _relay_max_results_from_info(info: Any) -> int | None:
-    """Resolve ``relay_max_results`` from the planner's graphql-core ``info``.
-
-    The walker runs at the optimizer extension's middleware layer, where ``info``
-    is the raw graphql-core ``GraphQLResolveInfo`` whose ``.schema`` is a bare
-    ``GraphQLSchema`` with NO ``.config`` (unlike the resolve-time Strawberry
-    ``Info`` ``SliceMetadata.from_arguments`` expects). The config dig lives in
-    ``utils/typing.py::schema_config_from_info`` (shared with the walker's name
-    converter and ``resolve_relay_max_results``) so this helper never
-    dereferences ``info.schema.config`` itself. Returns ``None`` when no config
-    is reachable so the engine default applies downstream - deliberately distinct
-    from ``resolve_relay_max_results``'s terminal ``100``.
-    """
-    return getattr(schema_config_from_info(info), "relay_max_results", None)
-
-
 def _coerce_pagination_int(value: Any) -> Any:
     """Coerce a pagination ``first`` / ``last`` argument to ``int`` when int-like.
 
@@ -803,8 +793,15 @@ def _coerce_pagination_int(value: Any) -> Any:
 def _connection_window_slice_from_arguments(
     arguments: dict[str, Any],
     info: Any,
-) -> tuple[int, int | None, bool] | None:
-    """Resolve the window ``(offset, limit, reverse)`` from one argument payload.
+) -> ConnectionWindowBounds | None:
+    """Resolve the window bounds from one argument payload.
+
+    Returns the ``ConnectionWindowBounds`` the shared derivation already built,
+    rather than immediately destructuring it into an anonymous 3-tuple: the
+    tuple carried the same three fields with none of their names, and every
+    consumer down the chain had to re-spell ``(offset, limit, reverse)`` in the
+    right order to get them back.
+
 
     The planner-side adapter over the shared
     ``utils/connections.py::derive_connection_window_bounds`` contract (so the
@@ -855,7 +852,7 @@ def _connection_window_slice_from_arguments(
         )
     except (ValueError, TypeError):
         return None
-    return bounds.offset, bounds.limit, bounds.reverse
+    return bounds
 
 
 def _keyset_window_slice_from_arguments(
@@ -865,7 +862,7 @@ def _keyset_window_slice_from_arguments(
     columns: tuple[Any, ...],
     fingerprint: str,
 ) -> tuple[tuple[int, int | None, bool], KeysetSeek | None] | None:
-    """Resolve one keyset window ``((offset, limit, reverse), seek)`` per payload.
+    """Resolve one keyset window ``(bounds, seek)`` per payload.
 
     The keyset twin of ``_connection_window_slice_from_arguments``, forking
     BEFORE the offset engine (``SliceMetadata`` cannot parse a value cursor):
@@ -917,7 +914,7 @@ def _keyset_window_slice_from_arguments(
         )
     except (GraphQLError, ValueError, TypeError):
         return None
-    return (bounds.offset, bounds.limit, bounds.reverse), seek
+    return bounds, seek
 
 
 def _divergent_key_windows(
@@ -925,7 +922,7 @@ def _divergent_key_windows(
     info: Any,
     keyset_context: DeclaredCursorState | None = None,
 ) -> tuple[
-    list[tuple[str | None, tuple[int, int | None, bool], KeysetSeek | None]],
+    list[tuple[str | None, ConnectionWindowBounds, KeysetSeek | None]],
     list[str | None],
     list[tuple[str | None, str]],
 ]:
@@ -954,8 +951,7 @@ def _divergent_key_windows(
       per-parent pipeline raises that alias's own validation error). A
       ``None`` key is the shared-window scheme: the caller records every
       identity, matching the pre-fold single-window write;
-    - otherwise the key's ``(offset, limit, reverse)`` window joins
-      ``planned``.
+    - otherwise the key's ``ConnectionWindowBounds`` window joins ``planned``.
 
     ``keyset_context`` routes every key through the keyset window adapter
     instead (each alias decodes its OWN ``after:`` cursor into its own
@@ -967,7 +963,7 @@ def _divergent_key_windows(
     SKIP, join windowability, child-queryset safety) stay whole-relation in
     ``plan_connection_relation``.
     """
-    planned: list[tuple[str | None, tuple[int, int | None, bool], KeysetSeek | None]] = []
+    planned: list[tuple[str | None, ConnectionWindowBounds, KeysetSeek | None]] = []
     malformed: list[str | None] = []
     fallbacks: list[tuple[str | None, str]] = []
     for resp_key, key_arguments in response_key_arguments.items():
@@ -993,8 +989,7 @@ def _divergent_key_windows(
         if window is None:
             malformed.append(resp_key)
             continue
-        _offset, limit, reverse = window
-        if reverse and limit == 0:
+        if window.reverse and window.limit == 0:
             fallbacks.append((resp_key, "last: 0"))
             continue
         planned.append((resp_key, window, seek))
@@ -1357,8 +1352,12 @@ def plan_connection_relation(
     strategy = _select_nested_strategy(hints_map.get(relation_field_name))
     planned_keys: list[str | None] = []
     advised = False
-    for resp_key, (offset, limit, reverse), window_seek in keyed_windows:
-        range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
+    for resp_key, bounds, window_seek in keyed_windows:
+        range_plan = window_range_plan(
+            offset=bounds.offset,
+            limit=bounds.limit,
+            reverse=bounds.reverse,
+        )
         # Count policy, derived
         # from the ONE shared ``FetchMode`` value instead of two independent
         # expressions: ``COUNTED`` annotates the per-partition ``Count(1) OVER``
@@ -1383,9 +1382,9 @@ def plan_connection_relation(
             child_queryset=child_queryset,
             join=join,
             order_by=tuple(order_by),
-            offset=offset,
-            limit=limit,
-            reverse=reverse,
+            offset=bounds.offset,
+            limit=bounds.limit,
+            reverse=bounds.reverse,
             with_total_count=with_total_count,
             next_page_probe=next_page_probe,
             keyset_seek=window_seek,

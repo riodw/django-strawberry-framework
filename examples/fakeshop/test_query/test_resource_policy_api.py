@@ -21,8 +21,12 @@ Row groups, in the order a request meets them:
   container width, value depth, input nodes, scalar bytes, uploads) - charged
   over a TINY document carrying a LARGE variable payload, which is the shape
   document limits cannot see, including the two shapes only a real request
-  builds: one variable spliced into two fields (the same Python object twice) and
-  a nested value whose depth no bracket in the document reflects;
+  builds: one variable spliced into two fields (the same Python object twice)
+  and a nested value whose depth no bracket in the document reflects;
+- the raw-pk relation id sets - the write inputs whose relation ids render as
+  raw pks rather than ``GlobalID``s (``[Int!]`` on the wire), charged against
+  the relation bounds through their bind specs rather than the id scalar's
+  name, with the GlobalID twins and the aggregate kept honest beside them;
 - introspection, charged like any other document shape rather than exempted;
 - the collection bounds the fields enforce (raw-list rows, connection page size,
   and the list sibling that used to bypass the connection cap);
@@ -42,6 +46,7 @@ import json
 from functools import cache
 
 import pytest
+from apps.library import models as library_models
 from apps.products.services import seed_data
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -140,6 +145,7 @@ MAX_ALIASES = 3
 MAX_COST = 5_000
 MAX_LIST_ROWS = 3
 MAX_PAGE_SIZE = 5
+MAX_NESTED_ROWS = 2
 MAX_NODE_IDS = 3
 MAX_MEMBERSHIP = 4
 MAX_RELATION_IDS = 2
@@ -175,6 +181,7 @@ urlpatterns = [
         _probe_view(max_selections=MAX_SELECTIONS, max_aliases=MAX_ALIASES),
     ),
     path("rp-cost/", _probe_view(max_collection_cost=MAX_COST)),
+    path("rp-nested-rows/", _probe_view(max_nested_rows=MAX_NESTED_ROWS)),
     path("rp-values/", _probe_view(**_VALUE_BOUNDS)),
     path("rp-value-depth/", _probe_view(max_value_depth=MAX_VALUE_DEPTH)),
     path("rp-deadline/", _probe_view(execution_deadline_seconds=DEADLINE_SECONDS)),
@@ -368,6 +375,53 @@ def test_an_explicit_small_page_narrows_the_collection_cost():
 # Value bounds: a tiny document carrying a large variable payload
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.django_db
+def test_a_nested_row_list_over_the_bound_is_rejected():
+    """A list of input objects is a nested row set, charged on ``max_nested_rows``.
+
+    The ``and`` combinator is a list of filter input objects - the same shape a
+    nested serializer / formset payload presents on a write. Three branches
+    against a bound of two must reject on ``max_nested_rows`` specifically: a
+    row that only widened ``max_container_width`` or ``max_input_nodes`` would
+    let the bound silently stop applying to the nested-row shape.
+    """
+    branches = ", ".join('{ name: { exact: "x" } }' for _ in range(MAX_NESTED_ROWS + 1))
+    query = "{ allLibraryGenres(filter: { and: [%s] }) { name } }" % branches
+    extensions = _rejection(_post("/rp-nested-rows/", query))
+    assert extensions["bound"] == "max_nested_rows"
+    assert extensions["charged"] == MAX_NESTED_ROWS + 1
+
+
+@pytest.mark.django_db
+def test_a_nested_row_list_at_the_bound_is_not_rejected():
+    branches = ", ".join('{ name: { exact: "x" } }' for _ in range(MAX_NESTED_ROWS))
+    query = "{ allLibraryGenres(filter: { and: [%s] }) { name } }" % branches
+    _no_rejection(_post("/rp-nested-rows/", query))
+
+
+@pytest.mark.django_db
+def test_a_nested_row_list_rides_in_through_one_variable():
+    """The tiny-document / large-variable shape, on the nested-rows bound.
+
+    ``$f`` carries the whole row list in a variable, so no document bracket
+    reflects its width - the same tiny-document/large-payload shape the other
+    value bounds are charged from, here answered from the declared input type
+    of ``and`` rather than from any bracket in the text.
+    """
+    rows = [{"name": {"exact": "x"}}] * (MAX_NESTED_ROWS + 1)
+    extensions = _rejection(
+        _post(
+            "/rp-nested-rows/",
+            "query R($f: [GenreFilterInputType!]) { "
+            "allLibraryGenres(filter: { and: $f }) { name } }",
+            {"f": rows},
+        ),
+    )
+    assert extensions["bound"] == "max_nested_rows"
+    assert extensions["charged"] == MAX_NESTED_ROWS + 1
+
+
 _NODES = "query N($ids: [ID!]!) { nodes(ids: $ids) { __typename } }"
 _GENRE_IN = "query G($ids: [String!]) { allLibraryGenres(filter: { id: { in: $ids } }) { name } }"
 _GENRE_FILTER = "query G($f: GenreFilterInputType) { allLibraryGenres(filter: $f) { name } }"
@@ -528,8 +582,245 @@ def test_one_variable_spliced_into_two_mutation_fields_is_charged_twice():
     assert extensions["charged"] == 4
 
 
+# ---------------------------------------------------------------------------
+# Raw-pk relation id sets: the write input's own bind record, not the scalar name
+# ---------------------------------------------------------------------------
+
+
+#: A ``Shelf`` write carries raw-pk relation lists on every flavor (the related
+#: ``BranchType`` primary is non-Relay, so the ids render ``[Int!]``), while the
+#: ``Book`` writes are the GlobalID twins (``[ID!]``). A name-keyed rule charges
+#: the ``[ID!]`` twins and passes every raw-pk list as a membership list; the
+#: bind specs - the same records the request-time decode walks - are what
+#: classify both spellings alike.
+_RAW_PK_SHELF_MODEL = (
+    "mutation S($d: ShelfAlt_ubranchesBranchCodeInput!) { createShelf(data: $d) "
+    "{ result { code } errors { field messages } } }"
+)
+_RAW_PK_SHELF_FORM = (
+    "mutation S($d: ShelfRelationsFormInput!) { createShelfViaForm(data: $d) "
+    "{ result { code } errors { field messages } } }"
+)
+_RAW_PK_SHELF_SERIALIZER = (
+    "mutation S($d: AltBranchesShelfSerializerInput!) { "
+    "createShelfViaAltBranchesSerializer(data: $d) "
+    "{ result { code } errors { field messages } } }"
+)
+_GLOBAL_ID_SERIALIZER_UPDATE = (
+    "mutation U($id: ID!, $d: BookGenresSerializerPartialInput!) { "
+    "updateBookGenresViaSerializer(id: $id, data: $d) "
+    "{ node { title } errors { field messages } } }"
+)
+
+
+def _data_input_type(field: str) -> str:
+    """Return the generated input type name of a mutation field's ``data`` argument.
+
+    Serializer hook-derived input names carry a descriptor digest, so the nested
+    row's input type is read off the probe schema instead of being hard-coded.
+    """
+    mutation_field = _probe_schema(())._schema.mutation_type.fields[field]
+    argument_type = mutation_field.args["data"].type
+    while hasattr(argument_type, "of_type"):
+        argument_type = argument_type.of_type
+    return argument_type.name
+
+
 @pytest.mark.django_db
-def test_a_deeply_nested_variable_value_is_rejected_on_value_depth():
+def test_a_raw_pk_model_relation_list_over_the_bound_is_rejected():
+    """A raw-pk relation list charges the relation bound, like its GlobalID twin.
+
+    The wire item type of a raw-pk relation is ``Int`` - ``createShelf``'s
+    ``altBranches`` renders ``[Int!]`` - so a classification keyed on the
+    ``ID`` scalar name never saw these lists and the relation bound was free
+    for every non-Relay write. The bind spec the owning mutation stashed is
+    what classifies the list: width 3 against a per-mutation bound of 2.
+    """
+    variables = {"d": {"code": "RP-Model", "altBranches": [1, 1, 1]}}
+    extensions = _rejection(_post("/rp-values/", _RAW_PK_SHELF_MODEL, variables))
+    assert extensions["bound"] == "max_relation_ids_per_mutation"
+    assert extensions["charged"] == MAX_RELATION_IDS + 1
+
+
+@pytest.mark.django_db
+def test_a_raw_pk_form_relation_list_over_the_bound_is_rejected():
+    """The FORM flavor's raw-pk M2M charges the relation bound like its model twin."""
+    extensions = _rejection(
+        _post(
+            "/rp-values/",
+            _RAW_PK_SHELF_FORM,
+            {"d": {"code": "RP-F", "altBranches": [1, 1, 1]}},
+        ),
+    )
+    assert extensions["bound"] == "max_relation_ids_per_mutation"
+    assert extensions["charged"] == MAX_RELATION_IDS + 1
+
+
+@pytest.mark.django_db
+def test_a_raw_pk_serializer_relation_list_over_the_bound_is_rejected():
+    """The SERIALIZER flavor's raw-pk M2M charges the relation bound like its twins."""
+    extensions = _rejection(
+        _post(
+            "/rp-values/",
+            _RAW_PK_SHELF_SERIALIZER,
+            {"d": {"code": "RP-2", "altBranches": [1, 1, 1]}},
+        ),
+    )
+    assert extensions["bound"] == "max_relation_ids_per_mutation"
+    assert extensions["charged"] == MAX_RELATION_IDS + 1
+
+
+@pytest.mark.django_db
+def test_a_nested_serializer_row_relation_list_is_charged_against_the_field():
+    """A raw-pk relation list inside a NESTED row charges its enclosing field.
+
+    ``createBranchWithNestedShelves`` carries ``shelves: [<row>!]``, and each row
+    exposes a raw-pk ``altBranches`` list. The nested rows' own bind specs (the
+    ``nested_specs`` records on the enclosing field's spec) classify the nested
+    list, so a hostile client cannot park relation ids a level deep where the
+    scalar name - absent here - would never see them.
+    """
+    input_type = _data_input_type("createBranchWithNestedShelves")
+    mutation = (
+        "mutation N($d: " + input_type + "!) { createBranchWithNestedShelves(data: $d) "
+        "{ result { id } errors { field messages } } }"
+    )
+    variables = {
+        "d": {"name": "RP-Nested", "shelves": [{"code": "RP-N1", "altBranches": [1, 1, 1]}]},
+    }
+    extensions = _rejection(_post("/rp-values/", mutation, variables))
+    assert extensions["bound"] == "max_relation_ids_per_mutation"
+    assert extensions["charged"] == MAX_RELATION_IDS + 1
+
+
+@pytest.mark.django_db
+def test_a_global_id_relation_list_still_charges_the_relation_bound():
+    """The ``ID``-typed twin keeps its bound - the spec and the name agree there.
+
+    The serializer UPDATE shape's relation list rides ``GlobalID``; it charged
+    correctly under the name rule and must keep doing so under the spec rule,
+    which only ever ADDS a signal, never replaces the fallback for inputs the
+    package did not generate.
+    """
+    extensions = _rejection(
+        _post(
+            "/rp-values/",
+            _GLOBAL_ID_SERIALIZER_UPDATE,
+            {"id": "Qm9vazox", "d": {"genres": ["1", "2", "3"]}},
+        ),
+    )
+    assert extensions["bound"] == "max_relation_ids_per_mutation"
+    assert extensions["charged"] == MAX_RELATION_IDS + 1
+
+
+@pytest.mark.django_db
+def test_raw_pk_relation_lists_at_the_bound_execute():
+    """The bound is a ceiling over legal writes, not a wall in front of them.
+
+    Two visible branches at a per-field bound of two run the whole decode +
+    write path: the bound charges the shape, and a legal width still writes.
+    """
+    home = library_models.Branch.objects.create(name="RPHome", city="open")
+    alt1 = library_models.Branch.objects.create(name="RPAlt1", city="open")
+    alt2 = library_models.Branch.objects.create(name="RPAlt2", city="open")
+    payload = _post(
+        "/rp-values/",
+        _RAW_PK_SHELF_MODEL,
+        {"d": {"code": "RP-OK", "branchId": home.pk, "altBranches": [alt1.pk, alt2.pk]}},
+    )
+    _no_rejection(payload)
+    assert payload["data"]["createShelf"]["result"]["code"] == "RP-OK"
+    shelf = library_models.Shelf.objects.get(code="RP-OK")
+    assert set(shelf.alt_branches.values_list("pk", flat=True)) == {alt1.pk, alt2.pk}
+
+
+@pytest.mark.django_db
+def test_raw_pk_relation_ids_across_fields_accumulate_in_the_aggregate():
+    """Two raw-pk writes that each pass the per-field bound exhaust the request's total.
+
+    The aggregate is the bound that sees a batch assembled out of
+    individually-legal writes, whatever flavor each write rides. Two model
+    fields of two raw-pk ids apiece are 4 against an aggregate of 3 - and the
+    per-field counter reset between them is what proves the aggregate is a
+    separate budget, not the per-field one misfiring.
+    """
+    mutation = """
+    mutation S($a: ShelfAlt_ubranchesBranchCodeInput!, $b: ShelfAlt_ubranchesBranchCodeInput!) {
+      first: createShelf(data: $a) { result { code } }
+      second: createShelf(data: $b) { result { code } }
+    }
+    """
+    variables = {
+        "a": {"code": "RP-A", "altBranches": [1, 2]},
+        "b": {"code": "RP-2", "altBranches": [1, 2]},
+    }
+    extensions = _rejection(_post("/rp-values/", mutation, variables))
+    assert extensions["bound"] == "max_relation_ids_total"
+    assert extensions["charged"] == 4
+
+
+@pytest.mark.django_db
+def test_a_global_id_relation_and_a_raw_pk_relation_share_one_aggregate():
+    """One aggregate budget, two spellings of the same write.
+
+    The request batches a raw-pk model write (2 ids) with a GlobalID serializer
+    update (2 ids): both charge ``max_relation_ids_total``, so a batch assembled
+    from differently-typed relation lists cannot spend more than one budget.
+    """
+    mutation = """
+    mutation M($s: ShelfAlt_ubranchesBranchCodeInput!, $d: BookGenresSerializerPartialInput!, $id: ID!) {
+      shelf: createShelf(data: $s) { result { code } }
+      book: updateBookGenresViaSerializer(id: $id, data: $d) { node { title } }
+    }
+    """
+    variables = {
+        "s": {"code": "RP-3", "altBranches": [1, 2]},
+        "id": "Qm9vazox",
+        "d": {"genres": ["1", "2"]},
+    }
+    extensions = _rejection(_post("/rp-values/", mutation, variables))
+    assert extensions["bound"] == "max_relation_ids_total"
+    assert extensions["charged"] == 4
+
+
+@pytest.mark.django_db
+def test_a_nested_row_relation_list_at_the_bound_is_not_rejected():
+    """The under-boundary half on the nested tier: one row of one id stays legal."""
+    input_type = _data_input_type("createBranchWithNestedShelves")
+    mutation = (
+        "mutation N($d: " + input_type + "!) { createBranchWithNestedShelves(data: $d) "
+        "{ result { id } errors { field messages } } }"
+    )
+    variables = {"d": {"name": "RP-NestedOK", "shelves": [{"code": "RP-N2", "altBranches": [1]}]}}
+    _no_rejection(_post("/rp-values/", mutation, variables))
+
+
+@pytest.mark.django_db
+def test_a_membership_list_inside_a_generated_mutation_input_stays_membership():
+    """Spec-keyed classification charges only RELATION fields as relations.
+
+    ``ShelfAlt_ubranchesBranchCodeInput.branchId`` is a raw-pk SINGLE relation
+    (one id, not a list); its sibling ``code`` is a scalar. Neither is a relation
+    LIST, so a raw-pk write carrying only those reaches the resolver with no
+    resource rejection - the control proving the spec signal charges only the
+    LIST fields that ARE relations, which is what keeps
+    ``test_raw_pk_relation_lists_at_the_bound_execute``'s legal write (one FK +
+    a two-id list) under the per-field bound of two.
+    """
+    mutation = (
+        "mutation S($d: ShelfAlt_ubranchesBranchCodeInput!) { createShelf(data: $d) "
+        "{ result { code } errors { field messages } } }"
+    )
+    payload = _post(
+        "/rp-values/",
+        mutation,
+        {"d": {"code": "RP-OK", "branchId": 1}},
+    )
+    _no_rejection(payload)
+
+
+@pytest.mark.django_db
+def test_a_deeply_nested_variable_value_is_bounded_by_value_depth():
     """The bound the pre-parse depth scan structurally cannot supply.
 
     ``max_depth`` counts brackets in the document TEXT; this document has three
@@ -630,6 +921,23 @@ def test_an_oversized_upload_is_rejected_by_the_policy_not_by_the_body_cap():
 # ---------------------------------------------------------------------------
 
 
+# TODO(spec-050 slice 4): Add the request-specific list-argument policy rows at
+# the existing ``/rp-rows/`` mount; keep document admission and runtime window
+# assertions separate.
+#
+# Pseudocode:
+#
+# - Create library Branch rows inline and send a legal smaller ``limit``. Assert
+#   only that many rows serialize, while the pre-execution collection-cost
+#   charge remains ``ResourcePolicy.max_list_rows`` rather than the client limit.
+# - Send ``limit == MAX_LIST_ROWS`` and the first over-ceiling value; assert the
+#   boundary accepts then returns ``LIST_ARGUMENT_INVALID`` with the mount's
+#   request-specific ceiling, never ``DEFAULT_RESOURCE_POLICY``.
+# - Send ordered ``offset == MAX_LIST_ROWS`` and the first larger value. The
+#   former may return an empty page; the latter must report the same narrowed
+#   policy ceiling even when a field declaration is trusted to return more.
+# - Capture queries for numeric/coercion rejection and limit zero so argument
+#   refusal or an empty queryset window performs no row-fetch SQL.
 @pytest.mark.django_db
 def test_a_raw_root_list_stops_at_the_configured_maximum():
     """``DjangoListField`` is bounded whether or not the field says anything."""

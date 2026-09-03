@@ -132,6 +132,12 @@ _get_filterset_class = make_dynamic_set_getter(
     reserved_keys=_RESERVED_FACTORY_KEYS,
     explicit_param="filterset_class",
     fields_alias=FILTERSET_FIELDS_ALIAS,
+    # django-filter's metaclass hard-asserts that a Meta.model declares at
+    # least one of `fields` / `exclude`; without this gate that raw
+    # AssertionError escapes get_filterset_class. The order side keeps its
+    # plain-metaclass fields-less lifecycle, so the flag is filter-family
+    # only (create_dynamic_set_class documents the split).
+    require_fields_or_exclude=True,
 )
 
 

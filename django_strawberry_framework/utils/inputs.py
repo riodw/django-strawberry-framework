@@ -41,6 +41,7 @@ import strawberry
 from django.db import models as django_models
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from .canonical import base_container_values, canonical_sort_key
 from .imports import import_attr_if_importable
 
 # ``utils/strings.py`` is the owner of ``graphql_camel_name``;
@@ -174,10 +175,26 @@ def emit_set_input_field_triples(
     (``iter_input_field_collisions``) already reject this class of silent drop;
     this is the parity guard for the filter / order generated-input surfaces,
     which both route their emission through here.
+
+    The package rejects this collision class at four points, and they are
+    deliberately NOT one walk. This one and ``iter_input_field_collisions`` read
+    generated specs and word the cause the consumer can act on (a flattened
+    ``__`` path here, a relation's ``<name>_id`` remap there);
+    ``mutations/inputs.py::_audit_mutation_input_surface`` reads STRAWBERRY's own
+    resolved field definitions, because a merged consumer ``input_class``'s
+    naming is only visible after decoration; and
+    ``build_strawberry_input_class`` is the independent BACKSTOP at the
+    construction site, whose value is precisely that it does not share a body
+    with the domain guards - one walk would mean one bug disabling all of them.
     """
     triples: list[tuple[str, Any, dict[str, Any]]] = []
     seen_attr: dict[str, str] = {}
     seen_graphql: dict[str, str] = {}
+    # Provenance rows are staged and committed only after the whole set walks
+    # clean. Writing them as each field is emitted left the family's
+    # ``field_specs`` table half-populated when a later member collided - a
+    # schema build that failed loud but not cleanly.
+    staged_specs: list[tuple[tuple[type, str], GeneratedInputFieldSpec]] = []
     for top_name, entry in entries:
         python_attr = flatten_lookup_path(top_name)
         graphql_name = graphql_camel_name(python_attr)
@@ -217,11 +234,17 @@ def emit_set_input_field_triples(
         seen_attr[python_attr] = top_name
         seen_graphql[graphql_name] = top_name
         triples.append((python_attr, annotation, field_kwargs))
-        field_specs[(set_cls, python_attr)] = GeneratedInputFieldSpec(
-            python_attr=python_attr,
-            graphql_name=graphql_name,
-            django_source_path=django_source_path,
+        staged_specs.append(
+            (
+                (set_cls, python_attr),
+                GeneratedInputFieldSpec(
+                    python_attr=python_attr,
+                    graphql_name=graphql_name,
+                    django_source_path=django_source_path,
+                ),
+            ),
         )
+    field_specs.update(staged_specs)
     return triples
 
 
@@ -357,11 +380,17 @@ def make_input_namespace(
     cache + per-set ``_lifecycle`` binding state): the mutation / form / serializer
     flavors derive their input fields from one declaration's field set, not a
     related-set BFS graph, so they have neither a factory cache nor per-set
-    lifecycle state to reset. Materialized class objects stay PARKED in the
-    module ``__dict__`` per the shared parked-globals lifecycle - ``materialize_fn``
-    overwrites the global via ``setattr`` on the next finalize, so stripping it
-    via ``delattr`` would break any ``strawberry.lazy(...)`` LazyType a consumer
-    module still holds.
+    lifecycle state to reset.
+
+    PARKED-GLOBALS LIFECYCLE (the package's one statement of it; every other
+    materialize / clear surface cross-references this paragraph rather than
+    restating it). A materialized input class is pinned as a REAL module global
+    and is never removed: ``materialize_fn`` overwrites it via ``setattr`` on
+    the next finalize, so a stale class is replaced in place, whereas stripping
+    it with ``delattr`` would break any ``strawberry.lazy(...)`` LazyType a
+    consumer module still holds - and a holder whose autouse-reload fixture did
+    not also reload it would then fail to resolve. Every ``clear_*`` in this
+    package therefore resets LEDGERS only, never the module ``__dict__``.
     """
     ledger: dict[str, type] = {}
 
@@ -440,30 +469,16 @@ def _opaque_meta_value(value: Any) -> tuple[str, int, int]:
     return ("__unhashable_meta_value__", id(type(value)), id(value))
 
 
-def _meta_sort_key(value: Any) -> tuple[str, int, int]:
-    """Return a total, hostile-repr-safe ordering key for metadata values."""
-    return (_safe_arg_repr(value), id(type(value)), id(value))
-
-
-def _base_meta_values(value: Any) -> tuple[Any, ...]:
-    """Read a built-in container through its base iterator, not an override."""
-    if isinstance(value, dict):
-        return tuple(dict.items(value))
-    if isinstance(value, set):
-        return tuple(set.__iter__(value))
-    if isinstance(value, frozenset):
-        return tuple(frozenset.__iter__(value))
-    if isinstance(value, list):
-        return tuple(list.__iter__(value))
-    if isinstance(value, tuple):
-        return tuple(tuple.__iter__(value))
-    return tuple(value)
-
-
 def _sorted_meta_values(value: Any) -> list[Any]:
-    """Sort a metadata container without trusting iteration or representation hooks."""
+    """Sort a metadata container without trusting iteration or representation hooks.
+
+    The read and the ordering are ``utils/canonical.py``'s
+    (``base_container_values`` / ``canonical_sort_key``), shared with the write
+    pipeline's drift fingerprint; what stays here is the metadata-flavored
+    rejection wording.
+    """
     try:
-        return sorted(_base_meta_values(value), key=_meta_sort_key)
+        return sorted(base_container_values(value), key=canonical_sort_key)
     except BaseException as exc:
         raise ConfigurationError(
             f"Generated set metadata contains an unreadable {_safe_type_name(value)} container.",
@@ -507,14 +522,15 @@ def _hashable_meta_value(v: Any, active: set[int], depth: int) -> Any:
                     )
                     for key, value in dict.items(v)
                 )
-                return tuple(sorted(pairs, key=_meta_sort_key))
+                return tuple(sorted(pairs, key=canonical_sort_key))
             if isinstance(v, (set, frozenset)):
                 values = (
-                    _hashable_meta_value(item, active, depth + 1) for item in _base_meta_values(v)
+                    _hashable_meta_value(item, active, depth + 1)
+                    for item in base_container_values(v)
                 )
-                return tuple(sorted(values, key=_meta_sort_key))
+                return tuple(sorted(values, key=canonical_sort_key))
             return tuple(
-                _hashable_meta_value(item, active, depth + 1) for item in _base_meta_values(v)
+                _hashable_meta_value(item, active, depth + 1) for item in base_container_values(v)
             )
         finally:
             active.remove(marker)
@@ -676,15 +692,15 @@ def make_set_meta_cache_key(safe_meta: dict[str, Any]) -> tuple:
     elif isinstance(fields, (list, tuple)):
         fields_key = (
             "seq",
-            tuple(make_hashable_meta_value(item) for item in _base_meta_values(fields)),
+            tuple(make_hashable_meta_value(item) for item in base_container_values(fields)),
         )
     elif isinstance(fields, (set, frozenset)):
         fields_key = (
             "seq",
             tuple(
                 sorted(
-                    (make_hashable_meta_value(item) for item in _base_meta_values(fields)),
-                    key=_meta_sort_key,
+                    (make_hashable_meta_value(item) for item in base_container_values(fields)),
+                    key=canonical_sort_key,
                 ),
             ),
         )
@@ -723,7 +739,11 @@ def normalize_set_meta_for_factory(
     - ``exclude`` is a set of names semantically, even though django-filter
       accepts any sequence; canonicalize every list / tuple / set-shaped
       declaration to the same ``repr``-sorted list so equivalent exclusions
-      cannot mint duplicate ``<Model>Auto*`` classes.
+      cannot mint duplicate ``<Model>Auto*`` classes. A falsy ``exclude``
+      (``None``, empty containers) drops the key entirely: django-filter reads
+      exclusions as ``exclude or []``, so every falsy spelling is "no
+      exclusions" and must not survive as an extras discriminator that splits
+      a cache slot (the ``fields=None``-vs-absent equivalence, exclude side).
     """
     if not isinstance(meta, dict):
         raise ConfigurationError(
@@ -747,7 +767,13 @@ def normalize_set_meta_for_factory(
     if canonical_fields is not fields:
         safe_meta["fields"] = canonical_fields
     exclude = safe_meta.get("exclude")
-    if isinstance(
+    if not exclude:
+        # django-filter reads exclusions as ``exclude or []``: every falsy
+        # spelling (``None``, an empty container) excludes nothing, exactly
+        # like omitting the key. Drop it so "no exclusions" cannot split a
+        # cache slot via an extras discriminator.
+        safe_meta.pop("exclude", None)
+    elif isinstance(
         exclude,
         (
             list,
@@ -767,6 +793,7 @@ def create_dynamic_set_class(
     auto_name_suffix: str,
     getter_name: str,
     explicit_param: str,
+    require_fields_or_exclude: bool = False,
 ) -> type:
     """Build a synthetic set-family subclass from a ``Meta`` dict.
 
@@ -775,6 +802,15 @@ def create_dynamic_set_class(
     call. Spec-027 explicitly drops the ``replace_csv_filters`` rewrap --
     Strawberry's typed input handles ``list[T]`` natively. The order twin
     uses the same ``type(...)`` construction (no cookbook counterpart).
+
+    ``require_fields_or_exclude`` pre-validates the base class's own Meta
+    requirement with a typed ``ConfigurationError`` instead of letting the
+    base metaclass reject it. The filter side sets it because django-filter's
+    metaclass hard-asserts that a ``Meta.model`` carries at least one of
+    ``fields`` / ``exclude`` -- without the gate that raw ``AssertionError``
+    escapes ``get_filterset_class``. The order side leaves it off: its plain
+    ``type`` metaclass accepts a fields-less Meta, whose zero-field rejection
+    stays at the BFS construction site.
     """
     model = safe_meta.get("model")
     if model is None:
@@ -786,6 +822,15 @@ def create_dynamic_set_class(
         raise ConfigurationError(
             f"{getter_name} requires `model` to be a Django model class when called "
             f"without an explicit {explicit_param}; got {model!r}.",
+        )
+    if (
+        require_fields_or_exclude
+        and safe_meta.get("fields") is None
+        and safe_meta.get("exclude") is None
+    ):
+        raise ConfigurationError(
+            f"{getter_name} requires `fields` or `exclude` when called without an explicit "
+            f"{explicit_param}; received meta with neither.",
         )
     meta_attrs = dict(safe_meta)
     name = f"{model.__name__}{auto_name_suffix}"
@@ -802,6 +847,7 @@ def make_dynamic_set_getter(
     reserved_keys: frozenset[str],
     explicit_param: str,
     fields_alias: str | None = None,
+    require_fields_or_exclude: bool = False,
 ) -> Callable[..., type]:
     """Return a Layer-6 ``get_<family>set_class`` getter over a family cache.
 
@@ -810,6 +856,10 @@ def make_dynamic_set_getter(
     cache-key fix cannot drift between families. ``fields_alias`` is the
     metaclass synonym (``FILTERSET_FIELDS_ALIAS`` on the filter side; ``None``
     on orders, which has no synonym) resolved by ``resolve_set_meta_fields``.
+    ``require_fields_or_exclude`` threads to ``create_dynamic_set_class`` for
+    base classes whose metaclass demands a ``fields`` / ``exclude`` declaration
+    (the django-filter-backed filter side); the default keeps the order side's
+    fields-less Meta lifecycle intact.
     """
 
     def get_set_class(explicit: type | None, **meta: Any) -> type:
@@ -830,6 +880,7 @@ def make_dynamic_set_getter(
             auto_name_suffix=auto_name_suffix,
             getter_name=getter_name,
             explicit_param=explicit_param,
+            require_fields_or_exclude=require_fields_or_exclude,
         )
         cache[cache_key] = generated
         return generated
@@ -1020,8 +1071,13 @@ def normalize_field_name_sequence(
 
     ``None`` means "unset". A non-``None`` value is coerced to a tuple so the bind
     and the generator see one shape. A bare string is rejected (it would iterate
-    as characters); a non-string entry is rejected (it would otherwise surface as a
-    confusing "unknown field" later); a duplicate name is rejected (it would
+    as characters); a set / frozenset is rejected (its iteration order varies per
+    process under hash randomization, and the serializer flavor folds the DECLARED
+    order into the generated input type name - the model / form flavors sort their
+    name sets - so an unordered container would make one declaration produce
+    different type names and SDL field orders in different processes); a
+    non-string entry is rejected (it would otherwise surface as a confusing
+    "unknown field" later); a duplicate name is rejected (it would
     collapse silently when the effective field set is taken as a ``frozenset``,
     masking a malformed declaration), failing loud naming the repeated field(s).
     ``label`` names which key (``fields`` / ``exclude``) is at fault; ``flavor``
@@ -1034,6 +1090,14 @@ def normalize_field_name_sequence(
         raise ConfigurationError(
             f"{flavor} Meta.fields / Meta.exclude must be a sequence of field "
             f"names, not a bare string: {_safe_arg_repr(value)}.",
+        )
+    if isinstance(value, (set, frozenset)):
+        raise ConfigurationError(
+            f"{flavor} Meta.{label} must be an ordered sequence of field name "
+            f"strings (a list or tuple), not an unordered {type(value).__name__}: "
+            f"{_safe_arg_repr(value)}. A set's iteration order varies between "
+            "processes, which would make the generated input type names and SDL "
+            "field order nondeterministic.",
         )
     try:
         names = tuple(value)
@@ -1068,7 +1132,7 @@ def resolve_effective_fields(
     subject: str,
     seq_flavor: str,
     unknown_noun: str,
-    empty_message: str,
+    empty_message: str | None = None,
 ) -> dict[str, Any]:
     """Return the effective ``{name: field}`` dict after ``fields`` / ``exclude`` narrowing.
 
@@ -1089,6 +1153,12 @@ def resolve_effective_fields(
     ``base_fields``, the serializer's read-only-filtered ``writable`` map) so the
     "basis is the only structural divergence" shape holds. Each flavor keeps a thin
     wrapper that supplies these, so the pinned error wording stays byte-identical.
+
+    ``empty_message`` is optional because one flavor cannot decide emptiness here:
+    the model flavor merges a consumer ``input_class``, so an empty EFFECTIVE set
+    is still a valid input once the override half is inherited. That flavor omits
+    the message and keeps its own override-aware guard downstream; every other
+    flavor supplies one and fails at the narrowing.
     """
     fields = normalize_field_name_sequence(fields, label="fields", flavor=seq_flavor)
     exclude = normalize_field_name_sequence(exclude, label="exclude", flavor=seq_flavor)
@@ -1117,7 +1187,7 @@ def resolve_effective_fields(
     else:
         effective = dict(basis)
 
-    if not effective:
+    if not effective and empty_message is not None:
         raise ConfigurationError(empty_message)
     return effective
 
@@ -1171,6 +1241,8 @@ def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
 def build_strawberry_input_class(
     name: str,
     field_specs: list[tuple[str, Any, dict[str, Any] | None]],
+    *,
+    empty_message: str | None = None,
 ) -> type:
     """Construct a ``@strawberry.input``-decorated dataclass.
 
@@ -1223,6 +1295,19 @@ def build_strawberry_input_class(
         raise ConfigurationError(
             f"Generated input {name!r} field specifications could not be read.",
         ) from exc
+    if not specs and empty_message is not None:
+        # The zero-field guard belongs at the CONSTRUCTION site, not only at the
+        # callers: Strawberry rejects an empty input object at ``Schema(...)``
+        # build with a raw ``ValueError`` naming the GENERATED type, which tells
+        # a consumer nothing about the class they wrote. A caller that knows the
+        # better remedy supplies it here.
+        #
+        # Optional rather than unconditional, because one caller legitimately
+        # builds an empty generated remainder: ``mutations/inputs.py`` merges a
+        # consumer ``input_class``, so an input whose GENERATED half is empty is
+        # still a valid input once the override half is inherited. That caller
+        # keeps its own guard, which can see the overrides this function cannot.
+        raise ConfigurationError(empty_message)
     for index, field_spec in enumerate(specs):
         try:
             python_attr, annotation, raw_kwargs = field_spec
@@ -1528,12 +1613,9 @@ def clear_generated_input_namespace(
       resolved set base's ``_lifecycle`` descriptor (``SetLifecycleAttrs``) rather
       than a re-spelled tuple, so the family names them in ONE place.
 
-    **Materialized class objects are intentionally left parked** in the family
-    ``inputs`` module ``__dict__``: the materialization helper overwrites the
-    module global via ``setattr`` on the next finalize, so a parked class is
-    replaced in place once the rebuild runs. Stripping it via ``delattr`` here
-    would break any ``strawberry.lazy(...)`` LazyType held by a consumer module
-    whose autouse-reload fixture did NOT also reload the holder.
+    Ledgers only: materialized class objects stay parked in the family
+    ``inputs`` module ``__dict__`` per the parked-globals lifecycle stated on
+    ``make_input_namespace``.
 
     Each subsystem lookup is best-effort (``_safe_import``): an unreachable
     factory / set module never prevents the reachable ledger reset. The two
@@ -1700,31 +1782,29 @@ class GeneratedInputArgumentsFactory:
         type_name = set_input_type_name(set_cls)
         owner_definition = getattr(set_cls, "_owner_definition", None)
         triples = self._build_input_triples(set_cls, type_name, owner_definition)
-        if not triples:
-            # A set whose Layer-4 expansion is empty -- an ``OrderSet`` with an
-            # empty / omitted ``Meta.fields`` and no active ``RelatedOrder``, or a
-            # related branch that expands to nothing -- would build a zero-field
-            # ``@strawberry.input``. Strawberry rejects that only at ``Schema(...)``
-            # build with a raw ``ValueError: Input Object type <Name> must define
-            # one or more fields``, naming the GENERATED type rather than the
-            # consumer's set class. Fail loud here at the framework boundary with a
-            # ``ConfigurationError`` naming the offending set + family, mirroring
-            # the write-side empty-input guards (``mutations`` / ``forms`` /
-            # ``rest_framework`` ``inputs.py``). The filter family never reaches
-            # this branch -- its ``_build_input_triples`` always appends the
-            # ``and_`` / ``or_`` / ``not_`` operator bag -- so in practice only the
-            # order family (no operator bag, spec-028 Decision 8) can be empty; the
-            # guard lives at this single set-family build site so every present and
-            # future family inherits it.
-            raise ConfigurationError(
+        # A set whose Layer-4 expansion is empty -- an ``OrderSet`` with an empty /
+        # omitted ``Meta.fields`` and no active ``RelatedOrder``, or a related
+        # branch that expands to nothing -- would build a zero-field
+        # ``@strawberry.input``. The rejection itself lives at the construction
+        # site (``build_strawberry_input_class``), so a future family inherits it
+        # without re-adding a pre-call check; only the remedy is worded here,
+        # naming the consumer's set class and its family instead of the generated
+        # type Strawberry would name. The filter family never reaches it -- its
+        # ``_build_input_triples`` always appends the ``and_`` / ``or_`` / ``not_``
+        # operator bag -- so in practice only the order family (no operator bag,
+        # spec-028 Decision 8) can be empty.
+        input_cls = build_strawberry_input_class(
+            type_name,
+            triples,
+            empty_message=(
                 f"{self._factory_label}: {self._family_label} {set_cls.__qualname__} "
                 f"generates the GraphQL input type {type_name!r} with no fields. "
                 "Strawberry rejects a zero-field input object at schema build "
                 f"('Input Object type {type_name} must define one or more fields'). "
                 f"Declare at least one field via the {self._rename_noun}'s Meta.fields "
-                "(or add a RelatedOrder / RelatedFilter branch).",
-            )
-        input_cls = build_strawberry_input_class(type_name, triples)
+                "(or add a RelatedOrder / RelatedFilter branch)."
+            ),
+        )
         self.input_object_types[type_name] = input_cls
         self._collision_registry[type_name] = set_cls
 

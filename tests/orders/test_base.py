@@ -4,6 +4,10 @@ Covers the ``RelatedOrder`` primitive: class / absolute-import / unqualified
 target resolution through the shared ``LazyRelatedClassMixin``, the
 ``bind_orderset`` idempotency contract, and the spec-028 rule that the
 mixin's home is the neutral ``sets_mixins`` module (NOT ``filters/base.py``).
+Also covers the target-type gate: a target that RESOLVES to a non-``OrderSet``
+(the cross-family ``FilterSet``, a plain class, or a factory returning a
+non-class) raises ``ConfigurationError`` at the ``.orderset`` read instead of
+surviving until the BFS input builder detonates on it.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from django_strawberry_framework import sets_mixins
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import OrderSet, RelatedOrder
 
 
@@ -227,3 +232,103 @@ def test_related_order_unbound_absolute_import_path_resolves():
     related = RelatedOrder("tests.orders.test_base.AOrder", field_name="a")
     assert not hasattr(related, "bound_orderset")
     assert related.orderset is AOrder
+
+
+# ---------------------------------------------------------------------------
+# Target-type gate: a RESOLVED target must be None (placeholder) or OrderSet
+# ---------------------------------------------------------------------------
+
+
+class _NotAnOrderSet:
+    """A plain class -- legal Python, not an ``OrderSet``."""
+
+
+def test_related_order_rejects_plain_class_target_with_typed_error():
+    """A resolved non-``OrderSet`` class target raises ``ConfigurationError``.
+
+    The gate fires at the ``.orderset`` read -- the one seam every consumer
+    (BFS enqueue, input emission, runtime recursion, permission recursion)
+    routes through -- naming the owning orderset and the offending target,
+    instead of letting the mis-wiring survive until the BFS builder calls
+    ``target.type_name_for()`` on it (a raw ``AttributeError`` at finalize
+    subpass 4, outside the uniform subpass-2 rewrap).
+    """
+
+    class Owner(OrderSet):
+        shelf = RelatedOrder(_NotAnOrderSet, field_name="shelf")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _ = Owner.shelf.orderset
+    msg = str(exc_info.value)
+    assert "Owner" in msg
+    assert "shelf" in msg
+    assert "NotAnOrderSet" in msg
+    assert "OrderSet subclass" in msg
+
+
+def test_related_order_rejects_filterset_target():
+    """The cross-family twin (``FilterSet``) is rejected, never silently built.
+
+    A ``FilterSet`` carries ``type_name_for`` / a ``get_fields``-shaped
+    surface, so without the gate the BFS builder would walk the FILTER
+    family's fields into an order input class (or crash on the filter
+    objects' missing ``orderset`` attribute) instead of rejecting the
+    cross-family mis-wiring at first resolution.
+    """
+    from django_strawberry_framework.filters import FilterSet
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            from apps.library.models import Shelf
+
+            model = Shelf
+            fields = ["code"]
+
+    class Owner(OrderSet):
+        shelf = RelatedOrder(ShelfFilter, field_name="shelf")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _ = Owner.shelf.orderset
+    msg = str(exc_info.value)
+    assert "FilterSet" in msg
+    assert "ShelfFilter" in msg
+
+
+def test_related_order_rejects_factory_returning_non_class():
+    """A factory resolving to a non-class is rejected by the same gate."""
+
+    class Owner(OrderSet):
+        shelf = RelatedOrder(lambda: object(), field_name="shelf")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _ = Owner.shelf.orderset
+    assert "object" in str(exc_info.value)
+
+
+def test_related_order_target_gate_names_unbound_owner():
+    """A never-bound declaration reports ``<unbound>`` as its owner label."""
+    related = RelatedOrder(_NotAnOrderSet, field_name="a")
+    with pytest.raises(ConfigurationError) as exc_info:
+        _ = related.orderset
+    assert "<unbound>" in str(exc_info.value)
+
+
+def test_related_order_none_placeholder_target_still_reads_none():
+    """The ``RelatedOrder(None, ...)`` placeholder keeps its skip-silently read."""
+    related = RelatedOrder(None, field_name="shelf")
+    assert related.orderset is None
+
+
+def test_related_order_target_gate_preserves_importerror_for_unresolved_strings():
+    """The gate fires AFTER string resolution: unresolvable strings stay ``ImportError``.
+
+    Pins the finalizer's subpass-2 contract -- the rewrap keys on the raw
+    ``ImportError`` (``__cause__`` preserved), which the gate must not
+    preempt or replace.
+    """
+
+    class Owner(OrderSet):
+        a = RelatedOrder("NoSuchOrderAnywhereXYZ", field_name="a")
+
+    with pytest.raises(ImportError):
+        _ = Owner.a.orderset

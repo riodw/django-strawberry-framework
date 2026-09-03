@@ -332,6 +332,25 @@ def test_order_columns_reject_unresolvable_names():
     assert _order_columns(("",), Book._meta) is None
 
 
+def test_order_columns_reject_an_empty_order():
+    """An empty order downgrades: the lateral branch cannot render ``OVER (ORDER BY )``.
+
+    Not a planner product (``deterministic_order`` always ends in the pk), but
+    the strategy seam accepts hand-built requests - and unlike unresolvable
+    names the windowed fallback DOES render a valid orderless window for this
+    shape, so the downgrade keeps the request planned instead of crashing the
+    lateral SQL at fetch time.
+    """
+    from django_strawberry_framework.optimizer.lateral_fetch import _order_columns
+
+    assert _order_columns((), Book._meta) is None
+    plan = OptimizationPlan()
+    assert LateralPrefetchStrategy().plan(_shelf_books_request(order_by=()), plan) is True
+    (entry,) = plan.prefetch_related
+    assert not isinstance(entry.queryset, LateralQuerySet)
+    assert WINDOW_ROW_NUMBER in entry.queryset.query.annotations
+
+
 def test_spec_downgrades_on_columnless_primary_key():
     """A composite (columnless) child pk has no single default join column."""
     fake_queryset = SimpleNamespace(

@@ -14,10 +14,15 @@ import strawberry
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
-from .exceptions import ConfigurationError
+from .exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_class_name,
+)
 from .resource_policy import bounded_rows, bounded_rows_async, validate_collection_bound
 from .types import DjangoType
 from .types.base import _is_relay_shaped
+from .utils.directives import validated_field_directives
 from .utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
@@ -93,27 +98,50 @@ def _validate_djangotype_target(
     ``definition.origin is target_type`` is the strict own-class invariant
     (NOT ``hasattr``).
 
-    Raises ``ConfigurationError`` on failure; returns ``None`` when all four
-    pass. The caller runs any factory-specific guards (e.g. the connection
-    field's Relay-Node guard) AFTER this returns.
+    Every deployment-supplied value in a rejection message renders through the
+    guarded helpers (``exceptions.py``): the non-class arm renders
+    ``_safe_arg_repr`` (the ``_validate_mutation_target`` parity spelling) and
+    the class arms render ``_safe_class_name``, so a hostile ``__repr__`` or a
+    metaclass ``__name__`` property that raises cannot detonate the message
+    assembly and replace the typed rejection with a raw ``RuntimeError``.
+
+    The definition read is contained: ``getattr``'s default suppresses only
+    ``AttributeError``, so a metaclass ``__getattr__`` raising anything else
+    would escape raw and the typed "not a registered DjangoType" rejection
+    would never exist. A read that cannot be answered is a target that cannot
+    be PROVEN registered, so the failure is the same typed reject (fail
+    closed, matching ``forms/inputs.py::_model_column_for``'s posture).
+
+    Raises ``ConfigurationError`` on failure; returns the resolved
+    ``__django_strawberry_definition__`` when all four pass, so the Relay
+    validator consumes the SAME contained read instead of re-reading the
+    attribute directly (a stateful metaclass could answer the first guarded
+    read and detonate a second raw one). The caller runs any factory-specific
+    guards (e.g. the connection field's Relay-Node guard) AFTER this returns.
     """
     if not inspect.isclass(target_type):
         raise ConfigurationError(
-            f"{field} requires a DjangoType class; got {target_type!r}.",
+            f"{field} requires a DjangoType class; got {_safe_arg_repr(target_type)}.",
         )
     if not issubclass(target_type, DjangoType):
         raise ConfigurationError(
-            f"{field} requires a DjangoType subclass; got {target_type.__name__}.",
+            f"{field} requires a DjangoType subclass; got {_safe_class_name(target_type)}.",
         )
-    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    try:
+        definition = getattr(target_type, "__django_strawberry_definition__", None)
+    except Exception:
+        # Contained: a metaclass whose __getattr__ raises anything other than
+        # AttributeError must reach the typed rejection below, not escape raw.
+        definition = None
     if definition is None or getattr(definition, "origin", None) is not target_type:
         raise ConfigurationError(
-            f"{field} target {target_type.__name__} is not a registered DjangoType. "
-            f"This usually means {target_type.__name__}'s `Meta` is missing a `model` "
+            f"{field} target {_safe_class_name(target_type)} is not a registered DjangoType. "
+            f"This usually means {_safe_class_name(target_type)}'s `Meta` is missing a `model` "
             "declaration, or it inherits a definition from a parent without declaring its own `Meta`.",
         )
     if resolver is not None and not callable(resolver):
         raise ConfigurationError(f"{field} resolver must be callable.")
+    return definition
 
 
 def _validate_relay_djangotype_target(
@@ -136,8 +164,10 @@ def _validate_relay_djangotype_target(
     The caller supplies the full ``relay_error_message`` so each factory keeps
     its own wording.
     """
-    _validate_djangotype_target(target_type, resolver, field=field)
-    definition = target_type.__django_strawberry_definition__
+    # The definition comes back from the base validator's ONE contained read;
+    # re-reading the attribute directly here would let a stateful metaclass
+    # answer the first (guarded, defaulted) read and detonate the second.
+    definition = _validate_djangotype_target(target_type, resolver, field=field)
     if not _is_relay_shaped(target_type, definition.interfaces):
         raise ConfigurationError(relay_error_message)
 
@@ -294,6 +324,17 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     # constructor checks (see ``_validate_djangotype_target`` for the
     # load-bearing ordering and the own-class registration invariant).
     _validate_djangotype_target(target_type, resolver, field="DjangoListField")
+    # The hostile-container containment for the directives iterable, shared with
+    # every other field factory in the package
+    # (``utils/directives.py::validated_field_directives`` owns the one check and
+    # its rationale): a bare string / bytes is iterated element-wise by
+    # Strawberry, a hostile iterator raising midway escapes raw, and a
+    # non-iterable detonates at the ``strawberry.field`` call. Validate BEFORE
+    # handing to Strawberry so the factory fails loud as a ``ConfigurationError``
+    # at the assignment line. ``utils.directives`` imports only ``exceptions``,
+    # so the low-level read-side module can share it without the read->write
+    # layering inversion importing the mutations copy would have created.
+    directives = validated_field_directives("DjangoListField", directives)
     # Async-detection asymmetry (see spec Decision 2,
     # "Async-detection asymmetry - intentional, not a harmonization candidate"):
     # ``_default`` uses runtime ``in_async_context()`` per-call so the same

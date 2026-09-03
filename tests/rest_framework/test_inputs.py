@@ -36,8 +36,9 @@ from rest_framework import serializers
 from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryOptional
 
-from django_strawberry_framework import DjangoType
+from django_strawberry_framework import DjangoType, SerializerMutation
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.mutations.inputs import CREATE
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import inputs as serializer_inputs
 from django_strawberry_framework.rest_framework.inputs import (
@@ -1703,7 +1704,7 @@ def test_resolve_injected_field_specs_unknown_field_raises_configuration_error()
 
     field_map = dict(S().fields)
     with pytest.raises(ConfigurationError, match="not in the serializer's schema-time field map"):
-        resolve_injected_field_specs(S, field_map, ["non_existent"])
+        resolve_injected_field_specs(S, field_map, ["non_existent"], operation_kind=CREATE)
 
 
 def test_build_serializer_inputs_preserves_optional_fields_one_shot_iterator():
@@ -1808,10 +1809,52 @@ def test_resolve_injected_field_specs_valid():
         injected_int = serializers.IntegerField()
 
     field_map = dict(InjectedSer().fields)
-    assert resolve_injected_field_specs(InjectedSer, field_map, None) == []
-    assert resolve_injected_field_specs(InjectedSer, field_map, ()) == []
+    assert resolve_injected_field_specs(InjectedSer, field_map, None, operation_kind=CREATE) == []
+    assert resolve_injected_field_specs(InjectedSer, field_map, (), operation_kind=CREATE) == []
 
-    specs = resolve_injected_field_specs(InjectedSer, field_map, ("injected_str", "injected_int"))
+    specs = resolve_injected_field_specs(
+        InjectedSer,
+        field_map,
+        ("injected_str", "injected_int"),
+        operation_kind=CREATE,
+    )
     assert len(specs) == 2
     assert specs[0].target_name == "injected_str"
     assert specs[1].target_name == "injected_int"
+
+
+# ---------------------------------------------------------------------------
+# Unordered Meta.fields containers (process-deterministic generated names)
+# ---------------------------------------------------------------------------
+
+
+def test_set_valued_meta_fields_fail_loud_at_class_creation():
+    """A set-valued ``SerializerMutation.Meta.fields`` fails loud at class creation.
+
+    Regression: ``normalize_field_name_sequence`` accepted a set, and the
+    serializer flavor's ``serializer_input_type_name`` concatenates per-field
+    tokens in WALK order (the model / form flavors sort their name sets). The
+    same declaration therefore generated DIFFERENT input type names - and SDL
+    field orders - under different ``PYTHONHASHSEED`` values: the committed SDL
+    was not reproducible and the materialize ledger could not be relied on
+    across processes.
+    """
+    _register_products_types()
+    serializer_cls = _item_serializer()
+
+    with pytest.raises(ConfigurationError, match="ordered sequence of field name strings"):
+
+        class CreateItem(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
+                operation = "create"
+                fields = {"name", "category"}  # type: ignore[assignment]
+
+
+def test_set_valued_builder_fields_fail_loud():
+    """The isolated builder entry rejects a set-valued ``fields=`` for the same reason."""
+    _register_products_types()
+    serializer_class = _item_serializer()
+
+    with pytest.raises(ConfigurationError, match="ordered sequence of field name strings"):
+        build_serializer_inputs(serializer_class, fields={"name", "category"})

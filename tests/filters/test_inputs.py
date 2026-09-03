@@ -728,6 +728,57 @@ def test_normalize_input_value_none_returns_none():
     assert normalize_input_value(f, None) is None
 
 
+def test_normalize_input_value_rejects_dict_on_csv_filter():
+    """A mapping into a CSV filter fails loud instead of leaking its KEYS.
+
+    The ``in`` / ``range`` arms iterate ``raw_value`` element-by-element;
+    the pre-guard arms SPLATTED a mapping container into its keys -- a direct
+    ``apply_sync`` patch like ``{'start': 1, 'end': 5}`` on a ``__range`` CSV
+    leaf normalized to ``['start', 'end']``, silently swapping the caller's
+    values for the mapping's keys in the form-data dict. The shape is invalid
+    (the schema declares these inputs as GraphQL lists), so the normalizer
+    fails loud with the typed error instead of guessing an element source.
+    """
+
+    class CharInFilter(BaseInFilter, CharFilter):
+        pass
+
+    f = CharInFilter(field_name="code", lookup_expr="in")
+    with pytest.raises(ConfigurationError, match="non-list container"):
+        normalize_input_value(f, {"start": 1, "end": 5})
+
+
+def test_normalize_input_value_rejects_scalar_on_list_filter():
+    """A scalar (string / int) into a list-consuming arm fails loud.
+
+    A ``str`` container previously iterated its CHARACTERS -- ``"abc"``
+    became ``['a', 'b', 'c']`` -- the same silent shape-coercion defect class
+    as the dict-keys leak, so the guard rejects every non-list container.
+    """
+    with pytest.raises(ConfigurationError, match="non-list container"):
+        normalize_input_value(ListFilter(), "abc")
+    with pytest.raises(ConfigurationError, match="non-list container"):
+        normalize_input_value(GlobalIDMultipleChoiceFilter(), 42)
+
+
+def test_normalize_input_value_rejects_dict_on_expanded_range_csv():
+    """The expanded ``__range`` CSV leaf rejects a {start, end} patch shape.
+
+    The expanded ``__range`` filter is a ``BaseCSVFilter`` (element-binding
+    ``[start, end]`` list over the wire); only the package's own
+    ``RangeFilter`` primitive owns the ``{start, end}`` mapping shape through
+    its ``RangeField`` patch. A dict into the CSV branch must fail loud,
+    never normalize its keys into the membership list.
+    """
+    from django_filters import BaseRangeFilter, NumberFilter
+
+    class IntRange(BaseRangeFilter, NumberFilter):
+        pass
+
+    with pytest.raises(ConfigurationError, match="non-list container"):
+        normalize_input_value(IntRange(), {"start": 1, "end": 5}, field_name="code__range")
+
+
 def test_normalize_input_value_unset_returns_none():
     """``strawberry.UNSET`` is treated as "not supplied", same as ``None``.
 
@@ -1560,6 +1611,98 @@ def test_range_input_type_name_preserves_digit_boundary_in_field_name():
     assert (
         _build_range_input_class(plain, int, PriceDigitFilter).__name__
         == "PriceDigitFilterPrice2RangeInputType"
+    )
+
+
+@pytest.mark.django_db
+def test_build_input_fields_keeps_underscore_edge_operator_bags_distinct():
+    """``price`` / ``price_`` mint DISTINCT operator-bag GraphQL type names.
+
+    ``pascal_case`` used to drop leading / trailing underscore runs, so two
+    members whose names differ only at the edges collapsed to one type-name
+    stem even though BOTH emission guards passed (the Python attrs and the
+    camel GraphQL field names stay distinct for edge variants). The two bag
+    classes are embedded in annotations (not the spec-027 Decision 9 ledger),
+    so Strawberry silently kept whichever registered first and dropped the
+    other -- a ``CharFilter`` bag and a ``RangeFilter`` bag shared one wire
+    type and one member's lookups vanished from the schema. The stem now
+    preserves the edge runs (the Pascal dual of ``graphql_camel_name``).
+    """
+    import re
+
+    class UnderscoreEdgeFilter(FilterSet):
+        price = CharFilter(field_name="name", lookup_expr="exact")
+        price_ = RangeFilter(field_name="city", lookup_expr="exact")
+
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    triples = _build_input_fields(UnderscoreEdgeFilter)
+    by_attr = {python_attr: annotation for python_attr, annotation, _kwargs in triples}
+
+    def _bag(attr: str):
+        return next(arg for arg in get_args(by_attr[attr]) if arg is not type(None))
+
+    bag_plain = _bag("price")
+    bag_under = _bag("price_")
+    assert bag_plain.__name__ == "UnderscoreEdgeFilterPriceFilterInputType"
+    assert bag_under.__name__ == "UnderscoreEdgeFilterPrice_FilterInputType"
+    assert bag_plain is not bag_under
+    # The two bags carry DIFFERENT shapes: the CharFilter bag's ``exact`` is a
+    # scalar, the RangeFilter bag's ``exact`` embeds the range sub-input.
+    assert "RangeInputType" not in str(bag_plain.__annotations__["exact"])
+    assert "RangeInputType" in str(bag_under.__annotations__["exact"])
+
+    @strawberry.type
+    class Query:
+        ok: int
+
+    sdl = str(strawberry.Schema(query=Query, types=[bag_plain, bag_under]))
+    bag_defs = set(re.findall(r"input (UnderscoreEdgeFilterPrice_?FilterInputType)", sdl))
+    assert bag_defs == {
+        "UnderscoreEdgeFilterPriceFilterInputType",
+        "UnderscoreEdgeFilterPrice_FilterInputType",
+    }
+    # The range sub-input of the trailing-underscore member survives too
+    # (pre-fix the whole bag was silently dropped at registration).
+    assert "UnderscoreEdgeFilterCityRangeInputType" in sdl
+
+
+@pytest.mark.django_db
+def test_range_input_type_name_preserves_leading_underscore_run_in_field_name():
+    """Range sub-input names keep ``_price`` distinct from ``price``."""
+
+    class LeadingEdgeRangeFilter(FilterSet):
+        price = RangeFilter(field_name="name")
+        _price = RangeFilter(field_name="city")
+
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    assert (
+        _build_range_input_class(
+            RangeFilter(field_name="name"),
+            int,
+            LeadingEdgeRangeFilter,
+        ).__name__
+        == "LeadingEdgeRangeFilterNameRangeInputType"
+    )
+    assert (
+        _build_range_input_class(
+            RangeFilter(field_name="city"),
+            int,
+            LeadingEdgeRangeFilter,
+        ).__name__
+        == "LeadingEdgeRangeFilterCityRangeInputType"
+    )
+    # The naming rule itself: the leading run survives into the stem.
+    assert LeadingEdgeRangeFilter.type_name_for("_price") == (
+        "LeadingEdgeRangeFilter_PriceFilterInputType"
+    )
+    assert LeadingEdgeRangeFilter.type_name_for("price") == (
+        "LeadingEdgeRangeFilterPriceFilterInputType"
     )
 
 

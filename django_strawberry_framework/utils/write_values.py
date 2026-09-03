@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from strawberry import relay
 
-from .errors import field_error, relation_field_error
+from .errors import FIELD_ERROR_CODE_INVALID, field_error, relation_field_error
 from .inputs import FILE, RELATION_MULTI, RELATION_SINGLE, iter_provided_input_fields
 from .querysets import (
     coerce_field_value_or_none,
@@ -71,7 +71,7 @@ def unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
             return field_error(
                 field_name,
                 "Text contains invalid Unicode (unpaired surrogate code points).",
-                codes="invalid",
+                codes=FIELD_ERROR_CODE_INVALID,
             )
     return None
 
@@ -229,6 +229,44 @@ def decode_visible_relation(
     return project(obj), None
 
 
+# The relation-id container's text/mapping atoms: values that are iterable but
+# are NEVER a container OF relation ids. Deliberately a different set from
+# ``errors.py::_TEXT_ATOM_TYPES`` (it adds ``Mapping``, which is a container -
+# just never this one) and named separately for that reason.
+RELATION_ID_ATOM_TYPES = (
+    str,
+    bytes,
+    bytearray,
+    memoryview,
+    Mapping,
+)
+
+
+def materialize_relation_id_container(values: Any, graphql_name: str) -> tuple[list | None, Any]:
+    """Materialize a relation-id container, or return the uniform field-keyed error.
+
+    GraphQL normally supplies a list, but every write flavor's M2M seam can be
+    reached with an arbitrary iterable, including a one-shot or hostile
+    iterator. A malformed container is an invalid relation VALUE, not a
+    resolver exception, so it collapses to the same field-keyed
+    ``relation_field_error`` envelope every other relation rejection uses.
+
+    Security-relevant, which is why it is one body rather than a copied one:
+    the container is materialized BEFORE any member is decoded, so a
+    partially-consumed iterator can never reach a visibility query, and a text
+    / mapping atom is rejected outright rather than iterated into per-character
+    or per-key "ids".
+
+    Returns ``(provided_values, None)`` or ``(None, field_error)``.
+    """
+    if isinstance(values, RELATION_ID_ATOM_TYPES):
+        return None, relation_field_error(graphql_name)
+    try:
+        return list(values), None
+    except BaseException:
+        return None, relation_field_error(graphql_name)
+
+
 def decode_visible_relation_ids(
     values: Any,
     *,
@@ -255,27 +293,9 @@ def decode_visible_relation_ids(
     whole-list ``None``; the serializer passes it through so ``is_valid()``
     decides. Returns ``(pks, None)`` on success or ``(None, FieldError)``.
     """
-    # Materialize the container before decoding any member.  GraphQL normally
-    # supplies a list, but callers can reach this shared seam with an arbitrary
-    # iterable (including a one-shot or hostile iterator).  A malformed
-    # container is an invalid relation value, not a resolver exception; keeping
-    # the failure in the same field-keyed envelope also guarantees that a
-    # partially-consumed iterator cannot lead to a visibility query.
-    if isinstance(
-        values,
-        (
-            str,
-            bytes,
-            bytearray,
-            memoryview,
-            Mapping,
-        ),
-    ):
-        return None, relation_field_error(graphql_name)
-    try:
-        provided_values = list(values)
-    except BaseException:
-        return None, relation_field_error(graphql_name)
+    provided_values, container_error = materialize_relation_id_container(values, graphql_name)
+    if container_error is not None:
+        return None, container_error
 
     pks: list[Any] = []
     for value in provided_values:

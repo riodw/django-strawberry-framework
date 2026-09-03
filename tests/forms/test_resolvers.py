@@ -2731,6 +2731,92 @@ def test_decode_form_relation_multi_rejects_non_collection_sequences():
         assert err.field == "genres"
 
 
+@pytest.mark.django_db
+def test_decode_form_relation_multi_one_shot_generator_fully_decoded():
+    """A one-shot M2M container is materialized once, then decoded elementwise.
+
+    The decoder consumes the container exactly once (no re-iteration of a
+    one-shot iterator) and every member is type-checked + visibility-checked on
+    its own branch.
+    """
+    first = library_models.Genre.objects.create(name=_uniq("G1"))
+    second = library_models.Genre.objects.create(name=_uniq("G2"))
+    field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
+    keys, error = form_resolvers._decode_form_relation_multi(
+        iter([first.pk, second.pk]),
+        graphql_name="genres",
+        related_model=library_models.Genre,
+        form_field=field,
+        info=None,
+    )
+    assert error is None
+    assert keys == [first.pk, second.pk]
+
+
+def test_decode_form_relation_multi_iteration_failures_stay_in_envelope():
+    """A container that fails DURING iteration is the uniform field-keyed error.
+
+    A generator raising midway and an ``__iter__`` raising ``BaseException``
+    both collapse to the relation envelope instead of escaping the resolver as
+    a raw ``RuntimeError`` / ``BaseException``.
+    """
+
+    class _ProbeBaseException(BaseException):
+        pass
+
+    class _MidwayRaise:
+        def __iter__(self):
+            yield 1
+            raise RuntimeError("midway")
+
+    class _BaseExceptionIter:
+        def __iter__(self):
+            raise _ProbeBaseException("hostile iteration")
+
+    field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.none())
+    for values in (_MidwayRaise(), _BaseExceptionIter()):
+        keys, error = form_resolvers._decode_form_relation_multi(
+            values,
+            graphql_name="genres",
+            related_model=library_models.Genre,
+            form_field=field,
+            info=None,
+        )
+        assert keys is None
+        assert error is not None
+        assert error.field == "genres"
+
+
+@pytest.mark.django_db
+def test_decode_form_relation_multi_materializes_before_any_visibility_query():
+    """A partially-consumed M2M container never reaches a visibility query.
+
+    The container is materialized BEFORE any member is decoded, so an iterator
+    that raises after its first id yields the field-keyed container error with
+    ZERO database queries - a half-consumed id set can never be partially
+    confirmed against (or leaked into) the visibility check.
+    """
+    genre = library_models.Genre.objects.create(name=_uniq("G"))
+    field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
+
+    def _container():
+        yield genre.pk
+        raise RuntimeError("hostile second pull")
+
+    with CaptureQueriesContext(connection) as ctx:
+        keys, error = form_resolvers._decode_form_relation_multi(
+            _container(),
+            graphql_name="genres",
+            related_model=library_models.Genre,
+            form_field=field,
+            info=None,
+        )
+    assert keys is None
+    assert error is not None
+    assert error.field == "genres"
+    assert ctx.captured_queries == []
+
+
 def test_reconstruct_partial_data_m2m_does_not_exist():
     from django.core.exceptions import ObjectDoesNotExist
 

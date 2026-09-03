@@ -789,6 +789,133 @@ def test_consumer_resolver_iterable_with_total_count_selected_raises():
     assert not any("Cannot return null for non-nullable field" in m for m in messages)
 
 
+@pytest.mark.django_db
+@pytest.mark.parametrize("make_source", [iter, set, frozenset])
+def test_consumer_resolver_countless_iterable_paginates_without_total_count(make_source):
+    """A count-less non-queryset source paginates with ``totalCount`` NOT selected.
+
+    Regression pin for the eager ``.count`` read in ``_attach_count_sync``: the
+    helper passed ``value=nodes.count`` even when the count was NOT requested,
+    and the attribute access itself is eager - so a generator / set / one-shot
+    iterator (shapes the consumer-resolver contract admits) raised a raw
+    ``AttributeError: 'set' object has no attribute 'count'`` on every page
+    without ``totalCount``. The read is now gated on ``want_count`` exactly
+    like the async helper's ``acount()`` call already was.
+    """
+    services.seed_data(3)
+    rows = list(Category.objects.all())
+
+    def resolver(root, info) -> Iterable:
+        return make_source(rows)
+
+    schema = _field_schema(
+        _make_sidecar_node_type("CountlessIterableNode", total_count=True),
+        resolver=resolver,
+    )
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+
+
+@pytest.mark.django_db
+def test_consumer_resolver_generator_paginates_without_total_count():
+    """A generator return paginates normally when ``totalCount`` is not selected.
+
+    Generators are NAMED in the consumer-``resolver=`` contract (a non-queryset
+    iterable may be paginated when no ``filter:`` / ``orderBy:`` input is
+    supplied). The eager ``.count`` attribute read in ``_attach_count_sync``
+    broke that contract outright: ``AttributeError: 'generator' object has no
+    attribute 'count'`` on every page without ``totalCount``. This is the
+    schema-level pin of the gated read; the opted connection shape proves the
+    count was not merely requested-and-skipped.
+    """
+    services.seed_data(2)
+    rows = list(Category.objects.all())
+
+    def resolver(root, info) -> Iterable:
+        yield from rows
+
+    schema = _field_schema(
+        _make_sidecar_node_type("GeneratorSourceNode", total_count=True),
+        resolver=resolver,
+    )
+    result = schema.execute_sync(
+        "{ items(first: 1) { pageInfo { hasNextPage } edges { node { id } } } }",
+    )
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+    assert result.data["items"]["pageInfo"] is not None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("bad_source", [None, 42])
+def test_consumer_resolver_non_iterable_source_raises_graphql_error(bad_source):
+    """A scalar source fails closed with a package error, not a blank AssertionError.
+
+    ``None`` / an ``int`` are neither QuerySet nor iterable; Relay's slicer
+    first slice-subscripts (``TypeError``), then trips its own bare
+    ``assert isinstance(nodes, (Iterable, Iterator))`` - an empty-message
+    ``AssertionError`` at the GraphQL boundary. The pipeline's shape gate
+    refuses the source instead.
+    """
+    services.seed_data(1)
+
+    def resolver(root, info) -> Iterable:
+        return bad_source
+
+    schema = _field_schema(_make_sidecar_node_type("ScalarSourceNode"), resolver=resolver)
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+
+    assert result.errors is not None
+    messages = [str(err.message) for err in result.errors]
+    assert any("neither a QuerySet" in m and "plain iterable" in m for m in messages)
+
+
+@pytest.mark.django_db
+def test_guard_non_queryset_iterable_admits_getitem_only_sequence():
+    """A ``__getitem__``-only legacy sequence stays admitted by the shape gate.
+
+    ``isinstance(value, Iterable)`` is False for an object implementing only
+    the sequence protocol, yet Relay's slicer paginates it via the
+    slice-subscript path - so the guard must not reject it.
+    """
+    from django_strawberry_framework.connection import _guard_non_queryset_iterable
+
+    class LegacySequence:
+        def __getitem__(self, index):
+            return [][index]
+
+    _guard_non_queryset_iterable(LegacySequence())  # does not raise
+    with pytest.raises(GraphQLError, match="plain iterable"):
+        _guard_non_queryset_iterable(None)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_consumer_resolver_set_source_paginates_without_total_count():
+    """Async path: a set source paginates with ``totalCount`` unselected (no raw leak).
+
+    The async execution reaches the SAME ``_attach_count_sync`` (a set is not
+    an ``AsyncIterator``, so Relay's async resolver branch does not fire and
+    the count helper runs synchronously); before the gate the eager
+    ``.count`` read leaked ``AttributeError`` here too.
+    """
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(2)
+    rows = await sync_to_async(lambda: list(Category.objects.all()))()
+
+    async def resolver(root, info) -> Iterable:
+        return set(rows)
+
+    schema = await sync_to_async(_field_schema)(
+        _make_sidecar_node_type("AsyncSetSourceNode", total_count=True),
+        resolver=resolver,
+    )
+    result = await schema.execute("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+
+
 async def test_attach_count_async_awaits_before_guard_raises():
     """``_attach_count_async`` awaits the connection coroutine BEFORE the non-queryset guard can raise.
 

@@ -41,7 +41,12 @@ from .operations import _OPERATION_PERMISSION_ACTION
 # authorization BYPASS. Shared by both
 # enforcement seams - the resolver's ``authorize_or_raise`` (``check_permission``)
 # and ``DjangoMutation.check_permission`` (each ``has_permission``) - so the
-# wording cannot drift between them.
+# wording cannot drift between them. Mirrors
+# ``utils/permissions.py::_GATE_ASYNC_RECOURSE`` (the read-side gate's twin);
+# the two are deliberately NOT computed from a shared template the way the three
+# pipeline recourses are (``utils/querysets.py::sync_pipeline_recourse``, whose
+# docstring declines these two): four of their clauses differ, so a template
+# would take a parameter per clause and pin nothing.
 _PERMISSION_ASYNC_RECOURSE = (
     "A DjangoMutation runs its permission check synchronously, so it cannot await "
     "an async permission hook; redefine has_permission / check_permission as a sync "
@@ -96,7 +101,20 @@ def run_permission_classes(
     denial, ``True`` only when all allow.
     """
     meta = type(mutation_self)._mutation_meta
-    for permission_class in meta.permission_classes:
+    # The validated permission set is iterated as a SNAPSHOT (a tuple captured
+    # before the walk), never live: a ``has_permission`` hook receives the
+    # mutation class and could otherwise mutate the very list this loop iterates
+    # - clearing it would short-circuit the in-flight loop to "all allowed" (the
+    # configured deniers never run) and the emptied list would persist on the
+    # class, authorizing every later request: a persistent cross-request
+    # authorization bypass. The AND contract (every entry must allow) is sound
+    # only over the validated set captured at class creation, never over
+    # whatever a hook leaves behind. The storage side makes that guarantee hold:
+    # the validated snapshot is a SEALED record (see
+    # ``sets.py::_ValidatedMutationMeta``) - the permission set is an immutable
+    # tuple and the snapshot refuses reassignment, so a hook cannot empty,
+    # lengthen, or swap the configuration this walk is running inside.
+    for permission_class in tuple(meta.permission_classes):
         allowed = _require_sync_bool_auth_result(
             permission_class().has_permission(
                 info,

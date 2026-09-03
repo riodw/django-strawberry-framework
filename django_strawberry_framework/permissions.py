@@ -102,14 +102,6 @@ from django.db.models.fields.reverse_related import ForeignObjectRel
 from .exceptions import ConfigurationError
 from .registry import registry
 
-# ``SyncMisuseError`` is re-exported (redundant-alias form, the established
-# ``types/relay.py`` convention) so the cascade's own error surface is importable
-# from this module (``from django_strawberry_framework.permissions import
-# SyncMisuseError``) without reaching into the private ``utils`` package. It is
-# already in the package-root ``__all__`` via ``types``, so this re-export adds no
-# new public name.
-from .utils.querysets import SyncMisuseError as SyncMisuseError
-
 # ``apply_type_visibility_sync`` runs a target's ``get_queryset`` and rejects an
 # async hook with ``SyncMisuseError`` (the coroutine closed first); the cascade
 # reuses it as the per-edge probe so the package keeps ONE sync-misuse site
@@ -120,14 +112,26 @@ from .utils.querysets import SyncMisuseError as SyncMisuseError
 # rendered through the cascade's per-edge error seam (``_edge_error_renderer``);
 # because the boundary now returns a SEALED queryset, the cascade's
 # ``.values(...)`` re-projection runs on a genuine ``QuerySet.values`` (never a
-# consumer ``_values`` override), and only the SQL-composability battery around
-# that re-projection stays cascade-local.
+# consumer ``_values`` override), and only the RE-PROJECTION battery -- the
+# rejections that exist because the cascade calls ``.values(...)`` -- stays
+# cascade-local.
 from .utils.querysets import (
+    _CASCADE_SEAL_POLICY,
+    _defect_message,
     _prepared_visibility_source,
     apply_type_visibility_sync,
+    base_queryset,
     model_for,
     run_in_one_sync_boundary,
 )
+
+# ``SyncMisuseError`` is re-exported (redundant-alias form, the established
+# ``types/relay.py`` convention) so the cascade's own error surface is importable
+# from this module (``from django_strawberry_framework.permissions import
+# SyncMisuseError``) without reaching into the private ``utils`` package. It is
+# already in the package-root ``__all__`` via ``types``, so this re-export adds no
+# new public name.
+from .utils.querysets import SyncMisuseError as SyncMisuseError
 
 _ASYNC_RECOURSE = (
     "apply_cascade_permissions walks target hooks synchronously and "
@@ -328,125 +332,131 @@ def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
     The twin of :func:`_edge_error_renderer`, for the other end of the helper:
     ``apply_cascade_permissions`` seals its root through
     ``utils/querysets.py::_prepared_visibility_source``, which owns the
-    shape / concrete-table / sealability contract but words its defaults for
-    ``apply_type_visibility``. The consumer never called that function -- they
-    called this one, from inside their own ``get_queryset`` -- so the cascade
-    keeps its own prose (and its own recourse) on every source defect.
+    shape / concrete-table / sealability / composability contract but words its
+    defaults for ``apply_type_visibility``. The consumer never called that
+    function -- they called this one, from inside their own ``get_queryset`` --
+    so the cascade keeps its own prose (and its own recourse) on every source
+    defect.
 
-    The cascade seals with ``require_model_rows=False`` (a ``.values()`` root is
-    the cascade's supported input, exactly as it is for a hook return), which
-    also leaves the ``sliced`` rejection to :func:`_validate_root_queryset`
-    below, so the reachable codes here are ``type``, ``table``, and
-    ``untrusted``.
+    The cascade seals under ``_CASCADE_SEAL_POLICY``: ``require_model_rows``
+    off (a ``.values()`` root is the cascade's supported input, exactly as it is
+    for a hook return), ``reject_sliced`` and ``reject_combined`` on (the walk
+    narrows by ``.filter(...)``, which Django refuses on either shape, so
+    accepting one would leak a raw ``TypeError`` / ``NotSupportedError``
+    mid-walk instead of the fail-closed configuration error). The reachable
+    codes are therefore ``type``, ``table``, ``untrusted``, ``sliced`` and
+    ``combined``.
     """
+    name = cls.__name__
 
     def _render(code: str, detail: str) -> str:
-        if code == "type":
-            return (
-                f"apply_cascade_permissions requires a QuerySet of {model.__name__} "
-                f"rows for {cls.__name__}; got {detail}. Pass the "
-                f"get_queryset hook's queryset (a Manager needs .all(); a list has "
-                f"no lazy query to compose into)."
-            )
-        if code == "table":
-            return (
-                f"apply_cascade_permissions for {cls.__name__} requires a QuerySet "
-                f"over {model.__name__}'s concrete table; got a {detail} queryset."
-            )
-        # ``code == "untrusted"`` -- the only remaining source defect reachable
-        # with no required alias and ``require_model_rows=False``; an unhandled
-        # future code would fall through silently, so this last branch is
-        # unconditional.
-        return (
-            f"apply_cascade_permissions for {cls.__name__} got a root queryset that "
-            f"cannot be sealed into a framework-owned execution queryset ({detail}); "
-            f"the cascade narrows a rebuilt queryset rather than the caller's object, "
-            f"and a foreign Query class, a foreign row iterable, or an unresolved "
-            f"deferred filter cannot be faithfully rebuilt. Pass plain query state."
+        return _defect_message(
+            {
+                "type": (
+                    f"apply_cascade_permissions requires a QuerySet of {model.__name__} "
+                    f"rows for {name}; got {detail}. Pass the "
+                    f"get_queryset hook's queryset (a Manager needs .all(); a list has "
+                    f"no lazy query to compose into)."
+                ),
+                "table": (
+                    f"apply_cascade_permissions for {name} requires a QuerySet "
+                    f"over {model.__name__}'s concrete table; got a {detail} queryset."
+                ),
+                "untrusted": (
+                    f"apply_cascade_permissions for {name} got a root queryset that "
+                    f"cannot be sealed into a framework-owned execution queryset ({detail}); "
+                    f"the cascade narrows a rebuilt queryset rather than the caller's object, "
+                    f"and a foreign Query class, a foreign row iterable, or an unresolved "
+                    f"deferred filter cannot be faithfully rebuilt. Pass plain query state."
+                ),
+                "sliced": (
+                    f"apply_cascade_permissions for {name} got a sliced "
+                    f"queryset; the cascade narrows by .filter(...), which cannot be "
+                    f"applied after a slice. Cascade first, slice after."
+                ),
+                "combined": (
+                    f"apply_cascade_permissions for {name} got a "
+                    f"{detail}() combined queryset; the cascade narrows "
+                    f"by .filter(...), which Django does not support after a combinator. "
+                    f"Cascade each branch before combining."
+                ),
+            },
+            (code, detail),
+            f"The apply_cascade_permissions root for {name}",
         )
 
     return _render
 
 
-def _validate_root_queryset(cls: type, queryset: models.QuerySet) -> None:
-    """Reject a sealed root/nested ``queryset`` the cascade cannot narrow.
-
-    Runs on the SEALED source, so the shape / concrete-table / sealability
-    rejections have already been made by
-    ``utils/querysets.py::_prepared_visibility_source`` (with the cascade's
-    :func:`_root_error_renderer` prose). What is left is the pair the seal does
-    not decide for a ``require_model_rows=False`` source: sliced and combined
-    (``union()`` / ``intersection()`` / ``difference()``) roots. Both are
-    rejected up front because the walk narrows by ``.filter(...)``, which Django
-    refuses on either shape, so accepting one would leak a raw ``TypeError`` /
-    ``NotSupportedError`` mid-walk instead of the fail-closed configuration
-    error.
-    """
-    if queryset.query.is_sliced:
-        raise ConfigurationError(
-            f"apply_cascade_permissions for {cls.__name__} got a sliced "
-            f"queryset; the cascade narrows by .filter(...), which cannot be "
-            f"applied after a slice. Cascade first, slice after.",
-        )
-    if queryset.query.combinator:
-        raise ConfigurationError(
-            f"apply_cascade_permissions for {cls.__name__} got a "
-            f"{queryset.query.combinator}() combined queryset; the cascade narrows "
-            f"by .filter(...), which Django does not support after a combinator. "
-            f"Cascade each branch before combining.",
-        )
-
-
 def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
     """Build the cascade's error renderer for the shared visibility boundary.
 
-    The boundary owns the hook-result shape / concrete-table / alias checks
-    (``utils/querysets.py::_normalized_visibility_result``); this seam keeps
-    the cascade's path-rich per-edge prose on those failures. The ``type`` /
-    ``table`` / ``alias`` wordings are the cascade's established strings;
-    ``untrusted`` (a queryset whose state the boundary cannot seal into a
-    framework-owned execution queryset -- a foreign ``Query`` class, a foreign
-    row iterable, or an unresolved deferred filter) is boundary-new and gets
-    cascade-flavored prose of its own. The cascade runs
-    with ``require_model_rows=False``, so the boundary never raises the
-    ``projection`` code here - a ``.values()`` return is the cascade's
-    supported input, not a defect.
+    The boundary owns the hook-result shape / concrete-table / alias /
+    composability checks (``utils/querysets.py::_normalized_visibility_result``);
+    this seam keeps the cascade's path-rich per-edge prose on those failures.
+    The ``type`` / ``table`` / ``alias`` / ``sliced`` / ``combined`` wordings are
+    the cascade's established strings; ``untrusted`` (a queryset whose state the
+    boundary cannot seal into a framework-owned execution queryset -- a foreign
+    ``Query`` class, a foreign row iterable, or an unresolved deferred filter)
+    is boundary-new and gets cascade-flavored prose of its own. The cascade runs
+    under ``_CASCADE_SEAL_POLICY``, whose ``require_model_rows=False`` means the
+    boundary never raises the ``projection`` code here - a ``.values()`` return
+    is the cascade's supported input, not a defect - while its
+    ``reject_sliced`` / ``reject_combined`` are what surface the two shapes
+    ``_validated_target_subquery`` cannot re-project.
     """
+    edge = f"{field.model.__name__}.{field.name}"
+    name = target_type.__name__
 
     def _render(code: str, detail: str) -> str:
-        if code == "type":
-            return (
-                f"{target_type.__name__}.get_queryset must return a QuerySet for "
-                f"the cascade subquery on {field.model.__name__}.{field.name}; "
-                f"got {detail}."
-            )
-        if code == "table":
-            return (
-                f"{target_type.__name__}.get_queryset returned a {detail} "
-                f"queryset for the cascade subquery on "
-                f"{field.model.__name__}.{field.name}, which targets "
-                f"{field.related_model.__name__}; the subquery must stay on the "
-                f"target's concrete table (proxy siblings are compatible, MTI "
-                f"children are not)."
-            )
-        if code == "untrusted":
-            return (
-                f"{target_type.__name__}.get_queryset returned a queryset that cannot be "
-                f"sealed into a framework-owned execution queryset ({detail}) for the "
-                f"cascade subquery on {field.model.__name__}.{field.name}; the cascade "
-                f"re-projects the sealed queryset to the edge's target column, and a "
-                f"foreign Query class, a foreign row iterable, or an unresolved deferred "
-                f"filter cannot be faithfully rebuilt. Return plain rows."
-            )
-        # ``code == "alias"`` -- the only remaining boundary code the cascade
-        # can surface (it runs with require_model_rows=False, so no
-        # ``projection`` code reaches here); an unhandled future code would fall
-        # through silently, so this last branch is unconditional.
-        return (
-            f"{target_type.__name__}.get_queryset returned a queryset on alias "
-            f"{detail!r} for the cascade subquery on "
-            f"{field.model.__name__}.{field.name}, but the cascade is pinned to "
-            f"{alias!r}; a cascade cannot compose cross-database subqueries."
+        return _defect_message(
+            {
+                "type": (
+                    f"{name}.get_queryset must return a QuerySet for "
+                    f"the cascade subquery on {edge}; "
+                    f"got {detail}."
+                ),
+                "table": (
+                    f"{name}.get_queryset returned a {detail} "
+                    f"queryset for the cascade subquery on "
+                    f"{edge}, which targets "
+                    f"{field.related_model.__name__}; the subquery must stay on the "
+                    f"target's concrete table (proxy siblings are compatible, MTI "
+                    f"children are not)."
+                ),
+                "untrusted": (
+                    f"{name}.get_queryset returned a queryset that cannot be "
+                    f"sealed into a framework-owned execution queryset ({detail}) for the "
+                    f"cascade subquery on {edge}; the cascade "
+                    f"re-projects the sealed queryset to the edge's target column, and a "
+                    f"foreign Query class, a foreign row iterable, or an unresolved deferred "
+                    f"filter cannot be faithfully rebuilt. Return plain rows."
+                ),
+                "sliced": (
+                    f"{name}.get_queryset returned a sliced queryset "
+                    f"for the cascade subquery on "
+                    f"{edge}; a LIMIT/OFFSET visibility "
+                    f"predicate is row-order-dependent and cannot compose as an __in "
+                    f"subquery."
+                ),
+                "combined": (
+                    f"{name}.get_queryset returned a "
+                    f"{detail}() combined "
+                    f"queryset for the cascade subquery on "
+                    f"{edge}; re-projecting a combined "
+                    f"queryset only rewrites the outer projection while each branch "
+                    f"keeps its original column, so it cannot be safely bound to the "
+                    f"edge's target column."
+                ),
+                "alias": (
+                    f"{name}.get_queryset returned a queryset on alias "
+                    f"{detail!r} for the cascade subquery on "
+                    f"{edge}, but the cascade is pinned to "
+                    f"{alias!r}; a cascade cannot compose cross-database subqueries."
+                ),
+            },
+            (code, detail),
+            f"The {name}.get_queryset return for the cascade subquery on {edge}",
         )
 
     return _render
@@ -464,11 +474,14 @@ def _validated_target_subquery(
     closed here, before composition. The shared visibility boundary
     (``utils/querysets.py::_normalized_visibility_result``, reached through
     ``apply_type_visibility_sync`` with the cascade's error renderer) already
-    owns the shape / concrete-table / alias contract: by the time a return
+    owns the shape / concrete-table / alias contract, and its
+    ``_CASCADE_SEAL_POLICY`` owns the two composability rejections that are not
+    re-projection-specific (``sliced`` and ``combined``): by the time a return
     reaches this function it is a real ``QuerySet`` on the target's concrete
-    table, pinned to the root alias. What stays cascade-local is everything
-    with no boundary analogue -- the SQL-composability battery around the
-    ``.values(...)`` re-projection. The accepted queryset is re-projected to
+    table, pinned to the root alias, unsliced and uncombined. What stays
+    cascade-local is the RE-PROJECTION battery, the rejections with no boundary
+    analogue because they exist only because this function calls
+    ``.values(...)``. The accepted queryset is re-projected to
     ``.values(field.target_field.attname)`` so the membership test always
     binds the FK's actual target column: a consumer ``.values(...)`` /
     ``.values_list(...)`` projection is overridden rather than trusted, and a
@@ -479,29 +492,13 @@ def _validated_target_subquery(
     selected column. Shapes where it changes *semantics* are rejected instead
     of "repaired": a grouped queryset (aggregate ``annotate`` / ``values()``
     grouping) would gain a different ``GROUP BY``, silently widening the
-    visible set; a combined queryset (``union()`` etc.) only rewrites the
-    outer projection while each branch keeps selecting its original column;
-    an ``extra(select={...})`` alias shadowing the target column would make
-    ``.values(...)`` select the raw-SQL expression, not the model column.
+    visible set; a field-specific ``distinct(...)`` would keep different rows;
+    an ``extra(select={...})`` or ``annotate(...)`` alias shadowing the target
+    column would make ``.values(...)`` select the alias expression, not the
+    model column. The combined-queryset case is the same argument made one
+    layer up, in the seal, because a combinator also blocks the cascade's
+    ``.filter(...)`` narrowing at the root.
     """
-    if target_qs.query.is_sliced:
-        raise ConfigurationError(
-            f"{target_type.__name__}.get_queryset returned a sliced queryset "
-            f"for the cascade subquery on "
-            f"{field.model.__name__}.{field.name}; a LIMIT/OFFSET visibility "
-            f"predicate is row-order-dependent and cannot compose as an __in "
-            f"subquery.",
-        )
-    if target_qs.query.combinator:
-        raise ConfigurationError(
-            f"{target_type.__name__}.get_queryset returned a "
-            f"{target_qs.query.combinator}() combined "
-            f"queryset for the cascade subquery on "
-            f"{field.model.__name__}.{field.name}; re-projecting a combined "
-            f"queryset only rewrites the outer projection while each branch "
-            f"keeps its original column, so it cannot be safely bound to the "
-            f"edge's target column.",
-        )
     if target_qs.query.distinct_fields:
         raise ConfigurationError(
             f"{target_type.__name__}.get_queryset returned a queryset with "
@@ -615,16 +612,16 @@ def apply_cascade_permissions(
     # to erase the cascade predicate and then pass an apparently valid but
     # unfiltered query back to the outer hook-result seal. The cascade's own
     # renderer keeps the source defects attributed to THIS call, and
-    # ``require_model_rows=False`` matches the cascade's hook-return contract:
-    # a ``.values()`` root is supported input, and the slice rejection stays in
-    # ``_validate_root_queryset``.
+    # ``_CASCADE_SEAL_POLICY`` states the cascade's whole contract in one place:
+    # a ``.values()`` root is supported input, while a sliced or combined root
+    # -- neither of which ``.filter(...)`` can narrow -- is rejected by the seal
+    # itself rather than by a second battery after it.
     queryset, _required_alias = _prepared_visibility_source(
         cls,
         queryset,
         render_error=_root_error_renderer(cls, model),
-        require_model_rows=False,
+        policy=_CASCADE_SEAL_POLICY,
     )
-    _validate_root_queryset(cls, queryset)
     names_to_walk = _validate_fields(model, fields)
     plan = _edge_plan(model)
     if names_to_walk is None and plan.unsupported:
@@ -692,7 +689,7 @@ def _walk(
         target_type = registry.get(field.related_model)
         if target_type is None:
             continue
-        base = field.related_model._default_manager.using(state.alias).all()
+        base = base_queryset(field.related_model, using=state.alias)
         edge_state = dataclasses.replace(
             state,
             path=(*state.path, f"{cls.__name__}.{field.name}"),
@@ -705,7 +702,7 @@ def _walk(
                 info,
                 async_recourse=_ASYNC_RECOURSE,
                 render_error=_edge_error_renderer(target_type, field, state.alias),
-                require_model_rows=False,
+                policy=_CASCADE_SEAL_POLICY,
             )
         finally:
             _cascade_state.reset(edge_token)

@@ -15,10 +15,12 @@ from django.http import QueryDict
 from graphql import GraphQLError
 from strawberry import relay
 
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import (
     ArrayFilter,
     ArrayFilterMethod,
     Filter,
+    FilterSet,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
     LazyRelatedClassMixin,
@@ -194,6 +196,21 @@ def test_integer_range_filter_passes_through_empty_value():
     assert f.filter(sentinel, None) is sentinel
 
 
+def test_integer_range_filter_lying_list_subclass_fails_closed():
+    """A ``list`` SUBCLASS whose ``__iter__`` raises detonates inside the
+    ``list(value)`` materialization; the containment arm fails closed to the
+    unfiltered skip (the GraphQL contract rejects the shape upstream) instead
+    of leaking the raw ``RuntimeError``."""
+
+    class Lying(list):
+        def __iter__(self):
+            raise RuntimeError("hostile __iter__ detonated")
+
+    sentinel = object()
+    f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range")
+    assert f.filter(sentinel, Lying([1, 2])) is sentinel
+
+
 def test_integer_range_filter_applies_distinct_when_flagged():
     """``IntegerRangeFilter.filter`` calls ``.distinct()`` when ``distinct=True``."""
     calls = {"distinct": 0}
@@ -251,6 +268,15 @@ def test_list_filter_defers_to_super_for_nonempty_lists():
     f = ListFilter(field_name="ids", lookup_expr="in")
     f.filter(_Qs(), [1, 2])
     assert captured == {"ids__in": [1, 2]}
+
+
+def test_list_filter_passes_through_none():
+    """``None`` skips the list-shape gate entirely and falls through to
+    ``Filter.filter``, which short-circuits on ``EMPTY_VALUES`` - the same
+    pass-through the sibling ``IntegerInFilter`` documents."""
+    sentinel = object()
+    f = ListFilter(field_name="ids")
+    assert f.filter(sentinel, None) is sentinel
 
 
 # ---------------------------------------------------------------------------
@@ -1244,9 +1270,16 @@ def test_integer_in_filter_unbound_and_missing_model():
     res = f.filter(qs, [1, 2])
     assert "IN (1, 2)" in str(res.query)
 
-    # Empty value passes through without crashing
+    # None (omission) passes through without crashing.
     assert f.filter(qs, None) is qs
-    assert f.filter(qs, "") is qs
+
+    # A non-list scalar is a CODED reject since the shape gate: a string
+    # used to iterate char-by-char through the coercion loop ("26"
+    # coercing to [2, 6] -- a wrong-result membership) and a bare int
+    # leaked ``TypeError: 'int' object is not iterable``.
+    with pytest.raises(GraphQLError) as exc_info:
+        f.filter(qs, "")
+    assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
 
 
 def test_integer_range_filter_malformed_values_pass_through():
@@ -1294,11 +1327,284 @@ def test_filters_base_edge_cases():
     assert _marked_pk_field_name(f) == "target__pk"
 
 
-def test_related_filter_get_queryset_target_without_model():
-    """`RelatedFilter.get_queryset` safely returns None when target FilterSet has no model."""
+def test_related_filter_get_queryset_mistyped_target_is_typed():
+    """`RelatedFilter.get_queryset` surfaces the family gate's typed rejection
+    for a mis-typed target.
+
+    Replaces the pre-gate silent ``None`` propagation: a non-FilterSet
+    target made the fallback return ``None`` (its ``_meta`` read came back
+    empty), leaking a ``None`` queryset into django-filter's field build.
+    The gate rejects the mis-typed target at the ``.filterset`` read
+    instead.
+    """
 
     class _NoModelFilterSet:
         _meta = None
 
     rel = RelatedFilter(_NoModelFilterSet)
-    assert rel.get_queryset(request=None) is None
+    with pytest.raises(ConfigurationError) as exc_info:
+        rel.get_queryset(request=None)
+    assert "is not a FilterSet subclass" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# RelatedFilter target-type gate (the `.filterset` read seam).
+# ---------------------------------------------------------------------------
+
+
+class _PlainClassTarget:
+    """A plain class that is not a FilterSet (the mis-typed RelatedFilter target)."""
+
+
+def test_related_filter_gate_accepts_filterset_class_target():
+    class Target(FilterSet):
+        class Meta:
+            model = models.Shelf
+            fields = ["id"]
+
+    related = RelatedFilter(Target, field_name="shelves")
+    assert related.filterset is Target
+
+
+def test_related_filter_gate_passes_the_none_placeholder():
+    """``RelatedFilter(None)`` is the skip-silently placeholder: the gate must
+    pass it so the BFS enqueue and ``_expand_related_filter`` skip the branch."""
+    related = RelatedFilter(None, field_name="shelves")
+    assert related.filterset is None
+
+
+def test_related_filter_gate_rejects_plain_class_target():
+    related = RelatedFilter(_PlainClassTarget, field_name="shelves")
+    with pytest.raises(ConfigurationError) as exc_info:
+        related.filterset
+    msg = str(exc_info.value)
+    assert "declares RelatedFilter 'shelves'" in msg
+    assert "_PlainClassTarget" in msg
+    assert "is not a FilterSet subclass" in msg
+
+
+def test_related_filter_gate_rejects_cross_family_orderset_target():
+    """The cross-family twin: an ``OrderSet`` cannot filter a relation branch.
+    Pre-gate it was silently enqueued into the FILTER BFS, walking the order
+    family's fields through the filter input builder."""
+    from django_strawberry_framework.orders import OrderSet
+
+    class AnyOrderset(OrderSet):
+        class Meta:
+            model = models.Shelf
+            fields = ["id"]
+
+    related = RelatedFilter(AnyOrderset, field_name="shelves")
+    with pytest.raises(ConfigurationError) as exc_info:
+        related.filterset
+    assert "is not a FilterSet subclass" in str(exc_info.value)
+
+
+def test_related_filter_gate_rejects_factory_returning_non_class():
+    def factory():
+        return 42
+
+    related = RelatedFilter(factory, field_name="shelves")
+    with pytest.raises(ConfigurationError):
+        related.filterset
+
+
+def test_related_filter_gate_preserves_raw_import_error_for_unresolvable_strings():
+    """The unresolvable-string raw ``ImportError`` is the finalizer's rewrap
+    key and MUST stay raw at the property read."""
+    related = RelatedFilter("no.such.module.NoSuchFilter", field_name="shelves")
+    with pytest.raises(ImportError):
+        related.filterset
+
+
+def test_related_filter_gate_names_the_bound_owner():
+    class Target(FilterSet):
+        class Meta:
+            model = models.Shelf
+            fields = ["id"]
+
+    class Owner(FilterSet):
+        shelves = RelatedFilter(Target, field_name="shelves")
+
+        class Meta:
+            model = models.Branch
+            fields = ["id"]
+
+    # Re-target the bound declaration through the permissive setter, then
+    # read: the gate names the OWNING filterset, not just the target.
+    Owner.related_filters["shelves"].filterset = _PlainClassTarget
+    with pytest.raises(ConfigurationError) as exc_info:
+        Owner.related_filters["shelves"].filterset
+    assert "Owner" in str(exc_info.value)
+
+
+def test_related_filter_expansion_surfaces_the_gate_not_a_raw_attribute_error():
+    """``FilterSet.get_filters()`` expansion (``_expand_related_filter``
+    reading ``f.filterset``) surfaces the typed gate error instead of the
+    pre-fix raw ``AttributeError: ... has no attribute 'get_filters'``."""
+
+    class Parent(FilterSet):
+        shelves = RelatedFilter(_PlainClassTarget, field_name="shelves")
+
+        class Meta:
+            model = models.Branch
+            fields = ["id"]
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        Parent.get_filters()
+    assert "is not a FilterSet subclass" in str(exc_info.value)
+
+
+def test_related_filter_gate_rejects_mistyped_target_at_bfs_enqueue():
+    """The BFS factory's enqueue (``getattr(related, 'filterset')``) hits the
+    gate instead of enqueueing the mis-typed target and detonating inside
+    ``set_input_type_name``."""
+    from django_strawberry_framework.filters.factories import FilterArgumentsFactory
+
+    class Parent(FilterSet):
+        shelves = RelatedFilter(_PlainClassTarget, field_name="shelves")
+
+        class Meta:
+            model = models.Branch
+            fields = ["id"]
+
+    factory = FilterArgumentsFactory(Parent)
+    with pytest.raises(ConfigurationError):
+        factory._ensure_built()
+
+
+def test_related_filter_gate_passes_none_placeholder_through_bfs_enqueue():
+    """The ``None`` placeholder is skipped silently by the BFS: the build
+    succeeds with the related branch omitted."""
+    from django_strawberry_framework.filters.factories import FilterArgumentsFactory
+
+    class Parent(FilterSet):
+        shelves = RelatedFilter(None, field_name="shelves")
+
+        class Meta:
+            model = models.Branch
+            fields = ["id"]
+
+    factory = FilterArgumentsFactory(Parent)
+    factory._ensure_built()
+    assert factory.input_object_types
+
+
+# ---------------------------------------------------------------------------
+# Hostile filter-value shapes (fail-closed containment at the filter() seam).
+# ---------------------------------------------------------------------------
+
+
+def test_list_filter_scalar_value_is_a_coded_reject():
+    """The old bare ``len(value)`` leaked ``TypeError: object of type 'int'
+    has no len()`` -- the exact sibling of the leak the GlobalID
+    multiple-choice gate's own docstring documents as fixed."""
+    f = ListFilter(field_name="code")
+    with pytest.raises(GraphQLError) as exc_info:
+        f.filter(models.Shelf.objects.none(), 42)
+    assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
+
+
+def test_list_filter_one_shot_iterator_is_a_coded_reject():
+    f = ListFilter(field_name="code")
+    with pytest.raises(GraphQLError):
+        f.filter(models.Shelf.objects.none(), iter(["a", "b"]))
+
+
+def test_list_filter_string_value_is_rejected_not_iterated_charwise():
+    """A string under an ``in`` lookup used to reach Django's char-wise
+    string iteration (``in: "26"`` compiling to ``IN ('2','6')``); the shape
+    gate rejects the non-list shape first."""
+    f = ListFilter(field_name="code", lookup_expr="in")
+    with pytest.raises(GraphQLError):
+        f.filter(models.Shelf.objects.none(), "26")
+
+
+def test_integer_in_filter_scalar_value_is_a_coded_reject():
+    """The coercion loop leaked ``TypeError: 'int' object is not iterable``
+    for a scalar that bypasses form coercion."""
+    f = IntegerInFilter(field_name="lifetime_fines_cents")
+    with pytest.raises(GraphQLError) as exc_info:
+        f.filter(models.Shelf.objects.none(), 42)
+    assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
+
+
+def test_integer_in_filter_string_value_is_rejected_not_iterated_charwise():
+    """A string value iterated char-by-char through the coercion loop:
+    ``in: "26"`` coerced to ``[2, 6]`` -- a wrong-result membership, not
+    just a raw escape."""
+    f = IntegerInFilter(field_name="lifetime_fines_cents")
+
+    class Parent:
+        _meta = type("_Meta", (), {"model": models.Patron})()
+
+    f.parent = Parent()
+    with pytest.raises(GraphQLError):
+        f.filter(models.Shelf.objects.none(), "26")
+
+
+def test_globalid_multiple_choice_lying_list_subclass_is_a_coded_reject():
+    """A ``list`` SUBCLASS whose ``__iter__`` raises passes the ``isinstance``
+    shape gate and used to detonate inside ``list(value)``."""
+
+    class Lying(list):
+        def __iter__(self):
+            raise RuntimeError("hostile __iter__ detonated")
+
+    f = GlobalIDMultipleChoiceFilter(field_name="id")
+    with pytest.raises(GraphQLError) as exc_info:
+        f.filter(models.Shelf.objects.none(), Lying(["ShelfNode:1"]))
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
+
+
+def test_array_filter_hostile_emptiness_probe_is_a_coded_reject():
+    """``value in EMPTY_VALUES`` evaluates ``value == ...``; a hostile
+    ``__eq__`` used to detonate raw inside the probe."""
+
+    class Hostile:
+        def __eq__(self, other):
+            raise RuntimeError("hostile __eq__ detonated")
+
+        def __ne__(self, other):
+            raise RuntimeError("hostile __ne__ detonated")
+
+        def __hash__(self):
+            return 0
+
+    f = ArrayFilter(field_name="tags")
+    with pytest.raises(GraphQLError) as exc_info:
+        f.filter(models.Shelf.objects.none(), Hostile())
+    assert exc_info.value.extensions == {"code": "FILTER_INVALID"}
+
+
+def test_integer_range_filter_hostile_value_skips_without_detonating():
+    """The shape check runs BEFORE any value probe, so a hostile ``__eq__``
+    takes the documented pass-through skip instead of detonating inside the
+    old leading ``value in EMPTY_VALUES`` membership."""
+
+    class Hostile:
+        def __eq__(self, other):
+            raise RuntimeError("hostile __eq__ detonated")
+
+        def __hash__(self):
+            return 0
+
+    qs = models.Shelf.objects.none()
+    f = IntegerRangeFilter(field_name="lifetime_fines_cents")
+    assert f.filter(qs, Hostile()) is qs
+
+
+def test_decode_global_id_hostile_repr_still_raises_the_coded_error():
+    """The malformed-payload message interpolates the rejected value; a
+    hostile ``__repr__`` used to detonate DURING the GraphQLError assembly,
+    replacing the promised coded error with a raw ``RuntimeError``. The
+    guarded repr fallback renders ``<unprintable ...>`` instead."""
+
+    class Hostile:
+        def __repr__(self):
+            raise RuntimeError("hostile __repr__ detonated")
+
+    with pytest.raises(GraphQLError) as exc_info:
+        _decode_and_validate_global_id(Hostile(), GlobalIDFilter(field_name="id"))
+    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
+    assert "unprintable" in str(exc_info.value)

@@ -1567,6 +1567,84 @@ def test_supplied_injected_field_passes_runtime_check():
     serializer_resolvers._assert_schema_runtime_agreement(_injected_topic_mut(), serializer)
 
 
+def test_injected_serializer_choice_field_agrees_on_update_operation():
+    """An UPDATE mutation's injected serializer-only ``ChoiceField`` spec agrees with the runtime.
+
+    A serializer-only ``ChoiceField`` upgrades to a generated enum whose GraphQL name is
+    derived from the provisional type name (``_serializer_choice_enum``). The injected spec is
+    resolved under the OPERATION's provisional (``<Ser>PartialInput`` for an update), the SAME
+    provisional ``_assert_field_agreement`` re-derives the runtime annotation under - so the
+    two sides resolve the SAME enum and a perfectly valid update declaration agrees instead of
+    raising a spurious requiredness/annotation disagreement on every invocation (the
+    create-side provisional would record ``<Ser>Input<Status>Enum`` while the runtime guard
+    re-derives ``<Ser>PartialInput<Status>Enum``).
+    """
+    from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
+    from django_strawberry_framework.rest_framework.inputs import resolve_injected_field_specs
+
+    class StatusShelfSer(serializers.ModelSerializer):
+        status = serializers.ChoiceField(
+            choices=[("active", "Active"), ("retired", "Retired")],
+            required=True,
+            write_only=True,
+        )
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ("code", "branch", "status")
+
+    field_map = dict(StatusShelfSer().fields)
+    update_specs = resolve_injected_field_specs(
+        StatusShelfSer,
+        field_map,
+        ("status",),
+        operation_kind=PARTIAL,
+    )
+    # The injected spec's enum is named off the PARTIAL provisional - the SAME provisional the
+    # runtime agreement re-derives for an update - so the injected enum identity matches.
+    assert "PartialInput" in update_specs[0].annotation_repr
+    fake_update = type(
+        "UpdateInjectedChoiceMut",
+        (),
+        {
+            "_mutation_meta": SimpleNamespace(
+                model=library_models.Shelf,
+                operation="update",
+                optional_fields=(),
+                injected_fields=("status",),
+            ),
+            "_input_field_specs": [],
+            "_injected_field_specs": update_specs,
+        },
+    )
+    # No raise: the schema-side injected spec and the runtime re-derivation agree.
+    serializer_resolvers._assert_schema_runtime_agreement(fake_update, StatusShelfSer())
+
+    # The create provisional still records the create-named enum (and agrees on create).
+    create_specs = resolve_injected_field_specs(
+        StatusShelfSer,
+        field_map,
+        ("status",),
+        operation_kind=CREATE,
+    )
+    assert "PartialInput" not in create_specs[0].annotation_repr
+    fake_create = type(
+        "CreateInjectedChoiceMut",
+        (),
+        {
+            "_mutation_meta": SimpleNamespace(
+                model=library_models.Shelf,
+                operation="create",
+                optional_fields=(),
+                injected_fields=("status",),
+            ),
+            "_input_field_specs": [],
+            "_injected_field_specs": create_specs,
+        },
+    )
+    serializer_resolvers._assert_schema_runtime_agreement(fake_create, StatusShelfSer())
+
+
 def test_write_surface_agreement_with_no_injected_fields_walks_input_only():
     """A mutation with an empty injected surface still agrees on its GraphQL input specs."""
     serializer_resolvers._assert_schema_runtime_agreement(
@@ -2483,6 +2561,129 @@ def test_merged_kwargs_hook_non_mapping_return_is_configuration_error():
             alias="default",
             hook_context=_hook_ctx(),
         )
+
+
+def test_hook_mapping_rejects_non_string_keys():
+    """A mapping with non-string keys fails loud at the hook boundary.
+
+    The keys become ``serializer_class(**kwargs)`` / ``serializer.save(**save_kwargs)``
+    keywords, so a non-string key could not pass the boundary and instead escaped later as
+    a raw ``TypeError: keywords must be strings`` - the same unclassified escape the
+    non-mapping guard exists to prevent. The gate also keeps every downstream key-hashing
+    consumer (the exact-match injection comparison, the save-kwarg shadow checks) on plain
+    string keys.
+    """
+    mutation = type("M", (), {})
+    for hook_name in (
+        "get_serializer_kwargs()",
+        "get_serializer_injected_data()",
+        "get_serializer_save_kwargs()",
+    ):
+        with pytest.raises(ConfigurationError, match="non-string key"):
+            serializer_resolvers._hook_mapping(mutation, hook_name, {1: "x"})
+        with pytest.raises(ConfigurationError, match="non-string key"):
+            serializer_resolvers._hook_mapping(mutation, hook_name, {b"k": "x", "ok": 1})
+    # A legitimate str-keyed mapping passes untouched.
+    assert serializer_resolvers._hook_mapping(mutation, "get_serializer_kwargs()", {"k": 1}) == {
+        "k": 1,
+    }
+
+
+def test_merged_kwargs_hook_non_string_keys_are_configuration_error():
+    """A ``get_serializer_kwargs`` returning a non-str-keyed mapping fails loud, typed."""
+
+    def hook(
+        self,
+        info,
+        *,
+        data,
+        hook_context,
+    ):
+        return {1: "x", "data": data}
+
+    mutation_cls = _reserved_kwarg_mutation(hook)
+    with pytest.raises(ConfigurationError, match="non-string key"):
+        serializer_resolvers._merged_serializer_kwargs(
+            mutation_cls,
+            _info_with_request(),
+            final_data={"name": "X"},
+            instance=None,
+            alias="default",
+            hook_context=_hook_ctx(),
+        )
+
+
+@pytest.mark.django_db
+def test_serializer_kwargs_hook_non_string_keys_fail_before_serializer_construction():
+    """End to end: a hostile constructor-hook return is the typed error, never a raw TypeError.
+
+    Pre-fix the non-string key reached ``serializer_class(**kwargs)`` and escaped the whole
+    write step as ``TypeError: keywords must be strings``; the boundary now rejects it before
+    any serializer work.
+    """
+    category = product_models.Category.objects.create(name="KeyGateCat")
+
+    class KeyGateSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    def hostile_kwargs(
+        self,
+        info,
+        *,
+        data,
+        hook_context,
+    ):
+        return {1: "x", "data": data}
+
+    mutation_cls = _bind_item_serializer_mutation(KeyGateSerializer)
+    mutation_cls.get_serializer_kwargs = hostile_kwargs
+
+    with write_pipeline("default", lock=False):
+        with pytest.raises(ConfigurationError, match="non-string key"):
+            serializer_resolvers._serializer_write_step(
+                mutation_cls,
+                _info_with_request(),
+                None,
+                {"name": "KeyGate", "category": category.pk},
+            )
+
+
+@pytest.mark.django_db
+def test_save_kwargs_hook_non_string_keys_fail_before_save():
+    """End to end: a non-str-keyed save-kwargs return is the typed error before ``save()``.
+
+    The shadow / model-field key checks both pass an unknown integer key, so pre-fix it
+    reached ``serializer.save(**save_kwargs)`` and escaped as a raw ``TypeError``.
+    """
+    category = product_models.Category.objects.create(name="KeyGateSaveCat")
+
+    class KeyGateSaveSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    def hostile_save_kwargs(
+        self,
+        info,
+        *,
+        data,
+        hook_context,
+    ):
+        return {1: "x"}
+
+    mutation_cls = _bind_item_serializer_mutation(KeyGateSaveSerializer)
+    mutation_cls.get_serializer_save_kwargs = hostile_save_kwargs
+
+    with write_pipeline("default", lock=False):
+        with pytest.raises(ConfigurationError, match="non-string key"):
+            serializer_resolvers._serializer_write_step(
+                mutation_cls,
+                _info_with_request(),
+                None,
+                {"name": "KeyGateSave", "category": category.pk},
+            )
 
 
 def test_merged_kwargs_hook_explicit_none_data_is_configuration_error():

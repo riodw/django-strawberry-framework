@@ -270,7 +270,7 @@ def test_unset_permission_classes_keeps_model_permission_default():
             serializer_class = serializer_cls
             operation = "create"
 
-    assert CreateItem._mutation_meta.permission_classes == [DjangoModelPermission]
+    assert CreateItem._mutation_meta.permission_classes == (DjangoModelPermission,)
 
 
 def test_permission_classes_accepted_as_known_key():
@@ -283,7 +283,8 @@ def test_permission_classes_accepted_as_known_key():
             operation = "create"
             permission_classes = []
 
-    assert CreateItem._mutation_meta.permission_classes == []
+    # The allow-any opt-out is stored as the immutable empty tuple:
+    assert CreateItem._mutation_meta.permission_classes == ()
 
 
 def test_fields_and_exclude_both_raises():
@@ -911,7 +912,7 @@ def test_get_serializer_for_schema_classmethod_override_drives_bind():
         (lambda _fields: [], "must return a mapping"),
         (lambda _fields: {"name": object()}, "DRF serializers.Field"),
         (lambda fields: {"alias": fields["name"]}, "field-map key"),
-        (lambda fields: {1: fields["name"]}, "key must be a string"),
+        (lambda fields: {1: fields["name"]}, "key must be a plain string"),
     ],
 )
 def test_schema_hook_rejects_invalid_field_map_at_class_creation(map_factory, message):
@@ -980,6 +981,52 @@ def test_schema_field_map_reports_malformed_entries_and_unreadable_bound_names()
 
     with pytest.raises(ConfigurationError, match="field_name descriptor"):
         _validate_schema_field_map("BrokenField", {"name": HostileBoundName()})
+
+
+def test_schema_field_map_hostile_bound_name_comparison_is_typed():
+    """A bound-name VALUE with a hostile ``__ne__`` stays a typed configuration error.
+
+    The ``field_name`` descriptor's READ was already guarded; the guard does not sanitize
+    the VALUE it returns, and the mismatch comparison dispatches on it - so an adversarial
+    ``__ne__`` escaped as a raw exception from the middle of the validator. The comparison
+    itself is now contained like every other untrusted read.
+    """
+
+    class HostileNe:
+        def __ne__(self, other):
+            raise RuntimeError("ne exploded")
+
+        def __repr__(self):
+            return "<HostileNe>"
+
+    field = serializers.CharField()
+    field.field_name = "name"
+    field.field_name = HostileNe()
+    with pytest.raises(ConfigurationError, match="field_name whose comparison failed"):
+        _validate_schema_field_map("M", {"name": field})
+
+
+def test_schema_field_map_rejects_str_subclass_key_with_hostile_hash():
+    """A ``str``-subclass key is rejected before any comparison or dict-set dispatch.
+
+    Keys become input field names, so the plain-string gate (the resolver-tier
+    ``_hook_mapping`` precedent) keeps every downstream key-hashing consumer away from an
+    overridable ``__hash__`` / ``__ne__`` a ``str`` subclass could carry.
+    """
+
+    class HostileStr(str):
+        def __hash__(self):
+            raise RuntimeError("hash exploded")
+
+    field = serializers.CharField()
+    field.field_name = "name"
+
+    class OneHostileKey(dict):
+        def items(self):
+            return [(HostileStr("name"), field)]
+
+    with pytest.raises(ConfigurationError, match="key must be a plain string"):
+        _validate_schema_field_map("M", OneHostileKey())
 
 
 def test_schema_hook_invalid_value_with_hostile_repr_is_typed():
@@ -1468,6 +1515,130 @@ def test_validate_nested_fields_materializes_one_shot_selectors():
     )
     assert result is not None
     assert result["items"].fields == ("name",)
+
+
+def test_validate_nested_fields_rejects_mapping_that_cannot_be_materialized():
+    """A hostile ``Meta.nested_fields`` Mapping cannot leak its iteration error."""
+    serializer_cls, field_map = _category_field_map()
+
+    class BrokenMapping(dict):
+        def items(self):
+            raise RuntimeError("nested iteration exploded")
+
+    with pytest.raises(ConfigurationError, match="could not be materialized"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            BrokenMapping(),
+        )
+
+
+def test_validate_nested_fields_rejects_iteration_raising_midway():
+    """An ``.items()`` iterator that raises after one VALID entry still fails typed.
+
+    The entries are materialized up front, so a midway explosion cannot escape between
+    per-entry checks (the first entry here passes every check before the iterator raises).
+    """
+    serializer_cls, field_map = _category_field_map()
+
+    def entries():
+        yield "items", NestedSerializerConfig()
+        raise RuntimeError("midway explosion")
+
+    class MidwayMapping(dict):
+        def items(self):
+            return entries()
+
+    with pytest.raises(ConfigurationError, match="could not be materialized"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            MidwayMapping(),
+        )
+
+
+def test_validate_nested_fields_rejects_malformed_entries():
+    """Entries that do not unpack as ``(field_name, NestedSerializerConfig)`` fail typed."""
+    serializer_cls, field_map = _category_field_map()
+
+    class MalformedEntries(dict):
+        def items(self):
+            return [("items", NestedSerializerConfig(), "extra")]
+
+    with pytest.raises(ConfigurationError, match="could not be unpacked"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            MalformedEntries(),
+        )
+
+
+class HostileNestedKeyHash(str):
+    def __hash__(self):
+        raise RuntimeError("hash exploded")
+
+
+class HostileNestedKeyRepr:
+    def __repr__(self):
+        raise RuntimeError("repr exploded")
+
+
+@pytest.mark.parametrize(
+    "key_factory",
+    [
+        # Unhashable: would detonate ``field_map.get()`` with a raw TypeError.
+        lambda: ["boom"],
+        # A str subclass carrying a hostile ``__hash__``: would detonate the dict-set.
+        lambda: HostileNestedKeyHash(),
+        # A hostile ``__repr__``: would detonate the typed-error f-string assembly.
+        lambda: HostileNestedKeyRepr(),
+    ],
+)
+def test_validate_nested_fields_rejects_non_plain_string_keys(key_factory):
+    """Only an exact ``str`` key may reach ``field_map.get()`` or the ``normalized`` dict-set."""
+    serializer_cls, field_map = _category_field_map()
+
+    class HostileKeyEntries(dict):
+        def items(self):
+            return [(key_factory(), NestedSerializerConfig())]
+
+    with pytest.raises(ConfigurationError, match="keys must be plain strings"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            HostileKeyEntries(),
+        )
+
+
+def test_validate_nested_fields_empty_mapping_requires_no_write_override():
+    """An EMPTY ``Meta.nested_fields = {}`` is no declaration: no create()/update() override demanded.
+
+    The write-method gate exists so nested DATA never reaches a default
+    ``ModelSerializer.create()`` / ``.update()``; an EMPTY declaration passes no nested data,
+    and every other consumer treats a falsy ``nested_fields`` as absent.
+    """
+
+    class ItemInlineless(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    result = _validate_serializer_nested_fields(
+        "M",
+        ItemInlineless,
+        "create",
+        dict(ItemInlineless().fields),
+        {},
+    )
+    assert result == {}
 
 
 def test_nested_fields_stored_on_snapshot_and_builds():

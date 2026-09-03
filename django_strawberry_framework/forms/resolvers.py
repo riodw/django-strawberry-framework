@@ -97,7 +97,6 @@ reconstruction.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from django import forms
@@ -115,7 +114,7 @@ from ..utils.write_values import (
     decode_field_handlers,
     decode_provided_fields,
     decode_visible_relation,
-    relation_field_error,
+    materialize_relation_id_container,
 )
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -241,21 +240,9 @@ def _decode_form_relation_multi(
     """
     if _is_empty_form_value(values, form_field):
         return [], None
-    if isinstance(
-        values,
-        (
-            str,
-            bytes,
-            bytearray,
-            memoryview,
-            Mapping,
-        ),
-    ):
-        return None, relation_field_error(graphql_name)
-    try:
-        provided_values = list(values)
-    except BaseException:
-        return None, relation_field_error(graphql_name)
+    provided_values, container_error = materialize_relation_id_container(values, graphql_name)
+    if container_error is not None:
+        return None, container_error
     keys: list[Any] = []
     for value in provided_values:
         key, error = _decode_form_relation_single(

@@ -26,6 +26,8 @@ captures the scalar-only field list used in those updated tests.
 import datetime
 import functools
 import itertools
+import sys
+import types
 from collections.abc import Sequence
 
 import pytest
@@ -33,6 +35,7 @@ import strawberry
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
 from strawberry import relay
+from strawberry.types.auto import StrawberryAuto
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -2610,3 +2613,284 @@ def test_optimizer_hints_bad_value_raises():
                 model = Category
                 fields = ("id", "name", "items")
                 optimizer_hints = {"items": "not_a_hint"}  # type: ignore[dict-item]
+
+
+# ---------------------------------------------------------------------------
+# PEP 563 (`from __future__ import annotations`) auto handling
+# ---------------------------------------------------------------------------
+
+
+def _exec_pep563_module(program, module_name):
+    """exec ``program`` into a REAL sys.modules entry and return its namespace.
+
+    Strawberry resolves string annotations through ``sys.modules`` for the
+    class's ``__module__``; a real consumer module always has an entry, and
+    this harness must reproduce that shape for finalize to run.
+    """
+    module = types.ModuleType(module_name)
+    sys.modules[module_name] = module
+    exec(program, module.__dict__)
+    return module.__dict__
+
+
+def test_pep563_auto_annotation_synthesizes_model_inferred_type():
+    """`name: auto` in a PEP 563 consumer still synthesizes the model type.
+
+    Under ``from __future__ import annotations`` the marker reaches
+    ``__init_subclass__`` as the STRING "auto" - raw annotation values are
+    never evaluated there. ``_is_auto_annotation`` must accept that spelling
+    or the field is misclassified as consumer-authored, no synthesis runs,
+    and the literal string rides into ``cls.__annotations__``.
+    """
+    namespace = _exec_pep563_module(
+        """
+from __future__ import annotations
+
+from django_strawberry_framework import DjangoType
+from strawberry import auto
+
+from apps.products.models import Category
+
+
+class PEP563AutoType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+
+    name: auto
+""",
+        "test_base_pep563_auto",
+    )
+    pep563_type = namespace["PEP563AutoType"]
+    assert pep563_type.__annotations__["name"] is str
+    finalize_django_types()
+    assert pep563_type.__strawberry_definition__ is not None
+
+
+def test_pep563_dotted_auto_annotation_synthesizes_model_inferred_type():
+    """`name: strawberry.auto` in a PEP 563 consumer is the same marker.
+
+    ``auto`` has two source spellings - the imported name and the dotted
+    ``strawberry.auto`` attribute - and PEP 563 preserves whichever the
+    consumer wrote as the raw annotation STRING. Recognizing only "auto"
+    misclassified the dotted spelling as a consumer-authored annotation, so
+    no synthesis ran and the literal string rode into
+    ``cls.__annotations__``.
+    """
+    namespace = _exec_pep563_module(
+        """
+from __future__ import annotations
+
+import strawberry
+
+from django_strawberry_framework import DjangoType
+
+from apps.products.models import Category
+
+
+class PEP563DottedAutoType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+
+    name: strawberry.auto
+""",
+        "test_base_pep563_dotted_auto",
+    )
+    pep563_type = namespace["PEP563DottedAutoType"]
+    assert pep563_type.__annotations__["name"] is str
+    finalize_django_types()
+    assert pep563_type.__strawberry_definition__ is not None
+
+
+def test_pep563_foreign_dotted_auto_is_not_the_marker():
+    """`Something.auto` under a non-``strawberry`` prefix stays consumer-authored.
+
+    Only the ``strawberry`` prefix makes a dotted ``.auto`` the infer marker.
+    Any other object's ``auto`` attribute is an ordinary type annotation and
+    must keep its own meaning - matching on the ``.auto`` suffix alone would
+    hijack it and silently replace the consumer's declared type.
+    """
+    namespace = _exec_pep563_module(
+        """
+from __future__ import annotations
+
+from django_strawberry_framework import DjangoType
+
+from apps.products.models import Category
+
+
+class Aliases:
+    auto = str
+
+
+class PEP563ForeignDottedType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+
+    name: Aliases.auto
+""",
+        "test_base_pep563_foreign_dotted_auto",
+    )
+    pep563_type = namespace["PEP563ForeignDottedType"]
+    # Untouched by synthesis: the consumer's own annotation string survives.
+    assert pep563_type.__annotations__["name"] == "Aliases.auto"
+    finalize_django_types()
+    assert pep563_type.__strawberry_definition__ is not None
+
+
+def test_pep563_unselected_dotted_auto_annotation_raises():
+    """The unselected-`auto` guard fires for the dotted spelling too."""
+    with pytest.raises(ConfigurationError, match="not selected in Meta.fields"):
+        _exec_pep563_module(
+            """
+from __future__ import annotations
+
+import strawberry
+
+from django_strawberry_framework import DjangoType
+
+from apps.products.models import Category
+
+
+class PEP563UnselectedDottedAutoType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id",)
+
+    name: strawberry.auto
+""",
+            "test_base_pep563_unselected_dotted_auto",
+        )
+
+
+def test_pep563_auto_relation_annotation_registers_pending_relation():
+    """`items: auto` under PEP 563 still defers through a PendingRelation.
+
+    The misclassification this pins used to register ZERO pending records -
+    the relation was treated as consumer-authored and the finalizer never
+    resolved its target.
+    """
+
+    class ProbePEP563ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id",)
+
+    namespace = _exec_pep563_module(
+        """
+from __future__ import annotations
+
+from django_strawberry_framework import DjangoType
+from strawberry import auto
+
+from apps.products.models import Category
+
+
+class PEP563RelationAutoType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name", "items")
+
+    items: auto
+""",
+        "test_base_pep563_relation_auto",
+    )
+    pep563_type = namespace["PEP563RelationAutoType"]
+    pending_for_type = [
+        pending
+        for pending in registry.iter_pending_relations()
+        if pending.source_type is pep563_type
+    ]
+    assert [pending.field_name for pending in pending_for_type] == ["items"]
+    finalize_django_types()
+    assert pep563_type.__strawberry_definition__ is not None
+
+
+def test_pep563_unselected_auto_annotation_raises():
+    """The unselected-`auto` guard fires for the PEP 563 string spelling too."""
+    with pytest.raises(ConfigurationError, match="not selected in Meta.fields"):
+        _exec_pep563_module(
+            """
+from __future__ import annotations
+
+from django_strawberry_framework import DjangoType
+from strawberry import auto
+
+from apps.products.models import Category
+
+
+class PEP563UnselectedAutoType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id",)
+
+    name: auto
+""",
+            "test_base_pep563_unselected_auto",
+        )
+
+
+def test_auto_string_spelling_accepted_without_future_import():
+    """An explicit `name: "auto"` asks for the marker without PEP 563."""
+
+    class StringAutoType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        name: "auto"  # noqa: F821 - the string spelling IS the marker under test
+
+    assert StringAutoType.__annotations__["name"] is str
+    finalize_django_types()
+    assert StringAutoType.__strawberry_definition__ is not None
+
+
+def test_non_string_annotation_keys_raise_configuration_error():
+    """Metaclass-injected non-string annotation keys are rejected, not leaked.
+
+    Class-body syntax can only produce string keys, but a metaclass may
+    inject arbitrary keys before ``type.__new__`` runs; the collection
+    boundary must reject them instead of raising raw ``TypeError`` from the
+    ``sorted()`` calls over the auto-name sets. The ``metaclass=`` KEYWORD
+    is the only construction that applies the metaclass: a base-class
+    position leaves ``type()`` in charge (verified on 3.14).
+    """
+
+    class InjectAnnotationsMeta(type):
+        def __new__(mcs, name, bases, namespace, **kwargs):
+            annotations = dict(namespace.get("__annotations__", {}))
+            annotations[1] = StrawberryAuto()
+            annotations["zz"] = StrawberryAuto()
+            namespace["__annotations__"] = annotations
+            return super().__new__(mcs, name, bases, namespace, **kwargs)
+
+    with pytest.raises(ConfigurationError, match="string names"):
+
+        class ProbeNonStringKeysType(DjangoType, metaclass=InjectAnnotationsMeta):
+            class Meta:
+                model = Category
+                fields = ("id",)
+
+
+def test_meta_metaclass_raising_getattr_raises_configuration_error():
+    """A Meta metaclass ``__getattr__`` that raises is contained.
+
+    ``getattr(meta, key, default)`` only swallows ``AttributeError``; every
+    Meta attribute read routes through ``_meta_attr`` so hostile attribute
+    access surfaces as ``ConfigurationError`` like every other shape
+    violation.
+    """
+
+    class HostileMeta(type):
+        def __getattr__(cls, item):
+            if item in {"fields", "optimizer_hints", "interfaces"}:
+                raise RuntimeError(f"hostile Meta access: {item}")
+            raise AttributeError(item)
+
+    with pytest.raises(ConfigurationError, match="could not be read"):
+
+        class ProbeHostileMetaType(DjangoType):
+            class Meta(metaclass=HostileMeta):
+                model = Category

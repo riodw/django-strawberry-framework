@@ -52,7 +52,7 @@ from strawberry.types.auto import StrawberryAuto
 from strawberry.types.field import StrawberryField
 
 from ..conf import RELAY_GLOBALID_STRATEGY_KEY
-from ..exceptions import ConfigurationError, _safe_arg_repr
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
@@ -559,6 +559,54 @@ def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
     )
 
 
+def _meta_attr(meta: type, key: str, default: Any = None) -> Any:
+    """Read one ``Meta`` attribute, containing hostile attribute access.
+
+    ``getattr(meta, key, default)`` only swallows ``AttributeError``; a Meta
+    class with a metaclass ``__getattr__`` that raises anything else leaks the
+    raw exception out of ``DjangoType.__init_subclass__``. The containment
+    policy is the one ``_normalize_fields_spec`` applies to hostile iteration:
+    every ``Meta`` attribute read routes through here so the failure surfaces
+    as ``ConfigurationError`` instead.
+    """
+    try:
+        return getattr(meta, key, default)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Meta.{key} could not be read from the Meta class: "
+            f"{_safe_type_name(exc)}: {_safe_text(exc)}.",
+        ) from exc
+
+
+def _is_auto_annotation(annotation: Any) -> bool:
+    """Return True for the ``field: auto`` declare-but-infer marker, every spelling.
+
+    Recognized: the ``StrawberryAuto`` instance, the string ``"auto"``, and the
+    string ``"strawberry.auto"``.
+
+    The instance form is what a plain consumer module stores in
+    ``cls.__annotations__``. Under ``from __future__ import annotations``
+    (PEP 563) raw annotation values are never evaluated, so the marker
+    reaches ``__init_subclass__`` as a STRING - the same string-annotation
+    reality ``_id_annotation_is_relay_node_id`` already accounts for on the
+    Relay-id path. Both source spellings survive into that string verbatim:
+    ``field: auto`` (from ``from strawberry import auto``) becomes "auto",
+    and ``field: strawberry.auto`` becomes "strawberry.auto". An explicit
+    string annotation in a non-PEP 563 module asks for the same marker, so
+    the string forms match there too.
+
+    The dotted form is accepted ONLY under the ``strawberry`` prefix: an
+    arbitrary ``x.auto`` is some other module's or class's attribute and must
+    keep its ordinary annotation meaning rather than silently becoming the
+    infer marker. Aliased imports (``import strawberry as sb``) are not
+    recognized - resolving those would require evaluating the annotation
+    against the defining module's namespace, which PEP 563 exists to avoid.
+    """
+    if isinstance(annotation, StrawberryAuto):
+        return True
+    return isinstance(annotation, str) and annotation in ("auto", "strawberry.auto")
+
+
 class DjangoType:
     """Base class for Django-model-backed Strawberry GraphQL types."""
 
@@ -589,6 +637,25 @@ class DjangoType:
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         consumer_annotations = dict(cls.__annotations__)
+        # Class-body syntax can only produce string annotation keys, but a
+        # metaclass may inject arbitrary keys into the namespace before
+        # ``type.__new__`` runs. Downstream every annotation key is treated as
+        # a field NAME (membership tests, ``sorted`` over the auto-name sets,
+        # the final ``{**synthesized, **consumer_annotations}`` merge), so a
+        # non-string key would raise raw ``TypeError``/``KeyError`` from those
+        # walks. The string-keys contract is validated HERE, once, at the
+        # collection boundary - the same contain-hostile-input-at-the-gate
+        # policy as ``_normalize_fields_spec``.
+        non_string_annotation_keys = sorted(
+            (key for key in consumer_annotations if not isinstance(key, str)),
+            key=repr,
+        )
+        if non_string_annotation_keys:
+            raise ConfigurationError(
+                f"{cls.__name__}: class annotations must have string names; got non-string "
+                f"keys {non_string_annotation_keys}. Annotation keys are field names; "
+                "non-string keys cannot be synthesized or exposed.",
+            )
         # ``field: auto`` is the "declare-but-infer" marker (the fifth corner of the
         # override surface): the field is written as a class annotation for
         # readability / IDE visibility / co-location with sibling overrides, but its
@@ -605,7 +672,7 @@ class DjangoType:
         auto_annotated_fields = frozenset(
             name
             for name, annotation in consumer_annotations.items()
-            if isinstance(annotation, StrawberryAuto)
+            if _is_auto_annotation(annotation)
         )
         unselected_auto = sorted(auto_annotated_fields - selected_field_names)
         if unselected_auto:
@@ -731,7 +798,7 @@ class DjangoType:
             origin=cls,
             model=meta.model,
             name=validated.name,
-            description=getattr(meta, "description", None),
+            description=_meta_attr(meta, "description"),
             fields_spec=validated.fields_spec,
             exclude_spec=validated.exclude_spec,
             selected_fields=tuple(fields),
@@ -944,7 +1011,7 @@ def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
     validators so non-mapping declarations fail before hint keys or
     values are inspected.
     """
-    value = getattr(meta, "optimizer_hints", None)
+    value = _meta_attr(meta, "optimizer_hints")
     if value is None:
         return {}
     if not isinstance(value, Mapping):
@@ -952,7 +1019,7 @@ def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
             f"{meta.model.__name__}.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
             f"instances, got {type(value).__name__}.",
         )
-    model = getattr(meta, "model", None)
+    model = _meta_attr(meta, "model")
     prefix = f"{model.__name__}." if isinstance(model, type) else ""
     for key in value:
         if not isinstance(key, str):
@@ -1076,7 +1143,7 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
     helper only validates the shape and contents of the
     ``Meta.interfaces`` tuple itself.
     """
-    raw = getattr(meta, "interfaces", None)
+    raw = _meta_attr(meta, "interfaces")
     if raw is None:
         return ()
     if isinstance(raw, str):
@@ -1209,13 +1276,13 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     Raises:
         ConfigurationError: any of the above violations.
     """
-    model = getattr(meta, "model", None)
+    model = _meta_attr(meta, "model")
     if model is None:
         raise ConfigurationError("Meta.model is required")
     if not isinstance(model, type) or not issubclass(model, models.Model):
         raise ConfigurationError("Meta.model must be a Django model class")
 
-    raw_name = getattr(meta, "name", None)
+    raw_name = _meta_attr(meta, "name")
     if raw_name is not None:
         if not isinstance(raw_name, str):
             raise ConfigurationError(
@@ -1244,19 +1311,19 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     # purpose -- do not "unify" them.
     declared = {k for k in meta.__dict__ if not k.startswith("_")}
 
-    # Use ``getattr(..., None) is not None`` rather than ``meta.__dict__``
-    # membership so a child Meta inheriting ``fields`` from a base Meta
-    # still trips the mutual-exclusion check when it declares ``exclude``
-    # (and vice versa). ``fields = None`` (or ``exclude = None``)
-    # remains "unset" - matches ``_normalize_fields_spec``'s treatment
-    # of ``None`` and the broader convention that an explicit ``None``
-    # means "no preference".
-    has_fields = getattr(meta, "fields", None) is not None
-    has_exclude = getattr(meta, "exclude", None) is not None
+    # Use the MRO-walking ``_meta_attr`` (``getattr`` semantics inside)
+    # rather than ``meta.__dict__`` membership so a child Meta inheriting
+    # ``fields`` from a base Meta still trips the mutual-exclusion check
+    # when it declares ``exclude`` (and vice versa). ``fields = None``
+    # (or ``exclude = None``) remains "unset" - matches
+    # ``_normalize_fields_spec``'s treatment of ``None`` and the broader
+    # convention that an explicit ``None`` means "no preference".
+    has_fields = _meta_attr(meta, "fields") is not None
+    has_exclude = _meta_attr(meta, "exclude") is not None
     if has_fields and has_exclude:
         raise ConfigurationError("Meta.fields and Meta.exclude are mutually exclusive")
 
-    primary = getattr(meta, "primary", False)
+    primary = _meta_attr(meta, "primary", False)
     if not isinstance(primary, bool):
         raise ConfigurationError("Meta.primary must be a bool")
 
@@ -1270,23 +1337,23 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
-    fields_spec = _normalize_fields_spec(getattr(meta, "fields", None))
-    exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None), "exclude")
+    fields_spec = _normalize_fields_spec(_meta_attr(meta, "fields"))
+    exclude_spec = _normalize_sequence_spec(_meta_attr(meta, "exclude"), "exclude")
     optimizer_hints = _meta_optimizer_hints(meta)
     interfaces = _validate_interfaces(meta)
     relay_shaped = _is_relay_shaped(cls, interfaces)
-    filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
-    orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
-    connection = _validate_connection(meta, getattr(meta, "connection", None), relay_shaped)
-    cursor_field = _validate_cursor_field(meta, getattr(meta, "cursor_field", None), relay_shaped)
+    filterset_class = _validate_filterset_class(meta, _meta_attr(meta, "filterset_class"))
+    orderset_class = _validate_orderset_class(meta, _meta_attr(meta, "orderset_class"))
+    connection = _validate_connection(meta, _meta_attr(meta, "connection"), relay_shaped)
+    cursor_field = _validate_cursor_field(meta, _meta_attr(meta, "cursor_field"), relay_shaped)
     globalid_strategy = _validate_globalid_strategy(
         meta,
-        getattr(meta, "globalid_strategy", None),
+        _meta_attr(meta, "globalid_strategy"),
         relay_shaped,
     )
     relation_shapes = _validate_relation_shapes(
         meta,
-        getattr(meta, "relation_shapes", None),
+        _meta_attr(meta, "relation_shapes"),
         relay_shaped,
     )
     # Override shape stage (spec-029 Decision 8 step 1): the two set-valued
@@ -1298,11 +1365,11 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     # (unknown / excluded / consumer-authored / Relay-pk / relation) need the
     # selected fields and run later in ``_validate_nullability_override_targets``.
     nullable_overrides = frozenset(
-        _normalize_sequence_spec(getattr(meta, "nullable_overrides", None), "nullable_overrides")
+        _normalize_sequence_spec(_meta_attr(meta, "nullable_overrides"), "nullable_overrides")
         or (),
     )
     required_overrides = frozenset(
-        _normalize_sequence_spec(getattr(meta, "required_overrides", None), "required_overrides")
+        _normalize_sequence_spec(_meta_attr(meta, "required_overrides"), "required_overrides")
         or (),
     )
     both_sets_collision = sorted(nullable_overrides & required_overrides)
@@ -1320,7 +1387,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     # ``_validate_filesystem_path_targets``.
     filesystem_path_fields = frozenset(
         _normalize_sequence_spec(
-            getattr(meta, "filesystem_path_fields", None),
+            _meta_attr(meta, "filesystem_path_fields"),
             "filesystem_path_fields",
         )
         or (),

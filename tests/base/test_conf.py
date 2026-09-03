@@ -730,3 +730,68 @@ def test_upstream_patches_enabled_hostile_iteration_generic_becomes_configuratio
     with mock.patch.object(conf, "settings", s):
         with pytest.raises(ConfigurationError, match="iteration failed"):
             upstream_patches_enabled("django")
+
+
+def test_normalize_hostile_metaclass_name_property_contained():
+    """A hostile metaclass ``__name__`` must not replace the typed rejection.
+
+    The non-mapping rejection assembles its message with the received
+    value's type name at the raise site - before any exception object
+    exists - so a metaclass whose ``__name__`` property raises used to
+    escape the f-string as a raw ``RuntimeError``, destroying the promised
+    ``ConfigurationError`` (the same failure class
+    ``exceptions.describe_value`` documents for ``got {...}`` tails). The
+    guarded ``_safe_type_name`` renderer degrades the unreadable name to
+    its ``"object"`` last resort instead.
+    """
+
+    class BadMeta(type):
+        @property
+        def __name__(cls):  # type: ignore[override]
+            raise RuntimeError("hostile __name__ boom")
+
+    class Evil(metaclass=BadMeta):  # type: ignore[misc]
+        pass
+
+    with pytest.raises(ConfigurationError, match="must be a mapping or None; got object"):
+        conf._normalize_user_settings(Evil())
+    with pytest.raises(ConfigurationError, match="must be a mapping or None; got object"):
+        Settings(Evil())
+
+
+def test_upstream_patches_enabled_hostile_metaclass_value_contained():
+    """A non-bool/non-mapping toggle whose type name raises stays contained."""
+
+    class BadMeta(type):
+        @property
+        def __name__(cls):  # type: ignore[override]
+            raise RuntimeError("hostile __name__ boom")
+
+    class Evil(metaclass=BadMeta):  # type: ignore[misc]
+        pass
+
+    s = Settings({"APPLY_UPSTREAM_PATCHES": Evil()})
+    import unittest.mock as mock
+
+    with mock.patch.object(conf, "settings", s):
+        with pytest.raises(ConfigurationError, match="bool or a mapping"):
+            upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_hostile_metaclass_mapping_value_contained():
+    """A non-bool per-dependency value with hostile type metadata stays contained."""
+
+    class BadMeta(type):
+        @property
+        def __name__(cls):  # type: ignore[override]
+            raise RuntimeError("hostile __name__ boom")
+
+    class Evil(metaclass=BadMeta):  # type: ignore[misc]
+        pass
+
+    s = Settings({"APPLY_UPSTREAM_PATCHES": {"django": Evil()}})
+    import unittest.mock as mock
+
+    with mock.patch.object(conf, "settings", s):
+        with pytest.raises(ConfigurationError, match="must be a bool"):
+            upstream_patches_enabled("django")

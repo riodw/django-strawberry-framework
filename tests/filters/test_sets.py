@@ -37,6 +37,7 @@ from django_filters import (
     MultipleChoiceFilter,
     NumberFilter,
 )
+from django_filters.filterset import UnknownFieldBehavior
 from graphql import GraphQLError
 
 from django_strawberry_framework import DjangoType
@@ -428,8 +429,213 @@ def test_filterset_get_fields_does_not_alter_explicit_dict_meta():
 
 
 # ---------------------------------------------------------------------------
+# Meta.fields re-readability gate
+# ---------------------------------------------------------------------------
+
+
+def test_filterset_get_fields_rejects_one_shot_iterator_at_class_creation():
+    """``Meta.fields`` as a one-shot iterator fails closed at class creation.
+
+    ``FilterSetOptions`` stores the declaration verbatim and upstream
+    ``get_fields`` consumes it into a fresh ``OrderedDict`` per call, so a
+    generator expands correctly ONCE and then silently re-expands to an EMPTY
+    field map on every later pass -- exactly the divergence the
+    lazy-``RelatedFilter`` re-expansion exists to serve
+    (``should_cache_expansion`` refuses the first cache write while a string
+    target is unresolved). The gate fires BEFORE the first consumption, so the
+    declaration is rejected at the metaclass instead of diverging at
+    finalization time. Mirrors the order family's ``_expand_meta_fields`` gate.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+
+        class ShelfFilter(FilterSet):
+            class Meta:
+                model = library_models.Shelf
+                fields = (f for f in ["code"])
+
+    message = str(excinfo.value)
+    assert "ShelfFilter" in message
+    assert "Meta.fields" in message
+    # The message names what was RECEIVED and enumerates what IS accepted, so
+    # it never describes a wider contract than the gate enforces.
+    assert "generator" in message
+    assert "'__all__', a lookup-bag dict, or a re-readable collection of field names" in message
+    assert "dict keys/values" in message
+    assert "not a one-shot iterator or generator" in message
+
+
+def test_filterset_get_fields_rejects_builtin_iterator_too():
+    with pytest.raises(ConfigurationError):
+
+        class ShelfFilter(FilterSet):
+            class Meta:
+                model = library_models.Shelf
+                fields = iter(["code"])
+
+
+def test_filterset_fields_alias_carried_generator_hits_the_gate():
+    """``filter_fields`` promotes onto ``Meta.fields`` at the metaclass, so an
+    alias-carried one-shot iterator must hit the same re-readability gate."""
+    with pytest.raises(ConfigurationError):
+
+        class ShelfFilter(FilterSet):
+            class Meta:
+                model = library_models.Shelf
+                filter_fields = (f for f in ["code"])
+
+
+def test_filterset_get_fields_re_readables_still_expand():
+    """Positive control: every shipped ``Meta.fields`` shape keeps expanding
+    (the gate has no false positives)."""
+
+    class ListForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = ["code"]
+
+    class TupleForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("code",)
+
+    class SetForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code"}
+
+    class FrozenForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = frozenset({"code"})
+
+    class DictForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class AllForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = "__all__"
+
+    class ExcludeOnlyForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            exclude = ["code"]
+
+    assert set(ListForm.get_fields()) == {"code"}
+    assert set(TupleForm.get_fields()) == {"code"}
+    assert set(SetForm.get_fields()) == {"code"}
+    assert set(FrozenForm.get_fields()) == {"code"}
+    assert set(DictForm.get_fields()) == {"code"}
+    assert "code" in set(AllForm.get_fields())
+    assert set(ExcludeOnlyForm.get_fields())  # exclude-only implies the rest
+
+
+def test_filterset_accepts_a_computed_re_readable_collection():
+    """A ``dict`` view or a custom ``Collection`` is a legal declaration.
+
+    The contract is re-readability, not membership of a builtin allow-list: a
+    consumer computing ``Meta.fields`` from a mapping's keys or from a project
+    container holds the field names just as a list does, so the expansion
+    re-runs to the same result and the declaration must be accepted.
+    """
+
+    class _NameSet:
+        def __init__(self, *names):
+            self._names = names
+
+        def __iter__(self):
+            return iter(self._names)
+
+        def __len__(self):
+            return len(self._names)
+
+        def __contains__(self, item):
+            return item in self._names
+
+    class KeysViewForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}.keys()
+
+    class CustomCollectionForm(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = _NameSet("code")
+
+    assert set(KeysViewForm.get_fields()) == {"code"}
+    assert set(CustomCollectionForm.get_fields()) == {"code"}
+    # Re-reading the declaration yields the same expansion (the property the
+    # gate exists to guarantee).
+    assert set(KeysViewForm.get_fields()) == {"code"}
+    assert set(CustomCollectionForm.get_fields()) == {"code"}
+
+
+# ---------------------------------------------------------------------------
 # spec-027 Decision 4 owner-aware filter_for_field
 # ---------------------------------------------------------------------------
+
+
+def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_field():
+    """An unrecognized model field returns ``None`` under WARN / IGNORE behavior.
+
+    django-filter's ``filter_for_field`` returns ``None`` for a model field
+    with no ``FILTER_DEFAULTS`` entry (``Item.attachment`` is a ``FileField``)
+    whenever ``Meta.unknown_field_behavior`` is ``WARN`` or ``IGNORE``; upstream
+    ``get_filters`` then skips the leaf. The package override dereferences
+    ``default.distinct`` / ``default.field_name`` / ``default.extra``, so it
+    MUST return the ``None`` verbatim instead of crashing with a raw
+    ``AttributeError`` on a field type the package deliberately does not
+    filter. The default (``RAISE``) behavior keeps upstream's assertion.
+    """
+
+    class AttachmentProbe(FilterSet):
+        class Meta:
+            model = Item
+            fields = ["name", "attachment"]
+            unknown_field_behavior = UnknownFieldBehavior.IGNORE
+
+    filters = AttachmentProbe.get_filters()
+    assert "name" in filters
+    assert "attachment" not in filters
+
+    attachment_field = Item._meta.get_field("attachment")
+    assert AttachmentProbe.filter_for_field(attachment_field, "attachment", "exact") is None
+
+    with pytest.raises(AssertionError):
+
+        class RaiseProbe(FilterSet):
+            class Meta:
+                model = Item
+                fields = ["name", "attachment"]
+
+
+@pytest.mark.django_db
+def test_ignore_unknown_field_filterset_still_filters_declared_columns():
+    """End-to-end: an IGNORE-behavior filterset still filters its real columns.
+
+    The unrecognized ``FileField`` leaf is skipped; the surviving ``name``
+    leaf keeps its operator-bag input, its form validation, and its
+    predicate through the real apply pipeline.
+    """
+    Item.objects.all().delete()
+    category = Category.objects.create(name="Unknown-Field Probe")
+    Item.objects.create(name="Probe Alpha", category=category)
+    Item.objects.create(name="Probe Beta", category=category)
+
+    class AttachmentProbe(FilterSet):
+        class Meta:
+            model = Item
+            fields = ["name", "attachment"]
+            unknown_field_behavior = UnknownFieldBehavior.IGNORE
+
+    queryset = AttachmentProbe.apply_sync(
+        {"name": {"exact": "Probe Alpha"}},
+        Item.objects.all(),
+        _make_info(),
+    )
+    assert [item.name for item in queryset] == ["Probe Alpha"]
 
 
 def test_filter_for_field_picks_global_id_multiple_choice_filter_for_relay_m2m_target():
@@ -4276,15 +4482,153 @@ def test_get_filters_skips_none_target_related_filter():
     assert not any(name.startswith("rel__") for name in filters)
 
 
-def test_normalize_input_returns_empty_for_non_dataclass_non_dict():
-    """A value that is neither a dict nor a dataclass normalizes to ``{}``."""
+def test_normalize_input_rejects_non_walkable_input():
+    """A non-walkable top-level input fails loud instead of normalizing to ``{}``.
+
+    The old contract normalized any non-dict / non-dataclass input to
+    ``{}``: ``apply_sync("name", qs, info)`` returned the FULL queryset
+    with every predicate dropped AND every ``check_*`` gate skipped --
+    the same permission + filter bypass ``_validate_logic_branch_shape``
+    fails loud for one level down, here at the top of the whole request.
+    Only an inactive value (``None`` / ``UNSET``) and a walkable-but-empty
+    input remain legitimate no-ops.
+    """
 
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             fields = {"name": ["exact"]}
 
-    assert CategoryFilter._normalize_input(object()) == {}
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter._normalize_input(object())
+    assert "skip every check_* permission gate" in str(excinfo.value)
+    # A bare string (the scalar sibling of ``object()``) fails the same way.
+    with pytest.raises(ConfigurationError):
+        CategoryFilter._normalize_input("name")
+    # A top-level list is not a walkable filter input for the filter
+    # family (only the order family flattens top-level lists).
+    with pytest.raises(ConfigurationError):
+        CategoryFilter._normalize_input([{"name": "foo"}])
+
+
+@pytest.mark.django_db
+def test_apply_sync_scalar_top_level_input_fails_loud():
+    """``apply_sync("name", ...)`` raises instead of returning every row.
+
+    End-to-end proof of the non-walkable-input guard through the public
+    apply surface: the scalar input used to normalize to ``{}`` and the
+    resolver returned the unfiltered queryset while skipping every gate.
+    """
+
+    fired: list[str] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def check_name_permission(self, request):
+            fired.append("name")
+
+    Category.objects.create(name="alpha")
+    Category.objects.create(name="beta")
+    with pytest.raises(ConfigurationError):
+        CategoryFilter.apply_sync("name", Category.objects.all(), _make_info())
+    # The request fails loud at the prelude, before any gate could fire --
+    # the silent allow is closed by the failure itself.
+    assert fired == []
+
+
+def test_normalize_input_rejects_dict_value_on_scalar_filter():
+    """A dict value on a non-range filter fails loud instead of splatting form keys.
+
+    The scalar-branch merge (``data.update(normalized)``) used to splat any
+    dict return from ``normalize_input_value`` into the form data: the top
+    -level field key was REPLACED by the dict's own keys, which django-filter's
+    form silently ignores as unknown -- an explicit filter input applying NO
+    filtering (``{"name": {"nope": "x"}}`` filtered nothing). Only a
+    range-kind filter may return the positional dict patch.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact", "in"]}
+
+    # Unknown bag keys (neither a lookup attr nor a range patch).
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter._normalize_input({"name": {"nope": "x"}})
+    assert "name" in str(excinfo.value)
+    # A dict parked under a KNOWN lookup key is the same splat hazard.
+    with pytest.raises(ConfigurationError):
+        CategoryFilter._normalize_input({"name": {"exact": {"k": "v"}}})
+    # The wire spelling of the ``in`` lookup (schema name, not the ``in_``
+    # python attr) is not a bag key either -- it used to splat verbatim.
+    with pytest.raises(ConfigurationError):
+        CategoryFilter._normalize_input({"name": {"in": ["foo"]}})
+
+
+@pytest.mark.django_db
+def test_apply_sync_dict_valued_scalar_filter_fails_loud():
+    """A dict value under a known lookup fails loud through the full apply pipeline.
+
+    ``{"name": {"exact": {"k": "v"}}}`` used to normalize to
+    ``{"k": "v"}`` -- the field association was lost, django-filter's form
+    silently ignored the unknown ``k`` key, and the request returned every
+    row while the consumer believed ``name`` was filtered.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    Category.objects.create(name="alpha")
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter.apply_sync(
+            {"name": {"exact": {"k": "v"}}},
+            Category.objects.all(),
+            _make_info(),
+        )
+    assert "single scalar form key" in str(excinfo.value)
+
+
+def test_range_patch_dict_values_still_merge_positional_keys():
+    """The range-patch guard exempts the two range primitives.
+
+    ``_require_range_patch_filter`` must stay silent for the framework
+    ``RangeFilter`` (and django-filter's own ``RangeFilter``): their dict
+    return IS the documented positional ``{<field>_0, <field>_1}`` patch.
+    """
+    import dataclasses
+
+    from django_strawberry_framework.filters import RangeFilter
+
+    @dataclasses.dataclass
+    class _NameBag:
+        range: Any = None
+
+    class PatronFilter(FilterSet):
+        fines = RangeFilter(field_name="lifetime_fines_cents")
+        lifetime_fines_cents__range = RangeFilter(
+            field_name="lifetime_fines_cents",
+            lookup_expr="range",
+        )
+
+        class Meta:
+            model = library_models.Patron
+            fields = []
+
+    # Top-level scalar branch: the {start, end} patch still merges positionally.
+    assert PatronFilter._normalize_input({"fines": {"start": 1, "end": 5}}) == {
+        "fines_0": 1,
+        "fines_1": 5,
+    }
+    # The operator-bag branch merges the same patch through the guard.
+    data = PatronFilter._normalize_input(
+        {"lifetime_fines_cents": _NameBag(range={"start": 1, "end": 5})},
+    )
+    assert data == {"lifetime_fines_cents__range_0": 1, "lifetime_fines_cents__range_1": 5}
 
 
 def test_operator_bag_items_walks_lookup_attr_dict():

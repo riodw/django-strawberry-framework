@@ -71,6 +71,7 @@ filters / orders / mutations / permissions.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime
 import enum
 import inspect
@@ -84,6 +85,7 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from django.db import models
 from django.db.models import Prefetch, sql
+from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import RawSQL
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.lookups import Lookup
@@ -191,6 +193,28 @@ def reject_async_in_sync_context(
     return value
 
 
+def _disposed_awaitable(value: Any) -> bool:
+    """Return whether ``value`` was an awaitable, DISPOSING it when it was.
+
+    The shared half of every awaitable refusal in the package: detect, then
+    close the coroutine / cancel the future so no "coroutine was never awaited"
+    warning escapes. Four sites spelled this pair inline, each followed by its
+    own raise.
+
+    The raise deliberately stays at the caller. The ``SyncMisuseError`` versus
+    ``ConfigurationError`` split is a documented contract (``SyncMisuseError``
+    is reserved for sync boundaries), and the prose differs per seam - but the
+    load-bearing reason is the hot path: these guards run on every sync
+    resolver return, and threading the message through a shared refuser would
+    build the f-string on every non-awaitable call. Here the message is
+    constructed only when one is actually raised.
+    """
+    if not inspect.isawaitable(value):
+        return False
+    _dispose_sync_awaitable(value)
+    return True
+
+
 def _dispose_sync_awaitable(value: Any) -> None:
     """Release a rejected awaitable without awaiting it, when possible.
 
@@ -220,17 +244,41 @@ def model_for(type_cls: type) -> type[models.Model]:
     return type_cls.__django_strawberry_definition__.model
 
 
+def base_queryset(model: type[models.Model], *, using: str | None = None) -> models.QuerySet:
+    """Return a fresh unevaluated base queryset for ``model``, optionally alias-pinned.
+
+    The MODEL-keyed seed. ``initial_queryset`` is its TYPE-keyed wrapper, and
+    the two are genuinely different questions: a surface that seeds from the
+    registered type's model asks the first, while a surface that seeds from a
+    relation's own target model (the optimizer walker's prefetch child, the
+    cascade's per-edge base, a ``RelatedFilter``'s child) asks the second and
+    must NOT route through the registered type - the relation's model is the
+    authority there.
+
+    ``using`` pins the seed to a database alias, spelled
+    ``manager.using(alias).all()`` (never ``.all().using(alias)``): a sharded
+    parent must seed its children on the SAME connection, and the
+    conditional-on-``None`` shape was being written out at each such site.
+    ``relay.py`` deliberately does not use this - it takes the raw manager and
+    composes from there.
+    """
+    manager = model._default_manager
+    return manager.using(using).all() if using is not None else manager.all()
+
+
 def initial_queryset(type_cls: type) -> models.QuerySet:
     """Return ``model._default_manager.all()`` for a ``DjangoType``'s model.
 
     Step 1 of the Relay node defaults' four-step shape and the default
     resolver seed for list / connection fields. Seeds from
     ``model_for(type_cls)`` so the model lookup stays single-sited; every
-    surface that needs a fresh unevaluated base queryset shares this one
-    source. Callers are responsible for ``type_cls`` being a registered
-    ``DjangoType``; a missing definition surfaces as a raw ``AttributeError``.
+    surface that needs a fresh unevaluated base queryset for a registered TYPE
+    shares this one source (the model-keyed seed underneath is
+    :func:`base_queryset`). Callers are responsible for ``type_cls`` being a
+    registered ``DjangoType``; a missing definition surfaces as a raw
+    ``AttributeError``.
     """
-    return model_for(type_cls)._default_manager.all()
+    return base_queryset(model_for(type_cls))
 
 
 def normalize_query_source(source: Any) -> tuple[Any, bool]:
@@ -343,6 +391,22 @@ def is_async_only_iterable(value: Any) -> bool:
     return isinstance(value, AsyncIterable) and not isinstance(value, Iterable)
 
 
+# TODO(spec-050 slice 2): Add the private async-only queryset-row completion
+# adapter here, beside the package's one iterable classifier, so the list field
+# and optimizer share one representation instead of recognizing lookalikes.
+#
+# Pseudocode:
+#
+# - ``_AsyncQuerySetRows`` stores one final sliced plain QuerySet, implements
+#   only ``__aiter__`` by delegating to ``queryset.__aiter__()``, and has no
+#   ``__iter__``. Construction rejects non-querysets rather than becoming a
+#   generic async collection wrapper.
+# - Provide small package-private predicates/accessors for the optimizer to
+#   unwrap the exact adapter and for the list field to wrap a final queryset.
+#   Rewrapping always creates the same adapter around the optimizer's returned
+#   queryset; lists, ``None``, and other iterables are never coerced.
+# - Do not materialize here. The root optimizer must still see the inner lazy
+#   queryset before graphql-core chooses synchronous Iterable completion.
 def reject_async_iterable_in_sync_context(value: Any, *, flavor_noun: str) -> None:
     """Reject an async-only resolver SOURCE under synchronous GraphQL execution.
 
@@ -873,12 +937,37 @@ def _genuine_node_defect(
 # Plain container types both graph walkers descend into member-wise. Django stores only
 # these exact builtins in the slots they appear in; a SUBCLASS is not a container here,
 # it is an object that must prove genuine-Django provenance like any other node.
-_WALKED_SEQUENCE_TYPES: tuple[type, ...] = (
-    list,
-    tuple,
-    set,
-    frozenset,
+# The plain containers the seal walks member-wise (and, having walked, must be
+# able to REBUILD). ONE inventory: the sequence types and ``dict`` used to be
+# declared separately, so every call site re-spelled the union by hand and
+# admitting a new container type meant finding all of them first.
+#
+# The prove side and the rebuild side (``_reconstructed_value``) are two halves of
+# one round trip, and the dangerous direction is prover-accepted /
+# rebuilder-unhandled: such a value reaches reconstruction, matches no branch, and
+# fails the seal CLOSED with no indication that the inventories disagree.
+# ``tests/utils/test_querysets.py`` asserts the rebuild side answers for every
+# member of this set, so the two cannot drift silently.
+_PLAIN_CONTAINER_TYPES: frozenset[type] = frozenset(
+    {
+        list,
+        tuple,
+        set,
+        frozenset,
+        dict,
+    },
 )
+
+
+def _is_plain_container(value_type: type) -> bool:
+    """Return whether ``value_type`` is EXACTLY one of the walked plain containers.
+
+    Exact-type membership, never ``issubclass``: a ``list`` / ``dict`` SUBCLASS
+    can override ``__iter__`` / ``items`` and would dispatch consumer code mid
+    walk, so it is not a plain container and falls through to the provenance
+    proof instead.
+    """
+    return value_type in _PLAIN_CONTAINER_TYPES
 
 
 def _expr_mapping_key_detail(label: str, key: Any) -> str:  # noqa: ARG001 - shared detail signature
@@ -1021,7 +1110,7 @@ def _direct_rhs_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[str, s
     if _is_inert_value(value):
         return None
     value_type = type(value)
-    if value_type in _WALKED_SEQUENCE_TYPES or value_type is dict:
+    if _is_plain_container(value_type):
         return _container_defect(value, walk, label, _direct_rhs_defect, _expr_mapping_key_detail)
     hook_defect = _rhs_hook_defect(value_type, label)
     if hook_defect is not None:
@@ -1079,7 +1168,7 @@ def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, st
     if _is_inert_value(node):
         return None
     node_type = type(node)
-    if node_type in _WALKED_SEQUENCE_TYPES or node_type is dict:
+    if _is_plain_container(node_type):
         return _container_defect(node, walk, label, _expr_graph_defect, _expr_mapping_key_detail)
     # ``WhereNode`` and ``sql.Query`` (a subquery's inner query, surfaced by
     # ``Subquery.get_source_expressions``) route to their dedicated walkers BEFORE this
@@ -1286,9 +1375,12 @@ _EXACT_DICT_QUERY_ATTRS: tuple[str, ...] = (
     "external_aliases",
     "table_map",
     "annotations",
-    "extra",
     "_filtered_relations",
 )
+# ``extra`` is deliberately ABSENT: the raw-SQL scan below validates it as an
+# exact ``dict`` with exact-``str`` keys AND its ``(sql, params)`` payloads, in
+# byte-identical wording, so listing it here only ran the weaker half of that
+# same check a second time on every seal.
 _EXACT_SET_QUERY_ATTRS: tuple[str, ...] = (
     "annotation_select_mask",
     "extra_select_mask",
@@ -1554,6 +1646,15 @@ _BOUND_VALUE_NORMALIZERS: tuple[tuple[type, Any], ...] = (
     (datetime.timedelta, _normalized_timedelta),
     (uuid.UUID, _normalized_uuid),
 )
+# This is a hand-ordered MIRROR of ``_INERT_VALUE_TYPES`` minus ``bool`` (whose
+# subclasses cannot exist), and the ORDER is semantic -- ``datetime`` before
+# ``date`` because the first subclasses the second, scalars before ``Enum`` --
+# so it must not be derived from the frozenset, which would reorder it.
+# What CAN be checked without losing the order is that the two inventories still
+# agree, and they must: an inert type admitted there with no normalizer entry
+# here makes SUBCLASS instances of it fail the seal closed, and exact instances
+# short-circuit earlier, so the gap stays invisible until a subclass shows up.
+# ``tests/utils/test_querysets.py`` pins the agreement.
 
 
 class _UntrustedBoundValueError(TypeError):
@@ -2167,10 +2268,90 @@ def _rebuilt_prefetch_or_defect(
     return rebuilt, None
 
 
+def _prefetch_relation_target_or_none(
+    parent_model: type[models.Model],
+    path: Any,
+) -> type[models.Model] | None:
+    """Return the model the prefetch lookup ``path`` terminates on, or ``None``.
+
+    Resolves ``prefetch_through`` one segment at a time through each model's
+    ``_meta`` (Django's own relation metadata -- no consumer dispatch, every
+    ``parent_model`` here is already a proven model class) and returns the
+    FINAL relation's ``related_model``. Each part is tried against the field map
+    first (``_meta.get_field`` -- forward relations and explicit
+    ``related_name``/bare-model-name reverse registrations), and on a miss
+    against the model's reverse-ACCESSOR map: a reverse relation declared
+    WITHOUT ``related_name`` is prefetched through the default
+    ``<model>_set`` accessor (Django's own reverse-descriptor spelling) while
+    the field map knows it under the bare child name, so the accessor scan is
+    what proves the target for that spelling too -- ``Permission.user_set``,
+    ``ContentType.permission_set``. A path that does not resolve to a
+    relation at every segment (an unknown name, a plain column, a
+    ``GenericForeignKey``-shaped accessor Django resolves through descriptors at
+    fetch time rather than through the model's field map, an unresolved
+    lazy-FK string whose ``related_model`` stays a raw string) returns ``None``,
+    and the caller keeps the status-quo behavior for that entry -- the
+    fetch-time traversal is Django's own responsibility, and the check must
+    never fail-close a prefetch path Django supports. Multi-segment paths walk
+    intermediate relations, so the target of ``"items__entries"`` is the
+    reverse-relation target of ``entries`` on the child model, not the first
+    relation's model.
+    """
+    if type(path) is not str:
+        return None
+    current: Any = parent_model
+    for part in path.split(LOOKUP_SEP):
+        try:
+            field = current._meta.get_field(part)
+        except Exception:
+            # Not in the field map: the default ``<model>_set`` / bare-name
+            # reverse accessor spelling (a relation declared without a
+            # ``related_name``) is what prefetch actually accepts, so resolve
+            # the part over the accessor map before giving up.
+            field = _reverse_relation_by_accessor_or_none(current, part)
+        if field is None or not getattr(field, "is_relation", False):
+            return None
+        related = getattr(field, "related_model", None)
+        if not isinstance(related, type) or not issubclass(related, models.Model):
+            return None
+        current = related
+    return current
+
+
+def _reverse_relation_by_accessor_or_none(model: Any, part: Any) -> Any:
+    """Return the reverse relation whose accessor name is spelled ``part``.
+
+    ``_meta.get_field`` registers a reverse relation under its declared name
+    (the ``related_name``, or the child model's bare name when none is
+    declared) -- NOT under the ``<model>_set`` accessor spelling the reverse
+    descriptor (and therefore Django's prefetch traversal, which resolves the
+    lookup by attribute access) actually accepts. The accessor map is Django's
+    own relation metadata (``get_accessor_name()`` over ``_meta.get_fields()``),
+    and only non-concrete reverse relations carry accessor names; ``model`` is
+    always an already-proven model class (the same proven ``parent_model`` walk
+    the field-map path runs on), so no consumer dispatch is reachable. A miss
+    returns ``None`` and the caller keeps the fail-open contract for genuinely
+    unresolvable paths (generic FKs, lazy ``related_model`` strings, plain
+    columns, unknown segments).
+    """
+    for candidate in model._meta.get_fields():
+        if not getattr(candidate, "is_relation", False):
+            continue
+        if getattr(candidate, "concrete", True):
+            # Forward relations carry no accessor and are field-map names,
+            # already resolved by ``_meta.get_field`` before this scan runs.
+            continue
+        accessor = candidate.get_accessor_name()
+        if type(accessor) is str and accessor == part:
+            return candidate
+    return None
+
+
 def _sealed_prefetch_related_lookups(
     lookups: Any,
     cls_name: str,
     required_alias: str | None,
+    parent_model: type[models.Model],
 ) -> tuple[tuple[Any, ...] | None, tuple[str, str] | None]:
     """Seal every ``Prefetch`` entry's inner queryset; pass string lookups through.
 
@@ -2189,10 +2370,10 @@ def _sealed_prefetch_related_lookups(
     descriptor) and rebuilt into a fresh plain ``Prefetch`` -- the subclass
     identity of both the inner queryset AND the ``Prefetch`` wrapper is dropped,
     so neither a hostile queryset override nor a hostile ``Prefetch`` method
-    override can re-inject at fetch time. The child seal runs with
-    ``allow_sliced=True`` because a sliced prefetch queryset is legal (Django >=
-    4.2 top-N per parent) and nothing refilters a prefetch child, while
-    ``require_model_rows`` still holds. A child that cannot be sealed (a
+    override can re-inject at fetch time. The child seal runs under
+    ``_PREFETCH_CHILD_POLICY``, whose ``reject_sliced=False`` admits the legal
+    sliced prefetch queryset (Django >= 4.2 top-N per parent) that nothing
+    refilters, while ``require_model_rows`` still holds. A child that cannot be sealed (a
     non-queryset ``.queryset``, a malformed model, a foreign ``Query`` class, a
     foreign row iterable, a subclass carrying an unresolved deferred filter) fails
     the OUTER seal closed with the ``untrusted`` defect -- carrying the inner
@@ -2200,6 +2381,25 @@ def _sealed_prefetch_related_lookups(
     rather than being silently dropped. A ``Prefetch`` whose ``.queryset is None``
     (Django builds the child itself) and a plain string lookup both pass through
     unchanged.
+
+    The child's model must also belong to the RELATION the lookup path targets:
+    Django's prefetch machinery populates the related cache from the child
+    queryset without checking that its model matches the relation's target when
+    both models carry a same-named foreign key (Django ticket #37267, unfixed),
+    so a ``Prefetch("items", queryset=<unrelated model>.objects.all())`` over a
+    coincidentally-named FK column would land that OTHER table's rows in the
+    ``items`` relation -- rows the related type's ``get_queryset`` visibility
+    hook never ran on, crossing the visibility boundary one edge down. The path
+    is resolved here one segment at a time on the candidate's own model (the same
+    resolution Django performs at fetch -- the declared ``related_name`` AND the
+    default ``<model>_set`` accessor spelling a relation without one is reached
+    by, e.g. ``Permission.user_set``) and the child must be the related model
+    or one of its SUBCLASSES (proxy and MTI children are compatible, per
+    Django's own directional contract); a child over an unrelated model fails
+    the outer seal closed as ``untrusted``. A path whose target cannot be
+    resolved here (a non-relation segment, a generic-FK alias) is left to
+    Django's own fetch-time traversal unchanged -- the guard only ever narrows
+    shapes Django itself mishandles, never a legitimate prefetch.
 
     Returns ``(sealed_lookups, None)`` on success or ``(None, (code, detail))``
     on the first unsealable child.
@@ -2234,14 +2434,42 @@ def _sealed_prefetch_related_lookups(
                 if isinstance(inner, models.QuerySet)
                 else None
             )
-            if inner_state is None or _concrete_or_none(inner_state.get("model")) is None:
+            inner_concrete = (
+                _concrete_or_none(inner_state.get("model")) if inner_state is not None else None
+            )
+            if inner_state is None or inner_concrete is None:
                 lookup = entry_state.get("prefetch_through")
                 return None, (
                     "untrusted",
                     f"{cls_name} prefetch {lookup!r} queryset cannot be sealed",
                 )
-            # Thread the OUTER effective alias into the child seal with
-            # ``require_shared_alias=True``: a child explicitly pinned to a DIFFERENT
+            # The child's rows will be handed to the LOOKUP's relation at fetch
+            # time, so the child must be over that relation's own model (or a
+            # subclass of it -- Django's directional compatibility). An unrelated
+            # model with a coincidentally same-named FK passes Django's prefetch
+            # machinery (no model check there), and the foreign rows would land in
+            # the related cache -- and then the GraphQL relation -- without the
+            # related type's ``get_queryset`` visibility hook ever running on
+            # them, a cross-table leak the sealed boundary exists to close. The
+            # path resolves from the parent's model metadata with no dispatch; an
+            # unresolvable path (a generic FK, a traversal Django resolves
+            # differently at fetch) is left untouched here, exactly as before.
+            relation_target = _prefetch_relation_target_or_none(
+                parent_model,
+                entry_state.get("prefetch_through"),
+            )
+            if relation_target is not None and not issubclass(inner_concrete, relation_target):
+                lookup = entry_state.get("prefetch_through")
+                return None, (
+                    "untrusted",
+                    f"{cls_name} prefetch {lookup!r} queryset is over "
+                    f"{_safe_class_name(inner_state.get('model'))} rows, but the {lookup!r} "
+                    f"relation targets {_safe_class_name(relation_target)} rows; a prefetch "
+                    "child over an unrelated table would populate the relation with rows "
+                    "the related type's visibility hook never saw",
+                )
+            # Thread the OUTER effective alias into the child seal, which runs
+            # with ``require_shared_alias``: a child explicitly pinned to a DIFFERENT
             # alias fails closed (the seal's ``alias`` defect), and -- critically --
             # when the outer alias is UNRESOLVED (``effective_alias is None`` because
             # the parent is unrouted), an explicitly routed child ALSO fails closed
@@ -2255,13 +2483,12 @@ def _sealed_prefetch_related_lookups(
             # rejection (which exists because outer read surfaces refilter) does
             # not apply one edge down, while ``require_model_rows`` still holds
             # (Django itself requires a ``ModelIterable`` for a prefetch queryset).
+            # Both facts are the two fields ``_PREFETCH_CHILD_POLICY`` sets.
             sealed_inner, defect = _seal_or_defect(
                 inner,
                 inner_state.get("model"),
                 required_alias,
-                require_model_rows=True,
-                allow_sliced=True,
-                require_shared_alias=True,
+                _PREFETCH_CHILD_POLICY,
             )
             if defect is not None:
                 lookup = entry_state.get("prefetch_through")
@@ -2324,7 +2551,7 @@ def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[st
                 return child_defect
         walk.leave(value_id)
         return None
-    if value_type in _WALKED_SEQUENCE_TYPES or value_type is dict:
+    if _is_plain_container(value_type):
         return _container_defect(
             value,
             walk,
@@ -2439,22 +2666,122 @@ def _queryset_state_defect(state: dict, cls_name: str) -> tuple[str, str] | None
     return None
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _SealPolicy:
+    """The per-surface option set ``_seal_or_defect`` runs under, declared once.
+
+    Every surface that seals a queryset differs from the default on one or two
+    axes, and each axis used to be its own keyword re-declared down the whole
+    boundary chain (source preparation, result normalization, both colored
+    runners). One frozen policy object carries them instead, so a new axis is a
+    field here plus its check in the seal -- never a keyword threaded through
+    five signatures, which is how the async runner came to reach none of them.
+
+    - ``require_model_rows`` -- the row iterable must be ``ModelIterable``. Off
+      only for the cascade, which re-projects the sealed queryset to the edge's
+      target column and never iterates its rows, so a ``.values()`` return is
+      supported input rather than a defect.
+    - ``reject_sliced`` -- a sliced query (a ``LIMIT`` / ``OFFSET`` was taken) is
+      a defect. Deliberately INDEPENDENT of ``require_model_rows``: the two
+      answer different questions (what the rows ARE, versus whether this surface
+      will recompose onto them), and fusing them is what forced the cascade to
+      re-implement the slice rejection at both of its own entry points. Off one
+      edge down, where nothing recomposes -- a ``Prefetch`` child (Django's legal
+      top-N-per-parent queryset) and the optimizer walker's nested-connection
+      child, whose own gate degrades a sliced child to the fully-unplanned
+      per-parent fallback instead of recomposing filters / ordering onto it.
+    - ``reject_combined`` -- a ``union()`` / ``intersection()`` / ``difference()``
+      query is a defect. On only for the cascade, which narrows by
+      ``.filter(...)`` and re-projects to a single column, neither of which
+      Django supports after a combinator.
+    - ``require_shared_alias`` -- the candidate's explicit ``_db`` must EQUAL the
+      outer effective alias, INCLUDING when that alias is ``None``. Set solely
+      for a ``Prefetch`` child, so one GraphQL resolution never spans two
+      database connections.
+    """
+
+    # TODO(spec-050 slice 2): Document and add
+    # ``require_unevaluated: bool = False`` as an independent seal axis. It is
+    # enabled only for post-OrderSet results; it must not change the verdict of
+    # any shipped source/result seal.
+    require_model_rows: bool = True
+    reject_sliced: bool = True
+    reject_combined: bool = False
+    require_shared_alias: bool = False
+
+
+# Every read surface (Relay node defaults, connection root, list field, the
+# related-object hooks): model rows, nothing sliced to recompose onto, one alias.
+_DEFAULT_SEAL_POLICY = _SealPolicy()
+# ``apply_cascade_permissions`` at BOTH of its ends -- the root it is handed and
+# every target hook's return. A ``.values()`` projection is supported input
+# (the cascade re-projects it), while sliced and combined shapes are rejected
+# because the walk narrows by ``.filter(...)`` and re-projects to the edge's
+# target column, neither of which Django supports on those shapes.
+_CASCADE_SEAL_POLICY = _SealPolicy(require_model_rows=False, reject_combined=True)
+# The optimizer walker's nested-connection child: its own gate
+# (``nested_fetch.py::unwindowable_child_queryset_reason``) classifies a sliced
+# child and degrades the nested connection to the fully-unplanned per-parent
+# fallback WITHOUT recomposing, so the slice rejection's premise does not hold.
+_UNRECOMPOSED_CHILD_POLICY = _SealPolicy(reject_sliced=False)
+# A ``Prefetch`` child: the same no-recomposition licence, plus the shared-alias
+# requirement that keeps one GraphQL resolution on one database connection.
+_PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=True)
+
+
+# TODO(spec-050 slice 2): Add argument-aware visibility and post-OrderSet seal
+# policies plus one surface helper; keep all hostile-state reads inside this
+# module.
+#
+# Pseudocode:
+#
+# - ``_LIST_ARGUMENT_VISIBILITY_POLICY`` is the default policy with
+#   ``reject_combined=True``. Both colored list pipelines pass it to
+#   ``apply_type_visibility_*`` for active arguments only; the omitted/all-null
+#   branch keeps the shipped default policy.
+# - ``_ORDERSET_RESULT_POLICY`` requires model rows, unevaluated state,
+#   unsliced state, no combination, and the same ROUTING INTENT as the
+#   pre-order source. A helper accepts the target type, the sealed pre-order
+#   queryset, the candidate result, and the public method name. It calls
+#   ``_seal_or_defect`` with that effective alias, including ``None`` as an
+#   unrouted requirement, and renders every defect as actionable
+#   ``ConfigurationError`` naming ``OrderSet.apply_sync`` or
+#   ``OrderSet.apply_async``.
+# - Routing intent is ``_db`` equality (``None`` included) AND ``_hints``
+#   equality against the pre-order source. ``_db`` alone is NOT the invariant:
+#   Django resolves an unrouted queryset through the router using model plus
+#   ``_hints``, so two candidates can both carry ``_db is None`` and still
+#   resolve to different aliases, and the seal copies whatever hints the
+#   candidate carried into the rebuild. Do NOT compare RESOLVED aliases -- that
+#   calls a consumer router mid-validation; intent equality is stricter and
+#   dispatches nothing. ``_hints`` is already proven ``None`` or an exact
+#   ``dict`` here, so this is one comparison at a proven-shape site.
+# - A returned Manager/list/None/wrong-model/projection/evaluated/sliced/
+#   combined/cross-routed/unreadable queryset is rejected. The successful
+#   return is the freshly sealed plain queryset; list code never reads
+#   ``query``, ``_result_cache``, ``_db``, or iterable-class state itself.
+# - The requirement is on the SEALED OUTPUT, never the candidate's class. A
+#   sealable ``QuerySet`` SUBCLASS is accepted and rebuilt into a plain
+#   framework-owned queryset -- that normalization is this boundary's shipped
+#   feature and must not be narrowed into a subclass rejection. The one
+#   subclass that still fails is the existing rule: one carrying an unresolved
+#   ``_deferred_filter`` cannot be safely baked and fails closed as
+#   ``untrusted``.
 def _seal_or_defect(
     candidate: Any,
     model: type[models.Model],
     required_alias: str | None,
-    *,
-    require_model_rows: bool = True,
-    allow_sliced: bool = False,
-    require_shared_alias: bool = False,
+    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> tuple[models.QuerySet | None, tuple[str, str] | None]:
     """Rebuild a framework-owned plain ``QuerySet`` from ``candidate``'s validated state.
 
     The single sealing primitive both boundary sites run. Returns
     ``(sealed_queryset, None)`` on success, or ``(None, (code, detail))`` on the
     first defect. Codes run ``type`` -> ``table`` -> ``untrusted`` -> ``sliced``
-    -> ``projection`` -> ``alias`` (the one canonical ordering both sites
-    share), except that the outer exact-``sql.Query`` check (``untrusted``) runs
+    -> ``combined`` -> ``projection`` -> ``alias`` (the one canonical ordering
+    every site shares; a new code takes a FIXED position in it, and owes an arm
+    at every message-building site that can reach it), except that the outer
+    exact-``sql.Query`` check (``untrusted``) runs
     BEFORE the combinator table walk: the walk reads query attributes through
     normal attribute access, so only a proven-genuine ``sql.Query`` may be
     walked.
@@ -2507,34 +2834,42 @@ def _seal_or_defect(
       deferred filter Django never produces fails closed as a typed defect, not a raw
       exception) -- or a
       ``Prefetch`` in ``_prefetch_related_lookups`` carries an inner queryset that
-      cannot itself be sealed, a non-exact-``str`` lookup, or a consumer
+      cannot itself be sealed, a non-exact-``str`` lookup, a consumer
       ``Prefetch`` subclass (rebuilt as an exact ``Prefetch`` so no
-      ``get_current_querysets`` override survives). This REPLACES the old
+      ``get_current_querysets`` override survives), or an inner queryset whose
+      model is unrelated to the lookup path's relation target (Django ticket
+      #37267: the fetch-time traversal groups a wrong-model child into the
+      related cache, so the sealed boundary proves the child's model is the
+      relation's own target or a subclass of it before admitting the entry,
+      under either the declared ``related_name`` or the default
+      ``<model>_set`` accessor spelling). This REPLACES the old
       class-level method inventory: ``untrusted`` now means "cannot be sealed",
       not "overrides a listed method".
-    - ``sliced`` -- only when ``require_model_rows`` (every read surface): the
-      query is sliced (a ``LIMIT`` / ``OFFSET`` was taken). Django forbids
-      reordering or refiltering a sliced query, so the next framework transform
-      (a Relay ``.filter(pk=...)``, a connection ordering) would raise a raw
-      ``TypeError`` outside the typed defect contract. The cascade
-      (``require_model_rows=False``) keeps its own slice rejections, one per
-      queryset it receives: the root it is handed, in
-      ``permissions.py::_validate_root_queryset``, and the hook return it
-      composes as a subquery, in
-      ``permissions.py::_validated_target_subquery``. ``allow_sliced`` (private,
-      default ``False``) suppresses ONLY this slice rejection while leaving
-      ``require_model_rows`` in force: it is set solely for a ``Prefetch`` child
-      (a legal sliced top-N-per-parent prefetch queryset), which nothing
-      refilters, so the rejection's premise does not hold one edge down.
-    - ``projection`` -- only when ``require_model_rows`` (every surface except
-      the cascade): the row iterable is not ``ModelIterable`` (a ``.values()`` /
-      ``.values_list()`` projection whose rows are not model instances). The
-      cascade passes ``require_model_rows=False`` because it re-projects the
-      sealed queryset to the edge's target column and never iterates it.
+    - ``sliced`` -- when ``policy.reject_sliced`` (every surface that recomposes
+      onto the sealed queryset): the query is sliced (a ``LIMIT`` / ``OFFSET``
+      was taken). Django forbids reordering or refiltering a sliced query, so
+      the next framework transform (a Relay ``.filter(pk=...)``, a connection
+      ordering, the cascade's ``.filter(...)`` narrowing) would raise a raw
+      ``TypeError`` outside the typed defect contract. Off one edge down, where
+      nothing recomposes: a ``Prefetch`` child (a legal sliced
+      top-N-per-parent queryset) and the optimizer walker's nested-connection
+      child, whose own gate degrades a sliced child instead of recomposing.
+    - ``combined`` -- when ``policy.reject_combined`` (the cascade alone): the
+      query carries a ``union()`` / ``intersection()`` / ``difference()``
+      combinator. The cascade narrows by ``.filter(...)`` and re-projects to the
+      edge's target column; Django supports neither after a combinator, and a
+      re-projection would only rewrite the OUTER select while each branch kept
+      its own column.
+    - ``projection`` -- only when ``policy.require_model_rows`` (every surface
+      except the cascade): the row iterable is not ``ModelIterable`` (a
+      ``.values()`` / ``.values_list()`` projection whose rows are not model
+      instances). The cascade runs with ``require_model_rows=False`` because it
+      re-projects the sealed queryset to the edge's target column and never
+      iterates it.
     - ``alias`` -- a value explicitly routed off ``required_alias``. For a
       top-level source an UNROUTED value (``_db is None``) is never an alias defect;
       the seal pins it via ``using=`` at construction. For a prefetch child
-      (``require_shared_alias``), the child's explicit ``_db`` must EQUAL the outer
+      (``policy.require_shared_alias``), the child's explicit ``_db`` must EQUAL the outer
       effective alias, including when that alias is ``None`` -- an unrouted parent
       forces an unrouted child, so one resolution never spans two connections.
 
@@ -2649,7 +2984,7 @@ def _seal_or_defect(
         return None, ("untrusted", f"{cls_name}._iterable_class is {detail}")
     # The outer effective alias is what this seal pins the queryset onto (a required
     # alias, else the source's own explicit ``_db``); prefetch children are sealed
-    # against it with ``require_shared_alias=True`` so neither a pinned parent nor an
+    # against it with ``require_shared_alias`` so neither a pinned parent nor an
     # UNROUTED parent (effective alias ``None``) can hold an explicitly cross-routed
     # child -- one GraphQL resolution never spans two database connections.
     effective_alias = required_alias if required_alias is not None else db
@@ -2657,14 +2992,26 @@ def _seal_or_defect(
         state.get("_prefetch_related_lookups"),
         cls_name,
         effective_alias,
+        qmodel,
     )
     if prefetch_defect is not None:
         return None, prefetch_defect
-    if require_model_rows and not allow_sliced and rebuilt_query.is_sliced:
+    # TODO(spec-050 slice 2): After all type/table/untrusted proof passes,
+    # inspect the already-extracted state without dispatch. When
+    # ``policy.require_unevaluated`` and ``state.get("_result_cache") is not
+    # None``, return ``("unevaluated", "the result cache is populated")`` here,
+    # immediately before ``sliced``. This fixes the canonical order to
+    # type -> table -> untrusted -> unevaluated -> sliced -> combined ->
+    # projection -> alias and prevents the rebuild from erasing evaluation.
+    if policy.reject_sliced and rebuilt_query.is_sliced:
         return None, ("sliced", f"rows {rebuilt_query.low_mark}:{rebuilt_query.high_mark}")
-    if require_model_rows and iterable is not ModelIterable:
+    # ``combinator`` is a plain ``str | None`` slot on the proven-genuine
+    # ``sql.Query``, read off the reconstructed clone -- no consumer dispatch.
+    if policy.reject_combined and rebuilt_query.combinator:
+        return None, ("combined", str(rebuilt_query.combinator))
+    if policy.require_model_rows and iterable is not ModelIterable:
         return None, ("projection", _safe_class_name(iterable))
-    if require_shared_alias:
+    if policy.require_shared_alias:
         # A prefetch child: its explicit ``_db`` must EQUAL the outer effective alias,
         # INCLUDING when that alias is ``None`` (an unrouted parent forces an unrouted
         # child). ``required_alias`` here IS the outer effective alias.
@@ -2748,6 +3095,33 @@ def _coerced_manager_queryset(manager: models.Manager) -> models.QuerySet:
     return queryset
 
 
+def _defect_message(messages: dict[str, str], defect: tuple[str, str], subject: str) -> str:
+    """Return ``subject``'s wording for a ``(code, detail)`` seal defect.
+
+    The seal's defect codes are a closed, canonically ordered set, but each
+    message-building site renders only the subset IT can reach, so every ladder
+    used to end in an unconditional branch for its own last code. That shape
+    cannot fail loudly: a code added to the seal without an arm at a site does
+    not raise there, it MISLABELS -- the schema author is told about an alias
+    mismatch or a wrong table for a rejection that was neither. Dispatch is
+    exhaustive instead, and an unrendered code says exactly that, so the defect
+    still fails closed and the missing arm is legible in the message.
+
+    Each site owns its own prose (a cascade edge names the edge, a read surface
+    names ``get_queryset``); what is shared is the dispatch and the
+    exhaustiveness, never the wording.
+    """
+    code, detail = defect
+    message = messages.get(code)
+    if message is None:
+        return (
+            f"{subject} was rejected by the visibility boundary with the {code!r} defect "
+            f"({detail}), which this surface declares no wording for. This is a framework "
+            f"defect: a seal defect code was added without an arm at this site."
+        )
+    return message
+
+
 def _visibility_result_error(
     type_cls: type,
     model: type[models.Model],
@@ -2763,55 +3137,69 @@ def _visibility_result_error(
     prose (``"... for the cascade subquery on Model.field ..."``) survives
     the checks moving into this shared boundary; surfaces without bespoke
     prose take the defaults below.
+
+    The reachable subset here is every code except ``combined``, which only a
+    ``reject_combined`` policy emits and which only the cascade sets -- and the
+    cascade always supplies its own ``render_error``.
+
     """
+    # TODO(spec-050 slice 2): Replace the stale reachability sentence above and
+    # add explicit ``unevaluated`` and ``combined`` message arms. Active list
+    # arguments make ``combined`` reachable without a cascade renderer, and the
+    # post-order seal makes ``unevaluated`` a real defect. The prose must name
+    # the source/hook result and the remedy, never expose ``_defect_message``'s
+    # framework-defect fallback.
     code, detail = defect
     if render_error is not None:
         return ConfigurationError(render_error(code, detail))
-    if code == "type":
-        return ConfigurationError(
-            f"{_safe_class_name(type_cls)}.get_queryset must return a QuerySet or Manager of "
-            f"{_safe_class_name(model)} rows; got {detail}. A list / generator / iterable has no "
-            f"lazy query for the surface to compose into, and None discards the "
-            f"visibility contract entirely.",
-        )
-    if code == "table":
-        return ConfigurationError(
-            f"{_safe_class_name(type_cls)}.get_queryset returned a {detail} queryset; the "
-            f"visibility contract composes over {_safe_class_name(model)}'s concrete table "
-            f"(proxy siblings are compatible, MTI children and unrelated models are not).",
-        )
-    if code == "untrusted":
-        return ConfigurationError(
-            f"{_safe_class_name(type_cls)}.get_queryset returned a queryset that cannot be sealed "
-            f"into a framework-owned execution queryset ({detail}); the visibility "
-            f"boundary rebuilds a plain QuerySet from the validated query state, and a "
-            f"foreign Query class, a foreign row iterable, or an unresolved deferred "
-            f"filter cannot be faithfully rebuilt. Return a queryset backed by a plain "
-            f"django.db.models.sql.Query over model or .values() rows.",
-        )
-    if code == "sliced":
-        return ConfigurationError(
-            f"{_safe_class_name(type_cls)}.get_queryset returned a sliced queryset ({detail}); "
-            f"the surface composes further filters and ordering onto the hook result, "
-            f"and Django forbids refiltering or reordering a sliced query, so the next "
-            f"transform would raise a raw TypeError outside the visibility contract. "
-            f"Return the unsliced queryset and let the surface paginate.",
-        )
-    if code == "projection":
-        return ConfigurationError(
-            f"{_safe_class_name(type_cls)}.get_queryset returned a {detail} projection; the "
-            f"visibility contract composes over {_safe_class_name(model)} model rows, not a "
-            f".values() / .values_list() (or custom-iterable) projection whose rows "
-            f"are not {_safe_class_name(model)} instances. Return a queryset of model rows.",
-        )
-    # ``code == "alias"`` -- the only remaining defect the shared checker emits;
-    # an unhandled future code would fall through silently, so this last branch
-    # is unconditional.
+    name = _safe_class_name(type_cls)
+    model_name = _safe_class_name(model)
     return ConfigurationError(
-        f"{_safe_class_name(type_cls)}.get_queryset returned a queryset routed to alias "
-        f"{detail!r}, but this resolution is pinned to alias {required_alias!r}; "
-        f"a visibility hook cannot re-route a pinned resolution. Remove the "
-        f".using(...) call.",
+        _defect_message(
+            {
+                "type": (
+                    f"{name}.get_queryset must return a QuerySet or Manager of "
+                    f"{model_name} rows; got {detail}. A list / generator / iterable has no "
+                    f"lazy query for the surface to compose into, and None discards the "
+                    f"visibility contract entirely."
+                ),
+                "table": (
+                    f"{name}.get_queryset returned a {detail} queryset; the "
+                    f"visibility contract composes over {model_name}'s concrete table "
+                    f"(proxy siblings are compatible, MTI children and unrelated models "
+                    f"are not)."
+                ),
+                "untrusted": (
+                    f"{name}.get_queryset returned a queryset that cannot be sealed "
+                    f"into a framework-owned execution queryset ({detail}); the visibility "
+                    f"boundary rebuilds a plain QuerySet from the validated query state, and a "
+                    f"foreign Query class, a foreign row iterable, or an unresolved deferred "
+                    f"filter cannot be faithfully rebuilt. Return a queryset backed by a plain "
+                    f"django.db.models.sql.Query over model or .values() rows."
+                ),
+                "sliced": (
+                    f"{name}.get_queryset returned a sliced queryset ({detail}); "
+                    f"the surface composes further filters and ordering onto the hook result, "
+                    f"and Django forbids refiltering or reordering a sliced query, so the next "
+                    f"transform would raise a raw TypeError outside the visibility contract. "
+                    f"Return the unsliced queryset and let the surface paginate."
+                ),
+                "projection": (
+                    f"{name}.get_queryset returned a {detail} projection; the "
+                    f"visibility contract composes over {model_name} model rows, not a "
+                    f".values() / .values_list() (or custom-iterable) projection whose rows "
+                    f"are not {model_name} instances. Return a queryset of model rows."
+                ),
+                "alias": (
+                    f"{name}.get_queryset returned a queryset routed to alias "
+                    f"{detail!r}, but this resolution is pinned to alias {required_alias!r}; "
+                    f"a visibility hook cannot re-route a pinned resolution. Remove the "
+                    f".using(...) call."
+                ),
+            },
+            defect,
+            f"{name}.get_queryset",
+        ),
     )
 
 
@@ -2820,23 +3208,16 @@ def _prepared_visibility_source(
     queryset: Any,
     *,
     render_error: Any = None,
-    require_model_rows: bool = True,
-    allow_sliced: bool = False,
+    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> tuple[models.QuerySet, str | None]:
     """Validate and SEAL the source queryset before the visibility hook runs.
 
     Returns ``(sealed_queryset, required_alias)``. The source is sealed through
     ``_seal_or_defect`` before the hook runs - it must be a real ``QuerySet``
     over the registered type's concrete table, sealable (a plain ``sql.Query``, a
-    Django row iterable, no unresolved deferred filter), and model rows (unless
-    ``require_model_rows`` is off for the cascade). ``allow_sliced`` (default
-    ``False``) forwards to the seal to suppress ONLY the slice rejection, for the
-    optimizer walker's nested-connection path whose own gate
-    (``nested_fetch.py::unwindowable_child_queryset_reason``) classifies a sliced
-    child and degrades to the fully-unplanned per-parent fallback WITHOUT
-    recomposing filters / ordering -- so the "next transform would recompose"
-    premise the rejection guards against does not hold there
-    (``spec-045-visibility_boundary-0_0_14`` Decision 5 degrade-to-unplanned). The
+    Django row iterable, no unresolved deferred filter), and whatever else
+    ``policy`` (a ``_SealPolicy``, default ``_DEFAULT_SEAL_POLICY``) requires:
+    model rows, no slice, and for the cascade no combinator. The
     sealed object is a fresh framework-owned plain ``QuerySet`` rebuilt from the
     source's query state, so the hook receives a trusted queryset regardless of
     what the caller passed; an already-evaluated source seals to a fresh,
@@ -2862,54 +3243,59 @@ def _prepared_visibility_source(
     Resolver-source ``Manager`` coercion stays in ``normalize_query_source``;
     framework-created seeds are querysets by construction. Preparation composes
     lazy query state only; it executes zero SQL.
+
     """
+    # TODO(spec-050 slice 2): Add ``unevaluated`` and ``combined`` arms to this
+    # source-site message map too. The active list policy reaches ``combined``
+    # before the hook; ``unevaluated`` remains future-proof/exhaustive even
+    # though the list's source policy does not enable it. Keep both ladders
+    # aligned with the seal's canonical code set.
     model = model_for(type_cls)
-    queryset, defect = _seal_or_defect(
-        queryset,
-        model,
-        None,
-        require_model_rows=require_model_rows,
-        allow_sliced=allow_sliced,
-    )
+    queryset, defect = _seal_or_defect(queryset, model, None, policy)
     if defect is not None:
         code, detail = defect
         if render_error is not None:
             raise ConfigurationError(render_error(code, detail))
-        if code == "type":
-            raise ConfigurationError(
-                f"apply_type_visibility requires a QuerySet of {_safe_class_name(model)} rows "
-                f"for {_safe_class_name(type_cls)}; got {detail}. Coerce a Manager with .all(); "
-                f"a list has no lazy query for the hook to narrow.",
-            )
-        if code == "untrusted":
-            raise ConfigurationError(
-                f"apply_type_visibility for {_safe_class_name(type_cls)} got a source queryset "
-                f"that cannot be sealed into a framework-owned execution queryset "
-                f"({detail}); the boundary rebuilds a plain QuerySet from the validated "
-                f"query state, and a foreign Query class, a foreign row iterable, or an "
-                f"unresolved deferred filter cannot be faithfully rebuilt. Pass a "
-                f"queryset backed by a plain django.db.models.sql.Query.",
-            )
-        if code == "sliced":
-            raise ConfigurationError(
-                f"apply_type_visibility for {_safe_class_name(type_cls)} got a sliced source "
-                f"queryset ({detail}); the visibility hook and the surface compose "
-                f"further filters and ordering onto the source, and Django forbids "
-                f"refiltering or reordering a sliced query. Pass the unsliced queryset "
-                f"and let the surface paginate.",
-            )
-        if code == "projection":
-            raise ConfigurationError(
-                f"apply_type_visibility for {_safe_class_name(type_cls)} got a {detail} projection "
-                f"source; the visibility contract composes over {_safe_class_name(model)} model "
-                f"rows, not a .values() / .values_list() (or custom-iterable) projection.",
-            )
-        # ``code == "table"`` -- the only other defect reachable with no
-        # required alias on a model-row source.
+        name = _safe_class_name(type_cls)
+        model_name = _safe_class_name(model)
         raise ConfigurationError(
-            f"apply_type_visibility for {_safe_class_name(type_cls)} requires a QuerySet over "
-            f"{_safe_class_name(model)}'s concrete table; got a {detail} queryset (proxy "
-            f"siblings are compatible, MTI children and unrelated models are not).",
+            _defect_message(
+                {
+                    "type": (
+                        f"apply_type_visibility requires a QuerySet of {model_name} rows "
+                        f"for {name}; got {detail}. Coerce a Manager with .all(); "
+                        f"a list has no lazy query for the hook to narrow."
+                    ),
+                    "table": (
+                        f"apply_type_visibility for {name} requires a QuerySet over "
+                        f"{model_name}'s concrete table; got a {detail} queryset (proxy "
+                        f"siblings are compatible, MTI children and unrelated models are not)."
+                    ),
+                    "untrusted": (
+                        f"apply_type_visibility for {name} got a source queryset "
+                        f"that cannot be sealed into a framework-owned execution queryset "
+                        f"({detail}); the boundary rebuilds a plain QuerySet from the validated "
+                        f"query state, and a foreign Query class, a foreign row iterable, or an "
+                        f"unresolved deferred filter cannot be faithfully rebuilt. Pass a "
+                        f"queryset backed by a plain django.db.models.sql.Query."
+                    ),
+                    "sliced": (
+                        f"apply_type_visibility for {name} got a sliced source "
+                        f"queryset ({detail}); the visibility hook and the surface compose "
+                        f"further filters and ordering onto the source, and Django forbids "
+                        f"refiltering or reordering a sliced query. Pass the unsliced queryset "
+                        f"and let the surface paginate."
+                    ),
+                    "projection": (
+                        f"apply_type_visibility for {name} got a {detail} projection "
+                        f"source; the visibility contract composes over {model_name} model "
+                        f"rows, not a .values() / .values_list() (or custom-iterable) "
+                        f"projection."
+                    ),
+                },
+                defect,
+                f"The apply_type_visibility source for {name}",
+            ),
         )
     pipeline = current_write_pipeline()
     if pipeline is not None:
@@ -2930,8 +3316,7 @@ def _normalized_visibility_result(
     required_alias: str | None,
     render_error: Any = None,
     *,
-    require_model_rows: bool = True,
-    allow_sliced: bool = False,
+    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> models.QuerySet:
     """Normalize a ``get_queryset`` hook result into a composable, correctly-routed queryset.
 
@@ -2963,13 +3348,7 @@ def _normalized_visibility_result(
     model = model_for(type_cls)
     if isinstance(result, models.Manager):
         result = _coerced_manager_queryset(result)
-    sealed, defect = _seal_or_defect(
-        result,
-        model,
-        required_alias,
-        require_model_rows=require_model_rows,
-        allow_sliced=allow_sliced,
-    )
+    sealed, defect = _seal_or_defect(result, model, required_alias, policy)
     if defect is not None:
         raise _visibility_result_error(type_cls, model, required_alias, defect, render_error)
     return sealed
@@ -2982,8 +3361,7 @@ def apply_type_visibility_sync(
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
     *,
     render_error: Any = None,
-    require_model_rows: bool = True,
-    allow_sliced: bool = False,
+    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> models.QuerySet:
     """Run ``type_cls.get_queryset`` in a sync context; reject async hooks loudly.
 
@@ -3015,27 +3393,15 @@ def apply_type_visibility_sync(
     ``render_error`` is the result-normalization error seam
     (``_visibility_result_error``): the cascade supplies its path-rich
     per-edge prose; other surfaces take the shared defaults.
-    ``require_model_rows`` defaults ``True`` (a read surface's hook must return
-    model rows); the cascade passes ``False`` because it deliberately accepts a
-    ``.values()`` / ``.values_list()`` return and re-projects it to the edge's
-    target column, and never iterates the target's rows.
-    ``allow_sliced`` defaults ``False`` (every recomposing read surface -- Relay
-    node defaults, connection root, list field, cascade -- rejects a sliced hook
-    result, because Django forbids reordering / refiltering a sliced query). Only
-    the optimizer walker's nested-connection plan path passes ``True``: its own
-    gate (``nested_fetch.py::unwindowable_child_queryset_reason``) detects the
-    sliced child and degrades the nested connection to the fully-unplanned
-    per-parent fallback WITHOUT recomposing, so the rejection's "next transform
-    would recompose" premise does not hold one edge down
-    (``spec-045-visibility_boundary-0_0_14`` Decision 5 degrade-to-unplanned;
-    mirrors the prefetch-child ``allow_sliced``).
+    ``policy`` is the seal's option set (``_SealPolicy``), applied to BOTH the
+    source and the result so the two seals of one call cannot diverge. It
+    defaults to ``_DEFAULT_SEAL_POLICY`` (model rows, no slice, no combinator
+    licence); ``permissions.py`` passes ``_CASCADE_SEAL_POLICY`` and the
+    optimizer walker's nested-connection plan path passes
+    ``_UNRECOMPOSED_CHILD_POLICY`` (``spec-045-visibility_boundary-0_0_14``
+    Decision 5 degrade-to-unplanned).
     """
-    queryset, required_alias = _prepared_visibility_source(
-        type_cls,
-        queryset,
-        require_model_rows=require_model_rows,
-        allow_sliced=allow_sliced,
-    )
+    queryset, required_alias = _prepared_visibility_source(type_cls, queryset, policy=policy)
     result = type_cls.get_queryset(queryset, info)
     result = reject_async_in_sync_context(
         result,
@@ -3054,8 +3420,7 @@ def apply_type_visibility_sync(
         result,
         required_alias,
         render_error,
-        require_model_rows=require_model_rows,
-        allow_sliced=allow_sliced,
+        policy=policy,
     )
 
 
@@ -3129,7 +3494,7 @@ def related_visibility_queryset_or_default(
     """
     queryset = related_visibility_queryset(related_model, info, async_recourse)
     if queryset is None:
-        return related_model._default_manager.all()
+        return base_queryset(related_model)
     return queryset
 
 
@@ -3254,6 +3619,9 @@ async def apply_type_visibility_async(
     type_cls: type,
     queryset: models.QuerySet,
     info: Any,
+    *,
+    render_error: Any = None,
+    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> models.QuerySet:
     """Run ``type_cls.get_queryset`` in an async context, awaiting awaitables.
 
@@ -3269,16 +3637,20 @@ async def apply_type_visibility_async(
     recursive await over an unbounded chain. The source and result then run
     the same shared hardened boundary as the sync runner
     (``_prepared_visibility_source`` / ``_normalized_visibility_result``),
-    so the two colored paths cannot drift. ``SyncMisuseError`` stays
+    so the two colored paths cannot drift. ``render_error`` and ``policy`` are
+    the sync runner's own seams, declared here for that reason: a surface whose
+    seal differs from the default (the cascade's ``_CASCADE_SEAL_POLICY``, the
+    walker's ``_UNRECOMPOSED_CHILD_POLICY``) must be able to state the same
+    contract on either colored path, and an option only one twin can reach IS
+    the drift the shared boundary exists to prevent. ``SyncMisuseError`` stays
     reserved for sync boundaries: every defect here is a plain
     ``ConfigurationError``.
     """
-    queryset, required_alias = _prepared_visibility_source(type_cls, queryset)
+    queryset, required_alias = _prepared_visibility_source(type_cls, queryset, policy=policy)
     result = type_cls.get_queryset(queryset, info)
     if inspect.isawaitable(result):
         result = await result
-        if inspect.isawaitable(result):
-            _dispose_sync_awaitable(result)
+        if _disposed_awaitable(result):
             raise ConfigurationError(
                 f"{_safe_class_name(type_cls)}.get_queryset resolved to a nested awaitable; an "
                 f"async get_queryset must resolve to a QuerySet (or Manager) after ONE "
@@ -3288,7 +3660,13 @@ async def apply_type_visibility_async(
     # is not immutability, so a hook can mutate the sealed source's
     # ``_result_cache`` / ``_query`` and return it. The result is ALWAYS re-sealed
     # so the second seal drops any injected cache (spec-045 Decision 3).
-    return _normalized_visibility_result(type_cls, result, required_alias)
+    return _normalized_visibility_result(
+        type_cls,
+        result,
+        required_alias,
+        render_error,
+        policy=policy,
+    )
 
 
 def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
@@ -3299,9 +3677,8 @@ def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
     leak a Strawberry pagination error, so both field factories share this
     boundary.
     """
-    if not inspect.isawaitable(source):
+    if not _disposed_awaitable(source):
         return
-    _dispose_sync_awaitable(source)
     raise SyncMisuseError(
         f"A sync {_safe_class_name(type_cls)} consumer resolver returned an awaitable. "
         "Declare the resolver `async def` (or use an async callable) so the "
@@ -3330,15 +3707,56 @@ def reject_residual_async_source(source: Any, type_cls: type) -> None:
     where a miss skips visibility - the connection pipeline previously lacked
     this guard, letting a nested async connection resolver bypass the hook.
     """
-    if not inspect.isawaitable(source):
+    if not _disposed_awaitable(source):
         return
-    _dispose_sync_awaitable(source)
     raise ConfigurationError(
         f"An async {_safe_class_name(type_cls)} consumer resolver resolved to another "
         f"awaitable after being awaited; a nested awaitable is neither a QuerySet "
         f"nor a plain iterable, and passing it through would silently skip the "
         f"get_queryset visibility hook. Return the queryset (or iterable) directly.",
     )
+
+
+def prepared_resolver_source(
+    result: Any,
+    type_cls: type,
+    *,
+    async_guard: Any,
+    non_queryset_guard: Any = None,
+    queryset_guard: Any = None,
+) -> tuple[Any, bool]:
+    """Refuse the wrong async shape, coerce a Manager, and report what the source IS.
+
+    The head every consumer-resolver pipeline runs, in the one order that is
+    safe: refuse the wrong async shape FIRST, then normalize, then let the
+    surface apply its own guard to whichever branch the value landed in. Both
+    list-field runners and both connection pipelines used to spell this out
+    themselves, and the miss it guards against is not cosmetic - a value that
+    slips past the async refusal reaches the NON-QUERYSET branch and is passed
+    through, skipping the ``get_queryset`` visibility hook entirely. That bug
+    has shipped once (see ``reject_residual_async_source``), which is why the
+    order is fixed here rather than at four call sites.
+
+    ``async_guard`` is the caller's colored refusal (``reject_awaitable_sync_source``
+    on a sync path, ``reject_residual_async_source`` on an already-awaited async
+    one) - passed in rather than selected by a flag, so each pipeline still names
+    the mistake it is refusing. ``queryset_guard`` / ``non_queryset_guard`` are
+    the surface's own per-branch checks (the connection's pre-sliced and
+    sidecar-on-a-plain-iterable rejections); the list field has neither.
+
+    Returns ``(source, is_queryset)`` rather than deciding the tail, so every
+    caller keeps its colored visibility step explicit and no ``await`` hides
+    behind a maybe-await abstraction.
+    """
+    async_guard(result, type_cls)
+    source, is_queryset = normalize_query_source(result)
+    if not is_queryset:
+        if non_queryset_guard is not None:
+            non_queryset_guard(source)
+        return source, False
+    if queryset_guard is not None:
+        queryset_guard(source)
+    return source, True
 
 
 def post_process_queryset_result_sync(type_cls: type, result: Any, info: Any) -> Any:
@@ -3354,8 +3772,11 @@ def post_process_queryset_result_sync(type_cls: type, result: Any, info: Any) ->
     ``reject_awaitable_sync_source`` guard, which keeps the invariant that a
     consumer ``QuerySet`` return is never resolved without its visibility hook.
     """
-    reject_awaitable_sync_source(result, type_cls)
-    source, is_queryset = normalize_query_source(result)
+    source, is_queryset = prepared_resolver_source(
+        result,
+        type_cls,
+        async_guard=reject_awaitable_sync_source,
+    )
     if is_queryset:
         return apply_type_visibility_sync(type_cls, source, info)
     return source
@@ -3373,8 +3794,11 @@ async def post_process_queryset_result_async(type_cls: type, result: Any, info: 
     and passing it through the non-queryset branch would skip the
     ``get_queryset`` visibility hook.
     """
-    reject_residual_async_source(result, type_cls)
-    source, is_queryset = normalize_query_source(result)
+    source, is_queryset = prepared_resolver_source(
+        result,
+        type_cls,
+        async_guard=reject_residual_async_source,
+    )
     if is_queryset:
         return await apply_type_visibility_async(type_cls, source, info)
     return source

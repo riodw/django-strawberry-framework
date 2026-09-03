@@ -29,6 +29,7 @@ import contextlib
 import importlib
 import subprocess
 import sys
+from typing import Any, get_type_hints
 
 import pytest
 
@@ -141,3 +142,22 @@ def test_successful_lookup_does_not_memoize(name):
     exported = getattr(django_strawberry_framework, name)
     assert exported is not None
     assert name not in vars(django_strawberry_framework)
+
+
+def test_getattr_return_annotation_admits_function_valued_exports():
+    """The PEP 562 hook's return annotation must not claim ``type`` for every soft export.
+
+    Two of the ``_DRF_SOFT_EXPORTS`` targets (``register_serializer_field_converter`` /
+    ``describe_serializer_input``) are plain functions, and the package ships
+    ``py.typed`` (PEP 561), so a ``-> type`` return hands a type-checking consumer a
+    false ``type`` for those names. The package's own module-hook idiom is ``-> Any``
+    (``routers.py``'s module ``__getattr__``), so the root hook declares it too.
+    """
+    hints = get_type_hints(django_strawberry_framework.__getattr__)
+    assert hints["return"] is Any
+    # The runtime tie-in: two soft exports genuinely are functions, so the
+    # annotation must admit non-type returns (and the names must still resolve).
+    assert callable(django_strawberry_framework.register_serializer_field_converter)
+    assert callable(django_strawberry_framework.describe_serializer_input)
+    assert not isinstance(django_strawberry_framework.register_serializer_field_converter, type)
+    assert not isinstance(django_strawberry_framework.describe_serializer_input, type)

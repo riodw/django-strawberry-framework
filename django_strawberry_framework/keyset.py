@@ -392,6 +392,21 @@ def _deserialize_cursor_value(field: models.Field, raw: Any, argument: str) -> A
         raise _invalid_cursor_error(argument) from None
 
 
+def keyset_contract_error(detail: str) -> GraphQLError:
+    """Build a keyset-contract rejection: the shared stem plus this site's ``detail``.
+
+    Every one of these errors says the same thing first - this connection is on
+    keyset cursors because it declared ``Meta.cursor_field`` - and then names
+    the single requirement the request violated. The stem was re-typed at five
+    sites across two modules, so a reword of the shared half was a five-site
+    edit with nothing checking it; the per-site half stays at its own site,
+    because that half is the actual message.
+    """
+    return GraphQLError(
+        f"This connection uses keyset cursors (Meta.cursor_field), which {detail}",
+    )
+
+
 def _invalid_cursor_error(argument: str) -> GraphQLError:
     """The one malformed / tampered / mismatched keyset-cursor error shape."""
     return GraphQLError(
@@ -491,8 +506,7 @@ def encode_keyset_cursor(columns: tuple[CursorColumn, ...], row: Any, *, fingerp
     for column in columns:
         value = getattr(row, column.value_source)
         if value is None:
-            raise GraphQLError(
-                "This connection uses keyset cursors (Meta.cursor_field), which "
+            raise keyset_contract_error(
                 "require non-nullable ordering columns; a NULL value was read "
                 f"from {column.value_source!r}.",
             )

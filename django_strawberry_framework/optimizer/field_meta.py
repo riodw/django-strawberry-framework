@@ -25,13 +25,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from ..exceptions import OptimizerError, _safe_type_name
 from ..utils.relations import (
-    _relation_attr,
-    _relation_bool,
-    _relation_name,
     has_composite_pk,
     instance_accessor,
     is_many_side_relation_kind,
+    relation_attr,
+    relation_bool,
     relation_kind,
+    relation_name,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -83,7 +83,11 @@ class FieldMeta:
             ``null=True`` default leaking through.
         related_model: The target model class for relations, or ``None``.
         attname: The DB column name (e.g., ``category_id`` for a FK).
-            ``None`` for reverse relations and non-FK fields.
+            ``None`` for reverse relations, non-FK fields, and every
+            relation that stores no column of its own (forward M2M,
+            ``GenericRelation``, ``GenericForeignKey`` - Django fills their
+            ``attname`` with the relation name, which the stamp drops so
+            every non-``None`` value is a real column).
         target_field_name: The target model field name a FK or forward
             M2M points at (Django's ``ManyToManyField`` descriptor
             exposes ``target_field`` pointing at the target model's PK,
@@ -227,34 +231,50 @@ class FieldMeta:
         elision metadata live here so the two call sites cannot drift.
         """
         if field_name is None:
-            field_name = _relation_attr(field, "name", None)
+            field_name = relation_attr(field, "name", None)
         if not isinstance(field_name, str):
             raise OptimizerError(
                 f"FieldMeta expected a string field name; got {_safe_type_name(field_name)}.",
             )
-        target_field = _relation_attr(field, "target_field", None)
-        related_model = _relation_attr(field, "related_model", None)
+        target_field = relation_attr(field, "target_field", None)
+        related_model = relation_attr(field, "related_model", None)
         target_pk_name = _target_pk_name(related_model)
         target_field_name = (
-            _relation_attr(target_field, "name", None) if target_field is not None else None
+            relation_attr(target_field, "name", None) if target_field is not None else None
         )
         if target_field_name is not None and not isinstance(target_field_name, str):
             target_field_name = None
         target_field_attname = (
-            _relation_attr(target_field, "attname", None) if target_field is not None else None
+            relation_attr(target_field, "attname", None) if target_field is not None else None
         )
         if target_field_attname is not None and not isinstance(target_field_attname, str):
             target_field_attname = None
-        is_m2m = _relation_bool(field, "many_to_many", False)
-        is_o2m = _relation_bool(field, "one_to_many", False)
-        is_o2o = _relation_bool(field, "one_to_one", False)
-        attname = _relation_attr(field, "attname", None)
+        is_m2m = relation_bool(field, "many_to_many", False)
+        is_o2m = relation_bool(field, "one_to_many", False)
+        is_o2o = relation_bool(field, "one_to_one", False)
+        attname = relation_attr(field, "attname", None)
         if attname is not None and not isinstance(attname, str):
             attname = None
-        auto_created = _relation_bool(field, "auto_created", False)
-        concrete = _relation_bool(field, "concrete", False)
-        content_type_field_name = _relation_name(field, "content_type_field_name")
-        object_id_field_name = _relation_name(field, "object_id_field_name")
+        auto_created = relation_bool(field, "auto_created", False)
+        concrete = relation_bool(field, "concrete", False)
+        # Django stamps ``attname`` with the RELATION NAME on fields that store
+        # no column of their own. Django 6.1 does that while carrying
+        # ``concrete = False`` (forward ``ManyToManyField``, ``GenericRelation``,
+        # ``GenericForeignKey`` via ``set_attributes_from_name``). Django 5.2
+        # reports the same forward M2M as ``concrete = True`` with
+        # ``attname == name``, so ``concrete is False`` alone misses the floor.
+        # The walker appends ``attname`` to ``plan.only_fields`` verbatim
+        # (``walker.py::_record_relation_access``); a non-column name poisons
+        # the projection Django silently drops at compile time. Drop the
+        # poisoned value when the field POSITIVELY declares itself non-concrete
+        # OR is many-to-many (no source-table column on any supported Django).
+        # A duck-typed descriptor that omits ``concrete`` and is not M2M keeps
+        # its attname so resolver test doubles carrying only ``attname`` are
+        # unaffected.
+        if is_relation and (relation_attr(field, "concrete", None) is False or is_m2m):
+            attname = None
+        content_type_field_name = relation_name(field, "content_type_field_name")
+        object_id_field_name = relation_name(field, "object_id_field_name")
         kind = relation_kind(field)
 
         # Cardinality-gated nullable rule - see ``nullable`` field docstring above for the full rationale.
@@ -263,11 +283,11 @@ class FieldMeta:
         elif kind == "reverse_one_to_one":
             nullable = True
         else:
-            nullable = _relation_bool(field, "null", False)
+            nullable = relation_bool(field, "null", False)
 
-        field_rel = _relation_attr(field, "field", None)
+        field_rel = relation_attr(field, "field", None)
         reverse_connector_attname = (
-            _relation_attr(field_rel, "attname", None) if field_rel is not None else None
+            relation_attr(field_rel, "attname", None) if field_rel is not None else None
         )
         if reverse_connector_attname is not None and not isinstance(
             reverse_connector_attname,

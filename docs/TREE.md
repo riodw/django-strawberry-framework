@@ -288,9 +288,11 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
+    ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
+    ├── directives.py             # Construction-time containment for the consumer-supplied ``directives=`` forward.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -415,9 +417,11 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
+    ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
+    ├── directives.py             # Construction-time containment for the consumer-supplied ``directives=`` forward.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -570,11 +574,14 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │       ├── lazy_relation_target_module.py  # Cross-module fixture holding the target of a ``strawberry.lazy`` relation override.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
+    ├── test_canonical.py         # Tests for the hostile-safe container read / ordering primitives (``utils/canonical.py``).
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
     ├── test_context.py           # Tests for the shared request-context read / write / delete dispatch.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
+    ├── test_directives.py        # Tests for the shared field-directives containment (``utils/directives.py``).
     ├── test_errors.py            # Shared mutation-error constructors remain total over hostile metadata.
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041).
+    ├── test_init.py              # Package-init tests pinning the ``utils`` package's re-export surface.
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.
@@ -806,11 +813,14 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │       ├── lazy_relation_target_module.py  # Cross-module fixture holding the target of a ``strawberry.lazy`` relation override.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
+    ├── test_canonical.py         # Tests for the hostile-safe container read / ordering primitives (``utils/canonical.py``).
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
     ├── test_context.py           # Tests for the shared request-context read / write / delete dispatch.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
+    ├── test_directives.py        # Tests for the shared field-directives containment (``utils/directives.py``).
     ├── test_errors.py            # Shared mutation-error constructors remain total over hostile metadata.
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041).
+    ├── test_init.py              # Package-init tests pinning the ``utils`` package's re-export surface.
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.

@@ -981,7 +981,7 @@ def test_orderset_apply_sync_handles_unset_in_nested_dict():
 
 @pytest.mark.django_db
 def test_orderset_expand_meta_fields_rejects_non_iterable_fields():
-    """Non-iterable or string Meta.fields (other than '__all__') raises ConfigurationError."""
+    """Non-collection or string Meta.fields (other than '__all__') raises ConfigurationError."""
 
     class IntFieldsOrder(OrderSet):
         class Meta:
@@ -990,7 +990,7 @@ def test_orderset_expand_meta_fields_rejects_non_iterable_fields():
 
     with pytest.raises(
         ConfigurationError,
-        match="must be '__all__' or an iterable of field names",
+        match="must be '__all__' or a re-readable collection of field names",
     ):
         IntFieldsOrder.get_fields()
 
@@ -1001,7 +1001,7 @@ def test_orderset_expand_meta_fields_rejects_non_iterable_fields():
 
     with pytest.raises(
         ConfigurationError,
-        match="must be '__all__' or an iterable of field names",
+        match="not a bare string",
     ):
         StrFieldsOrder.get_fields()
 
@@ -1012,9 +1012,177 @@ def test_orderset_expand_meta_fields_rejects_non_iterable_fields():
 
     with pytest.raises(
         ConfigurationError,
-        match="must be '__all__' or an iterable of field names",
+        match="must be '__all__' or a re-readable collection of field names",
     ):
         ObjFieldsOrder.get_fields()
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_rejects_non_string_entries_without_model():
+    """Entry-TYPE validation is unconditional: it does not need ``Meta.model``.
+
+    The model-less related-only arm previously skipped entry validation
+    entirely, so a ``None`` / bytes / unhashable entry either landed
+    silently in the expansion (``{None: None}``, ``{b'title': None}``) or
+    escaped as a raw ``TypeError: unhashable type`` from the expansion-dict
+    write. Every entry is a path token regardless of ``Meta.model``, so the
+    entry-type gate fires before the model-guarded path walk.
+    """
+
+    class NoModelNoneEntryOrder(OrderSet):
+        class Meta:
+            fields = [None]
+
+    with pytest.raises(ConfigurationError, match="entries must be field-name strings"):
+        NoModelNoneEntryOrder.get_fields()
+
+    class NoModelBytesEntryOrder(OrderSet):
+        class Meta:
+            fields = [b"title"]
+
+    with pytest.raises(ConfigurationError, match="entries must be field-name strings"):
+        NoModelBytesEntryOrder.get_fields()
+
+    class UnhashableEntryOrder(OrderSet):
+        class Meta:
+            fields = [["title"]]
+
+    with pytest.raises(ConfigurationError, match="entries must be field-name strings"):
+        UnhashableEntryOrder.get_fields()
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_rejects_non_string_entries_with_model():
+    """The entry-type gate precedes path validation, with or without ``Meta.model``."""
+
+    class NoneEntryOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = [None]
+
+    with pytest.raises(ConfigurationError, match="entries must be field-name strings"):
+        NoneEntryOrder.get_fields()
+
+    class BytesEntryOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = [b"title"]
+
+    with pytest.raises(ConfigurationError, match="entries must be field-name strings"):
+        BytesEntryOrder.get_fields()
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_rejects_one_shot_iterator_fields():
+    """A one-shot ``Meta.fields`` iterator is rejected instead of silently diverging.
+
+    The expansion re-runs whenever a lazy ``RelatedOrder`` target keeps the
+    ``get_fields`` cache gate from writing (the gate refuses while any
+    ``_orderset`` is still a string). A generator ``Meta.fields`` used to
+    expand correctly on the FIRST walk and then silently rebuild to an EMPTY
+    field set on every later walk (the iterator was exhausted); the
+    re-readable-container gate fails loud at declaration instead.
+    """
+
+    class IteratorFieldsOrder(OrderSet):
+        shelf = RelatedOrder("tests.orders.test_sets.MissingOrder", field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = iter(["title", "subtitle"])
+
+    with pytest.raises(ConfigurationError, match="re-readable"):
+        IteratorFieldsOrder.get_fields()
+
+    class GeneratorFieldsOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = (name for name in ["title", "subtitle"])
+
+    with pytest.raises(ConfigurationError, match="re-readable"):
+        GeneratorFieldsOrder.get_fields()
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_accepts_a_computed_re_readable_collection():
+    """A ``dict`` view or a custom ``Collection`` is a legal ``Meta.fields``.
+
+    The contract is re-readability, not membership of a builtin allow-list:
+    these hold their field names, so the expansion re-runs to the same
+    ``OrderedDict`` and the declaration must be accepted (the order family
+    keeps declaration order, so the view's insertion order survives).
+    """
+
+    class _NameSet:
+        def __init__(self, *names):
+            self._names = names
+
+        def __iter__(self):
+            return iter(self._names)
+
+        def __len__(self):
+            return len(self._names)
+
+        def __contains__(self, item):
+            return item in self._names
+
+    class KeysViewOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = {"title": None, "subtitle": None}.keys()
+
+    class CustomCollectionOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = _NameSet("title", "subtitle")
+
+    assert list(KeysViewOrder._expand_meta_fields()) == ["title", "subtitle"]
+    assert list(CustomCollectionOrder._expand_meta_fields()) == ["title", "subtitle"]
+    # Re-reading yields the same expansion (the property the gate guarantees).
+    assert list(KeysViewOrder._expand_meta_fields()) == ["title", "subtitle"]
+    assert list(CustomCollectionOrder._expand_meta_fields()) == ["title", "subtitle"]
+
+
+def test_orderset_expand_meta_fields_rejects_hostile_iterable_without_iterating():
+    """A hostile ``__iter__`` raising midway is rejected by the container gate.
+
+    The shape gate is structural (an ``isinstance`` container check), so a
+    one-shot iterable whose ``__iter__`` raises mid-iteration never gets
+    iterated at all: the raw ``RuntimeError`` cannot escape ``get_fields()``
+    because the object is rejected before the walk starts.
+    """
+
+    class Boom:
+        def __iter__(self):
+            yield "title"  # pragma: no cover - never reached past the gate
+            raise RuntimeError("boom mid-iteration")
+
+    class HostileIterOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = Boom()
+
+    with pytest.raises(ConfigurationError, match="re-readable"):
+        HostileIterOrder.get_fields()
+
+
+@pytest.mark.django_db
+def test_orderset_expand_meta_fields_dict_shape_iterates_keys():
+    """Dict-shaped ``Meta.fields`` (django-filter lookup bags) expands the KEYS.
+
+    Pins the documented degradation: the lookup-bag values are dropped and
+    each key becomes an order field, so a consumer porting a filter-style
+    ``fields`` dict gets field-name ordering instead of a silent error.
+    """
+
+    class DictFieldsOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"], "subtitle": ["icontains"]}
+
+    fields = DictFieldsOrder.get_fields()
+    assert list(fields) == ["title", "subtitle"]
+    assert all(v is None for v in fields.values())
 
 
 @pytest.mark.django_db

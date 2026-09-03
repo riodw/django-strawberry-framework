@@ -74,7 +74,7 @@ from typing import Any, ClassVar, Protocol
 from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
 
-from ..exceptions import ConfigurationError, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.connections import assert_window_fetch_mode_for
 from .join_taxonomy import RelationJoinDescriptor
 from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagination
@@ -421,23 +421,53 @@ def resolve_strategy(value: Any) -> NestedConnectionStrategy:
     fetch-time DB alias), or a ``NestedConnectionStrategy`` instance (a
     consumer-authored backend). ``None`` reads the
     ``NESTED_CONNECTION_STRATEGY`` setting, defaulting to ``"windowed"``.
+
+    The rejection never fails on the value it rejects: a selection is
+    consumer-supplied, so every dunder its decision reads is taken through the
+    base ``str`` slot (content equality for both the ``"auto"`` check and the
+    registry match - no ``dict`` lookup, whose hash and reflected
+    comparison would dispatch back into a hostile subclass), the ``plan``
+    attribute read absorbs a raising descriptor, and the message renders
+    through ``_safe_arg_repr``. A hostile ``__eq__`` / ``__hash__`` /
+    ``__repr__`` can neither force a false match nor replace the typed
+    ``ConfigurationError`` with an arbitrary exception.
     """
     if value is None:
         from ..conf import nested_connection_strategy_setting
 
         value = nested_connection_strategy_setting()
     if isinstance(value, str):
-        if value == "auto":
+        # The base ``str`` slot bypasses a subclass's ``__eq__`` override (the
+        # same slot discipline ``exceptions.py``'s renderers document); the
+        # C-level content comparison cannot dispatch back into the subclass.
+        if str.__eq__(value, "auto") is True:
             return AUTO_STRATEGY
+        # Content equality against the registry, scanned linearly: a ``dict``
+        # lookup would hash the value and compare the STORED key against it
+        # through the subclass's reflected ``__eq__`` - both hostile-
+        # controllable. The registry has two module-owned plain-str keys, so
+        # the scan is construction-time cheap and dispatch-free.
         registry = _builtin_strategies()
-        strategy = registry.get(value)
+        strategy = None
+        for candidate_name, candidate in registry.items():
+            if str.__eq__(value, candidate_name) is True:
+                strategy = candidate
+                break
         if strategy is None:
             raise ConfigurationError(
-                f"Unknown nested_connection_strategy {value!r}; expected one of "
-                f"{sorted(registry)} or 'auto' or a NestedConnectionStrategy instance.",
+                f"Unknown nested_connection_strategy {_safe_arg_repr(value)}; expected "
+                f"one of {sorted(registry)} or 'auto' or a NestedConnectionStrategy "
+                f"instance.",
             )
         return strategy
-    if not isinstance(value, type) and callable(getattr(value, "plan", None)):
+    try:
+        plan_callable = getattr(value, "plan", None)
+    except BaseException:
+        # ``getattr``'s default only absorbs ``AttributeError``; a raising
+        # property (or descriptor) is not a strategy, so the typed rejection
+        # below applies.
+        plan_callable = None
+    if not isinstance(value, type) and callable(plan_callable):
         return value
     raise ConfigurationError(
         f"nested_connection_strategy must be a strategy name, 'auto', or an object "

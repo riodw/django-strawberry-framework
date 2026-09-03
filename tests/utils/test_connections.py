@@ -18,7 +18,7 @@ from django_strawberry_framework.resource_policy import ResourcePolicy, stash_re
 from django_strawberry_framework.utils.connections import (
     CONNECTION_FILTER_KWARG,
     CONNECTION_ORDER_KWARG,
-    CONNECTION_SIDECAR_KWARGS,
+    CONNECTION_ORDER_KWARG_GRAPHQL,
     ConnectionWindowBounds,
     FetchMode,
     UnwindowableConnection,
@@ -302,10 +302,10 @@ def test_window_range_plan_rejects_negative_direct_bounds(offset, limit, message
 
 
 def test_sidecar_kwarg_family_constants():
-    """The sidecar kwarg family is the Python kwarg names ``filter`` / ``order_by``."""
+    """The sidecar kwarg names are pinned in both vocabularies the readers see."""
     assert CONNECTION_FILTER_KWARG == "filter"
     assert CONNECTION_ORDER_KWARG == "order_by"
-    assert CONNECTION_SIDECAR_KWARGS == ("filter", "order_by")
+    assert CONNECTION_ORDER_KWARG_GRAPHQL == "orderBy"
 
 
 def test_connection_sidecar_inputs_from_kwargs_extracts_both():

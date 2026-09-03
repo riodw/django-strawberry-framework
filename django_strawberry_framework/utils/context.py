@@ -28,13 +28,27 @@ be conflated when refactoring.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from typing import Any
 
-__all__ = ("clear_context_key", "get_context_value", "stash_on_context")
+__all__ = (
+    "MISSING",
+    "clear_context_key",
+    "get_context_value",
+    "restored_context_keys",
+    "stash_on_context",
+)
 
-_MISSING: Any = object()
-"""Sentinel for ``get_context_value`` to distinguish a missing attribute
-from an attribute that was explicitly stashed as ``None``."""
+MISSING: Any = object()
+"""Sentinel distinguishing a missing context key from one explicitly stashed as ``None``.
+
+Public because the distinction is not private to the read: any caller that
+stashes over an existing key and means to put the context back has to be able to
+say "this key was ABSENT", and a consumer that mints its own sentinel for that
+is one ``is`` comparison away from restoring the wrong thing. The round trip
+itself is :func:`restored_context_keys`.
+"""
 
 
 def get_context_value(context: Any, key: str, default: Any = None) -> Any:
@@ -55,7 +69,7 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
       ``stash_on_context``, which routes ``dict`` writes through
       ``__setitem__``.
     - Non-``dict`` contexts try attribute access first via ``getattr``;
-      if the attribute is genuinely absent (sentinel ``_MISSING``) the
+      if the attribute is genuinely absent (sentinel ``MISSING``) the
       helper falls through to ``context[key]``. The fallback is
       load-bearing for non-``dict`` mappings whose values were stashed
       via ``__setitem__`` because their object disallowed ``setattr``
@@ -78,15 +92,15 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
         return default
     if not isinstance(context, dict):
         try:
-            val = getattr(context, key, _MISSING)
+            val = getattr(context, key, MISSING)
         except Exception:
             # A consumer context can expose a descriptor that fails while
             # answering an internal key. Treat that shape as an unreadable
             # attribute and still try its mapping interface, if any; a
             # context read is a fail-closed lookup, not a reason to abort the
             # resolver before the resource / optimizer defaults can apply.
-            val = _MISSING
-        if val is not _MISSING:
+            val = MISSING
+        if val is not MISSING:
             return val
     try:
         if isinstance(context, dict):
@@ -151,7 +165,7 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
             # fallback in ``get_context_value`` (the ``try`` /
             # ``except (TypeError, KeyError, AttributeError)`` block that
             # routes through ``context[key]`` when ``getattr`` returns
-            # the ``_MISSING`` sentinel) - both paths exist so the
+            # the ``MISSING`` sentinel) - both paths exist so the
             # helper round-trips through whichever access mode the
             # context supports. The trailing dict-write ``except`` below
             # is the catch-and-return pattern; this one is the
@@ -204,3 +218,32 @@ def clear_context_key(context: Any, key: str) -> None:
         # whose ``__delitem__`` raises ``AttributeError`` when immutable) -
         # nothing to clear. Unexpected exceptions still surface.
         return
+
+
+@contextlib.contextmanager
+def restored_context_keys(context: Any, *keys: str) -> Iterator[None]:
+    """Snapshot ``keys``, run the body, and put them back - including on an exception.
+
+    The inverse this module documented but did not ship. A nested execution
+    (an extension re-entered for an inner operation, a batched request) stashes
+    over keys an outer frame owns and must restore them exactly: a key that was
+    ABSENT has to be CLEARED again, not stashed as ``None``, or the outer frame
+    reads a value it never wrote.
+
+    Deliberately a snapshot-and-restore, not a swap: the body writes whatever it
+    likes through ``stash_on_context`` (the resource policy stashes a policy AND
+    a monotonic deadline derived from it at entry), so this owns the round trip
+    and never the values.
+
+    Restoration runs in a ``finally``, so an exception raised inside the body
+    still leaves the context as it was found.
+    """
+    saved = [(key, get_context_value(context, key, MISSING)) for key in keys]
+    try:
+        yield
+    finally:
+        for key, value in saved:
+            if value is MISSING:
+                clear_context_key(context, key)
+            else:
+                stash_on_context(context, key, value)

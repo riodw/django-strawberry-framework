@@ -406,7 +406,18 @@ def included_field_selections(selections: list[Any]) -> list[Any]:
     instead, mirroring ``walker._merge_aliased_selections``'s passthrough.
     Both callers (the walker's level descent and the FK-id-elision scalar
     scan) only iterate the result, so sharing the caller's list is safe.
+
+    Non-``list``/``tuple`` iterables are materialized once at entry. The
+    fast-path probe loop and the rebuild loop below BOTH iterate the
+    collection, so a one-shot iterable (Strawberry's converter always builds
+    lists, but a consumer-crafted SelectionState may present a generator)
+    would be silently exhausted between them: fields before the first
+    fragment, and a fragment's whole body, would vanish from the plan
+    without any error. Re-iterable list/tuple inputs keep the identity
+    passthrough above.
     """
+    if not isinstance(selections, (list, tuple)):
+        selections = list(selections)
     for selection in selections:
         if is_fragment(selection) or not should_include(selection):
             break

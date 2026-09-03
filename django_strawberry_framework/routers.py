@@ -53,7 +53,7 @@ from .consumers import (
     resolved_revalidation_window,
 )
 from .exceptions import ConfigurationError, describe_value
-from .utils.imports import require_optional_module
+from .utils.imports import CHANNELS_FLOOR, STRAWBERRY_FLOOR, require_optional_module
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.core.handlers.asgi import ASGIHandler
@@ -66,13 +66,14 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 # (spec-041).
 __all__ = ("DjangoGraphQLProtocolRouter",)  # noqa: F822 - PEP 562 lazy export
 
-# The single channels-ABSENT install hint (spec-041 Decision 5):
-# names the verified floor (place 2 of the three-places-that-must-agree; place 1
-# is the ``channels[daphne]>=4.3.2`` dev-group row, place 3 is the spec's Risks
-# note). One floor covers the package's whole advertised Django range through 6.0.
+# The single channels-ABSENT install hint (spec-041 Decision 5). The floor
+# itself is ``utils/imports.py::CHANNELS_FLOOR`` - the only other place it is
+# written is the ``channels[daphne]`` dev-group row in ``pyproject.toml``, which
+# must be bumped with it. One floor covers the package's whole advertised Django
+# range through 6.0.
 _CHANNELS_INSTALL_HINT = (
     "DjangoGraphQLProtocolRouter requires channels, which is not installed. Install it "
-    "with `pip install 'channels>=4.3.2'` (the package's verified Channels floor)."
+    f"with `pip install 'channels>={CHANNELS_FLOOR}'` (the package's verified Channels floor)."
 )
 
 # Present-but-incompatible builder failures get their OWN actionable messages
@@ -81,12 +82,16 @@ _CHANNELS_INSTALL_HINT = (
 _CHANNELS_BROKEN_HINT = (
     "DjangoGraphQLProtocolRouter could not import its Channels composition pieces even "
     "though `channels` is installed - the install is likely broken or older than the "
-    "package's verified floor. Reinstall with `pip install 'channels>=4.3.2'`."
+    f"package's verified floor. Reinstall with `pip install 'channels>={CHANNELS_FLOOR}'`."
 )
+# Both floors are interpolated, never re-typed: this hint names two dependencies
+# and each one's version lives in ``utils/imports.py`` (``CHANNELS_FLOOR``,
+# ``STRAWBERRY_FLOOR``) with exactly one other written copy, its own
+# ``pyproject.toml`` dependency row.
 _STRAWBERRY_CHANNELS_BROKEN_HINT = (
     "DjangoGraphQLProtocolRouter could not import Strawberry's Channels consumers. It "
-    "requires both `channels>=4.3.2` and `strawberry-graphql>=0.316.0` with the "
-    "`strawberry.channels` consumer (GraphQLWSConsumer) importable."
+    f"requires both `channels>={CHANNELS_FLOOR}` and `strawberry-graphql>={STRAWBERRY_FLOOR}` "
+    "with the `strawberry.channels` consumer (GraphQLWSConsumer) importable."
 )
 
 # The construction-time failure for an unusable ``django_application``

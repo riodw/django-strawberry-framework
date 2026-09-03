@@ -22,7 +22,13 @@ it matters. What is left here is the surface a request cannot express:
 - the two teardown no-ops (a ``None`` result, an error-free result) whose whole
   observable behavior is that nothing happened;
 - the two fail-closed degrades, which need an error object and a result object no
-  engine builds; and
+  engine builds;
+- the gate and the floor under inputs no engine produces either: a ``DEBUG``
+  setting that cannot be read at all, an ``ErrorPolicy`` subclass whose attribute
+  reads raise, a container that lies about its emptiness, and an error whose
+  ``original_error`` read raises - every read the policy cannot verify answers
+  toward MASKING, and the floor that everything degrades onto cannot itself
+  raise; and
 - ``mask_execution_result``'s copy contract - the property that lets the
   subscription seam mask an event without disturbing the originals an extension
   reads. What that seam does on the wire is pinned at the consumer tier in
@@ -37,6 +43,7 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
+from django.conf import settings as django_settings
 from graphql import GraphQLError
 from graphql.execution import ExecutionResult as GraphQLExecutionResult
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
@@ -52,7 +59,9 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.debug import DjangoDebugExtension
 from django_strawberry_framework.extensions.error_policy import (
     DjangoErrorPolicyExtension,
+    _degraded,
     mask_execution_result,
+    masking_is_active,
     schema_error_policy,
 )
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
@@ -596,6 +605,226 @@ class _WriteRejectingStrawberryResult(StrawberryExecutionResult):
         if name == "data" and name in self.__dict__:
             raise RuntimeError("result is frozen")
         super().__setattr__(name, value)
+
+
+class _HostileMessagePolicy(ErrorPolicy):
+    """An admitted policy whose ``message`` read raises ``RuntimeError``.
+
+    A defaulted ``getattr`` in the degrade floor would suppress only
+    ``AttributeError``; this property raises anything else, which is how a
+    hostile subclass - ``object.__new__`` skips ``__post_init__`` validation -
+    smuggles itself past the ``isinstance`` gate in ``schema_error_policy`` and
+    once broke the floor itself.
+    """
+
+    @property
+    def message(self):
+        raise RuntimeError(_SENSITIVE)
+
+
+class _HostileEnabledPolicy(ErrorPolicy):
+    """An admitted policy whose ``enabled`` read raises."""
+
+    @property
+    def enabled(self):
+        raise RuntimeError(_SENSITIVE)
+
+
+class _SneakyError(GraphQLError):
+    """A ``GraphQLError`` subclass whose ``original_error`` read raises ``AttributeError``.
+
+    The property shadows the instance attribute ``__init__`` sets, so every read
+    raises - exactly the ambiguity a defaulted ``getattr`` cannot resolve, and
+    which it used to answer as absence: the deliberate-delivery branch, with the
+    error's own message left on the wire.
+    """
+
+    @property
+    def original_error(self):
+        raise AttributeError("original_error is not available")
+
+
+class _LyingErrors(list):
+    """A populated container answering falsy, so a truthiness check skips it."""
+
+    def __bool__(self) -> bool:
+        return False
+
+
+class _UnreadableSettings:
+    """A wrapped-settings stand-in that admits no attribute reads at all.
+
+    The shape ``settings`` presents when the whole wrapped holder is gone - what
+    an unconfigured process answers, and what the gate must survive as surely as
+    it survives a deleted ``DEBUG``.
+    """
+
+    def __getattr__(self, name):
+        raise AttributeError(f"No setting {name!r} exists on this holder.")
+
+
+def _policy_answering(value: object) -> ErrorPolicy:
+    """An admitted policy whose ``message`` read answers ``value`` without raising."""
+
+    class _ShapedMessagePolicy(ErrorPolicy):
+        @property
+        def message(self):
+            return value
+
+    return object.__new__(_ShapedMessagePolicy)
+
+
+def test_an_unreadable_enabled_read_is_answered_as_enabled():
+    """A policy that will not say whether it masks anything keeps the mask ON.
+
+    The ``isinstance`` gate in ``schema_error_policy`` admits an ``ErrorPolicy``
+    subclass whatever its attributes do, so a raising ``enabled`` property
+    reaches this gate, and answering it False would read a failure as the
+    opt-out. Enabled is the only direction that cannot leak: with the mask on,
+    the worst a hostile policy can do is land on the guarded floor.
+    """
+    assert masking_is_active(object.__new__(_HostileEnabledPolicy)) is True
+
+
+@pytest.mark.parametrize(
+    "absence",
+    ["deleted", "unreadable-holder"],
+    ids=["LazySettings cache + _wrapped cleared", "_wrapped replaced by unreadable"],
+)
+def test_the_masking_gate_stays_active_when_debug_cannot_be_read(monkeypatch, absence):
+    """A masking question answered by exception is one that stays masking ON.
+
+    Deleting the attribute (both the proxy's cache and the wrapped holder,
+    through the proxy's ``__delattr__``), or replacing the wrapped holder with
+    one that raises on attribute access, both make the read raise - either
+    ``AttributeError`` or an unrelated exception. The gate catches all exceptions
+    and defaults toward masking: an unreadable ``enabled`` answer becomes enabled,
+    and an unreadable ``DEBUG`` answer becomes not exactly ``True``.
+    """
+    if absence == "deleted":
+        monkeypatch.delattr(django_settings, "DEBUG")
+    else:
+        monkeypatch.setattr(django_settings, "_wrapped", _UnreadableSettings())
+
+    assert masking_is_active(DEFAULT_ERROR_POLICY) is True
+
+
+def test_a_teardown_with_unreadable_debug_masks_normally_and_keeps_data(monkeypatch):
+    """An unreadable ``DEBUG`` keeps masking AND the client's own data.
+
+    The gate used to answer by exception: the teardown caught it into the
+    whole-result floor and dropped healthy ``data`` beside the errors it should
+    have masked. With the read contained, the mask simply runs - policy message
+    and correlation id on the errors, ``data`` untouched.
+    """
+    monkeypatch.setattr(django_settings, "_wrapped", _UnreadableSettings())
+    result = GraphQLExecutionResult(
+        data={"ping": 1},
+        errors=[GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))],
+    )
+
+    _run_teardown(result)
+
+    assert result.data == {"ping": 1}
+    assert len(result.errors) == 1
+    assert result.errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert _SENSITIVE not in result.errors[0].message
+    assert len(result.errors[0].extensions[DEFAULT_ERROR_POLICY.correlation_extension_key]) == 32
+
+
+def test_a_hostile_policy_message_read_degrades_to_the_package_message(caplog):
+    """The floor survives the one object every other failure is landed on.
+
+    ``_degraded`` is what a failed masking call lands on, so it cannot itself
+    depend on the policy behaving: a raising ``message`` read used to unwind the
+    per-entry degrade, the outer degrade, and the teardown's own floor in one
+    raise, leaving the original message as the last one standing. The floor now
+    guards the read and answers the package default's message - which validated
+    itself at construction - and the failure is logged with its traceback.
+    """
+    caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
+    error = GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))
+    result = GraphQLExecutionResult(data={"ping": 1}, errors=[error])
+
+    masked = mask_execution_result(result, object.__new__(_HostileMessagePolicy))
+
+    assert masked is not result
+    assert masked.errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert _SENSITIVE not in str(masked.errors[0].message)
+    assert masked.data == {"ping": 1}
+    assert any(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [42, ""],
+    ids=["non-string", "empty-string"],
+)
+def test_a_floor_message_that_will_not_publish_falls_back_to_the_package_default(answer):
+    """The floor publishes one non-empty string, whatever the policy answers.
+
+    A read that SUCCEEDS with a value the wire cannot carry - a non-string, an
+    empty string - is refused the same way a raising read is: the package
+    default's message, which validated itself at construction, is what ships.
+    Driven through ``_degraded`` directly because a WELL-behaved error never
+    reaches the floor - a hostile answer needs a hostile error to land on it.
+    """
+    floor = _degraded(_policy_answering(answer))
+
+    assert floor.message == DEFAULT_ERROR_POLICY.message
+
+
+def test_a_falsy_but_populated_errors_container_is_still_masked():
+    """Iteration, not the container's own truthiness, decides what is classified.
+
+    A populated container whose ``__bool__`` answers falsy used to be waved
+    through the emptiness check unclassified, its messages intact. The list is
+    materialized before the check, so what is classified is what the container
+    actually carries, and order and arity survive the rewrite.
+    """
+    fine = GraphQLError("Deliberate.", original_error=GraphQLError("Deliberate."))
+    result = StrawberryExecutionResult(
+        data={"ping": 1},
+        errors=_LyingErrors(
+            [fine, GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))],
+        ),
+    )
+
+    masked = mask_execution_result(result, DEFAULT_ERROR_POLICY)
+
+    assert masked is not result
+    assert masked.errors[0] is fine
+    assert masked.errors[1].message == DEFAULT_ERROR_POLICY.message
+    assert masked.data == {"ping": 1}
+
+
+def test_a_genuinely_empty_error_list_is_still_a_no_op():
+    """Materializing before the emptiness check keeps the empty-list no-op."""
+    result = GraphQLExecutionResult(data={"ping": 1}, errors=[])
+
+    assert mask_execution_result(result, DEFAULT_ERROR_POLICY) is result
+    assert result.errors == []
+
+
+def test_an_original_error_read_that_raises_is_masked_not_trusted():
+    """An error the classifier cannot read behind is unexpected, not deliberate.
+
+    A defaulted ``getattr`` cannot tell an absent ``original_error`` - the parse
+    and validation case, which travels unchanged - from one whose read RAISES.
+    Answering a raise with "absent" used to ship the error's own message as a
+    deliberate delivery. The direct read's failure is contained by the per-entry
+    degrade instead: the guarded floor, no location, nothing of the original.
+    """
+    error = _SneakyError.__new__(_SneakyError)
+    result = StrawberryExecutionResult(data={"ping": 1}, errors=[error])
+
+    masked = mask_execution_result(result, DEFAULT_ERROR_POLICY)
+
+    assert masked is not result
+    assert masked.errors[0].message == DEFAULT_ERROR_POLICY.message
+    assert _SENSITIVE not in str(masked.errors[0].message)
+    assert masked.errors[0].original_error is None
+    assert masked.data == {"ping": 1}
 
 
 def test_one_error_that_cannot_be_masked_degrades_to_the_policy_message(caplog):

@@ -43,6 +43,7 @@ from django_strawberry_framework.mutations.permissions import (
     _require_sync_bool_auth_result,
     run_permission_classes,
 )
+from django_strawberry_framework.mutations.sets import _ValidatedMutationMeta
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 
@@ -718,3 +719,247 @@ def test_require_sync_bool_auth_result_rejects_non_bool_values(invalid_result):
     """``_require_sync_bool_auth_result`` rejects non-bool values without coercion."""
     with pytest.raises(ConfigurationError, match="must return a bool"):
         _require_sync_bool_auth_result(invalid_result, owner="CustomPerm", method="has_permission")
+
+
+# ---------------------------------------------------------------------------
+# Class-state hostility: the walk reads a SNAPSHOT, never the live list
+# (the 0.0.15 authorization-bypass hardening)
+# ---------------------------------------------------------------------------
+
+
+def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
+    """A hook emptying the class's permission list cannot flip the in-flight walk.
+
+    ``run_permission_classes`` iterates a SNAPSHOT (the tuple captured before the
+    walk), never the class's list object: a ``has_permission`` hook receives the
+    mutation class and can otherwise reach the exact list the loop is iterating -
+    clearing it would hit ``StopIteration`` on the next read and the walk would
+    return ALLOW without running the configured deniers, an authorization bypass
+    that also PERSISTS on the class (every later request authorized by the
+    polluted empty list, the allow-any posture). Over the snapshot the denier
+    still runs and the deny is honored.
+    """
+    events: list[str] = []
+
+    class AllowAndPollute:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            # ``mutation`` IS the mutation class the walk passes; the pollution
+            # reach is the exact object the walk would iterate live.
+            try:
+                mutation._mutation_meta.permission_classes.clear()
+            except AttributeError:  # tuple substrate: in-place mutation refused
+                events.append("pollution-refused")
+                return True
+            events.append("cleared")
+            return True
+
+    class Denier:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            events.append("Denier")
+            return False
+
+    # LIST substrate: the hostile hook CAN clear the class's list mid-walk - the
+    # exact pre-fix bypass shape. Over the snapshot the denier still runs and the
+    # deny is honored.
+    class ListSubstrateMutation:
+        _mutation_meta = SimpleNamespace(permission_classes=[AllowAndPollute, Denier])
+
+    assert (
+        run_permission_classes(
+            ListSubstrateMutation(),
+            info=SimpleNamespace(),
+            operation="create",
+            data=None,
+            instance=None,
+        )
+        is False
+    )
+    # The hook really emptied the live list - the in-flight walk ran the denier
+    # anyway (it iterates the captured snapshot, not the live list).
+    assert ListSubstrateMutation._mutation_meta.permission_classes == []
+    assert events == ["cleared", "Denier"]
+
+    # The SHIPPED tuple substrate refuses the in-place pollution outright, and
+    # the walk still reaches the denier.
+    events.clear()
+
+    class TupleSubstrateMutation:
+        _mutation_meta = SimpleNamespace(permission_classes=(AllowAndPollute, Denier))
+
+    assert (
+        run_permission_classes(
+            TupleSubstrateMutation(),
+            info=SimpleNamespace(),
+            operation="create",
+            data=None,
+            instance=None,
+        )
+        is False
+    )
+    assert events == ["pollution-refused", "Denier"]
+    # The shipped substrate is untouched by the pollution attempt.
+    assert TupleSubstrateMutation._mutation_meta.permission_classes == (AllowAndPollute, Denier)
+
+
+@pytest.mark.django_db
+def test_hook_rebinding_the_validated_permission_slot_fails_closed():
+    """A hook reassigning the validated permission set fails the request closed (live tier).
+
+    The snapshot walk survives list pollution (above), but pre-hardening a hook
+    could also REASSIGN the validated ``permission_classes`` slot on the shared
+    ``_ValidatedMutationMeta`` record: the in-flight walk still denied (over the
+    snapshot), but the polluted empty posture PERSISTED on the class and
+    authorized every later request. The sealed record refuses the write with
+    ``ConfigurationError``, so the hostile hook fails the request loudly (a
+    top-level error, no row), the validated configuration survives untouched,
+    and a second identical anonymous request is still denied.
+    """
+
+    denier_runs: list[str] = []
+
+    class AllowAndRebind:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            # The hook's ``mutation`` IS the mutation class; the plain attribute
+            # statement is the pre-fix persistent-bypass shape.
+            mutation._mutation_meta.permission_classes = ()
+            return True
+
+    class Denier:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            denier_runs.append("Denier")
+            return False
+
+    class CategoryT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class ItemT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name")
+            primary = True
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = [AllowAndRebind, Denier]
+
+    @strawberry.type
+    class Mutation:
+        create_item = DjangoMutationField(CreateItem)
+
+    finalize_django_types()
+    schema = DjangoSchema(query=_Query, mutation=Mutation, error_policy=_NO_ERROR_MASKING)
+    cat = product_models.Category.objects.create(name="Cat-rebind-seal")
+
+    res = _execute(
+        schema,
+        _CREATE_Q,
+        AnonymousUser(),
+        {"d": {"name": "Blocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+    # The seal raises OUT of the walk: loud top-level failure, no write.
+    assert res.errors is not None
+    assert isinstance(res.errors[0].original_error, ConfigurationError)
+    assert "sealed" in str(res.errors[0].original_error)
+    assert not product_models.Item.objects.filter(name="Blocked").exists()
+    # The seal refused the rebind: the validated configuration is untouched.
+    assert isinstance(CreateItem._mutation_meta, _ValidatedMutationMeta)
+    assert CreateItem._mutation_meta.permission_classes == (AllowAndRebind, Denier)
+
+    # The next (identical anonymous) request is still denied by the intact posture.
+    res2 = _execute(
+        schema,
+        _CREATE_Q,
+        AnonymousUser(),
+        {"d": {"name": "StillBlocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+    assert res2.errors is not None
+    assert not product_models.Item.objects.filter(name="StillBlocked").exists()
+    # The walk aborts at the FIRST entry (the raising hook) on every request:
+    # the configured denier never ran at all under the seal.
+    assert denier_runs == []
+
+
+def test_whole_record_swap_and_deletion_on_a_real_mutation_class_are_sealed():
+    """A mutation class's validated ``_mutation_meta`` head is write-once (0.0.15 hardening).
+
+    The metaclass guard (``make_meta_validating_metaclass.__setattr__`` /
+    ``__delattr__``) refuses any post-creation rebind or deletion of
+    ``_mutation_meta``: a ``has_permission`` hook receives the mutation class, so
+    an unguarded head would let one request replace the validated record
+    wholesale with a hook-chosen namespace (the empty allow-any posture) - the
+    persistent cross-request bypass the snapshot's own seal closes at the slot
+    level. Creation time is the one honored write, so the guards are unreachable
+    from a live request and are earned here at the unit tier. Related bind
+    outputs (``_primary_type`` etc.) are unaffected.
+    """
+    sealed = _create_item_mutation()
+    original = sealed._mutation_meta
+    hook_chosen = SimpleNamespace(permission_classes=())
+    with pytest.raises(ConfigurationError, match="sealed and cannot be rebound"):
+        sealed._mutation_meta = hook_chosen
+    with pytest.raises(ConfigurationError, match="sealed and cannot be deleted"):
+        del sealed._mutation_meta
+    # The validated record survived both attempts, record identity included.
+    assert isinstance(sealed._mutation_meta, _ValidatedMutationMeta)
+    assert sealed._mutation_meta is original
+    assert sealed._mutation_meta.permission_classes == (DjangoModelPermission,)
+    # Unrelated class attributes (the bind's outputs) stay writable and deletable:
+    # the head seal narrows ONLY the ``_mutation_meta`` head.
+    sealed._primary_type = None
+    assert sealed._primary_type is None
+    del sealed._primary_type
+    assert "_primary_type" not in sealed.__dict__
+
+
+def test_validated_mutation_meta_record_refuses_slot_writes_and_deletes():
+    """The validated snapshot's own slots are sealed once ``__init__`` finishes.
+
+    Mirrors the head seal at the record level: the record is the per-request
+    authorization source (``run_permission_classes`` reads
+    ``type(self)._mutation_meta.permission_classes``), so a sealed record refuses
+    every attribute write and delete for the life of the process. A consumer who
+    needs different authorization declares a new mutation class.
+    """
+    snapshot = _create_item_mutation()._mutation_meta
+    with pytest.raises(ConfigurationError, match="sealed"):
+        snapshot.permission_classes = ()
+    with pytest.raises(ConfigurationError, match="sealed"):
+        del snapshot.permission_classes
+    with pytest.raises(ConfigurationError, match="sealed and 'model' cannot be reassigned"):
+        snapshot.model = None
+    # The validated configuration is untouched by all three attempts.
+    assert snapshot.permission_classes == (DjangoModelPermission,)
+    assert snapshot.operation == "create"

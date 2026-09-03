@@ -60,6 +60,52 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.converters import DjangoFileType, DjangoImageType
 
 
+class InspRelPkTarget(models.Model):
+    """Implicit-id target for the test-only OneToOneField primary key below."""
+
+    label = models.TextField()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class InspRelPkProfile(models.Model):
+    """A OneToOneField primary key - a legal single-column relation pk."""
+
+    target = models.OneToOneField(
+        InspRelPkTarget,
+        primary_key=True,
+        on_delete=models.CASCADE,
+        related_name="+",
+    )
+    label = models.TextField()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class InspRelPkParent(models.Model):
+    """MTI parent: its child's parent-link pk is a relation field."""
+
+    label = models.TextField()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class InspRelPkChild(InspRelPkParent):
+    """MTI child: ``insprelpkparent_ptr`` IS ``_meta.pk`` (a relation)."""
+
+    extra = models.TextField()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
 @pytest.fixture(autouse=True)
 def _isolate_registry():
     """Drop registry state on entry/exit so each test starts clean."""
@@ -433,6 +479,85 @@ def test_inspect_direct_relay_node_inheritance_suppresses_pk_row():
     assert "GlobalID!" in id_row
     assert "relay.Node id" in id_row
     assert "SCALAR_MAP" not in id_row
+
+
+def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
+    """A OneToOneField primary key on a Relay-Node-shaped type renders as a relation.
+
+    ``_build_annotations`` suppresses the pk annotation for a Relay-shaped type
+    only in its NON-relation branch, so a relation pk keeps its auto-synthesized
+    annotation and finalize resolves it to the target type. The schema surface
+    therefore exposes ``target: <TargetType>!`` (the pk column's relation field)
+    alongside the interface-supplied ``id: GlobalID!`` - the pk field is NOT the
+    id field. The table must mirror that: a relation row naming the resolved
+    target type, never the interface's GlobalID row.
+    """
+
+    class InspRelPkTargetType(DjangoType):
+        class Meta:
+            model = InspRelPkTarget
+            primary = True
+            fields = ("id", "label")
+
+    class InspRelPkProfileType(DjangoType):
+        class Meta:
+            model = InspRelPkProfile
+            fields = "__all__"
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "InspRelPkProfileType", stdout=out)
+    text = out.getvalue()
+
+    target_row = _connection_row(text, "target")
+    assert "InspRelPkTargetType!" in target_row
+    assert "relation: forward FK" in target_row
+    assert "GlobalID!" not in target_row
+    assert "relay.Node id" not in target_row
+
+    # The table agrees with the schema the type actually builds into.
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def profile(self) -> InspRelPkProfileType:
+            raise NotImplementedError
+
+    sdl = str(strawberry.Schema(query=Query))
+    assert "target: InspRelPkTargetType!" in sdl
+
+
+def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
+    """An MTI parent-link pk (``<child>_ptr``) renders as a relation row.
+
+    The parent link is a ``OneToOneField`` - it IS ``model._meta.pk`` for the
+    child, so the same non-suppression contract applies: the field renders the
+    resolved parent type, not the interface's GlobalID (the id derives FROM the
+    ptr column, but the GraphQL field named for it is a relation type).
+    """
+
+    class InspRelPkParentType(DjangoType):
+        class Meta:
+            model = InspRelPkParent
+            primary = True
+            fields = ("id", "label")
+
+    class InspRelPkChildType(DjangoType):
+        class Meta:
+            model = InspRelPkChild
+            fields = "__all__"
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "InspRelPkChildType", stdout=out)
+    text = out.getvalue()
+
+    ptr_row = _connection_row(text, "insprelpkparent_ptr")
+    assert "InspRelPkParentType" in ptr_row
+    assert "relation: forward FK" in ptr_row
+    assert "GlobalID!" not in ptr_row
+    assert "relay.Node id" not in ptr_row
 
 
 def test_inspect_connection_only_relation_shape_renders_row():

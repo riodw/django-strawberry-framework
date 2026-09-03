@@ -23,7 +23,7 @@ from django_strawberry_framework.utils.permissions import (
     _fire_flat_relation_path_gates,
     _related_declarations,
     _request_from_context,
-    active_permission_field_paths,
+    active_permission_targets,
     active_related_branches,
     auth_aliases_for_permission_classes,
     extract_branch_value,
@@ -394,6 +394,96 @@ def test_invoke_permission_method_passes_a_normal_sync_return_through():
     # No raise, and the fire is recorded for the dedup set.
     invoke_permission_method(_Bare(), "name", HttpRequest(), fired=fired)
     assert "check_name_permission" in fired
+
+
+def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
+    """A DECLARED non-callable gate is a ConfigurationError, never a silent skip.
+
+    A bare ``callable()`` probe treated ``check_name_permission = 42`` exactly
+    like an absent gate: the intended gate never ran and nothing signaled -- the
+    same authorization no-op the async-gate guard closes. Misconfiguration on a
+    permission seam fails loud instead.
+    """
+    fired: set[str] = set()
+
+    class _Bare:
+        check_name_permission = 42  # a misconfigured, non-callable gate slot
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"_Bare permission gate 'check_name_permission' must be callable",
+    ):
+        invoke_permission_method(_Bare(), "name", HttpRequest(), fired=fired)
+    assert fired == set()
+
+    # The full walk reaches the same guard through the family dispatch.
+    class _DuckRelated:
+        pass
+
+    class _Set:
+        check_name_permission = "not-a-callable"
+
+        @classmethod
+        def _active_permission_targets(cls, input_value):
+            return ["name"], [("duck", _DuckRelated(), {"x": 1})]
+
+        @staticmethod
+        def _invoke_permission_method(
+            bare,
+            field_path,
+            request,
+            *,
+            fired=None,
+        ):
+            invoke_permission_method(bare, field_path, request, fired=fired)
+
+    # ``bare`` must be an instance of the set class (the mixin's
+    # ``object.__new__(cls)`` contract) for the class-declared gate slot to be
+    # visible through instance attribute access.
+    with pytest.raises(ConfigurationError, match="must be callable"):
+        run_active_input_permission_checks(
+            _Set,
+            {"name": "x"},
+            HttpRequest(),
+            fired={},
+            bare=object.__new__(_Set),
+            target_attr="filterset",
+            related_attr="related_filters",
+        )
+
+
+def test_invoke_permission_method_types_an_unreadable_gate_slot():
+    """A raising gate descriptor is a typed ConfigurationError, not a raw escape.
+
+    The sibling metadata reads on this surface (``_related_declarations``, the
+    flat-path walker's ``field_name`` probe) wrap hostile reads in
+    ``ConfigurationError``; the gate-slot read now does too, chaining the
+    original failure as ``__cause__``.
+    """
+
+    class _Hostile:
+        @property
+        def check_name_permission(self):
+            raise RuntimeError("gate descriptor exploded")
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"_Hostile permission gate 'check_name_permission' could not be read",
+    ) as excinfo:
+        invoke_permission_method(_Hostile(), "name", HttpRequest())
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "gate descriptor exploded" in str(excinfo.value.__cause__)
+
+
+def test_invoke_permission_method_treats_a_none_slot_as_absent():
+    """``check_name_permission = None`` stays a silent no-op (indistinguishable from absent)."""
+
+    class _Bare:
+        check_name_permission = None
+
+    fired: set[str] = set()
+    invoke_permission_method(_Bare(), "name", HttpRequest(), fired=fired)
+    assert fired == set()
 
 
 # ---------------------------------------------------------------------------
@@ -904,11 +994,20 @@ def test_run_active_input_permission_checks_caps_related_recursion():
         _SelfRef._run_permission_checks({"child": {"x": 1}}, HttpRequest())
 
 
-def test_active_permission_field_paths_excludes_logic_and_related_keys():
+def test_active_permission_targets_excludes_logic_and_related_keys_from_the_leaf_half():
+    """The LEAF half of the single classification pass drops logic and related keys.
+
+    The gate dispatch consumes exactly this half. It used to reach it through a
+    ``active_permission_field_paths`` wrapper in this module that nothing in the
+    package called - ``sets_mixins`` has its own one-line delegate, which is the
+    natural home because it already holds the seven configuration values the
+    wrapper made every caller re-pass.
+    """
+
     class _Set:
         related_orders = {"shelf": object()}
 
-    paths = active_permission_field_paths(
+    paths, branches = active_permission_targets(
         _Set,
         {"title": "asc", "shelf": {"code": "x"}, "and_": [{"title": "x"}]},
         field_specs={},
@@ -920,6 +1019,7 @@ def test_active_permission_field_paths_excludes_logic_and_related_keys():
     # (logic) excluded; ``title`` falls back to the python-attr token since
     # ``field_specs`` has no entry.
     assert paths == ["title"]
+    assert [name for name, _target, _value in branches] == ["shelf"]
 
 
 # ---------------------------------------------------------------------------

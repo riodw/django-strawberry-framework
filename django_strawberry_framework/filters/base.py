@@ -35,6 +35,12 @@ from django_filters.utils import get_model_field
 from graphql import GraphQLError
 from strawberry import relay
 
+from ..exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_class_name,
+    _safe_type_name,
+)
 from ..sets_mixins import (
     LazyRelatedClassMixin as LazyRelatedClassMixin,
 )  # re-exported via filters.__init__
@@ -47,7 +53,13 @@ from ..sets_mixins import RelatedSetTargetMixin
 # cycle (spec-031). These are the single source of truth for the
 # strategy->payload-shape mapping shared with the encoder and the decoder.
 from ..types.relay import MODEL_LABEL_STRATEGIES, TYPE_NAME_STRATEGIES
-from ..utils.querysets import coerce_field_value_or_none
+from ..utils.errors import (
+    FILTER_INVALID_ERROR_CODE,
+    GLOBALID_INVALID_ERROR_CODE,
+    GLOBALID_UNVALIDATABLE_ERROR_CODE,
+    coded_error_extensions,
+)
+from ..utils.querysets import base_queryset, coerce_field_value_or_none
 
 # The three framework strategies whose emitted GlobalID a filter input CAN
 # decode + validate (``model`` / ``type`` / ``type+model``). Derived from the
@@ -170,6 +182,34 @@ def _match_none_queryset(filter_instance: Any, qs: Any) -> Any:
     return qs if filter_instance.exclude else qs.none()
 
 
+def _materialize_list_shaped_values(value: Any, *, message: str, code: str) -> list[Any]:
+    """Fail-closed materialization of a filter's list-shaped input.
+
+    Django's form fields normally supply a plain list, but callers can invoke
+    a filter directly (and a malformed raw filter mapping can bypass form
+    coercion) with an arbitrary object. Only the list/tuple shapes accepted by
+    the form contract are meaningful; every other shape fails closed with the
+    caller's coded GraphQL error instead of leaking a raw ``TypeError`` from a
+    ``len()`` / iteration the shape can never satisfy.
+
+    The materialization itself is contained: a ``list`` SUBCLASS whose
+    ``__iter__`` raises mid-iteration passes the ``isinstance`` gate and would
+    otherwise detonate inside ``list(value)`` -- the same hostile-container
+    class ``orders/sets.py::OrderSet._expand_meta_fields`` closes structurally
+    -- so a lying container degrades to the same coded reject as a wrong
+    shape. Shared by ``_globalid_multiple_choice_values`` (the GlobalID
+    multi-value gate), ``ListFilter.filter``, and ``IntegerInFilter.filter``
+    so the fail-closed contract cannot drift between the three list-shaped
+    consumers.
+    """
+    if not isinstance(value, (list, tuple)):
+        raise GraphQLError(message, extensions=coded_error_extensions(code))
+    try:
+        return list(value)
+    except Exception as exc:
+        raise GraphQLError(message, extensions=coded_error_extensions(code)) from exc
+
+
 def _globalid_multiple_choice_values(value: Any) -> list[Any]:
     """Validate and normalize a multi-value GlobalID input container.
 
@@ -180,14 +220,14 @@ def _globalid_multiple_choice_values(value: Any) -> list[Any]:
     iterator or scalar before it could produce the package's coded GraphQL
     error.  Only the list/tuple shapes accepted by the form contract are
     meaningful here; all other shapes fail closed with the same invalid-ID
-    code used for malformed members.
+    code used for malformed members (including a lying ``list`` subclass
+    whose ``__iter__`` raises -- see ``_materialize_list_shaped_values``).
     """
-    if not isinstance(value, (list, tuple)):
-        raise GraphQLError(
-            "Invalid GlobalID list: expected a list of GlobalIDs.",
-            extensions={"code": "GLOBALID_INVALID"},
-        )
-    return list(value)
+    return _materialize_list_shaped_values(
+        value,
+        message="Invalid GlobalID list: expected a list of GlobalIDs.",
+        code=GLOBALID_INVALID_ERROR_CODE,
+    )
 
 
 # Private instance-attribute slot a generated GlobalID RELATION filter carries a
@@ -298,8 +338,25 @@ class ArrayFilter(TypedFilter):
         _install_empty_list_aware_method(self, value, ArrayFilterMethod)
 
     def filter(self, qs: Any, value: Any) -> Any:
-        """Apply the lookup; `[]` is a real value (not `EMPTY_VALUES`-ish)."""
-        if value in EMPTY_VALUES and value != []:
+        """Apply the lookup; `[]` is a real value (not `EMPTY_VALUES`-ish).
+
+        The ``EMPTY_VALUES`` membership probe is contained: a hostile value
+        whose ``__eq__`` / ``__ne__`` raises would otherwise detonate inside
+        the probe and replace the filter's contract with a raw
+        ``RuntimeError``. An unreadable value is outside the form contract
+        (GraphQL scalar coercion cannot deliver one), so it fails closed with
+        the package's coded filter error -- the same direction as
+        ``_materialize_list_shaped_values``, never the unfiltered skip that
+        would silently widen a restrictive predicate.
+        """
+        try:
+            is_empty = value in EMPTY_VALUES and value != []
+        except Exception as exc:
+            raise GraphQLError(
+                "Invalid filter value: the value could not be evaluated.",
+                extensions=coded_error_extensions(FILTER_INVALID_ERROR_CODE),
+            ) from exc
+        if is_empty:
             return qs
         return _apply_lookup_predicate(self, qs, value)
 
@@ -350,8 +407,26 @@ class ListFilter(TypedFilter):
         _install_empty_list_aware_method(self, value, ListFilterMethod)
 
     def filter(self, qs: Any, value: Any) -> Any:
-        """Short-circuit empty-list inputs to `qs.none()` (or `qs` when excluding)."""
-        if value is not None and len(value) == 0:
+        """Short-circuit empty-list inputs to `qs.none()` (or `qs` when excluding).
+
+        The raw input is shape-gated through
+        ``_materialize_list_shaped_values`` before the emptiness probe: the
+        old bare ``len(value)`` leaked ``TypeError`` for a scalar, a
+        one-shot iterator, or a generator -- the exact sibling of the
+        ``GlobalIDMultipleChoiceFilter`` leak its own gate documents -- and a
+        string value under an ``in`` lookup would have iterated char-by-char
+        (``in: "26"`` compiling to ``IN ('2','6')``). Only the list/tuple
+        shapes the form contract delivers are meaningful; everything else is
+        a coded reject.
+        """
+        if value is None:
+            return super().filter(qs, value)
+        value = _materialize_list_shaped_values(
+            value,
+            message="Invalid filter value: expected a list.",
+            code=FILTER_INVALID_ERROR_CODE,
+        )
+        if len(value) == 0:
             return _match_none_queryset(self, qs)
         return super().filter(qs, value)
 
@@ -403,9 +478,24 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
     """
 
     def filter(self, qs: Any, value: Any) -> Any:
-        """Coerce members, matching nothing when a non-empty input fully drops."""
+        """Coerce members, matching nothing when a non-empty input fully drops.
+
+        The raw input is shape-gated through ``_materialize_list_shaped_values``
+        first: a scalar leaked ``TypeError: 'int' object is not iterable`` out
+        of the coercion loop, and a string value iterated char-by-char
+        (``in: "26"`` coercing to ``[2, 6]`` -- a wrong-result membership, not
+        just a raw escape). Only the list/tuple shapes the form contract
+        delivers are meaningful; everything else is a coded reject.
+        """
+        if value is None:
+            return super().filter(qs, value)
+        value = _materialize_list_shaped_values(
+            value,
+            message="Invalid filter value: expected a list of integers.",
+            code=FILTER_INVALID_ERROR_CODE,
+        )
         if value in EMPTY_VALUES:
-            # Explicit empty / None (``in: []``): keep django-filter's skip (no
+            # Explicit empty (``in: []``): keep django-filter's skip (no
             # membership values were supplied, so there is no constraint to honor).
             return super().filter(qs, value)
         parent = getattr(self, "parent", None)
@@ -446,15 +536,30 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
     """
 
     def filter(self, qs: Any, value: Any) -> Any:
-        """Apply the range as a decomposed ``gte`` + ``lte`` pair (never a raw ``BETWEEN``)."""
-        if value in EMPTY_VALUES:
-            # Explicit empty / None: keep django-filter's skip (no bounds supplied).
+        """Apply the range as a decomposed ``gte`` + ``lte`` pair (never a raw ``BETWEEN``).
+
+        The ``isinstance`` shape check runs BEFORE any value probe: the old
+        leading ``value in EMPTY_VALUES`` membership detonated on a hostile
+        value whose ``__eq__`` raises, and the shapes it skipped (``None`` /
+        ``""`` / ``()``) are all covered by the shape check's skip arm anyway,
+        so the probe was redundant for every evaluable value. The materialize
+        keeps a lying ``list`` subclass (raising ``__len__`` / ``__iter__``)
+        from detonating inside ``len(value)`` / the unpack -- same containment
+        as ``_materialize_list_shaped_values``.
+        """
+        if not isinstance(value, (list, tuple)):
+            # Explicit empty / None / a non-sequence: keep django-filter's skip
+            # (no bounds supplied).
             return qs
-        if not isinstance(value, (list, tuple)) or len(value) != 2:
+        try:
+            bounds = list(value)
+        except Exception:
+            return qs
+        if len(bounds) != 2:
             return qs
         # ``BaseRangeField`` validates length == 2 before we run, and the generated
         # ``list[BigInt!]`` input carries non-null elements, so both bounds are present.
-        start, end = value
+        start, end = bounds
         lookups = {f"{self.field_name}__gte": start, f"{self.field_name}__lte": end}
         return _apply_lookups(self, qs, lookups)
 
@@ -639,9 +744,9 @@ def _decode_and_validate_global_id(
             # malformed-payload sibling, mirroring the node-field contract.
             suffix = "" if index is None else f" at index {index}"
             raise GraphQLError(
-                f"Invalid GlobalID: {value!r} is not a valid GlobalID (malformed "
+                f"Invalid GlobalID: {_safe_arg_repr(value)} is not a valid GlobalID (malformed "
                 f"base64 or not a 'type_name:node_id' shape){suffix}.",
-                extensions={"code": "GLOBALID_INVALID"},
+                extensions=coded_error_extensions(GLOBALID_INVALID_ERROR_CODE),
             ) from exc
     definition = _target_definition_for(filter_instance)
     if definition is not None:
@@ -669,7 +774,7 @@ def _decode_and_validate_global_id(
                 )
             raise GraphQLError(
                 message,
-                extensions={"code": "GLOBALID_UNVALIDATABLE"},
+                extensions=coded_error_extensions(GLOBALID_UNVALIDATABLE_ERROR_CODE),
             )
     accepted = _accepted_globalid_type_names(definition)
     if accepted is not None and decoded.type_name not in accepted:
@@ -688,9 +793,9 @@ def _decode_and_validate_global_id(
         # node-refetch path -- naming the list index when present.
         suffix = "" if index is None else f" at index {index}"
         raise GraphQLError(
-            f"Invalid GlobalID: {value!r} decodes to an empty node id, which is not a "
+            f"Invalid GlobalID: {_safe_arg_repr(value)} decodes to an empty node id, which is not a "
             f"valid resource identifier{suffix}.",
-            extensions={"code": "GLOBALID_INVALID"},
+            extensions=coded_error_extensions(GLOBALID_INVALID_ERROR_CODE),
         )
     target_model = getattr(definition, "model", None) if definition is not None else None
     target_pk = getattr(getattr(target_model, "_meta", None), "pk", None)
@@ -699,9 +804,9 @@ def _decode_and_validate_global_id(
         if coerced_node_id is None:
             suffix = "" if index is None else f" at index {index}"
             raise GraphQLError(
-                f"Invalid GlobalID: {value!r} carries a node id that is not a valid "
-                f"{target_model.__name__} primary-key value{suffix}.",
-                extensions={"code": "GLOBALID_INVALID"},
+                f"Invalid GlobalID: {_safe_arg_repr(value)} carries a node id that is not a valid "
+                f"{_safe_type_name(target_model)} primary-key value{suffix}.",
+                extensions=coded_error_extensions(GLOBALID_INVALID_ERROR_CODE),
             )
         return coerced_node_id
     return decoded.node_id
@@ -890,6 +995,21 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         return _apply_lookup_predicate(self, qs, node_ids, field_name=pk_field_name)
 
 
+def _filter_set_class() -> type:
+    """Return the ``FilterSet`` family base for the target-type gate.
+
+    Deferred so the ``filters.sets -> filters.base`` module-load edge stays
+    one-directional: ``filters.sets`` imports this module at module scope
+    (the ``FilterSet`` base needs ``RelatedFilter``), so a module-level import
+    back would re-enter a partially-initialized ``filters.sets`` at import
+    time -- the same cycle-keeping contract as
+    ``orders/base.py::_order_set_class``.
+    """
+    from .sets import FilterSet
+
+    return FilterSet
+
+
 class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     """`ModelChoiceFilter` that traverses into another `FilterSet`.
 
@@ -907,6 +1027,18 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     - An unqualified class name resolved against the owning filterset's
       module (e.g. ``"ShelfFilter"`` when both filtersets live in the
       same file).
+    - ``None`` -- the placeholder form (the branch is skipped at input
+      emission and BFS enqueue).
+
+    A target that RESOLVES to anything else -- an ``OrderSet`` (the
+    cross-family twin), a plain class, or a factory returning a non-class
+    -- raises ``ConfigurationError`` at the ``.filterset`` read. Without the
+    gate the mis-wiring survives declaration, binding, and expansion and
+    first detonates inside a consumer (``_expand_related_filter`` calling
+    ``target.get_filters()``, or the BFS builder's ``set_input_type_name``)
+    as a raw ``AttributeError``, or -- for an OrderSet-shaped target --
+    silently walks the ORDER family's fields through the filter input
+    builder.
     """
 
     # ``RelatedSetTargetMixin`` parameterization: the slots the shared
@@ -976,14 +1108,49 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
         """
         self._bind_owner(filterset)
 
+    def _validate_target(self, resolved: Any) -> None:
+        """The ``RelatedSetTargetMixin`` family gate: target must be a ``FilterSet``.
+
+        Fired by ``sets_mixins.py::RelatedSetTargetMixin._resolved_target`` on
+        every non-``None`` resolved read -- the one seam every consumer routes
+        through (the Layer-5 BFS enqueue in
+        ``utils/inputs.py::GeneratedInputArgumentsFactory._ensure_built``,
+        ``filters/sets.py::_expand_related_filter``, the finalizer's
+        unregistered-target audit, ``get_queryset``'s fallback, and the
+        permission traversal). Without the gate the mis-wiring survives
+        declaration, binding, and expansion and first detonates inside a
+        consumer (``target.get_filters()``, or the BFS builder's
+        ``set_input_type_name``) as a raw ``AttributeError``, or -- for an
+        OrderSet-shaped target -- silently walks the ORDER family's fields
+        through the filter input builder. Mirrors the order twin's
+        ``orders/base.py::RelatedOrder._validate_target``.
+        """
+        if not (isinstance(resolved, type) and issubclass(resolved, _filter_set_class())):
+            owner = getattr(self, self._owner_attr, None)
+            owner_label = (
+                _safe_class_name(owner, qualified=True) if isinstance(owner, type) else "<unbound>"
+            )
+            raise ConfigurationError(
+                f"{owner_label} declares RelatedFilter {_safe_arg_repr(self.field_name)} targeting "
+                f"{_safe_type_name(resolved)}, which is not a FilterSet subclass. "
+                "RelatedFilter targets must resolve to a FilterSet subclass (a class, "
+                "an import-path string, or a zero-arg factory returning one); "
+                "an OrderSet or unrelated class cannot filter a relation branch. "
+                "Declare the branch with a FilterSet or remove it.",
+            )
+
     @property
     def filterset(self) -> type[BaseFilterSet]:
         """Resolve `self._filterset` lazily on first access.
 
         Re-stores the resolved class so the next access is a plain
         attribute read; setter remains usable when a caller wants to
-        substitute the target. Delegates to the shared
-        ``RelatedSetTargetMixin._resolved_target``.
+        substitute the target. String / callable resolution is delegated
+        to ``LazyRelatedClassMixin.resolve_lazy_class`` via the shared
+        ``RelatedSetTargetMixin._resolved_target``, which also fires the
+        family's target-TYPE gate (``_validate_target``): a resolved value
+        must be ``None`` (the skip-silently placeholder) or a ``FilterSet``
+        subclass.
         """
         return self._resolved_target()
 
@@ -1004,5 +1171,5 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
             target = self.filterset
             model = getattr(getattr(target, "_meta", None), "model", None)
             if model is not None:
-                return model._default_manager.all()
+                return base_queryset(model)
         return queryset

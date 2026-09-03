@@ -2572,6 +2572,149 @@ def test_strictness_invalid_value_raises():
         DjangoOptimizerExtension(strictness="invalid")
 
 
+_END_DETONATION = "hostile dunder detonated"
+
+
+class _DetonatingEqStr(str):
+    def __eq__(self, other):
+        raise RuntimeError(_END_DETONATION)
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+
+class _DetonatingReprStr(str):
+    def __repr__(self):
+        raise RuntimeError(_END_DETONATION)
+
+
+class _DetonatingEqObject:
+    def __eq__(self, other):
+        raise RuntimeError(_END_DETONATION)
+
+
+class _DetonatingReprObject:
+    def __eq__(self, other):
+        return False
+
+    def __repr__(self):
+        raise RuntimeError(_END_DETONATION)
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        _DetonatingEqStr("bogus"),
+        _DetonatingReprStr("bogus"),
+        _DetonatingEqObject(),
+        _DetonatingReprObject(),
+    ],
+    ids=[
+        "eq-str-subclass",
+        "repr-str-subclass",
+        "eq-object",
+        "repr-object",
+    ],
+)
+def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile):
+    """B3: a hostile strictness value is rejected typed, never dispatched into.
+
+    The strictness boundary is construction-time consumer configuration with a
+    promised ``ValueError``. The membership read compares ``str`` candidates
+    through the base ``str`` slot and rejects non-``str`` candidates without an
+    equality probe, and the message renders through the guarded repr - so a
+    raising ``__eq__`` (reached through reflected comparison for a plain object)
+    or a raising ``__repr__`` cannot replace the typed rejection with the
+    value's own exception.
+    """
+    with pytest.raises(ValueError, match="strictness must be") as exc_info:
+        DjangoOptimizerExtension(strictness=hostile)
+    assert _END_DETONATION not in str(exc_info.value)
+
+
+def test_strictness_accepts_content_equal_str_subclass():
+    """B3: a benign str subclass with valid CONTENT keeps being accepted.
+
+    The base-slot comparison classifies by content, so a ``str`` subclass is
+    not over-blocked by the hostility guard (mirroring the strategy resolver's
+    content-equality convention).
+    """
+
+    class ContentRaise(str):
+        def __repr__(self):
+            raise RuntimeError(_END_DETONATION)
+
+    extension = DjangoOptimizerExtension(strictness=ContentRaise("raise"))
+    assert extension.strictness == "raise"
+
+
+@pytest.mark.parametrize(
+    "drain_at_pop",
+    [
+        1,
+        2,
+        3,
+        4,
+    ],
+)
+def test_plan_cache_eviction_survives_concurrent_drain(monkeypatch, drain_at_pop):
+    """B1: the eviction sweep tolerates the shared-instance drain race.
+
+    One extension instance is shared across a threaded / ASGI execution, and
+    the eviction loop pops up to a quarter of the cache after reading its
+    length. Concurrent requests' own sweeps can empty the cache between that
+    length read and any one of those pops; like the hit path's
+    ``move_to_end`` and the document-key cache's ``popitem``, the sweep must
+    absorb the ``KeyError`` instead of failing the request that was building a
+    plan. The drain lands on each pop position of the sweep in turn, so every
+    interleaving is pinned, not just the first.
+    """
+    from graphql import parse
+
+    import django_strawberry_framework.optimizer.extension as extension_module
+
+    monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 16)
+
+    def _info_for(root_field: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            operation=parse(f"query Q{root_field} {{ {root_field} }}").definitions[0],
+            fragments={},
+            variable_values={},
+            path=SimpleNamespace(key=root_field, prev=None),
+        )
+
+    extension = DjangoOptimizerExtension()
+    for idx in range(16):
+        key = DjangoOptimizerExtension._build_cache_key(_info_for(f"root{idx}"), Category, None)
+        extension._plan_cache[key] = object()
+    assert len(extension._plan_cache) == 16
+
+    # Simulate the interleaving: after this thread's length read, other
+    # requests' evictions drain the cache just before the ``drain_at_pop``-th
+    # pop of OUR sweep, so that pop hits an empty dict.
+    real_popitem = extension._plan_cache.popitem
+    calls = SimpleNamespace(value=0)
+
+    def racing_popitem(*, last):
+        calls.value += 1
+        if calls.value == drain_at_pop:
+            extension._plan_cache.clear()
+        return real_popitem(last=last)
+
+    monkeypatch.setattr(extension._plan_cache, "popitem", racing_popitem)
+
+    new_plan = SimpleNamespace(cacheable=True)
+    monkeypatch.setattr(
+        extension_module,
+        "plan_optimizations",
+        lambda selected_fields, model, info=None, *, source_type=None: new_plan,
+    )
+
+    plan = extension._get_or_build_plan([], Category, _info_for("rootnew"), None)
+    assert plan is new_plan
+    assert calls.value == 4
+
+
 @pytest.mark.django_db
 def test_strictness_warn_logs_unplanned_relation(caplog):
     """B3: strictness='warn' logs a warning for unplanned uncached relation access."""

@@ -1290,6 +1290,25 @@ def test_is_read_only_sql_uses_base_string_content_for_subclasses():
     assert not is_read_only_sql(sql)
 
 
+def test_is_read_only_sql_fails_closed_on_a_non_string_statement():
+    """A statement the classifier cannot read is never read-only, and reading it raises nothing.
+
+    ``cursor.execute`` hands the guard whatever object the caller passed. A non-string
+    whose ``__str__`` detonates must not escape the phase guard as a raw exception: an
+    unreadable statement is unclassifiable, and the only honest verdict for the
+    read-only phase is "not provably read-only" (fail closed).
+    """
+    from django_strawberry_framework.utils.write_transaction import is_read_only_sql
+
+    class _HostileStr:
+        def __str__(self):
+            raise RuntimeError("hostile __str__")
+
+    assert is_read_only_sql(_HostileStr()) is False
+    assert is_read_only_sql(None) is False
+    assert is_read_only_sql(b"SELECT 1") is False  # bytes SQL is not DB-API either
+
+
 @pytest.mark.django_db
 def test_pinned_alias_guard_rejects_writes_outside_the_write_phase():
     """On the PINNED alias, write SQL is rejected in the read-only phase and allowed inside it."""
@@ -1438,6 +1457,12 @@ def test_snapshot_target_state_fingerprints_mutable_container_values():
         instance.payload["tier"] = "platinum"
         with pytest.raises(ConfigurationError, match="mutated in memory"):
             assert_no_target_drift("JsonDriftMut", instance)
+        # A value that cannot be RE-fingerprinted at all (a reference cycle
+        # planted after the capture) still fails closed with the typed pipeline
+        # error - never a raw exception, and never a silent pass.
+        instance.payload["self"] = instance.payload
+        with pytest.raises(ConfigurationError, match="reference cycle"):
+            assert_no_target_drift("JsonCycleMut", instance)
 
 
 def test_snapshot_target_state_captures_filefield_name_not_the_mutable_descriptor():
@@ -1481,6 +1506,82 @@ def test_snapshot_target_state_captures_filefield_name_not_the_mutable_descripto
         instance.avatar.name = "evil.png"
         with pytest.raises(ConfigurationError, match="mutated in memory"):
             assert_no_target_drift("FileDriftMut", instance)
+
+
+@pytest.mark.django_db
+def test_assert_no_target_drift_fails_closed_on_a_hostile_eq():
+    """A planted value whose equality read detonates is the typed envelope, never raw.
+
+    The code the drift check polices (a permission method / hook / validator) can
+    plant ANY object on a field - including one whose ``__eq__`` raises. An
+    unreadable comparison is drift the check cannot rule out, so it fails closed
+    into the typed ``ConfigurationError``; a raw escape would break the pipeline's
+    exception-containment contract.
+    """
+    from django_strawberry_framework.utils.write_transaction import (
+        assert_no_target_drift,
+        require_write_pipeline,
+        snapshot_target_state,
+        write_pipeline,
+    )
+
+    class _RaisingEq:
+        def __eq__(self, other):
+            raise RuntimeError("hostile __eq__")
+
+        def __hash__(self):
+            return 0
+
+    category = product_models.Category.objects.create(name=_category_name())
+    item = product_models.Item.objects.create(name="GuardEq", category=category)
+    with write_pipeline("default", lock=False):
+        require_write_pipeline().target_state = snapshot_target_state(item)
+        item.name = _RaisingEq()  # planted by the code the check polices
+        with pytest.raises(ConfigurationError, match="mutated in memory"):
+            assert_no_target_drift("GuardEqMut", item)
+
+
+def test_file_name_snapshot_fails_closed_on_a_hostile_replacement():
+    """A non-``FieldFile`` replacement with a hostile ``__eq__`` reads as drift, not a raw escape.
+
+    The name snapshot compares the replaced value raw when it is not a
+    ``FieldFile`` - and a hostile replacement's equality read detonating must
+    answer "drifted" (fail closed), never propagate out of the guard.
+    """
+    from types import SimpleNamespace
+
+    from django.db.models.fields.files import FieldFile
+
+    from django_strawberry_framework.utils.write_transaction import (
+        _FileNameSnapshot,
+        assert_no_target_drift,
+        require_write_pipeline,
+        snapshot_target_state,
+        write_pipeline,
+    )
+
+    class _RaisingEq:
+        def __eq__(self, other):
+            raise RuntimeError("hostile __eq__")
+
+        def __hash__(self):
+            return 0
+
+    fake_field = SimpleNamespace(storage=None, attname="avatar")
+    file_value = FieldFile(instance=None, field=fake_field, name="orig.png")
+    field = SimpleNamespace(attname="avatar")
+    instance = SimpleNamespace(
+        avatar=file_value,
+        _meta=SimpleNamespace(concrete_fields=[field]),
+        get_deferred_fields=lambda: set(),
+    )
+
+    with write_pipeline("default", lock=False):
+        require_write_pipeline().target_state = snapshot_target_state(instance)
+        assert isinstance(require_write_pipeline().target_state["avatar"], _FileNameSnapshot)
+        instance.avatar = _RaisingEq()  # replaced with a hostile non-FieldFile
+        with pytest.raises(ConfigurationError, match="mutated in memory"):
+            assert_no_target_drift("GuardFileMut", instance)
 
 
 @pytest.mark.django_db
@@ -1545,3 +1646,198 @@ def test_field_fingerprint_covers_container_kinds_and_is_deterministic():
     # A nested mix round-trips stably.
     value = {"tags": [1, 2], "meta": {"seen": True}, "ids": {9, 8}}
     assert _field_fingerprint(value) == _field_fingerprint(dict(value))
+
+
+def test_field_fingerprint_reads_hostile_containers_through_their_base_slots():
+    """A container SUBCLASS cannot decide what the drift fingerprint sees.
+
+    The fingerprint is one half of a security check whose other half recomputes
+    it later, so a value that reports different contents on different calls
+    would let an unauthorized in-memory change compare clean. The walk therefore
+    reads every built-in container through its UNBOUND slot, and a lying
+    ``__iter__`` / ``__reversed__`` never runs.
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    class _LyingList(list):
+        def __iter__(self):
+            return iter([999])
+
+        def __reversed__(self):
+            return iter([999])
+
+    class _LyingDict(dict):
+        def items(self):
+            return iter([("spoofed", 999)])
+
+        def keys(self):
+            return iter(["spoofed"])
+
+    assert _field_fingerprint(_LyingList([1, 2, 3])) == _field_fingerprint([1, 2, 3])
+    assert _field_fingerprint(_LyingDict({"a": 1})) == _field_fingerprint({"a": 1})
+
+
+def test_field_fingerprint_orders_by_a_guarded_key_not_a_bare_repr():
+    """A constant or raising ``__repr__`` cannot collapse or break the ordering.
+
+    A bare ``repr`` sort key is two failures in one: a ``__repr__`` that raises
+    escapes the drift check as an untyped exception, and one that returns a
+    CONSTANT gives structurally different members the same sort key - which, for
+    an unordered container, means two different values can fingerprint the same
+    and drift between them goes undetected.
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    class _ConstantRepr:
+        def __init__(self, value):
+            self.value = value
+
+        def __repr__(self):
+            return "SAME"
+
+    class _RaisingRepr:
+        def __repr__(self):
+            raise RuntimeError("hostile repr")
+
+    # No raise, and the guarded placeholder still names the type.
+    digest = _field_fingerprint([_RaisingRepr()])
+    assert "_RaisingRepr" in digest
+
+    # A constant repr no longer makes two distinct members interchangeable: the
+    # ordering key falls through to type and object identity, which are total.
+    first, second = _ConstantRepr(1), _ConstantRepr(2)
+    assert _field_fingerprint({first: "x", second: "y"}) == _field_fingerprint(
+        {first: "x", second: "y"},
+    )
+
+
+def test_field_fingerprint_rejects_a_reference_cycle():
+    """A self-referential value is rejected by name, not by exhausting the node budget.
+
+    Consumer code between the locate and the save can make a JSONField value
+    cyclic; the drift check then recomputes the fingerprint over it. The node
+    budget already bounded the walk, but it reported the wrong reason - an
+    active-path guard names the actual defect.
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    cyclic: dict = {}
+    cyclic["self"] = cyclic
+    with pytest.raises(ConfigurationError, match="reference cycle"):
+        _field_fingerprint(cyclic)
+
+    nested: list = [1]
+    nested.append(nested)
+    with pytest.raises(ConfigurationError, match="reference cycle"):
+        _field_fingerprint(nested)
+
+
+def test_field_fingerprint_admits_a_repeated_sibling_that_is_not_a_cycle():
+    """The guard tracks the ACTIVE PATH, so a diamond is fine and only a cycle raises."""
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    shared = {"a": 1}
+    assert _field_fingerprint([shared, shared]) == _field_fingerprint([{"a": 1}, {"a": 1}])
+
+
+def test_field_fingerprint_reads_atom_leaves_through_base_slots():
+    """A scalar subclass's lying ``__repr__`` cannot forge another value's leaf.
+
+    The write persists a leaf's BASE content (``json.dumps`` serializes the base
+    string of a ``str`` subclass, never its ``__repr__``), so a leaf that trusted
+    the subclass's repr would let a smuggled value fingerprint as the value it
+    CLAIMS to be - a fail-open drift check. The walk renders every built-in atom
+    through its BASE type's unbound slot and tags the leaf by that base type,
+    never by the subclass's claimed ``__name__``; content-equal replacements
+    stay honest (no false drift).
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    shadow_str = type("str", (str,), {"__repr__": lambda self: repr("gold")})
+    shadow_int = type("int", (int,), {"__repr__": lambda self: "10"})
+
+    # Different base content -> different digest, however loudly the repr lies.
+    assert _field_fingerprint(["gold"]) != _field_fingerprint([shadow_str("admin")])
+    assert _field_fingerprint({10: 1}) != _field_fingerprint({shadow_int(20): 1})
+    # Equal base content -> equal digest: the fingerprint is content-honest.
+    assert _field_fingerprint(["gold"]) == _field_fingerprint([shadow_str("gold")])
+
+
+def test_field_fingerprint_reads_bytes_through_their_base_buffer():
+    """A ``bytes`` / ``bytearray`` subclass's raising ``__bytes__`` never runs.
+
+    The byte-string leaf is read through the base buffer, never ``bytes(item)``
+    (the constructor dispatches a subclass ``__bytes__``), and it stays
+    content-addressed and type-insensitive.
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    class _RaisingBytes(bytes):
+        def __bytes__(self):
+            raise RuntimeError("hostile __bytes__")
+
+    class _RaisingBytearray(bytearray):
+        def __bytes__(self):
+            raise RuntimeError("hostile bytearray __bytes__")
+
+    assert _field_fingerprint([_RaisingBytes(b"secret")]) == _field_fingerprint([b"secret"])
+    assert _field_fingerprint([_RaisingBytearray(b"secret")]) == _field_fingerprint([b"secret"])
+    assert _field_fingerprint([b"secret"]) != _field_fingerprint([b"tampered"])
+
+
+def test_field_fingerprint_distinguishes_opaque_objects_a_constant_repr_cannot_collapse():
+    """Two distinct opaque objects with one constant ``__repr__`` fingerprint apart.
+
+    A total ORDERING key alone is not enough: the LEAF must not render two
+    distinct objects equal either, or a replaced value with a lying constant
+    repr would compare clean against the captured digest (fail-open). Opaque
+    leaves therefore carry the type's and the value's identity alongside the
+    guarded repr - sound because a fingerprint is request-scoped (recomputed
+    from the same live objects, never persisted).
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    class _ConstantRepr:
+        def __init__(self, value):
+            self.value = value
+
+        def __repr__(self):
+            return "SAME"
+
+    first, second = _ConstantRepr(1), _ConstantRepr(2)
+    assert _field_fingerprint([first, "x"]) != _field_fingerprint([second, "x"])
+    # Re-fingerprinting the SAME objects is stable (the drift check's shape).
+    assert _field_fingerprint([first, "x"]) == _field_fingerprint([first, "x"])
+
+
+def test_field_fingerprint_walks_dict_keys_as_nodes():
+    """A dict key gets the same hostile-safe walk as a value, never a ``repr`` label.
+
+    A ``repr`` key label is a second place a lying ``__repr__`` could forge the
+    fingerprint (a shadowed-int key claiming another key's spelling); walking
+    the key as a node routes it through the same base-slot leaf render a value
+    gets, including container keys (tuples / frozensets are hashable).
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    # Container keys are walked by content, not rendered by ``repr``.
+    assert _field_fingerprint({(1, 2): "a"}) != _field_fingerprint({(1, 3): "a"})
+    assert _field_fingerprint({(1, 2): "a"}) == _field_fingerprint({(1, 2): "a"})
+    # The fixed key/value divider keeps the two roles distinguishable.
+    assert _field_fingerprint({10: "x"}) != _field_fingerprint({"x": 10})
+
+
+def test_field_fingerprint_leaf_tokens_stay_type_tagged():
+    """None / bool / float leaves keep their own type tags - 1, True, 1.0, and '1' never collide.
+
+    The atom tags come from the base type that performed the content read, so a
+    bool (an ``int`` subclass) and a float cannot masquerade as one another and
+    an explicit ``None`` never reads as the string ``"None"``.
+    """
+    from django_strawberry_framework.utils.write_transaction import _field_fingerprint
+
+    assert _field_fingerprint([None]) != _field_fingerprint(["None"])
+    assert _field_fingerprint([None]) == _field_fingerprint([None])  # stable
+    assert _field_fingerprint([True]) != _field_fingerprint([1])
+    assert _field_fingerprint([1.5]) != _field_fingerprint(["1.5"])
+    assert _field_fingerprint([1.5]) != _field_fingerprint([15])

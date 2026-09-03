@@ -7,15 +7,16 @@ from typing import Any
 import pytest
 
 import django_strawberry_framework.utils.typing as typing_module
-from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import (
-    _MAX_TYPE_WRAPPER_DEPTH,
+    MAX_TYPE_WRAPPER_DEPTH,
     _callable_inspection_target,
     is_async_callable,
     schema_config_from_info,
     strawberry_schema_from_info,
     strawberry_schema_from_schema,
     unwrap_container_type,
+    unwrap_graphql_type,
+    unwrap_non_null,
     unwrap_return_type,
 )
 
@@ -23,12 +24,14 @@ from django_strawberry_framework.utils.typing import (
 def test_typing_exports_all():
     """``django_strawberry_framework.utils.typing`` exports expected public symbols."""
     assert typing_module.__all__ == (
+        "MAX_TYPE_WRAPPER_DEPTH",
         "is_async_callable",
         "schema_config_from_info",
         "strawberry_schema_from_info",
         "strawberry_schema_from_schema",
         "unwrap_container_type",
         "unwrap_graphql_type",
+        "unwrap_non_null",
         "unwrap_return_type",
     )
 
@@ -118,7 +121,7 @@ def test_unwrap_graphql_type_peels_a_deep_but_finite_stack():
             self.of_type = of_type
 
     wrapped = Inner
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH - 1):
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH - 1):
         wrapped = Wrap(wrapped)
 
     assert unwrap_graphql_type(wrapped) is Inner
@@ -326,7 +329,7 @@ def test_unwrap_graphql_type_accepts_exact_wrapper_depth():
             self.of_type = of_type
 
     wrapped = Inner
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH):
         wrapped = Wrap(wrapped)
 
     assert unwrap_graphql_type(wrapped) is Inner
@@ -340,7 +343,7 @@ def test_unwrap_container_type_accepts_exact_wrapper_depth():
         pass
 
     wrapped = Inner
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH):
         wrapped = StrawberryList(of_type=wrapped)
 
     assert unwrap_container_type(wrapped) is Inner
@@ -360,7 +363,7 @@ def test_callable_inspection_target_accepts_exact_wrapper_depth():
         return 42
 
     wrapped = inner
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH):
         wrapped = functools.partial(wrapped)
 
     assert _callable_inspection_target(wrapped) is inner
@@ -403,3 +406,70 @@ def test_is_async_callable_raises_on_cyclic_wrapper_stack():
     p = CyclicPartial(lambda: 0)
     with pytest.raises(RuntimeError, match="cyclic or corrupt"):
         is_async_callable(p)
+
+
+def test_is_async_callable_sees_through_an_async_call_metaclass():
+    """A class whose metaclass carries ``async def __call__`` is async to CALL.
+
+    Calling a class dispatches through ``type(target).__call__`` -- the
+    metaclass -- not the class body's ``__call__`` (that one is instance-call
+    semantics). The predicate used to hard-return ``False`` for every class, so
+    a metaclass-async class, which yields a coroutine when called, violated the
+    "calling ``value`` yields a coroutine" contract, and such a class passed as
+    a ``globalid_strategy`` encoder slipped past the build-time sync-ness gate
+    (``types/base.py::_validate_globalid_callable``) to fail per request.
+    Plain classes keep the pinned "instantiation is sync" answer because
+    ``type.__call__`` is sync, and a class body's ``__call__`` never answers
+    for the class itself.
+    """
+
+    class _AsyncMeta(type):
+        async def __call__(cls): ...
+
+    class _UsesAsyncMeta(metaclass=_AsyncMeta): ...
+
+    class _InstanceAsyncCallable:
+        async def __call__(self): ...
+
+    class _ClassDictAsyncCall:
+        # Instances are async-callable; instantiation stays sync.
+        __call__ = _async_fn
+
+    assert is_async_callable(_UsesAsyncMeta) is True
+    assert is_async_callable(functools.partial(_UsesAsyncMeta)) is True
+    assert is_async_callable(_InstanceAsyncCallable) is False
+    assert is_async_callable(_ClassDictAsyncCall) is False
+    assert is_async_callable(_InstanceAsyncCallable()) is True
+
+
+def test_unwrap_non_null_peels_only_non_null_layers():
+    """The narrow peel stops at the list wrapper its callers must still see.
+
+    ``unwrap_graphql_type`` would peel the ``GraphQLList`` too, which is exactly
+    why the resource policy's list-vs-connection classification could not use it
+    and grew raw ``while isinstance`` loops instead.
+    """
+    from graphql import GraphQLList, GraphQLNonNull, GraphQLString
+
+    inner = GraphQLList(GraphQLNonNull(GraphQLString))
+    assert unwrap_non_null(GraphQLNonNull(inner)) is inner
+    assert unwrap_non_null(inner) is inner
+    assert unwrap_non_null(GraphQLString) is GraphQLString
+
+
+def test_unwrap_non_null_raises_on_a_cyclic_non_null_chain():
+    """A cyclic non-null chain raises instead of spinning the request thread.
+
+    graphql-core forbids ``NonNull(NonNull(x))``, so no genuine schema reaches
+    the ceiling - which is why the three unbounded ``while isinstance`` loops
+    this replaced looked safe. A hand-built or corrupted wrapper is the case the
+    bound exists for, and an unbounded loop on one hangs rather than failing.
+    """
+    from graphql import GraphQLNonNull
+
+    class _CyclicNonNull(GraphQLNonNull):
+        def __init__(self):
+            self.of_type = self
+
+    with pytest.raises(RuntimeError, match="unwrap_non_null"):
+        unwrap_non_null(_CyclicNonNull())

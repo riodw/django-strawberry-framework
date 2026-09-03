@@ -740,6 +740,8 @@ def resolve_injected_field_specs(
     serializer_class: type[serializers.BaseSerializer],
     field_map: dict[str, serializers.Field],
     injected_fields: Any,
+    *,
+    operation_kind: str,
 ) -> list[InputFieldSpec]:
     """Resolve the schema-time ``InputFieldSpec`` for each ``Meta.injected_fields`` name.
 
@@ -752,11 +754,26 @@ def resolve_injected_field_specs(
     injected value, not merely that its key is present in ``data``. ``None`` / empty yields
     ``[]``. Each name is already validated to exist in ``field_map`` at class creation; resolving
     an unsupported injected field here fails loud (the same fail-loud the input walk applies).
+
+    ``operation_kind`` is the mutation's operation input kind (``CREATE`` / ``PARTIAL``): the
+    field is resolved under the SAME provisional name the shape walk used for that operation
+    (``<Serializer>Input`` / ``<Serializer>PartialInput``) AND the runtime-agreement guard
+    re-derives the runtime annotation under. A serializer-only ``ChoiceField`` upgrades to a
+    generated enum whose GraphQL name is derived from that provisional
+    (``rest_framework/serializer_converter.py::_serializer_choice_enum``), so an
+    operation-blind provisional would record a create-named enum for an update mutation while
+    ``resolvers.py::_assert_field_agreement`` re-derives the runtime annotation under the
+    ``PartialInput`` provisional - a spurious requiredness/annotation disagreement raising on
+    EVERY invocation of a valid update declaration. The requiredness axis stays unset (the
+    injected value is present by construction, so only present / writable / source / kind /
+    relation-model are held to the agreement contract).
     """
     if not injected_fields:
         return []
     model = _serializer_model(serializer_class)
-    provisional_name = f"{serializer_class.__name__}Input"
+    provisional_name = (
+        f"{serializer_class.__name__}{'PartialInput' if operation_kind == PARTIAL else 'Input'}"
+    )
     specs: list[InputFieldSpec] = []
     for name in injected_fields:
         if name not in field_map:

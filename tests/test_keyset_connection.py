@@ -540,7 +540,7 @@ def test_keyset_window_slice_from_arguments_arms():
         columns=columns,
         fingerprint=fingerprint,
     )
-    assert window == (0, 2, False)
+    assert (window.offset, window.limit, window.reverse) == (0, 2, False)
     assert seek is None
 
     # A valid minted cursor decodes into the seek.
@@ -555,7 +555,7 @@ def test_keyset_window_slice_from_arguments_arms():
         columns=columns,
         fingerprint=fingerprint,
     )
-    assert window == (0, 2, False)
+    assert (window.offset, window.limit, window.reverse) == (0, 2, False)
     assert seek is not None
     assert seek.cursor.values == (1, issue.pk)
 

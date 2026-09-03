@@ -30,11 +30,13 @@ from __future__ import annotations
 
 import itertools
 import sys
+from types import SimpleNamespace
 
 import pytest
 import strawberry
 from apps.products import models as product_models
 from django import forms
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryOptional
@@ -193,6 +195,24 @@ def test_get_form_fields_does_not_instantiate_kwarg_requiring_form():
         KwargForm()  # proves the form genuinely cannot be instantiated no-arg
 
 
+def test_corrupted_base_fields_raises_typed_on_default_path():
+    """A clobbered ``base_fields`` raises a typed diagnostic naming the form.
+
+    The default basis acquisition (``dict(form_class.base_fields)`` inside
+    ``get_form_fields``) is guarded alongside the hook mapping: a consumer having
+    clobbered ``base_fields`` to a non-mapping raises ``ConfigurationError``
+    naming the form instead of a raw ``TypeError`` propagating out of
+    ``build_form_inputs`` (the bind's default path).
+    """
+
+    class Corrupt(forms.Form):
+        pass
+
+    Corrupt.base_fields = 123
+    with pytest.raises(ConfigurationError, match="Corrupt"):
+        build_form_inputs(Corrupt)
+
+
 def test_normalize_form_field_basis_rejects_none():
     """A mutation hook returning ``None`` raises a fail-loud ``ConfigurationError``."""
 
@@ -224,6 +244,41 @@ def test_form_field_basis_rejects_malformed_names_and_field_values():
             ProbeForm,
             {1: forms.CharField(), "name": object()},
         )
+
+
+def test_basis_rejects_non_identifier_field_names():
+    """A basis with a non-identifier field name raises typed, naming it.
+
+    A generated input attribute is rendered into the dataclass ``__init__``, so
+    an empty / spaced / digit-leading / keyword name could never build an input:
+    before the identifier guard such a name passed the string check and detonated
+    as a raw ``SyntaxError`` out of the generated ``__init__`` source at
+    input-class construction.
+    """
+
+    class ProbeForm(forms.Form):
+        pass
+
+    for name in (
+        "",
+        "with space",
+        "9lead",
+        "class",
+        "None",
+    ):
+        with pytest.raises(ConfigurationError, match="invalid names"):
+            normalize_form_field_basis(ProbeForm, {name: forms.CharField()})
+
+
+def test_weird_field_names_fail_loud_through_build():
+    """Weird names through the full build raise a typed diagnostic, not SyntaxError."""
+
+    class ProbeForm(forms.Form):
+        pass
+
+    weird = {"": forms.CharField(), "with space": forms.CharField(), "good": forms.CharField()}
+    with pytest.raises(ConfigurationError, match="invalid names"):
+        build_form_inputs(ProbeForm, form_fields=weird)
 
 
 def test_normalize_form_field_basis_valid_mapping():
@@ -829,6 +884,36 @@ def test_canonical_name_for_full_shape():
     )
 
 
+def test_build_form_inputs_rejects_out_of_vocabulary_operation_kind():
+    """``build_form_inputs`` takes a create-shaped kind; ``PARTIAL`` / garbage raise typed.
+
+    A ``PARTIAL`` create-side kind would silently build a degenerate pair (both
+    halves partial-shaped and partial-named, colliding at materialization); any
+    other out-of-vocabulary kind would silently resolve create-shaped. Both fail
+    loud instead.
+    """
+
+    class ProbeForm(forms.Form):
+        x = forms.CharField(required=False)
+
+    with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 'partial'"):
+        build_form_inputs(ProbeForm, operation_kind=PARTIAL)
+    with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 42"):
+        build_form_inputs(ProbeForm, operation_kind=42)
+
+
+def test_build_form_input_class_rejects_out_of_vocabulary_operation_kind():
+    """``build_form_input_class`` rejects anything but CREATE / FORM / PARTIAL."""
+
+    class ProbeForm(forms.Form):
+        x = forms.CharField(required=False)
+
+    with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 42"):
+        build_form_input_class(ProbeForm, operation_kind=42)
+    with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 'update'"):
+        build_form_input_class(ProbeForm, operation_kind="update")
+
+
 def test_identical_shape_dedupes_via_ledger():
     """Materializing the same class twice under one name is a no-op (identical shapes dedupe)."""
     cre, _, _, _ = build_form_inputs(_item_model_form(), operation_kind=CREATE)
@@ -1113,6 +1198,130 @@ def test_model_choice_field_with_none_queryset_is_fail_loud():
     assert "queryset is None" in message
 
 
+def _make_empty_form():
+    """A plain field-less ``forms.Form`` for hostile-basis probes."""
+
+    class EmptyForm(forms.Form):
+        pass
+
+    return EmptyForm
+
+
+def test_honest_str_subclass_basis_name_still_builds():
+    """An honest ``str`` subclass basis key passes the name guard and builds.
+
+    The identifier/keyword guard interrogates each basis name; a well-behaved
+    subclass inherits ``str.isidentifier`` and must keep building (the guard
+    rejects only names that could never build an input).
+    """
+
+    class PlainSub(str):
+        pass
+
+    form_cls = _make_empty_form()
+    normalized = normalize_form_field_basis(form_cls, {PlainSub("good"): forms.CharField()})
+    assert list(normalized) == ["good"]
+    cre, _, _, _ = build_form_inputs(form_cls, form_fields=normalized)
+    field_names = {f.python_name for f in cre.__strawberry_definition__.fields}
+    assert field_names == {"good"}
+
+
+def test_basis_diagnostic_survives_hostile_repr_key():
+    """The invalid-names diagnostic renders a hostile-``__repr__`` key typed.
+
+    The diagnostic is assembled by an f-string at the raise site, so a
+    hook-supplied non-``str`` key whose ``__repr__`` raises must not replace
+    the typed ``ConfigurationError`` with the repr's own exception (the
+    ``exceptions.py::describe_value`` failure mode - a rejection message cannot
+    fail on the value it is rejecting). The entry renders through
+    ``_safe_arg_repr`` as ``<unprintable T>`` instead.
+    """
+
+    class EvilRepr:
+        def __repr__(self):
+            raise RuntimeError("hostile repr")
+
+    with pytest.raises(ConfigurationError, match="invalid names.*EvilRepr"):
+        normalize_form_field_basis(_make_empty_form(), {EvilRepr(): forms.CharField()})
+
+
+def test_basis_diagnostic_typed_for_lying_isidentifier_str_subclass():
+    """A ``str`` subclass whose ``isidentifier`` raises is invalid, never raw.
+
+    The per-name interrogation sits inside the typed boundary: a name that
+    cannot even be asked ``isidentifier()`` is rejected by the same rule that
+    rejects non-identifiers (it is listed in the diagnostic), instead of
+    escaping ``_form_field_basis`` as a raw ``RuntimeError``.
+    """
+
+    class LyingStr(str):
+        def isidentifier(self):
+            raise RuntimeError("hostile isidentifier")
+
+    with pytest.raises(ConfigurationError, match="invalid names.*'x'"):
+        normalize_form_field_basis(_make_empty_form(), {LyingStr("x"): forms.CharField()})
+
+
+def test_basis_diagnostic_keeps_list_repr_for_benign_names():
+    """Benign invalid names keep the classic ``['a', 'b']`` list-repr byte shape."""
+
+    class ProbeForm(forms.Form):
+        pass
+
+    with pytest.raises(ConfigurationError) as exc:
+        normalize_form_field_basis(
+            ProbeForm,
+            {"with space": forms.CharField(), "9lead": forms.CharField()},
+        )
+    assert "['with space', '9lead']" in str(exc.value)
+
+
+def test_model_column_for_typed_on_hostile_meta_model():
+    """A raising ``_meta.model`` read fails loud typed, naming the form.
+
+    The corrupted-internals twin of the guarded ``base_fields`` read: a form
+    class whose ``_meta.model`` read raises is a clobbered class, so
+    ``_model_column_for`` raises the typed diagnostic instead of letting the
+    raw exception escape the schema-time build (or masking it as ``None``,
+    which would silently mis-type the field through the model-less table).
+    """
+
+    class BoomModelMeta:
+        @property
+        def model(self):
+            raise RuntimeError("hostile _meta.model")
+
+    class BoomModelForm:
+        _meta = BoomModelMeta()
+
+    with pytest.raises(ConfigurationError, match="BoomModelForm.*corrupted"):
+        _model_column_for(BoomModelForm, "name")
+
+
+def test_model_column_for_typed_on_non_field_does_not_exist_get_field():
+    """A ``get_field`` raising something OTHER than ``FieldDoesNotExist`` is typed.
+
+    ``FieldDoesNotExist`` keeps its ``None`` return (the extra-field path); any
+    other raise is corrupted model internals and fails loud typed, naming the
+    form and the field.
+    """
+
+    def _boom(name):
+        raise RuntimeError("hostile get_field")
+
+    def _missing(name):
+        raise FieldDoesNotExist(name)
+
+    boom_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_boom))
+    boom_form = SimpleNamespace(_meta=SimpleNamespace(model=boom_model))
+    with pytest.raises(ConfigurationError, match="SimpleNamespace.*get_field raised RuntimeError"):
+        _model_column_for(boom_form, "name")
+
+    missing_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_missing))
+    missing_form = SimpleNamespace(_meta=SimpleNamespace(model=missing_model))
+    assert _model_column_for(missing_form, "name") is None
+
+
 def test_resolve_target_column_reverse_m2m_and_non_concrete_fallback():
     from types import SimpleNamespace
 
@@ -1141,3 +1350,78 @@ def test_resolve_target_column_reverse_m2m_and_non_concrete_fallback():
 
     assert _model_column_for(fake_form, "reverse_m2m") is None
     assert _model_column_for(fake_form, "non_concrete") is None
+
+
+def test_form_basis_content_identity_reraises_the_basis_typed_reject_verbatim():
+    """A hostile basis reaching the cache-key projection keeps the build's OWN reject.
+
+    ``_form_basis_content_identity`` resolves its basis through the same guarded
+    ``_form_field_basis`` read the build uses, so a basis the build already rejects
+    typed must surface as THAT typed ``ConfigurationError`` verbatim - never
+    re-wrapped in the projection's own raw-read wording, never a raw escape from
+    cache-key assembly.
+    """
+
+    class _ClobberedBasesForm(forms.Form):
+        name = forms.CharField()
+
+    _ClobberedBasesForm.base_fields = 42  # dict(42) raises TypeError inside the guard
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.forms.inputs import _form_basis_content_identity
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        _form_basis_content_identity(_ClobberedBasesForm, None)
+
+    assert (
+        "get_form_fields() must return a mapping of field names to forms.Field instances."
+        in str(excinfo.value)
+    )
+    # The passthrough arm re-raises the basis reject VERBATIM: the projection's own
+    # raw-read wording must not appear.
+    assert "reading the field basis" not in str(excinfo.value)
+
+
+def test_form_basis_content_identity_types_a_raw_requiredness_read_failure():
+    """A raw non-typed escape from the identity walk still lands on the typed boundary.
+
+    ``_form_field_basis`` validation only checks ``isinstance(field, forms.Field)``,
+    so a subclass whose ``required`` read raises passes validation and detonates
+    later inside the projection's per-field walk (``form_field_required`` reads
+    ``field.required``). The projection's containment owns that: the raw failure is
+    reported as the typed ``ConfigurationError`` naming the phase, chained from the
+    original - never a raw escape from cache-key assembly.
+    """
+
+    class _HostileRequiredField(forms.Field):
+        armed = False
+
+        @property
+        def required(self):
+            # Django's ``Field.__init__`` both assigns and reads this slot; the read
+            # turns hostile only AFTER construction (the projection reads it later).
+            if type(self).armed:
+                raise RuntimeError("hostile requiredness read")
+            return self._required_slot
+
+        @required.setter
+        def required(self, value):
+            self._required_slot = value
+
+    class _PlainHostForm(forms.Form):
+        name = forms.CharField()
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.forms.inputs import _form_basis_content_identity
+
+    field = _HostileRequiredField()
+    _HostileRequiredField.armed = True
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        _form_basis_content_identity(_PlainHostForm, {"confirm": field})
+
+    assert "reading the field basis for the input shape identity raised RuntimeError" in str(
+        excinfo.value,
+    )
+    assert "hostile requiredness read" in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, RuntimeError)

@@ -82,6 +82,11 @@ _EXCEPTION_MESSAGE_CAP = 4096
 _EXCEPTION_STACK_CAP = 16384
 _PAYLOAD_CAP = 262144
 _MARKER = "... [truncated]"
+_HAS_SCHEMA_STREAM = hasattr(strawberry.Schema, "stream")
+_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
+    not _HAS_SCHEMA_STREAM,
+    reason="Schema.stream landed in strawberry-graphql 0.319.0",
+)
 
 
 @strawberry.type
@@ -876,7 +881,7 @@ def test_concurrent_sync_operations_use_isolated_instances():
 
 @override_settings(DEBUG=True)
 def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(default_wrapper, caplog):
-    """A malformed backend log entry degrades ``sql`` to the serialized prefix."""
+    """A malformed backend log entry costs its own row and never the result."""
 
     @strawberry.type
     class _InjectingQuery:
@@ -900,11 +905,9 @@ def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(defaul
         assert result.errors is None
         assert result.data == {"ok": "ok"}
         payload = result.extensions["debug"]
-        assert [row["sql"] for row in payload["sql"]] == ["SELECT 90"]  # the serialized prefix
+        assert [row["sql"] for row in payload["sql"]] == ["SELECT 90"]  # the bad row alone is lost
         assert payload["exceptions"] == []
-        assert any(
-            "SQL diagnostic collection failed" in record.message for record in caplog.records
-        )
+        assert any("could not be serialized" in record.message for record in caplog.records)
         # Restoration is separately protected from the diagnostic failure.
         assert default_wrapper.force_debug_cursor is False
         assert debug_module._coordinator._active == {}
@@ -914,6 +917,43 @@ def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(defaul
         # tests snapshot against it.
         while len(log) > entries_before:
             log.pop()
+
+
+def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(caplog):
+    """The other SQL degrade: a log that cannot be DRAINED is not a per-row failure.
+
+    The per-row guard covers a bad entry, but reading a connection's query log
+    is one indivisible step - a wrapper whose log raises hands back no entries
+    at all, so there is nothing to resume from and no way to skip "the bad
+    row". That snapshot contributes nothing and the rows already collected from
+    earlier snapshots survive, which is why the outer degrade is still here
+    beside the per-row one.
+    """
+
+    class _ExplodingQueryLog:
+        def __iter__(self):
+            raise RuntimeError("query log read failed")
+
+    good = SimpleNamespace(vendor="sqlite", alias="default", queries_log=[])
+    good_snapshot = _ConnectionSnapshot(database_connection=good, query_log_start=0)
+    good.queries_log.append({"sql": "SELECT 1", "time": "0.001"})
+    exploding_snapshot = _ConnectionSnapshot(
+        database_connection=SimpleNamespace(
+            vendor="sqlite",
+            alias="other",
+            queries_log=_ExplodingQueryLog(),
+        ),
+        query_log_start=0,
+    )
+
+    with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+        payload = _build_payload(
+            [good_snapshot, exploding_snapshot],
+            SimpleNamespace(errors=None),
+        )
+
+    assert [row["sql"] for row in payload["sql"]] == ["SELECT 1"]
+    assert any("SQL diagnostic collection failed" in record.message for record in caplog.records)
 
 
 def test_exception_diagnostic_failure_degrades_to_an_empty_list(caplog):
@@ -1258,6 +1298,109 @@ def _exception_row(message, stack=""):
     return {"excType": "", "message": message, "stack": stack}
 
 
+# ---------------------------------------------------------------------------
+# Scenario 22 - the streaming seam (``Schema.stream``, the seam the package's
+# WebSocket consumers call for every operation type from strawberry-graphql
+# 0.319.0 on). The engine reads the extension results INSIDE the still-open
+# operation context there, so the executing hook - not the operation
+# teardown - must own the stash the streaming seam reads. The non-streaming
+# colors read the results after ``on_operation``'s rebuild overwrites it, so
+# every contract pinned above is unchanged. The four rows skip on the
+# ``strawberry-graphql==0.316.0`` floor, which has no ``Schema.stream``.
+# ---------------------------------------------------------------------------
+
+
+@_SKIP_WITHOUT_STREAM
+async def test_streaming_seam_publishes_the_payload_the_engine_reads():
+    """A streamed operation carries ``extensions["debug"]`` like execute does.
+
+    Regression for the streaming seam: ``Schema.stream`` reads the extension
+    results inside the operation context, so the payload must be stashed at
+    the executing hook's teardown. Without that stash a WS-served schema
+    published no debug key at all while still paying the capture cost, and
+    the same schema diverged by transport (execute published, stream did not).
+    The engine calls ``stream()``-as-coroutine (the shape the package's own
+    ``_StopAwareSchema`` wraps), so the probe here follows it exactly.
+    """
+    schema = strawberry.Schema(
+        query=_BoomQuery,
+        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
+    )
+
+    source = await schema.stream("{ boom }")
+    frames = [frame async for frame in source]
+
+    assert len(frames) == 1
+    frame = frames[0]
+    # A bare schema has no masking extension: the raw message stays on the wire.
+    assert [error.message for error in frame.errors] == ["sensitive boom detail"]
+    payload = (frame.extensions or {}).get("debug")
+    assert payload is not None, "the streaming seam must publish debug like execute does"
+    assert set(payload) == {"sql", "exceptions"}
+    messages = [row["message"] for row in payload["exceptions"]]
+    assert messages == ["sensitive boom detail"]
+    assert isinstance(payload["sql"], list)
+
+    # Contrast: the non-streaming async color of the SAME schema publishes.
+    direct = await schema.execute("{ boom }")
+    assert "debug" in (direct.extensions or {})
+    assert [row["message"] for row in direct.extensions["debug"]["exceptions"]] == [
+        "sensitive boom detail",
+    ]
+
+
+@_SKIP_WITHOUT_STREAM
+async def test_streaming_clean_operation_carries_both_lists():
+    schema = strawberry.Schema(
+        query=_OkQuery,
+        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
+    )
+
+    source = await schema.stream("{ __typename }")
+    frames = [frame async for frame in source]
+
+    assert frames[0].errors is None
+    payload = frames[0].extensions["debug"]
+    assert payload == {"sql": [], "exceptions": []}
+
+
+@_SKIP_WITHOUT_STREAM
+async def test_streaming_parse_failure_publishes_no_debug_key():
+    """The no-key contract holds on the streaming seam for a never-executed operation."""
+    schema = strawberry.Schema(
+        query=_OkQuery,
+        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
+    )
+
+    frames = []
+    async for result in await schema.stream("{ ok"):
+        frames.append(result)
+
+    assert frames
+    assert all("debug" not in (result.extensions or {}) for result in frames)
+
+
+@override_settings(DEBUG=False)
+@_SKIP_WITHOUT_STREAM
+async def test_streaming_fail_closed_gate_withholds_and_warns(caplog):
+    """The inert gate holds on the streaming seam: no key, one warning, operation intact."""
+    schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
+
+    with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+        frames = [result async for result in await schema.stream("{ ok }")]
+
+    assert len(frames) == 1
+    assert frames[0].data == {"ok": "ok"}
+    assert "debug" not in (frames[0].extensions or {})
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and record.name == "django_strawberry_framework"
+    ]
+    assert len(warnings) == 1
+    assert "allow_unsafe_production" in warnings[0].getMessage()
+
+
 def test_caps_leave_an_empty_payload_with_both_lists_present():
     assert _apply_payload_caps([], []) == {"sql": [], "exceptions": []}
 
@@ -1341,3 +1484,196 @@ def test_build_payload_routes_its_assembled_rows_through_the_caps():
 
     assert payload["sql"] == []
     assert payload["exceptions"][0]["message"] == "m" * _EXCEPTION_MESSAGE_CAP + _MARKER
+
+
+# ---------------------------------------------------------------------------
+# Scenario 23 - hostile shapes degrade, never raise: a non-finite duration in
+# the query log (refused at the serializer - NaN/Infinity would ride through a
+# default ``json.dumps`` and break strict decoders downstream), a DELETED
+# ``settings.DEBUG`` (the gate reads it with a defaulted ``getattr``, so a test
+# or deployment that deleted the attribute gets the inert refusal a malformed
+# value gets, never an ``AttributeError`` the engine would coerce into a
+# synthetic error), a non-iterable ``errors`` scalar (the two-phase failure
+# policy contains it), and a hook generator abandoned mid-operation.
+# ---------------------------------------------------------------------------
+
+
+@override_settings(DEBUG=False)
+def test_deleted_debug_setting_is_an_inert_refusal(settings, caplog):
+    """A DELETED ``settings.DEBUG`` gets the inert refusal, not a crashed request.
+
+    ``getattr(settings, "DEBUG", None)`` with a default, not attribute access:
+    a deployment (or a test) that DELETED the setting must receive the same
+    inert refusal a malformed value gets, never an ``AttributeError`` escaping
+    the gate - the engine would coerce that into a synthetic error for the
+    very request the gate exists to leave untouched.
+    """
+    schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
+
+    del settings.DEBUG
+    try:
+        with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
+            result = schema.execute_sync("{ ok }")
+    finally:
+        settings.DEBUG = False
+
+    # The operation itself is untouched and the payload is withheld.
+    assert result.errors is None
+    assert result.data == {"ok": "ok"}
+    assert "debug" not in (result.extensions or {})
+    assert debug_module._coordinator._active == {}
+    warnings = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and record.name == "django_strawberry_framework"
+    ]
+    assert len(warnings) == 1
+    assert "allow_unsafe_production" in warnings[0].getMessage()
+
+
+@pytest.mark.parametrize(
+    "time",
+    [
+        "nan",
+        "inf",
+        "-inf",
+        float("nan"),
+        float("inf"),
+    ],
+    ids=[
+        "string-nan",
+        "string-inf",
+        "string-negative-inf",
+        "float-nan",
+        "float-inf",
+    ],
+)
+def test_a_non_finite_duration_is_refused_at_the_serializer(time):
+    """A non-finite duration cannot reach a row: it is refused, not rounded.
+
+    ``json.dumps`` encodes NaN and Infinity by default, but strict encoders
+    (and every JSON consumer that validates) reject the whole payload for one
+    such row - a diagnostic must never hand a client unparseable bytes. The
+    refusal is a ``ValueError`` at the serializer, which ``_build_payload``'s
+    SQL degrade catches; Django's own query log never writes one, so the row
+    is lost only when the backend itself is already misbehaving.
+    """
+    wrapper = SimpleNamespace(vendor="sqlite", alias="default")
+
+    with pytest.raises(ValueError, match="non-finite duration"):
+        _serialize_sql_row(wrapper, {"sql": "SELECT 1", "time": time})
+
+
+@override_settings(DEBUG=True)
+def test_a_nan_duration_costs_only_its_own_row_and_the_rest_keep_their_order(
+    default_wrapper,
+    caplog,
+):
+    """The end-to-end shape of the non-finite refusal: only the NaN row is lost.
+
+    Three queries, the NaN in the MIDDLE, because that is the position the
+    degrade's promise is actually about. A refusal raised out of a generator
+    expression is caught outside the generator, so the rows logged AFTER the bad
+    one used to be abandoned with it and a single hostile duration silently
+    truncated the diagnostic from that point on. The row after it surviving, in
+    log order, is what says the guard is per-row.
+    """
+
+    @strawberry.type
+    class _InjectingQuery:
+        @strawberry.field
+        def ok(self) -> str:
+            # Injected at the log boundary while the bracket is active: a good
+            # entry, one whose duration is non-finite, then another good one.
+            connections["default"].queries_log.append({"sql": "SELECT 92", "time": "0.001"})
+            connections["default"].queries_log.append(
+                {"sql": "SELECT 93", "time": float("nan")},
+            )
+            connections["default"].queries_log.append({"sql": "SELECT 94", "time": "0.002"})
+            return "ok"
+
+    schema = strawberry.Schema(query=_InjectingQuery, extensions=[DjangoDebugExtension])
+    log = connections["default"].queries_log
+    entries_before = len(log)
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+            result = schema.execute_sync("{ ok }")
+
+        assert result.errors is None
+        assert result.data == {"ok": "ok"}
+        payload = result.extensions["debug"]
+        # Both good rows survived, in the order they were logged: the refusal
+        # cost its own row and nothing else.
+        assert [row["sql"] for row in payload["sql"]] == ["SELECT 92", "SELECT 94"]
+        # No NaN row exists anywhere - a NaN is the one value unequal to itself.
+        assert not any(row["duration"] != row["duration"] for row in payload["sql"])
+        assert any("could not be serialized" in record.message for record in caplog.records)
+        assert default_wrapper.force_debug_cursor is False
+        assert debug_module._coordinator._active == {}
+    finally:
+        while len(log) > entries_before:
+            log.pop()
+
+
+def test_hostile_exception_str_degrades_to_an_empty_list(caplog):
+    """An exception whose ``__str__`` itself raises degrades ``exceptions`` to [].
+
+    ``_serialize_exception`` reads ``str(exception)`` after graphql-core's
+    ``except`` block finished, so a hostile ``__str__`` cannot be surfaced by
+    graphql-core's own error formatting first - the two-phase failure policy's
+    exception half is what keeps the row from ever reaching the payload.
+    """
+
+    class _HostileStrError(Exception):
+        def __str__(self):
+            raise RuntimeError("__str__ refused")
+
+    result = SimpleNamespace(errors=[GraphQLError("outer", original_error=_HostileStrError())])
+
+    with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+        payload = _build_payload([], result)
+
+    assert payload == {"sql": [], "exceptions": []}
+    assert any(
+        "exception diagnostic collection failed" in record.message for record in caplog.records
+    )
+
+
+def test_non_iterable_errors_scalar_degrades_to_an_empty_list(caplog):
+    """A result whose ``errors`` is a non-iterable scalar degrades ``exceptions`` to [].
+
+    graphql-core always carries a list or None, so this shape is synthetic -
+    but the two-phase failure policy promises the diagnostic can never raise,
+    so a hostile result object costs only its own list, with the failure
+    logged and the operation untouched.
+    """
+    with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+        payload = _build_payload([], SimpleNamespace(errors=42))
+
+    assert payload == {"sql": [], "exceptions": []}
+    assert any(
+        "exception diagnostic collection failed" in record.message for record in caplog.records
+    )
+
+
+@override_settings(DEBUG=True)
+def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper):
+    """A hook generator abandoned mid-operation still restores the captured flag.
+
+    ``hook.close()`` raises ``GeneratorExit`` at the yield; the teardown's
+    ``finally`` runs during that unwind, so restoration cannot be skipped by
+    a consumer discarding the generator.
+    """
+    original = default_wrapper.force_debug_cursor
+    extension = DjangoDebugExtension()
+    extension.execution_context = SimpleNamespace(result=None)
+    hook = extension.on_operation()
+
+    next(hook)  # the bracket is acquired
+    assert default_wrapper.force_debug_cursor is True
+    hook.close()  # abandoned mid-operation: GeneratorExit at the yield
+
+    assert default_wrapper.force_debug_cursor is original  # restored, not forced False
+    assert extension.get_results() == {}  # no stash was ever published
+    assert debug_module._coordinator._active == {}

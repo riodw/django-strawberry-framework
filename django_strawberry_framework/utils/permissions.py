@@ -34,16 +34,18 @@ from typing import Any
 from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
 
-from ..exceptions import ConfigurationError, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from .input_values import (
-    DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
     LEAF,
     RELATED,
+    RelatedDeclarationError,
     SetInputTraversal,
+    assert_set_traversal_depth,
     input_field_value,
     is_inactive_value,
     iter_active_fields,
     iter_input_items,
+    related_declaration_mapping,
 )
 from .querysets import reject_async_in_sync_context
 from .strings import flatten_lookup_path
@@ -80,7 +82,6 @@ def _check_method_name(field_path: str) -> str:
 # their import path.
 __all__ = [
     "ChannelsRequestAdapter",
-    "active_permission_field_paths",
     "active_permission_targets",
     "active_related_branches",
     "auth_aliases_for_permission_classes",
@@ -158,6 +159,35 @@ def _channels_scope(request: Any) -> Mapping[str, Any] | None:
     return None
 
 
+def _context_request(context: Any) -> tuple[Any, bool]:
+    """Read the ``request`` slot off a Strawberry context, with the read CONTAINED.
+
+    The Mapping-vs-attribute fork, once. A Strawberry context is either a
+    mapping (the classic ``{"request": ...}`` dict) or an object carrying a
+    ``request`` attribute, and both reads can dispatch consumer code: the
+    mapping read goes through the UNBOUND ``Mapping.get`` so a subclass's
+    ``get`` / ``__getitem__`` override never runs, and both are guarded so a
+    hostile descriptor cannot escape a request-resolution helper.
+
+    Returns ``(request, readable)``. The second element matters because the two
+    callers answer an unreadable slot DIFFERENTLY, and that difference is visible
+    in the errors they eventually produce: the mapping arm of
+    :func:`_request_from_context` treats it as "no request at all" and stops,
+    while every other path treats it as "no request HERE" and keeps looking.
+    Returning the fact rather than deciding it keeps that ordering with its
+    owner.
+    """
+    if isinstance(context, Mapping):
+        try:
+            return Mapping.get(context, "request"), True
+        except BaseException:
+            return None, False
+    try:
+        return getattr(context, "request", None), True
+    except BaseException:
+        return None, False
+
+
 def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
     """Wrap ``context`` or its ``request`` in a ``ChannelsRequestAdapter`` when an ASGI scope is present."""
     if isinstance(context, ChannelsRequestAdapter):
@@ -165,28 +195,13 @@ def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
     scope = _channels_scope(context)
     if scope is not None:
         return ChannelsRequestAdapter(context, scope)
-    if isinstance(context, Mapping):
-        try:
-            request = Mapping.get(context, "request")
-        except BaseException:
-            request = None
-        if isinstance(request, ChannelsRequestAdapter):
-            return request
-        if request is not None:
-            scope = _channels_scope(request)
-            if scope is not None:
-                return ChannelsRequestAdapter(request, scope)
-    else:
-        try:
-            request = getattr(context, "request", None)
-        except BaseException:
-            request = None
-        if isinstance(request, ChannelsRequestAdapter):
-            return request
-        if request is not None:
-            scope = _channels_scope(request)
-            if scope is not None:
-                return ChannelsRequestAdapter(request, scope)
+    request, _readable = _context_request(context)
+    if isinstance(request, ChannelsRequestAdapter):
+        return request
+    if request is not None:
+        scope = _channels_scope(request)
+        if scope is not None:
+            return ChannelsRequestAdapter(request, scope)
     return None
 
 
@@ -194,18 +209,18 @@ def _request_from_context(context: Any) -> Any | None:
     """Resolve every supported Django or Channels request context shape."""
     if isinstance(context, ChannelsRequestAdapter):
         return context
+    request, readable = _context_request(context)
     if isinstance(context, Mapping):
-        try:
-            request = Mapping.get(context, "request")
-        except BaseException:
+        # A mapping whose read RAISED is answered "no request", not "keep
+        # looking": the fall-through below would otherwise re-enter the same
+        # unreadable object through the adapter probe. The asymmetry is
+        # deliberate and is why the read reports readability instead of
+        # deciding it.
+        if not readable:
             return None
         if isinstance(request, (HttpRequest, ChannelsRequestAdapter)):
             return request
         return _channels_request_adapter(context)
-    try:
-        request = getattr(context, "request", None)
-    except BaseException:
-        request = None
     if isinstance(request, (HttpRequest, ChannelsRequestAdapter)):
         return request
     adapter = _channels_request_adapter(context)
@@ -374,12 +389,36 @@ def invoke_permission_method(
     async surface it runs on the ``sync_to_async`` worker ``_apply_common_finalize``
     wraps), so an async gate is rejected loudly with ``SyncMisuseError`` on both
     surfaces rather than passed through as a silent allow.
+
+    The gate SLOT itself is validated the same fail-loud way. A DECLARED gate
+    that is not callable (``check_name_permission = 42``) is silently skipped
+    by a bare ``callable()`` probe -- an intended gate that never runs and
+    never errors, the same authorization no-op the async guard closes -- so a
+    non-callable non-``None`` slot is a ``ConfigurationError``. An unreadable
+    slot (a raising descriptor / hostile metaclass) is typed too, matching
+    ``_related_declarations`` and ``_fire_flat_relation_path_gates`` on this
+    surface: hostile metadata reads become ``ConfigurationError``, never a raw
+    escape. A ``None`` slot stays indistinguishable from an absent one (the
+    ``getattr`` default) and remains a silent no-op.
     """
     method_name = _check_method_name(field_path)
     if fired is not None and method_name in fired:
         return
-    method = getattr(bare_instance, method_name, None)
-    if callable(method):
+    try:
+        method = getattr(bare_instance, method_name, None)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"The {_safe_type_name(type(bare_instance))} permission gate "
+            f"{method_name!r} could not be read.",
+        ) from exc
+    if method is not None and not callable(method):
+        raise ConfigurationError(
+            f"The {_safe_type_name(type(bare_instance))} permission gate "
+            f"{method_name!r} must be callable; got {_safe_arg_repr(method)}. "
+            "Define check_<field>_permission as a method (def, not async def) "
+            "or remove the attribute.",
+        )
+    if method is not None:
         reject_async_in_sync_context(
             method(request),
             owner=type(bare_instance).__name__,
@@ -428,9 +467,10 @@ def active_permission_targets(
     ``related_attr`` membership (logic and related names are disjoint, and the
     branch tuple reads ``related_obj`` / ``raw_value``, never ``spec``), so the
     ``RELATED`` half is byte-identical to ``active_related_branches``'s
-    field-spec-less, logic-key-less config; the ``LEAF`` half matches
-    ``active_permission_field_paths`` exactly. Both are kept as thin wrappers
-    over this so the classification rule stays single-sited.
+    field-spec-less, logic-key-less config; the ``LEAF`` half is what the gate
+    dispatch consumes, read straight off this pass by
+    ``sets_mixins.py::ActiveInputPermissionMixin._active_permission_field_paths``.
+    The classification rule therefore stays single-sited here.
     """
     config = SetInputTraversal(
         field_specs=field_specs,
@@ -496,52 +536,6 @@ def active_related_branches(
         handle_top_level_list=handle_top_level_list,
     )
     return branches
-
-
-def active_permission_field_paths(
-    cls: type,
-    input_value: Any,
-    *,
-    field_specs: Mapping[Any, Any],
-    related_attr: str,
-    logic_keys: frozenset[str],
-    fallback_path: Callable[[str], str],
-    unset_sentinel: Any = None,
-    handle_top_level_list: bool = False,
-) -> list[str]:
-    """Return the base Django source path for each active top-level field.
-
-    Drives the per-field gate dispatch: one entry per supplied top-level LEAF
-    field, keyed on its ``django_source_path`` (the lookup-free source field)
-    from ``field_specs[(cls, python_attr)]`` so ``check_<field>_permission``
-    fires once for a field no matter which lookups the consumer populated. Fields
-    with no field-spec entry fall back to ``fallback_path(python_attr)`` (the
-    filter side maps lookup attrs back to form keys; the order side uses the attr
-    verbatim).
-
-    Logical operators (``logic_keys`` -- filter ``and_`` / ``or_`` / ``not_``)
-    and related branches (recognized off ``related_attr`` on ``cls``) are
-    excluded -- the former are walked by the logical-branch recursion, the latter
-    by the related-branch loop -- because the shared ``iter_active_fields``
-    classifier marks them ``LOGIC`` / ``RELATED`` and only the ``LEAF`` records
-    are kept. ``None`` / ``unset_sentinel`` values are skipped (active-input-only)
-    and ``handle_top_level_list`` (order side) aggregates across the elements of
-    a top-level list input -- both handled inside the classifier.
-
-    Thin wrapper over ``active_permission_targets`` (single-sited classification):
-    returns only the ``LEAF`` half.
-    """
-    leaf_paths, _branches = active_permission_targets(
-        cls,
-        input_value,
-        field_specs=field_specs,
-        related_attr=related_attr,
-        logic_keys=logic_keys,
-        fallback_path=fallback_path,
-        unset_sentinel=unset_sentinel,
-        handle_top_level_list=handle_top_level_list,
-    )
-    return leaf_paths
 
 
 def _fire_gate_on_class(
@@ -650,21 +644,30 @@ def _fire_flat_relation_path_gates(
 
 
 def _related_declarations(cls: type, related_attr: str) -> tuple[tuple[Any, Any], ...]:
-    """Read a set's related declarations without trusting mapping overrides."""
+    """Read a set's related declarations without trusting mapping overrides.
+
+    The read + ``None`` normalization + mapping proof are the shared front half
+    (``utils/input_values.py::related_declaration_mapping``); what stays here is
+    the authorization-specific tail: the mapping is materialized through the
+    UNBOUND ``dict.items`` so a hostile ``items`` override cannot run inside a
+    permission walk, and every failure is worded against the declaring class and
+    attribute the consumer actually wrote.
+    """
     try:
-        related = getattr(cls, related_attr, None)
-    except BaseException as exc:
+        related = related_declaration_mapping(cls, related_attr)
+    except RelatedDeclarationError as exc:
+        if exc.kind == "not_mapping":
+            raise ConfigurationError(
+                f"{_safe_type_name(cls)} related permission declarations under "
+                f"{related_attr!r} must be a mapping; got {_safe_type_name(exc.value)}.",
+            ) from exc.__cause__
         raise ConfigurationError(
             f"{_safe_type_name(cls)} related permission declarations under "
             f"{related_attr!r} could not be read.",
-        ) from exc
-    if related is None:
-        return ()
-    if not isinstance(related, Mapping):
-        raise ConfigurationError(
-            f"{_safe_type_name(cls)} related permission declarations under "
-            f"{related_attr!r} must be a mapping; got {_safe_type_name(related)}.",
-        )
+        ) from exc.__cause__
+    # No emptiness short-circuit: a truthiness test would dispatch a hostile
+    # ``__bool__`` / ``__len__``, and an empty mapping already materializes to
+    # ``()`` through the unbound read below.
     try:
         items = dict.items(related) if isinstance(related, dict) else related.items()
         return tuple(items)
@@ -747,19 +750,12 @@ def run_active_input_permission_checks(
             # (``CardFilter.dependencies`` -> ``CardFilter``) is capped with a
             # typed error rather than recursing input-deep into a ``RecursionError``.
             next_depth = depth + 1
-            cap = getattr(child_set, "_MAX_LOGIC_DEPTH", DEFAULT_SET_INPUT_TRAVERSAL_DEPTH)
-            if next_depth > cap:
-                try:
-                    label = getattr(child_set, "__qualname__", None)
-                except BaseException:
-                    label = None
-                if not isinstance(label, str):
-                    label = _safe_type_name(child_set)
-                raise ConfigurationError(
-                    f"{label}: related-branch nesting exceeded the maximum traversal "
-                    f"depth ({cap}). Flatten the related input or split into multiple "
-                    "queries.",
-                )
+            assert_set_traversal_depth(
+                child_set,
+                next_depth,
+                branch="related-branch",
+                input_noun="related",
+            )
             child_set._run_permission_checks(
                 child_input,
                 request,

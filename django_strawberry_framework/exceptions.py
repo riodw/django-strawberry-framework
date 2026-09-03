@@ -85,13 +85,18 @@ def _safe_text(value: object, fallback: str = "") -> str:
     ``str`` slot so a subclass's overridden ``__str__`` / ``__format__`` never
     runs while an error envelope is being assembled; any other value renders
     through ``str()`` guarded by ``BaseException`` (a display operation must
-    never propagate ``SystemExit`` / ``KeyboardInterrupt``). An empty render
-    degrades to ``fallback`` so callers can name the slot ("``<unknown>``")
-    instead of publishing nothing; a raising dunder degrades to the shared
-    ``_unprintable`` placeholder.
+    never propagate ``SystemExit`` / ``KeyboardInterrupt``) and the render is
+    read back through the base ``str`` slot too, because CPython returns a
+    ``tp_str`` result unchanged when it is a ``str`` SUBCLASS - handing that
+    object back would let its overridden ``__len__`` detonate inside the
+    truthiness check below and its ``__str__`` / ``__format__`` run inside the
+    caller's f-string, both while an error envelope is being assembled. An
+    empty render degrades to ``fallback`` so callers can name the slot
+    ("``<unknown>``") instead of publishing nothing; a raising dunder degrades
+    to the shared ``_unprintable`` placeholder.
     """
     try:
-        rendered = str.__str__(value) if isinstance(value, str) else str(value)
+        rendered = str.__str__(value) if isinstance(value, str) else str.__str__(str(value))
     except BaseException:
         return _unprintable(value)
     return rendered or fallback

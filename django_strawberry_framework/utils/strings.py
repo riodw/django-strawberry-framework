@@ -122,13 +122,25 @@ snake_case.cache_parameters = _snake_case_cached.cache_parameters
 def pascal_case(name: str) -> str:
     """Convert a ``snake_case`` Django field name to ``PascalCase``.
 
-    Adjacent / leading / trailing underscores collapse to nothing, which
-    keeps generated GraphQL type names stable when consumers use names
-    like ``_legacy_id`` or ``status_``.
+    Leading and trailing underscore runs are preserved verbatim
+    (``"_leading"`` -> ``"_Leading"``, ``"status_"`` -> ``"Status_"``), the
+    Pascal dual of ``graphql_camel_name``'s edge rule: members of one set
+    whose names differ only at the underscore edges (``price`` / ``price_`` /
+    ``_price``) stay distinct as Python attrs and camel GraphQL field names,
+    so their generated type-name stems must stay distinct too -- otherwise
+    two operator-bag / range / enum classes silently claim one GraphQL type
+    name and Strawberry keeps whichever registers first, dropping the other
+    member's lookups from the schema.
+
+    Interior underscore runs still collapse (``"double__underscore"`` ->
+    ``"DoubleUnderscore"``): a ``LOOKUP_SEP`` boundary never survives into a
+    generated identifier (``flatten_lookup_path`` owns that), Django forbids
+    ``__`` in model field names, and the digit rule below already pins the
+    one interior boundary capitalization cannot encode.
 
     A separator before a digit-leading segment is retained (``"field_2"``
     -> ``"Field_2"``, not ``"Field2"``) because capitalization cannot encode
-    that boundary. This is the Pascal dual of ``graphql_camel_name``'s
+    that boundary. This completes the Pascal dual of ``graphql_camel_name``'s
     injectivity rule: without it, ``field_2`` and ``field2`` both become
     ``Field2``, so per-field operator-bag / range / enum type names silently
     collide and Strawberry keeps whichever class registers first.
@@ -143,13 +155,20 @@ def pascal_case(name: str) -> str:
     caller is not surprised.  Mirrors the analogous acronym caveat on
     ``snake_case``.
 
+    An input with no word-character tokens (``""``, ``"_"``, ``"__"``)
+    returns ``""``; ``pascal_case_or_raise`` turns that into the consumer's
+    typed error rather than letting an empty stem collide with the root
+    type name.
+
     Examples:
         ``"is_active"`` -> ``"IsActive"``;
         ``"status"`` -> ``"Status"``;
         ``"payment_method"`` -> ``"PaymentMethod"``;
         ``"field_2"`` -> ``"Field_2"``;
         ``"field2"`` -> ``"Field2"``;
-        ``"_leading"`` -> ``"Leading"``;
+        ``"_leading"`` -> ``"_Leading"``;
+        ``"trailing_"`` -> ``"Trailing_"``;
+        ``"___x_foo"`` -> ``"___XFoo"``;
         ``"double__underscore"`` -> ``"DoubleUnderscore"``.
     """
     name = _plain_text(name)
@@ -157,9 +176,12 @@ def pascal_case(name: str) -> str:
     if not parts:
         return ""
     head, *rest = parts
-    return head.capitalize() + "".join(
+    stem = head.capitalize() + "".join(
         f"_{part}" if part[0].isdigit() else part.capitalize() for part in rest
     )
+    leading = name[: len(name) - len(name.lstrip("_"))]
+    trailing = name[len(name.rstrip("_")) :]
+    return f"{leading}{stem}{trailing}"
 
 
 def pascal_case_or_raise(name: str, *, make_error: Callable[[str], Exception]) -> str:

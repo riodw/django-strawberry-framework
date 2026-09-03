@@ -125,6 +125,61 @@ def test_session_store_class_reports_a_storeless_engine_as_configuration_error(
             session_store_class()
 
 
+class _FormatHostileEngine(str):
+    """A deployment-supplied engine whose ``__format__`` raises while being interpolated."""
+
+    def __format__(self, spec):
+        raise RuntimeError("hostile __format__")
+
+
+class _ReprHostileEngine(str):
+    """A deployment-supplied engine whose ``__repr__`` raises while being rendered."""
+
+    def __repr__(self):
+        raise RuntimeError("hostile __repr__")
+
+
+@override_settings(SESSION_ENGINE=_FormatHostileEngine("tests.utils._no_such_engine"))
+def test_session_store_class_format_hostile_engine_raises_configuration_error():
+    """A hostile ``__format__`` on the engine cannot defeat the typed rejection.
+
+    ``SESSION_ENGINE`` is deployment-supplied, so the import-path f-string
+    ``f"{engine}.SessionStore"`` must never dispatch a consumer dunder: a
+    raising ``__format__`` would replace the promised ``ConfigurationError``
+    with an arbitrary exception on exactly the misconfiguration path where the
+    typed error matters (the same guarantee ``describe_value`` gives the
+    non-string rejection). The engine is flattened through the base ``str``
+    slot, so the rejection stays typed.
+    """
+    with pytest.raises(ConfigurationError, match="Could not resolve SESSION_ENGINE"):
+        session_store_class()
+
+
+@override_settings(SESSION_ENGINE=_ReprHostileEngine("tests.utils._no_such_engine"))
+def test_session_store_class_repr_hostile_engine_raises_configuration_error():
+    """A hostile ``__repr__`` on the engine cannot defeat the typed rejection.
+
+    The import-failure message renders the engine through ``{engine!r}`` at the
+    RAISE SITE - before any exception object exists, so the error hierarchy's
+    own ``__repr__`` guards cannot help. A deployment-supplied engine subclass
+    with a raising ``__repr__`` must therefore arrive at that site as a plain
+    base ``str``.
+    """
+    with pytest.raises(ConfigurationError, match="Could not resolve SESSION_ENGINE"):
+        session_store_class()
+
+
+@override_settings(SESSION_ENGINE=_ReprHostileEngine("tests.utils._no_such_engine"))
+def test_session_store_class_repr_hostile_engine_names_the_engine_path():
+    """The flattened engine still renders its path in the rejection message.
+
+    Flattening is a safety measure, not a redaction: the actionable part of the
+    message (which module could not be imported) survives.
+    """
+    with pytest.raises(ConfigurationError, match="tests.utils._no_such_engine"):
+        session_store_class()
+
+
 # ---------------------------------------------------------------------------
 # ConnectionActorState & connection_actor_state
 # ---------------------------------------------------------------------------

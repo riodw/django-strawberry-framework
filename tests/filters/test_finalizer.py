@@ -1375,3 +1375,42 @@ def test_phase_2_5_globalid_audit_skips_unresolvable_target():
     # Finalization succeeds: the unresolvable-target branch is a no-op skip.
     finalize_django_types()
     assert GenreType.__django_strawberry_definition__.finalized
+
+
+def test_finalize_surfaces_the_related_filter_target_gate_identity():
+    """A mis-typed ``RelatedFilter`` target surfaces the GATE's typed message
+    at finalize, never a raw ``AttributeError``.
+
+    Pre-gate, the mis-typed target survived declaration + binding + expansion
+    and detonated inside ``_expand_related_filter``'s
+    ``target.get_filters()`` as a raw ``AttributeError``, typed only
+    ACCIDENTALLY by subpass 2's blanket ``except Exception`` rewrap
+    ("raised during expansion"). The ``.filterset`` gate now raises the
+    typed ``ConfigurationError`` at first resolution, and subpass 2's
+    ``except ConfigurationError: raise`` propagates it BY IDENTITY -- the
+    original gate message survives, never the rewrap.
+    """
+
+    class _NotAFilterSet:
+        """A plain class: the mis-typed RelatedFilter target."""
+
+    class BrokenFilter(FilterSet):
+        branch = RelatedFilter(_NotAFilterSet, field_name="branch")
+
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+            filterset_class = BrokenFilter
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "declares RelatedFilter" in msg
+    assert "_NotAFilterSet" in msg
+    assert "is not a FilterSet subclass" in msg
+    assert "raised during expansion" not in msg

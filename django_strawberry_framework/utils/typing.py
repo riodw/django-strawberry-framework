@@ -27,12 +27,14 @@ import inspect
 from typing import Any, get_args, get_origin
 
 __all__ = (
+    "MAX_TYPE_WRAPPER_DEPTH",
     "is_async_callable",
     "schema_config_from_info",
     "strawberry_schema_from_info",
     "strawberry_schema_from_schema",
     "unwrap_container_type",
     "unwrap_graphql_type",
+    "unwrap_non_null",
     "unwrap_return_type",
 )
 
@@ -83,7 +85,7 @@ def schema_config_from_info(info: Any) -> Any | None:
 # This ceiling sits far above any real construct, so the only way to exceed it is a
 # cyclic or corrupt chain. Capping the peel gives the loops a fixed, statically-checkable
 # upper bound (NASA Power-of-Ten Rule 2) and turns a would-be hang into a loud failure.
-_MAX_TYPE_WRAPPER_DEPTH = 64
+MAX_TYPE_WRAPPER_DEPTH = 64
 
 
 def _callable_inspection_target(value: Any) -> Any:
@@ -96,18 +98,18 @@ def _callable_inspection_target(value: Any) -> Any:
     reached. This handles both ``partial(staticmethod_obj)`` and
     ``staticmethod(partial(callable_instance))``.
 
-    The peel is bounded by ``_MAX_TYPE_WRAPPER_DEPTH`` rather than looping
+    The peel is bounded by ``MAX_TYPE_WRAPPER_DEPTH`` rather than looping
     unconditionally: a chain longer than that ceiling can only be cyclic or
     corrupt, so it raises ``RuntimeError`` instead of spinning forever.
     """
     target = value
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH + 1):
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
         if not isinstance(target, (functools.partial, staticmethod)):
             return target
         target = target.func if isinstance(target, functools.partial) else target.__func__
     raise RuntimeError(
         f"_callable_inspection_target: callable wrapper stack exceeded "
-        f"{_MAX_TYPE_WRAPPER_DEPTH} layers; the wrapper chain is likely cyclic or corrupt.",
+        f"{MAX_TYPE_WRAPPER_DEPTH} layers; the wrapper chain is likely cyclic or corrupt.",
     )
 
 
@@ -129,6 +131,11 @@ def is_async_callable(value: Any) -> bool:
        ``iscoroutinefunction`` still reads it as sync; ``.__func__`` recovers the
        underlying coroutine function. A raw ``classmethod`` is not callable and is
        therefore outside this predicate's contract.
+    4. a class whose *metaclass* carries ``async def __call__`` -- calling the class
+       dispatches through ``type(target).__call__``, so the metaclass path is what
+       is inspected (a plain class's ``type.__call__`` keeps the pinned
+       "instantiation is sync" answer, and a class body's own ``__call__`` is
+       instance-call semantics that never answers for the class itself).
 
     Resolvers whose sync entry point returns an awaitable from elsewhere remain
     undetected -- the contract is to signal async-ness through the standard
@@ -141,7 +148,13 @@ def is_async_callable(value: Any) -> bool:
     if inspect.iscoroutinefunction(target):
         return True
     if isinstance(target, type):
-        return False
+        # Calling a class runs ``type(target).__call__`` (the metaclass), not the
+        # class body's ``__call__`` -- that one belongs to instances. A plain
+        # class resolves to the sync ``type.__call__`` slot wrapper, and a
+        # metaclass carrying ``async def __call__`` is genuinely async to call.
+        return inspect.iscoroutinefunction(
+            getattr(type(target), "__call__", None),  # noqa: B004
+        )
     # Inspecting ``__call__``'s async-ness, not testing callability -- so
     # ``callable()`` (what B004 suggests) is the wrong tool here.
     return inspect.iscoroutinefunction(
@@ -158,7 +171,7 @@ def unwrap_graphql_type(gql_type: Any) -> Any:
     wrapper to peel (including ``None`` and any object that does not
     expose ``of_type``).
 
-    The peel is bounded by ``_MAX_TYPE_WRAPPER_DEPTH`` rather than looping
+    The peel is bounded by ``MAX_TYPE_WRAPPER_DEPTH`` rather than looping
     unconditionally: a chain longer than that ceiling can only be cyclic or
     corrupt, so it raises ``RuntimeError`` instead of spinning forever.
 
@@ -167,13 +180,39 @@ def unwrap_graphql_type(gql_type: Any) -> Any:
         ``Inner`` -> ``Inner`` (no wrapper to peel);
         ``None`` -> ``None`` (no ``of_type`` attribute).
     """
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH + 1):
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
         if not hasattr(gql_type, "of_type"):
             return gql_type
         gql_type = gql_type.of_type
     raise RuntimeError(
         f"unwrap_graphql_type: `of_type` wrapper stack exceeded "
-        f"{_MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
+        f"{MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
+    )
+
+
+def unwrap_non_null(gql_type: Any) -> Any:
+    """Peel ONLY ``GraphQLNonNull`` layers, bounded; leave list wrappers in place.
+
+    The narrow sibling of :func:`unwrap_graphql_type`, for the callers that must
+    still SEE the ``GraphQLList`` underneath - the resource policy's list-vs-
+    connection classification would answer wrong if the list layer were peeled
+    too, which is why those sites could not simply call the full peel and each
+    grew its own raw ``while isinstance(..., GraphQLNonNull)`` loop instead.
+
+    Bounded like every other peel in this module (Power-of-Ten Rule 2): a
+    genuine graphql-core ``GraphQLNonNull`` cannot wrap another, so a chain past
+    the ceiling can only be a hand-built or corrupt type, and an unbounded
+    ``while`` on one hangs the request thread rather than failing.
+    """
+    from graphql import GraphQLNonNull
+
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
+        if not isinstance(gql_type, GraphQLNonNull):
+            return gql_type
+        gql_type = gql_type.of_type
+    raise RuntimeError(
+        f"unwrap_non_null: GraphQLNonNull wrapper stack exceeded "
+        f"{MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
     )
 
 
@@ -186,7 +225,7 @@ def unwrap_container_type(strawberry_type: Any) -> Any:
     class that happens to expose an ``of_type`` attribute must NOT be peeled
     (the bare-``hasattr`` contract would descend into it) - so the shared
     unbounded ``while isinstance`` loop lands here with the same
-    ``_MAX_TYPE_WRAPPER_DEPTH`` Power-of-Ten cap and loud cyclic-chain failure,
+    ``MAX_TYPE_WRAPPER_DEPTH`` Power-of-Ten cap and loud cyclic-chain failure,
     instead of living raw at a call site.
 
     The ``StrawberryContainer`` import is function-local so this module stays
@@ -195,13 +234,13 @@ def unwrap_container_type(strawberry_type: Any) -> Any:
     """
     from strawberry.types.base import StrawberryContainer
 
-    for _ in range(_MAX_TYPE_WRAPPER_DEPTH + 1):
+    for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
         if not isinstance(strawberry_type, StrawberryContainer):
             return strawberry_type
         strawberry_type = strawberry_type.of_type
     raise RuntimeError(
         f"unwrap_container_type: `of_type` container stack exceeded "
-        f"{_MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
+        f"{MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
     )
 
 

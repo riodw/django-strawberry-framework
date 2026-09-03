@@ -45,7 +45,7 @@ from typing import Any
 from django.conf import settings as django_settings
 from django.test.signals import setting_changed
 
-from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
 
 DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
 _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
@@ -187,11 +187,11 @@ def _normalize_user_settings(value: Any) -> dict[str, Any]:
         is_mapping = isinstance(value, Mapping)
     except Exception as exc:
         raise ConfigurationError(
-            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
+            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {_safe_type_name(value)}.",
         ) from exc
     if not is_mapping:
         raise ConfigurationError(
-            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
+            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {_safe_type_name(value)}.",
         )
     if type(value) is dict:
         return value
@@ -201,7 +201,7 @@ def _normalize_user_settings(value: Any) -> dict[str, Any]:
         raise
     except Exception as exc:
         raise ConfigurationError(
-            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
+            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {_safe_type_name(value)}.",
         ) from exc
 
 
@@ -410,7 +410,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
     except Exception as exc:
         raise ConfigurationError(
             f"`{APPLY_UPSTREAM_PATCHES_KEY}` must be a bool or a mapping of dependency names "
-            f"to bools; got {type(configured).__name__}.",
+            f"to bools; got {_safe_type_name(configured)}.",
         ) from exc
     if is_mapping:
         try:
@@ -453,7 +453,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
                 if type(value) is not bool:
                     raise ConfigurationError(
                         f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
-                        f"got {type(value).__name__}.",
+                        f"got {_safe_type_name(value)}.",
                     )
             return plain.get(dependency, True)
         except ConfigurationError:
@@ -464,7 +464,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
             ) from exc
     raise ConfigurationError(
         f"`{APPLY_UPSTREAM_PATCHES_KEY}` must be a bool or a mapping of dependency names "
-        f"to bools; got {type(configured).__name__}.",
+        f"to bools; got {_safe_type_name(configured)}.",
     )
 
 

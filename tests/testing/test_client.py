@@ -272,6 +272,87 @@ def test_files_placeholder_hostile_repr_keeps_assertion_error_boundary():
         )
 
 
+@pytest.mark.parametrize(
+    ("variables", "key"),
+    [
+        ({"": None}, ""),
+        ({"data": {"": None}}, "data."),
+        ({"data": {"image": None}}, "data..image"),
+    ],
+)
+def test_files_placeholder_empty_segment_raises_instead_of_emitting(variables, key):
+    """An empty dotted segment raises at the source instead of emitting a spec-invalid map.
+
+    A map entry built over an empty segment (the ``""`` key's ``variables.``
+    path) can never name a GraphQL variable - variable names are non-empty - so
+    emitting it posts a spec-invalid envelope only the server can diagnose (a
+    bare 400 naming no path). The placeholder walker owns the wire shape the map
+    points into, so the empty segment is a malformed call failed there, with the
+    guard's uniform ``AssertionError``.
+    """
+    with pytest.raises(AssertionError, match="empty dotted segment"):
+        TestClient().query(
+            "mutation($file: Upload!) { up }",
+            variables=variables,
+            files={key: object()},
+        )
+
+
+def test_files_placeholder_tuple_arrays_walk_and_map_like_lists():
+    """A ``tuple`` of placeholders is an array on the wire and walks exactly like a list.
+
+    ``json.dumps`` renders list AND tuple values as JSON arrays - the same closed
+    set the walker models - so a tuple carrying the ``None`` placeholders is a
+    valid call, not a "cannot descend" rejection: the JSON path of this same
+    client already accepts it. The map rule is unchanged (``variables.tags.0``),
+    and a mixed tuple/dict walk still resolves every path.
+    """
+    client = TestClient()
+    f_top, f_mixed = object(), object()
+
+    body = client._build_body(
+        "mutation($tags: [Upload!]!) { up }",
+        {"tags": (None, None)},
+        {"tags.1": f_top},
+        None,
+    )
+    assert json.loads(body["map"]) == {"tags.1": ["variables.tags.1"]}
+    assert body["tags.1"] is f_top
+
+    body = client._build_body(
+        "mutation($a: SpecInput!) { up }",
+        {"a": ({"c": None},)},
+        {"a.0.c": f_mixed},
+        None,
+    )
+    assert json.loads(body["map"]) == {"a.0.c": ["variables.a.0.c"]}
+    assert body["a.0.c"] is f_mixed
+
+
+@pytest.mark.parametrize("container", [list, tuple])
+def test_files_placeholder_hostile_len_container_fails_closed(container):
+    """A container with an unreadable ``len`` raises the uniform guard, not a raw escape.
+
+    The walker reads ``len`` for the index range check and the error message, so
+    a hostile ``__len__`` on a list- or tuple-shaped container would otherwise
+    escape as a raw ``RuntimeError`` in place of the guard - the same containment
+    class the hostile-``repr`` row above pins for the leaf value.
+    """
+
+    class _HostileLen(container):
+        def __len__(self):
+            raise RuntimeError("hostile __len__ detonated")
+
+    with pytest.raises(AssertionError, match="unreadable length") as excinfo:
+        TestClient().query(
+            "mutation($tags: [Upload!]!) { up }",
+            variables={"tags": _HostileLen([None])},
+            files={"tags.0": object()},
+        )
+    assert not isinstance(excinfo.value, _HostileLen)  # the guard type is uniform
+    assert "hostile __len__" not in str(excinfo.value)
+
+
 def test_files_key_shadowing_a_reserved_envelope_field_raises():
     """A ``files=`` key named ``operations`` or ``map`` raises instead of clobbering the envelope.
 

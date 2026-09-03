@@ -2,7 +2,15 @@
 
 Subpackage structure mirrors the convention both `graphene_django/utils/`
 and `strawberry_django/utils/` converge on: focused submodules per
-concern rather than a single 500-line `utils.py`. Includes, among others:
+concern rather than a single 500-line `utils.py`.
+
+The package root re-exports a small, PINNED set of names (``__all__`` below) -
+the seven that consumer-facing code and tests already reach for by the short
+spelling. It is deliberately not the union of the submodules' surfaces: the
+architecture notes below name what each submodule OWNS, and for a submodule's
+full public surface you read its own ``__all__``. Production code inside the
+package keeps importing submodules directly (``from ..utils.querysets import
+...``) so the layering stays legible at every call site.
 
 - ``relations`` - Django relation-shape classification
   (``relation_kind``, ``RelationKind``, ``is_many_side_relation_kind``).

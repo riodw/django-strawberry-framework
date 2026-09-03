@@ -526,6 +526,21 @@ def test_get_orderset_class_rejects_non_model_when_dynamic():
         get_orderset_class(None, model=object, fields=["title"])
 
 
+def test_get_orderset_class_allows_fields_less_meta():
+    """A fields-less Meta still builds: OrderSet's plain ``type`` metaclass has no
+
+    django-filter-style assert, so the zero-field rejection stays at the BFS
+    construction site. This is the family scoping of
+    ``create_dynamic_set_class``'s ``require_fields_or_exclude`` flag (the
+    filter side sets it; orders leaves the default off).
+    """
+    cls = get_orderset_class(None, model=library_models.Book)
+    assert cls.__name__ == "BookAutoOrder"
+    assert issubclass(cls, OrderSet)
+    with pytest.raises(ConfigurationError, match="no fields"):
+        OrderArgumentsFactory(cls).arguments
+
+
 def test_factory_builds_dynamic_orderset():
     """OrderArgumentsFactory builds input class for dynamic OrderSet from get_orderset_class."""
     dynamic_cls = get_orderset_class(None, model=library_models.Book, fields=["title"])

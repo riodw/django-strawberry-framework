@@ -59,22 +59,27 @@ from ..sets_mixins import (
     SetLifecycleAttrs,
     collect_related_declarations,
     expanded_once,
+    require_re_readable_field_declaration,
     should_cache_expansion,
 )
 from ..types.relay import implements_relay_node
+from ..utils.errors import FILTER_INVALID_ERROR_CODE, coded_error_extensions
 from ..utils.input_values import (
     DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
     LOGIC,
     RELATED,
+    SetInputTraversal,
     is_inactive_value,
     iter_active_fields,
     iter_input_items,
+    raise_set_traversal_depth_exceeded,
 )
 from ..utils.inputs import FILTERSET_FIELDS_ALIAS, promote_set_meta_fields
 from ..utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
+    base_queryset,
     run_in_one_sync_boundary,
 )
 from ..utils.relations import (
@@ -1196,11 +1201,13 @@ class FilterSet(
     # stay family-owned.
     _permission: ClassVar[ActiveInputPermissionAttrs] = ActiveInputPermissionAttrs(
         family_label="FilterSet",
-        related_attr="related_filters",
         target_attr="filterset",
-        field_specs=_field_specs,
-        logic_keys=_LOGIC_PYTHON_ATTRS,
-        unset_sentinel=UNSET,
+        traversal=SetInputTraversal(
+            field_specs=_field_specs,
+            related_attr="related_filters",
+            logic_keys=_LOGIC_PYTHON_ATTRS,
+            unset_sentinel=UNSET,
+        ),
     )
 
     # Logical-branch (`and` / `or` / `not`) recursion-depth cap. Declared
@@ -1434,13 +1441,38 @@ class FilterSet(
           sweep; the package's preferred shape is the opposite (PK is a
           canonical filter; M2M needs an explicit `RelatedFilter`).
 
+        A third duty gates the declaration SHAPE before any consumption:
+        ``FilterSetOptions`` stores ``Meta.fields`` verbatim and upstream
+        ``get_fields`` consumes it into a fresh ``OrderedDict`` per call, so a
+        one-shot iterator expands correctly ONCE and then silently re-expands
+        to an EMPTY field map on every later pass -- exactly the divergence the
+        lazy-``RelatedFilter`` re-expansion exists to serve
+        (``should_cache_expansion`` refuses the first cache write while a
+        string target is unresolved, so ``_build`` re-runs). The re-readability
+        contract is shared with the order family's ``_expand_meta_fields``
+        through ``sets_mixins.py::require_re_readable_field_declaration``,
+        applied here before the first consumption so the declaration fails
+        closed at class creation.
+
         The upstream method is named ``get_fields`` (no underscore prefix);
         we override the same name so `super().get_filters()`'s internal call
         routes through both narrowings.
         """
+        meta_fields = getattr(cls._meta, "fields", None)
+        if meta_fields is not None and not isinstance(meta_fields, str):
+            # ``str`` is exempt here (unlike the order family): the top-level
+            # ``"__all__"`` shorthand IS a string declaration, and any other
+            # string is upstream's to reject.
+            require_re_readable_field_declaration(
+                cls,
+                meta_fields,
+                subject="FilterSet",
+                accepted=(
+                    "'__all__', a lookup-bag dict, or a re-readable collection of field names"
+                ),
+            )
         fields = super().get_fields()
         model = cls._meta.model
-        meta_fields = getattr(cls._meta, "fields", None)
 
         # Per-field ``"__all__"`` expansion (dict form). Runs before the
         # top-level branch below; the two shapes are mutually exclusive
@@ -1521,6 +1553,20 @@ class FilterSet(
         once per matching child, corrupting list rows and connection counts.
         """
         default = super().filter_for_field(field, field_name, lookup_expr)
+        if default is None:
+            # Upstream's unrecognized-field contract. django-filter's
+            # ``filter_for_field`` returns ``None`` for a model field with no
+            # ``FILTER_DEFAULTS`` entry (``FileField`` / ``ImageField`` /
+            # ``BinaryField`` / ...) whenever ``Meta.unknown_field_behavior``
+            # is ``WARN`` or ``IGNORE``; upstream ``get_filters`` then skips
+            # the leaf. Every branch below dereferences ``default.distinct`` /
+            # ``default.field_name`` / ``default.extra``, so continuing on the
+            # ``None`` return crashed with a raw ``AttributeError`` on a field
+            # type the package deliberately does not filter -- instead of the
+            # graceful skip the supported WARN / IGNORE seams promise. Return
+            # the ``None`` verbatim: no filter is generated, so no candidate
+            # row exists for the leaf (fail closed, upstream-identical).
+            return None
         # Resolve ownership BEFORE mutating the returned instance. ``default``
         # arrives pre-merged with ``Meta.filter_overrides``; a consumer-owned
         # filter must remain byte-for-byte unchanged, including its explicit
@@ -2214,12 +2260,44 @@ class FilterSet(
         ``GlobalIDMultipleChoiceFilter.filter``, which read the owner
         via ``filter_instance.parent._owner_definition``. The owner is
         therefore not threaded as a parameter here.
+
+        Fail-loud input contracts (both raise the typed
+        ``ConfigurationError`` instead of silently dropping predicates
+        and skipping ``check_*`` gates -- the same permission + filter
+        bypass ``_validate_logic_branch_shape`` rejects for logical
+        elements):
+
+        * a NON-walkable top-level input (scalar / list / arbitrary
+          object) raises instead of normalizing to ``{}``;
+        * a dict value that survives ``normalize_input_value`` on a
+          NON-range filter raises via ``_require_range_patch_filter`` --
+          the dict patch shape is reserved for the positional range
+          patch, and any other dict would be splatted into unknown
+          form-data keys the form silently ignores (the
+          explicit-filter-applies-nothing failure mode).
         """
         if is_inactive_value(input_value, unset_sentinel=UNSET):
             return {}
         items = cls._iter_input_items(input_value)
         if items is None:
-            return {}
+            # A non-walkable input (scalar / list / arbitrary object) would
+            # contribute ZERO predicates AND fire ZERO ``check_*`` gates,
+            # so the caller receives the UNFILTERED queryset while believing
+            # the declared filter ran. ``_validate_logic_element_shape``
+            # already fails loud for exactly this shape one level down (a
+            # scalar arm of an ``and`` / ``or`` branch); the top of the
+            # request is the same bypass and gets the same verdict. A wire
+            # input can never land here (the generated input class types it),
+            # so what arrives is always a hand-built input -- a direct
+            # ``apply_sync`` / ``filter`` call, or a related branch of a
+            # hand-built mapping -- and it must not be answered with rows.
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: the filter input must be a "
+                f"mapping or a filter-input object, got a "
+                f"{type(input_value).__name__} ({_safe_arg_repr(input_value)}). "
+                "A non-walkable input would silently drop every predicate and "
+                "skip every check_* permission gate.",
+            )
 
         all_filters = cls.get_filters() if cls._meta.model is not None else {}
 
@@ -2302,6 +2380,7 @@ class FilterSet(
                         field_name=form_key,
                     )
                     if isinstance(normalized, dict):
+                        cls._require_range_patch_filter(filter_instance, form_key, lookup_value)
                         data.update(normalized)
                     else:
                         # An element-binding integer ``__in`` is range-coerced (and
@@ -2323,10 +2402,54 @@ class FilterSet(
             if isinstance(normalized, dict):
                 # Range-filter patch: multiple positional form keys for
                 # one Strawberry attribute.
+                cls._require_range_patch_filter(filter_instance, form_key, field.raw_value)
                 data.update(normalized)
             else:
                 data[form_key] = normalized
         return data
+
+    @classmethod
+    def _require_range_patch_filter(
+        cls,
+        filter_instance: Filter,
+        form_key: str,
+        lookup_value: Any,
+    ) -> None:
+        """Fail loud when a NON-range filter's normalized value is a dict patch.
+
+        ``normalize_input_value`` returns a ``dict`` patch for exactly one
+        legitimate shape: the range family's positional
+        ``{<field>_0, <field>_1}`` patch. A dict coming back from any OTHER
+        filter class means the raw value was itself a dict-shaped garbage
+        value that the catch-all normalization passed through verbatim --
+        a partial operator bag with unknown keys
+        (``{"name": {"nope": "x"}}``), a wire-spelled lookup the python-attr
+        sniff missed (``{"name": {"in": [...]}}``), or a dict parked under a
+        known lookup key (``exact: {"k": "v"}``). Merging such a dict via
+        ``data.update(...)`` SPLATS its keys into the form data as unknown
+        fields django-filter's form silently ignores: the field association
+        is lost, the consumer's explicit filter applies NOTHING, and the
+        request returns unfiltered rows -- the same
+        explicit-filter-applies-nothing failure the dict-bag walker exists to
+        close. Only range-kind filters legitimately consume a multi-key patch,
+        so only they may merge.
+
+        No generated input annotation for a non-range filter accepts an
+        object, so a dict here never comes off the wire: it is always a
+        malformed programmatic input (the mapping form of ``apply_sync`` /
+        ``filter``), which is why rejecting it cannot break a typed query.
+        """
+        if isinstance(filter_instance, (RangeFilter, django_filters.RangeFilter)):
+            return
+        raise ConfigurationError(
+            f"FilterSet {cls.__qualname__}: filter {form_key!r} received a dict "
+            f"value ({_safe_arg_repr(lookup_value)}) but "
+            f"{type(filter_instance).__name__} consumes a single scalar form "
+            "key. A dict value here would be splatted into unknown form-data "
+            "keys the form silently ignores, dropping the filter. Pass the "
+            "schema value shape for this filter (a scalar, a list, or a range "
+            "{start, end} input on a RangeFilter primitive).",
+        )
 
     @staticmethod
     def _operator_bag_items(raw_value: Any) -> list[tuple[str, Any]] | None:
@@ -2466,12 +2589,7 @@ class FilterSet(
                     "the target model or remove the RelatedFilter.",
                 )
             child_model = child_filterset._meta.model
-            child_manager = child_model._default_manager
-            child_base = (
-                child_manager.using(parent_db).all()
-                if parent_db is not None
-                else child_manager.all()
-            )
+            child_base = base_queryset(child_model, using=parent_db)
             yield field_name, target_type, child_filterset, child_input, child_base
 
     @classmethod
@@ -2575,13 +2693,18 @@ class FilterSet(
 
         Single source of truth for the consumer-visible message shared by
         ``_collect_nested_visibility_querysets_async``, ``_run_permission_checks``,
-        and ``_evaluate_logic_tree`` -- all three cap at ``cls._MAX_LOGIC_DEPTH``
-        and surface the identical typed error.
+        and ``_evaluate_logic_tree`` -- all five sites cap at
+        ``cls._MAX_LOGIC_DEPTH`` and surface the identical typed error. The
+        sentence and the defensive class-label read are
+        ``utils/input_values.py::raise_set_traversal_depth_exceeded``, shared with
+        the permission walk's related-branch cap so one budget is no longer
+        enforced in two vocabularies.
         """
-        raise ConfigurationError(
-            f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
-            f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
-            "or split into multiple queries.",
+        raise_set_traversal_depth_exceeded(
+            cls,
+            branch="logical-branch",
+            input_noun="filter",
+            subject="FilterSet",
         )
 
     @classmethod
@@ -2751,10 +2874,10 @@ class FilterSet(
             return
         raise GraphQLError(
             "Invalid filter input",
-            extensions={
-                "code": "FILTER_INVALID",
-                "errors": filterset_instance.errors.get_json_data(),
-            },
+            extensions=coded_error_extensions(
+                FILTER_INVALID_ERROR_CODE,
+                errors=filterset_instance.errors.get_json_data(),
+            ),
         )
 
     # ------------------------------------------------------------------

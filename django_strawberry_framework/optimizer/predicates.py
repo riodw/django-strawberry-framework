@@ -148,10 +148,18 @@ def attach_exists(queryset: QuerySet, inner_queryset: QuerySet) -> tuple[QuerySe
             f"match outer model {model.__name__!r}; the inner root must be a "
             f"correlated queryset over the same model.",
         )
-    if inner_queryset.db != queryset.db:
+    # Snapshot both resolutions BEFORE comparing and format the message from the
+    # snapshots: ``.db`` re-resolves through the router on every read of a
+    # hint-less queryset, so re-reading inside the f-string would report aliases
+    # that were never compared (a stateful router can make the message claim a
+    # mismatch between two identical aliases). Mirrors the combinator arm below,
+    # which already snapshots before it formats.
+    inner_db = inner_queryset.db
+    outer_db = queryset.db
+    if inner_db != outer_db:
         raise OptimizerError(
-            f"attach_exists database-alias mismatch: inner {inner_queryset.db!r} "
-            f"vs outer {queryset.db!r}; both querysets must resolve to the same "
+            f"attach_exists database-alias mismatch: inner {inner_db!r} "
+            f"vs outer {outer_db!r}; both querysets must resolve to the same "
             f"database alias.",
         )
     combinator = queryset.query.combinator

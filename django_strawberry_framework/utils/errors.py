@@ -10,7 +10,14 @@ flavors):
 - ``validation_error_to_field_errors`` - the Django ``ValidationError`` mapper;
 - ``integrity_error_field_errors`` - the save-time ``IntegrityError`` envelope;
 - ``join_error_path`` - dotted GraphQL error-path joining for nested
-  flatteners.
+  flatteners;
+- ``null_field_error`` / ``empty_validation_error`` - the two leaves whose
+  message + code pair was being re-typed by consumers of the module;
+- ``FIELD_ERROR_CODE_*`` - the ``FieldError.codes`` vocabulary, which is a
+  public wire contract that previously existed only as the union of string
+  literals at 19 raise sites;
+- ``coded_error_extensions`` + ``*_ERROR_CODE`` - the ``extensions={"code": ...}``
+  shape and code vocabulary every framework ``GraphQLError`` carries.
 
 Layering: ``FieldError`` and ``NON_FIELD_ERROR_KEY`` live in
 ``mutations/inputs.py`` (the single source); utils must not import the
@@ -31,6 +38,97 @@ from ..exceptions import _safe_text, _unprintable
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..mutations.inputs import FieldError
+
+__all__ = [
+    "FIELD_ERROR_CODE_CONFLICT",
+    "FIELD_ERROR_CODE_CONSTRAINT",
+    "FIELD_ERROR_CODE_INVALID",
+    "FIELD_ERROR_CODE_NOT_FOUND",
+    "FIELD_ERROR_CODE_NULL",
+    "FIELD_ERROR_CODE_PROTECTED",
+    "FIELD_ERROR_CODE_TRUNCATED",
+    "FILTER_INVALID_ERROR_CODE",
+    "GLOBALID_INVALID_ERROR_CODE",
+    "GLOBALID_UNVALIDATABLE_ERROR_CODE",
+    "coded_error_extensions",
+    "empty_validation_error",
+    "field_error",
+    "integrity_error_field_errors",
+    "join_error_path",
+    "null_field_error",
+    "relation_field_error",
+    "validation_error_to_field_errors",
+]
+
+# The text atoms: values that ARE a message rather than a container of messages.
+# Spelled once because missing a site when the set grows is not a cosmetic slip -
+# it makes a message iterate character-by-character into per-character
+# ``FieldError`` leaves, the exact failure ``_str_list`` exists to prevent.
+# The write path has its own, deliberately different atom set (it also excludes
+# ``Mapping``): see ``write_values.py::RELATION_ID_ATOM_TYPES``.
+_TEXT_ATOM_TYPES = (
+    str,
+    bytes,
+    bytearray,
+    memoryview,
+    Promise,
+)
+
+# ---------------------------------------------------------------------------
+# ``FieldError.codes`` vocabulary
+# ---------------------------------------------------------------------------
+# The codes the framework itself emits on the write envelope. This is derived
+# knowledge with no other home: the vocabulary is what a client branches on, yet
+# it used to exist only as the union of string literals across three subsystems.
+#
+# Framework ``"invalid"`` deliberately COLLIDES with Django's and DRF's own
+# ``"invalid"`` on the wire - a client cannot tell a framework relation-decode
+# rejection from a Django field-validation one by code alone, and that is the
+# established shape, not an oversight to fix here.
+#
+# These are constants, not an ``Enum``, and ``codes=`` arguments are NOT
+# validated against them: ``FieldError.codes`` is ``list[str]`` on the wire and
+# Django / DRF codes flow through the same parameter, so the vocabulary must
+# stay open at the constructor.
+FIELD_ERROR_CODE_INVALID = "invalid"
+FIELD_ERROR_CODE_NULL = "null"
+FIELD_ERROR_CODE_CONSTRAINT = "constraint"
+FIELD_ERROR_CODE_NOT_FOUND = "not_found"
+FIELD_ERROR_CODE_PROTECTED = "protected"
+FIELD_ERROR_CODE_CONFLICT = "conflict"
+FIELD_ERROR_CODE_TRUNCATED = "truncated"
+
+# ---------------------------------------------------------------------------
+# Coded ``GraphQLError`` extensions
+# ---------------------------------------------------------------------------
+# The OTHER error vocabulary: the ``extensions={"code": ...}`` payload a
+# framework ``GraphQLError`` carries so a client can act on a rejection without
+# parsing prose. ``resource_policy.py::RESOURCE_LIMIT_ERROR_CODE`` is the
+# established public spelling and stays exported from there (it is already in
+# the package root's ``__all__``); the codes below had no owner at all and were
+# re-typed as literals at each raise site, with the convention itself
+# transmitted only through docstrings.
+GLOBALID_INVALID_ERROR_CODE = "GLOBALID_INVALID"
+GLOBALID_UNVALIDATABLE_ERROR_CODE = "GLOBALID_UNVALIDATABLE"
+FILTER_INVALID_ERROR_CODE = "FILTER_INVALID"
+
+
+def coded_error_extensions(code: str, **detail: Any) -> dict[str, Any]:
+    """Build the ``extensions`` mapping for a coded framework ``GraphQLError``.
+
+    One shape for every coded error the framework raises: a ``"code"`` key
+    naming the machine-readable rejection, plus whatever structured detail the
+    raise site wants a client to be able to act on without parsing prose
+    (``ResourceLimitExceeded``'s ``bound`` / ``limit`` / ``charged``, the
+    filterset's ``errors`` payload). Keyword names become extension keys
+    verbatim.
+
+    Layering: this owns the SHAPE, never the vocabulary of any one subsystem -
+    ``errors.py`` sits below ``filters/`` and ``relay.py`` and must never import
+    from them. Codes flow downward: a subsystem's code constant either lives
+    here (the three below) or stays at its own owner and is passed in.
+    """
+    return {"code": code, **detail}
 
 
 def field_error(path: str, messages: Any, *, codes: Any = None) -> FieldError:
@@ -87,6 +185,10 @@ def _str_list(value: Any) -> list[str]:
     (a DRF ``ErrorDetail`` list, a tuple) is materialized with each element
     stringified.
     """
+    # A deliberate SUBSET of ``_TEXT_ATOM_TYPES``, not a missed site: this asks
+    # "is this already text?" (the one-element-list path), while the exclusion
+    # below asks "is this an atom rather than a container?". The byte-ish atoms
+    # are excluded from iteration but are not stringified by this first branch.
     try:
         is_str = isinstance(value, (str, Promise))
     except BaseException:
@@ -103,15 +205,7 @@ def _str_list(value: Any) -> list[str]:
                 frozenset,
                 Iterable,
             ),
-        ) and not isinstance(
-            value,
-            (
-                bytes,
-                bytearray,
-                memoryview,
-                Promise,
-            ),
-        )
+        ) and not isinstance(value, _TEXT_ATOM_TYPES)
     except BaseException:
         is_iter = False
     if not is_iter:
@@ -127,16 +221,7 @@ def _validation_messages(error: Any) -> list[Any]:
     """Read one Django validation leaf's messages without trusting its metadata."""
     try:
         msgs = error.messages
-        if isinstance(
-            msgs,
-            (
-                str,
-                bytes,
-                bytearray,
-                memoryview,
-                Promise,
-            ),
-        ):
+        if isinstance(msgs, _TEXT_ATOM_TYPES):
             return [msgs]
         return list(msgs)
     except BaseException:
@@ -166,39 +251,62 @@ def _validation_code(leaf: Any) -> Any:
         return None
 
 
-def _validation_codes(error: Any) -> list[Any]:
-    """Read all codes from one Django validation error leaf."""
+def _validation_leaves(error: Any) -> tuple[Any, ...]:
+    """Flatten one Django validation error into its leaf errors.
+
+    ``ValidationError.error_list`` is the flattened leaf list ``.messages``
+    reads. A hostile or absent ``error_list``, and a text atom planted in the
+    slot (which would otherwise be iterated character-by-character), both fall
+    back to treating the error itself as the single leaf.
+    """
     try:
         error_list = getattr(error, "error_list", None)
-        if error_list is not None:
-            leaves = (
-                (error_list,)
-                if isinstance(
-                    error_list,
-                    (
-                        str,
-                        bytes,
-                        bytearray,
-                        memoryview,
-                        Promise,
-                    ),
-                )
-                else tuple(error_list)
-            )
-        else:
-            leaves = (error,)
+        if error_list is None:
+            return (error,)
+        if isinstance(error_list, _TEXT_ATOM_TYPES):
+            return (error_list,)
+        return tuple(error_list)
     except BaseException:
-        leaves = (error,)
+        return (error,)
+
+
+def _validation_codes(error: Any) -> list[Any]:
+    """Read all codes from one Django validation error leaf."""
+    leaves = _validation_leaves(error)
     return [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
 
 
-def _empty_validation_error(path: str = "") -> FieldError:
-    """Build the fail-closed leaf for a validation failure carrying no details."""
+def empty_validation_error(path: str = "") -> FieldError:
+    """Build the fail-closed leaf for a validation failure carrying no details.
+
+    Public because the DRF flattener needs it: a serializer whose ``is_valid()``
+    fails with an empty (or unreadable) error payload still owes the envelope a
+    leaf, and ``rest_framework/resolvers.py`` was hand-building this exact
+    message + code pair at two sites purely because the name started with an
+    underscore. The module docstring's claim that the DRF flattener calls the
+    single leaf constructor is only true once this is reachable.
+    """
     return field_error(
         path,
         "Validation failed without error details.",
-        codes="invalid",
+        codes=FIELD_ERROR_CODE_INVALID,
     )
+
+
+def null_field_error(path: str) -> FieldError:
+    """Build the uniform "required field was sent as null" ``FieldError``.
+
+    Siblings :func:`relation_field_error`: one message + code pair for the
+    rejection every write flavor makes when a non-nullable field arrives
+    explicitly null. The auth flavor reached this leaf through
+    ``mutations/resolvers.py`` - importing a write-envelope leaf from the MODEL
+    mutation resolver is exactly the layering the promotion of these
+    constructors into ``utils/errors.py`` exists to undo.
+
+    The M2M "send an empty list to clear it" rejection is a different
+    condition with its own message and is deliberately NOT folded in here.
+    """
+    return field_error(path, "This field cannot be null.", codes=FIELD_ERROR_CODE_NULL)
 
 
 def _error_dict_entry(item: Any) -> tuple[Any, Any] | None:
@@ -225,7 +333,11 @@ def relation_field_error(graphql_name: str) -> FieldError:
     sourced across every flavor.
     """
     name = _safe_text(graphql_name)
-    return field_error(name, f"Invalid id for relation {name!r}.", codes="invalid")
+    return field_error(
+        name,
+        f"Invalid id for relation {name!r}.",
+        codes=FIELD_ERROR_CODE_INVALID,
+    )
 
 
 def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
@@ -261,23 +373,14 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
                         field_error(
                             "",
                             "Validation details could not be normalized.",
-                            codes="invalid",
+                            codes=FIELD_ERROR_CODE_INVALID,
                         ),
                     )
                     continue
                 field_name, field_errors = unpacked
                 normalized_name = _safe_text(field_name)
                 path = "" if normalized_name == NON_FIELD_ERRORS else normalized_name
-                if isinstance(
-                    field_errors,
-                    (
-                        str,
-                        bytes,
-                        bytearray,
-                        memoryview,
-                        Promise,
-                    ),
-                ):
+                if isinstance(field_errors, _TEXT_ATOM_TYPES):
                     field_error_items: tuple[Any, ...] = (field_errors,)
                 else:
                     try:
@@ -294,34 +397,14 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
                 errors.append(
                     field_error(path, messages, codes=codes)
                     if messages
-                    else _empty_validation_error(path),
+                    else empty_validation_error(path),
                 )
             if errors:
                 return errors
-    try:
-        error_list = getattr(exc, "error_list", None)
-        if error_list is not None:
-            leaves = (
-                (error_list,)
-                if isinstance(
-                    error_list,
-                    (
-                        str,
-                        bytes,
-                        bytearray,
-                        memoryview,
-                        Promise,
-                    ),
-                )
-                else tuple(error_list)
-            )
-        else:
-            leaves = (exc,)
-    except BaseException:
-        leaves = (exc,)
+    leaves = _validation_leaves(exc)
     codes = [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
     messages = _validation_messages(exc)
-    return [field_error("", messages, codes=codes) if messages else _empty_validation_error()]
+    return [field_error("", messages, codes=codes) if messages else empty_validation_error()]
 
 
 def integrity_error_field_errors() -> list[FieldError]:
@@ -337,7 +420,13 @@ def integrity_error_field_errors() -> list[FieldError]:
     write paths all return this same leaf (via ``save_or_field_errors`` or the
     serializer's three-``except`` save mapping).
     """
-    return [field_error("", "A database constraint was violated.", codes="constraint")]
+    return [
+        field_error(
+            "",
+            "A database constraint was violated.",
+            codes=FIELD_ERROR_CODE_CONSTRAINT,
+        ),
+    ]
 
 
 def join_error_path(prefix: str, segment: str) -> str:

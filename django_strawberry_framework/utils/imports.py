@@ -24,6 +24,32 @@ import importlib
 import sys
 from typing import Any
 
+__all__ = [
+    "CHANNELS_FLOOR",
+    "STRAWBERRY_FLOOR",
+    "import_attr",
+    "import_attr_if_importable",
+    "loaded_attr",
+    "require_optional_module",
+]
+
+
+# The verified Channels floor, interpolated into every install hint that names
+# it. Channels is the one optional dependency whose hint text is written at more
+# than one site (the router's three, the auth session boundary's one), so the
+# version was being re-typed as a bare literal that nothing compared against the
+# ``channels[daphne]`` row in ``pyproject.toml``. That row is still the second
+# place and must be bumped with this one; there is no third.
+CHANNELS_FLOOR = "4.3.2"
+
+# The verified Strawberry floor, interpolated into the one install hint that
+# names it (the router's broken-``strawberry.channels`` message). It lives here
+# beside ``CHANNELS_FLOOR`` for the same reason: a hard literal in a hint string
+# is compared against nothing, so it drifts silently away from the
+# ``strawberry-graphql`` row in ``pyproject.toml``. That row is the only other
+# place the floor is written and must be bumped with this one.
+STRAWBERRY_FLOOR = "0.316.0"
+
 
 def _plain_text(value: Any) -> Any:
     """Normalize a string subclass before handing it to import machinery."""

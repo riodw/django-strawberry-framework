@@ -91,9 +91,17 @@ def test_pascal_case_handles_snake_case_inputs():
     # GraphQL type-name stems (operator bags, range inputs, choice enums).
     assert pascal_case("field_2") == "Field_2"
     assert pascal_case("my_HTTP_response") == "MyHttpResponse"
-    # Adjacent / leading / trailing underscores collapse to nothing.
-    assert pascal_case("_leading") == "Leading"
-    assert pascal_case("trailing_") == "Trailing"
+    # Leading / trailing underscore runs are preserved verbatim -- the Pascal
+    # dual of ``graphql_camel_name``'s edge rule. Collapsing them made
+    # ``price`` / ``price_`` / ``_price`` members of one set mint the same
+    # generated type-name stem (operator bag / range / enum), so Strawberry
+    # silently kept one and dropped the other from the schema.
+    assert pascal_case("_leading") == "_Leading"
+    assert pascal_case("trailing_") == "Trailing_"
+    assert pascal_case("_price_") == "_Price_"
+    assert pascal_case("___x_foo") == "___XFoo"
+    # Interior runs still collapse: a LOOKUP_SEP boundary never survives into
+    # a generated identifier and Django forbids ``__`` in model field names.
     assert pascal_case("double__underscore") == "DoubleUnderscore"
 
 

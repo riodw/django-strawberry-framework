@@ -24,7 +24,6 @@ On top of that skeleton the module carries:
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db import models
@@ -38,8 +37,10 @@ from ..sets_mixins import (
     SetLifecycleAttrs,
     collect_related_declarations,
     expanded_once,
+    require_re_readable_field_declaration,
     should_cache_expansion,
 )
+from ..utils.input_values import SetInputTraversal
 from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
 from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.relations import (
@@ -167,11 +168,13 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # ``UNSET`` / ``None`` for omitted fields, no operator-bag logic keys.
     _permission: ClassVar[ActiveInputPermissionAttrs] = ActiveInputPermissionAttrs(
         family_label="OrderSet",
-        related_attr="related_orders",
         target_attr="orderset",
-        field_specs=_field_specs,
-        unset_sentinel=UNSET,
-        handle_top_level_list=True,
+        traversal=SetInputTraversal(
+            field_specs=_field_specs,
+            related_attr="related_orders",
+            unset_sentinel=UNSET,
+            handle_top_level_list=True,
+        ),
     )
 
     @classmethod
@@ -232,7 +235,25 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         per spec-028 -- forward FK columns are included,
         M2M managers and reverse FKs are excluded). Unordered ``set`` /
         ``frozenset`` declarations expand in the same ``repr``-sorted order
-        Layer-6 factory kwargs hash (``read_set_meta_fields``).
+        Layer-6 factory kwargs hash (``read_set_meta_fields``); dict-shaped
+        declarations iterate their keys (the django-filter lookup-bag shape
+        degrades to its field names).
+
+        Two declaration contracts are enforced at this gate:
+
+        - ``meta_fields`` must be a RE-READABLE collection (any
+          ``collections.abc.Collection`` that is not a text atom: list /
+          tuple / set / frozenset / dict / dict view / ``range`` / a custom
+          collection). The expansion re-runs whenever a lazy
+          ``RelatedOrder`` target keeps the ``get_fields`` cache gate from
+          writing, so a one-shot iterator would expand correctly once and
+          then silently rebuild to an empty or partial field set.
+        - Every entry is a field-name STRING, model or no model. A
+          model-less related-only set defers path validation to the
+          concrete ``queryset.model`` at apply time, but the entry type is
+          checked here so a ``None`` / bytes / non-hashable entry raises the
+          typed declaration error instead of silently landing in the
+          expansion (or raising raw ``TypeError`` from the dict write).
         """
         fields: OrderedDict = OrderedDict()
         meta = getattr(cls, "Meta", None)
@@ -257,13 +278,36 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             for name in _get_concrete_field_names_for_order(model):
                 fields[name] = None
             return fields
-        if isinstance(meta_fields, str) or not isinstance(meta_fields, Iterable):
-            raise ConfigurationError(
-                f"OrderSet {cls.__qualname__}.Meta.fields must be '__all__' or an iterable "
-                f"of field names; got {_safe_type_name(meta_fields)} ({_safe_arg_repr(meta_fields)}).",
-            )
+        # Re-readability is a declaration contract shared with the filter
+        # family, so the gate is theirs jointly
+        # (``sets_mixins.py::require_re_readable_field_declaration``): this
+        # expansion re-runs whenever a lazy ``RelatedOrder`` keeps the
+        # two-condition cache gate in ``get_fields`` from writing, and a
+        # one-shot declaration would expand correctly once and then silently
+        # rebuild to an EMPTY or partial field set. Dict-shaped fields iterate
+        # their keys (the django-filter lookup-bag shape degrades to its field
+        # names).
+        require_re_readable_field_declaration(
+            cls,
+            meta_fields,
+            subject="OrderSet",
+            accepted="'__all__' or a re-readable collection of field names",
+        )
         model = getattr(meta, "model", None)
         for field_path in meta_fields:
+            # Entry-TYPE validation is unconditional: a model-less related-only
+            # set defers path validation to the concrete ``queryset.model`` at
+            # apply time, but every entry is a path TOKEN here regardless, so a
+            # non-string entry is a declaration error at this gate instead of a
+            # silent ``{None: None}`` / ``{b'title': None}`` expansion (or a raw
+            # ``TypeError: unhashable type`` from the ``fields[...]`` write
+            # below) when ``Meta.model`` is absent.
+            if type(field_path) is not str:
+                raise ConfigurationError(
+                    f"OrderSet {cls.__qualname__}.Meta.fields entries must be field-name "
+                    f"strings; got {_safe_type_name(field_path)} "
+                    f"({_safe_arg_repr(field_path)}).",
+                )
             if model is not None:
                 try:
                     classify_path(model, field_path)
@@ -279,6 +323,25 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # Resolver-facing API (spec-028 Decision 8)
     # ------------------------------------------------------------------
 
+    # TODO(spec-050 slice 2): Add the OrderSet-owned active-term predicate; the
+    # list field must not grow a second order-input walker.
+    #
+    # Pseudocode: normalize through ``cls._normalize_input(input_value)``, pass
+    # that data through ``cls.get_flat_orders(...)``, and return whether any
+    # resulting direction is non-null. Keep it a classmethod so overrides of
+    # both existing canonical helpers remain observable.
+    #
+    # Call this helper only after ``apply_sync`` / ``apply_async`` succeeds, so
+    # permission and invalid-direction errors retain precedence. Re-normalizing
+    # is deliberate: the public apply methods remain override seams. Purity is a
+    # COMPATIBILITY CONSTRAINT on the method, not merely a test counter -- a
+    # stateful override can otherwise return different application and activity
+    # verdicts inside one request. Document ``_normalize_input`` overrides as
+    # pure/deterministic on the method itself, cap its input through the
+    # existing value policy, pin two calls when an override delegates to the
+    # base implementation, and raise an actionable ``ConfigurationError`` naming
+    # the method when the second normalization disagrees with the first rather
+    # than letting an incidental verdict decide the offset guard.
     @classmethod
     def _normalize_input(cls, input_value: Any) -> list[tuple[str, Ordering | None]]:
         """Delegate to ``normalize_input_value`` so callers see one entry point.

@@ -209,7 +209,24 @@ _AUDITED_REMOVE_DATABASES_FAILURES_SOURCES: tuple[str, ...] = (
     _CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
     _CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
 )
-_validated_remove_databases_failures_source: str | None = None
+# The upstream body ``apply()`` validated for the currently installed patch
+# generation. ``_disallowed_connection_methods`` reads this at TEARDOWN time,
+# from the module dictionary - which survives an in-process reload. The naive
+# ``= None`` reset is therefore a live-teardown hazard, not a neutral
+# re-initialization: ``importlib.reload()`` re-executes the assignment while the
+# PREVIOUS generation of :func:`_patched_remove_databases_failures` is still
+# installed on ``SimpleTestCase`` (and carries the module's audited-body proof
+# on its captured original), so every subsequent ``tearDownClass`` would raise
+# the "without a validated upstream body" ``RuntimeError`` until the next
+# ``apply()`` revalidates - permanently, if the consumer had the patches
+# disabled at that moment. Preserving the prior value across re-execution is
+# safe by construction: :func:`apply` only ever stores a body it validated
+# against this process's own Django, and every ``apply()`` revalidates before
+# installing, so the carried value can authorize no NEW installation - it only
+# keeps the running patch's read path valid until that revalidation.
+_validated_remove_databases_failures_source: str | None = globals().get(
+    "_validated_remove_databases_failures_source",
+)
 
 
 def _validate_upstream_shape() -> str:

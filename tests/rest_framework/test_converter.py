@@ -35,6 +35,7 @@ from typing import get_args, get_origin
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import models as product_models
 from django.db import models
 from rest_framework import serializers
@@ -542,6 +543,148 @@ def test_model_backed_relation_cardinality_mismatch_raises():
     field = MismatchedSer().fields["category_ids"]
     with pytest.raises(ConfigurationError, match="cardinality"):
         resolve_serializer_field(field, product_models.Item, "X")
+
+
+def _register_relay_shelf_primary() -> None:
+    class ShelfProbeType(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+            primary = True
+
+
+def _register_tagged_item_primary() -> None:
+    class TaggedItemProbeType(DjangoType):
+        class Meta:
+            model = library_models.TaggedItem
+            fields = ("id",)
+            primary = True
+
+
+def _register_membership_card_primary() -> None:
+    class MembershipCardProbeType(DjangoType):
+        class Meta:
+            model = library_models.MembershipCard
+            fields = ("id", "barcode")
+            primary = True
+
+
+def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
+    """A many relation over a one_to_many column emits a list id input, not one scalar id.
+
+    ``Branch.shelves`` is a ``ManyToOneRel``: collection-shaped (``one_to_many=True``)
+    but ``many_to_many=False``, so the column classifier alone would emit a single id.
+    The runtime ``ManyRelatedField`` validates a LIST of pks, and the generated input
+    must describe the same shape the runtime serializer validates - so after the
+    cardinality guard aligns the two sides, the emitted kind follows the serializer
+    field's cardinality (``relation_multi`` / a list annotation / the plain name).
+    """
+    _register_relay_shelf_primary()
+
+    class BranchSer(serializers.ModelSerializer):
+        shelves = serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=library_models.Shelf.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Branch
+            fields = ("name", "shelves")
+
+    field = BranchSer().fields["shelves"]
+    assert isinstance(field, serializers.ManyRelatedField)
+    _python_attr, annotation, spec = resolve_serializer_field(
+        field,
+        library_models.Branch,
+        "ProbeInput",
+    )
+    assert spec.kind == RELATION_MULTI
+    assert _python_attr == "shelves"  # a multi relation keeps the plain declared name
+    assert spec.input_attr == "shelves"
+    assert spec.graphql_name == "shelves"
+    assert spec.related_model is library_models.Shelf
+    assert get_origin(annotation) is list
+    assert relay.GlobalID in get_args(annotation)
+
+
+def test_many_pk_related_field_over_generic_relation_column_emits_multi():
+    """The same alignment over a ``GenericRelation`` column (also one_to_many, not m2m)."""
+    _register_tagged_item_primary()
+    tags_rel = library_models.Branch._meta.get_field("tags")
+    assert tags_rel.one_to_many is True and tags_rel.many_to_many is False
+
+    class BranchTagSer(serializers.ModelSerializer):
+        tagged = serializers.PrimaryKeyRelatedField(
+            many=True,
+            source="tags",
+            queryset=library_models.TaggedItem.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Branch
+            fields = ("name", "tagged")
+
+    field = BranchTagSer().fields["tagged"]
+    _attr, annotation, spec = resolve_serializer_field(
+        field,
+        library_models.Branch,
+        "ProbeInput",
+    )
+    assert spec.kind == RELATION_MULTI
+    assert spec.related_model is library_models.TaggedItem
+    assert get_origin(annotation) is list
+
+
+def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
+    """A single relation over a reverse OneToOneRel stays a single id input.
+
+    A ``OneToOneRel`` reports ``one_to_many=False`` (it mirrors the forward field's
+    ``many_to_one``), so the guard's model classifier calls it single-valued: the
+    single spelling passes and the emitted kind stays ``relation_single`` - the
+    reverse-O2O sibling of the forward-FK shape.
+    """
+    _register_membership_card_primary()
+    rel = library_models.Patron._meta.get_field("card")
+    assert type(rel).__name__ == "OneToOneRel"
+    assert serializer_converter._model_relation_cardinality(rel) is False
+
+    class PatronSer(serializers.ModelSerializer):
+        card = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.MembershipCard.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Patron
+            fields = ("name", "card")
+
+    field = PatronSer().fields["card"]
+    _attr, _annotation, spec = resolve_serializer_field(
+        field,
+        library_models.Patron,
+        "ProbeInput",
+    )
+    assert spec.kind == RELATION_SINGLE
+    assert spec.input_attr == "card_id"
+    assert spec.graphql_name == "cardId"
+    assert spec.related_model is library_models.MembershipCard
+
+
+def test_many_over_reverse_o2o_column_is_rejected():
+    """many=True over a reverse OneToOneRel is a cardinality mismatch (a collection lie)."""
+
+    class PatronSer(serializers.ModelSerializer):
+        card = serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=library_models.MembershipCard.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Patron
+            fields = ("name", "card")
+
+    field = PatronSer().fields["card"]
+    with pytest.raises(ConfigurationError, match="cardinality"):
+        resolve_serializer_field(field, library_models.Patron, "ProbeInput")
 
 
 def test_model_backed_slug_related_field_raises():

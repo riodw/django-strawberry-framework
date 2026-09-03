@@ -7593,6 +7593,45 @@ def test_serializer_injected_field_contract_over_http():
 
 
 @pytest.mark.django_db
+def test_serializer_update_injected_field_contract_over_http():
+    """An UPDATE mutation's injected serializer-only ``ChoiceField`` writes the injected value.
+
+    ``UpdateBookWithInjectedStatus`` narrows the partial input to ``title`` (dropping the
+    ``StatusStampBookSerializer``-required serializer-only ``status`` ``ChoiceField``) and
+    declares ``Meta.injected_fields = ("status",)`` with a ``get_serializer_injected_data``
+    override. The injected spec is resolved under the update's ``PartialInput`` provisional, so
+    its generated enum identity matches the runtime-agreement guard's re-derivation and the
+    update SUCCEEDS with the injected value - previously the agreement guard raised a spurious
+    ``ConfigurationError`` naming mismatched enum identities on EVERY update invocation.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="BeforeInject", shelf=shelf)
+
+    # ``status`` is narrowed away from the partial input (only ``title`` remains).
+    input_name = _mutation_data_input_type_name("updateBookWithInjectedStatus")
+    assert _input_field_names(input_name) == {"title"}
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: " + input_name + "!) { "
+        "updateBookWithInjectedStatus(id: $id, data: $d) { "
+        "node { title subtitle } errors { field messages } } }",
+        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "AfterInject"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookWithInjectedStatus"]
+    assert result["errors"] == []
+    # The override supplied the narrowed-away required ``status``; the write succeeded with it
+    # (the serializer's update() stamped the resolved enum value into ``subtitle``).
+    assert result["node"] == {"title": "AfterInject", "subtitle": "status:active"}
+    book.refresh_from_db()
+    assert book.subtitle == "status:active"
+
+
+@pytest.mark.django_db
 def test_serializer_m2m_relation_visibility_over_http():
     """A raw-pk M2M serializer input writes visible branches and rejects a hidden one.
 

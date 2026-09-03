@@ -288,6 +288,33 @@ is true of the three private classes beside it). The supported choices are the
 package default or an injected consumer of your own, passed as
 ``DjangoGraphQLProtocolRouter(..., websocket_consumer_class=...)``.
 
+**A frame the protocol cannot dispatch ends the connection, not the connection
+task.** Both handlers' message loops are upstream's own and carry no
+containment: ``handle_message`` dispatches client-supplied values straight into
+indexing and mapping lookups, so a frame that is not the object the dispatcher
+assumes - a JSON scalar or array, an unhashable operation id, a missing or
+non-mapping payload, a ``stop`` for an id that was never started - raises a raw
+``TypeError``/``KeyError`` out of the loop and kills the connection task. The
+socket then sits OPEN with nothing reading it, a client-controlled dead
+connection the ASGI server never reclaims. Both generated handler subclasses
+therefore override ``handle`` (not ``handle_message``: the ``RecursionError`` a
+pathologically nested document raises inside ``iter_json`` unwinds the loop
+itself, where no per-message wrapper can run) to contain every non-cancellation
+escape. The guard is a general exception boundary, not a list of confirmed
+shapes: whatever escapes is refused and the connection ends, fail-closed. The
+CLOSE, though, names the actual cause. A frame-shape escape (``TypeError`` /
+``KeyError`` / ``RecursionError``) gets upstream's own invalid-message refusal -
+``4400`` / "Failed to parse message", the close the transport-ws handler already
+spends for an undecodable frame, supplied by the package on the legacy protocol
+where upstream spends no invalid-message close at all. Any other escape is a
+server-side bug that unwound the loop, and gets ``1011`` / "Internal error"
+instead, with the traceback logged server-side and nothing about it on the wire:
+a server defect reported as a parse failure would blame the client for it.
+Cancellation propagates untouched. ``_strawberry_patches.py``'s ``RecursionError``
+translation does not reach this path - it wraps ``BaseView.parse_json`` on the
+HTTP tier, and the WebSocket decodes through ``view.decode_json`` inside the
+message loop - which is why the containment is here.
+
 Importing this module is ``channels``-free, which is what lets ``routers.py``
 import it above its own guard: the module level reaches only for the standard
 library, Django's own ``HttpRequest`` / ``DisallowedHost`` (a HARD dependency, and
@@ -368,6 +395,7 @@ from .utils.sessions import (
     actor_lease,
     connection_was_authenticated,
     note_authenticated_actor,
+    scope_key,
 )
 
 #: The default revalidation window, in seconds: ``0.0`` revalidates at every
@@ -424,12 +452,47 @@ _REVOCATION_ABANDONED = "abandoned"
 #: with the connection's revocation decision.
 _INFORMATION_BEARING_FRAME_TYPES = frozenset({"next", "data", "error"})
 
+#: The close the message-loop containment spends on a frame the protocol could
+#: not even dispatch: upstream's own ``graphql-transport-ws`` invalid-message
+#: refusal (``handle_invalid_message``), reused verbatim on BOTH protocols so a
+#: malformed frame is refused identically whichever subprotocol carried it.
+#: This is deliberately NOT the revocation close: the frame was invalid, not
+#: unauthorized - the actor was never in question, so ``4403`` would misstate
+#: the refusal. It is spent ONLY for the client-shape escapes below; a
+#: server-side failure gets the internal-error close instead, so the reason the
+#: client reads is never a false accusation against its own frame.
+_INVALID_MESSAGE_CLOSE_CODE = 4400
+_INVALID_FRAME_CLOSE_REASON = "Failed to parse message"
+
+#: The close spent when the loop escape was NOT a frame-shape problem: RFC 6455's
+#: own ``1011``, which ``graphql-transport-ws`` adopts unchanged for a server that
+#: failed to fulfil a request. The reason is a fixed string carrying no exception
+#: text, type name, or path: the client learns that the server broke, never how,
+#: while the full traceback is logged server-side where it belongs.
+_INTERNAL_ERROR_CLOSE_CODE = 1011
+_INTERNAL_ERROR_CLOSE_REASON = "Internal error"
+
+#: The exception classes a hostile or malformed FRAME actually raises out of
+#: either dispatch loop, and therefore the ones the invalid-message close speaks
+#: for: ``TypeError`` (indexing or hashing a value that is not the object the
+#: dispatcher assumes - a JSON scalar or array frame, an unhashable operation id,
+#: a non-mapping payload), ``KeyError`` (a frame missing a field the dispatcher
+#: reads unconditionally - no ``type``, no ``payload``, a legacy ``stop`` for an
+#: id that was never started), and ``RecursionError`` (a document nested past the
+#: parser's stack budget, raised inside the ``async for`` over ``iter_json``).
+#: Membership is what the close code is chosen by, so an escape outside this set
+#: is reported as the server's fault rather than dressed up as a parse failure.
+#: The classification is deliberately coarse in one direction only: a server-side
+#: bug that happens to raise one of these three is still reported as an invalid
+#: frame, which understates the server's fault but never overstates the client's.
+_CLIENT_FRAME_SHAPE_ESCAPES = (TypeError, KeyError, RecursionError)
+
 #: The private scope key holding the last successful revalidation's monotonic
 #: timestamp, written only when a window is configured. Namespaced with the
 #: distribution name exactly like ``auth/sessions.py::_SCOPE_LOCK_KEY``, so it
 #: can never collide with an ASGI key set by Channels, Django, or consumer
 #: middleware.
-_REVALIDATED_AT_SCOPE_KEY = "__django_strawberry_framework_ws_revalidated_at__"
+_REVALIDATED_AT_SCOPE_KEY = scope_key("ws_revalidated_at")
 
 
 def _monotonic() -> float:
@@ -1411,6 +1474,111 @@ def _install_stop_aware_schema(handler: Any) -> None:
     handler.schema = _StopAwareSchema(handler.schema, handler.view)
 
 
+async def _contain_message_loop_failure(handler: Any, exc: Exception, protocol: str) -> None:
+    """Refuse a connection whose message loop escaped, saying honestly whose fault it was.
+
+    The loop-containment half of the exception-containment invariant (the
+    admission and outbound checkpoints contain what a frame can DO; this
+    contains what a frame can BE). Neither protocol handler's own message loop
+    carries containment - ``handle_message`` dispatches client-supplied values
+    straight into indexing and mapping lookups, and a frame that is not the
+    object the protocol's dispatcher assumes (a JSON scalar or array instead of
+    an object, an unhashable operation id, a missing or non-mapping payload, a
+    ``stop`` for an id that was never started) raises a raw ``TypeError`` /
+    ``KeyError`` out of the loop and kills the connection task. The socket then
+    sits OPEN with nothing reading it: no close, no frames, no teardown - a
+    client-controlled dead connection the ASGI server will never reclaim.
+
+    The CONTAINMENT is general - whatever ordinary (``Exception``) failure
+    escapes the loop is refused and the connection ends, fail-closed - but the
+    CLOSE it spends is not, because the two escape families are not the same
+    event and must not be described to the client as though they were:
+
+    - a **client frame-shape** escape (``_CLIENT_FRAME_SHAPE_ESCAPES``: the
+      ``TypeError`` / ``KeyError`` / ``RecursionError`` a hostile or malformed
+      frame raises out of the dispatcher) takes ``4400`` /
+      ``"Failed to parse message"`` - upstream's own invalid-message shape,
+      spent by the transport-ws handler itself for a frame it cannot dispatch,
+      and supplied by the package on the legacy protocol where upstream spends
+      no invalid-message close at all;
+    - **anything else** is a package or consumer bug that unwound the loop, and
+      takes ``1011`` / ``"Internal error"`` instead. Reporting a server bug as a
+      parse failure would blame the client for the server's defect and send its
+      operator hunting a malformed frame that does not exist. The close reason
+      still carries no exception text - the traceback is logged here, named by
+      protocol, and never put on the wire.
+
+    Two upstream exceptions do NOT reach here because both handlers translate
+    them internally: ``NonTextMessageReceived`` / ``NonJsonMessageReceived`` (a
+    binary or malformed-JSON frame already gets upstream's controlled close).
+
+    Why neither close is a revocation: the frame was invalid or the server
+    broke, and in neither case was the actor in question, so ``4403`` would
+    misstate the refusal. Cancellation and the other process-level exceptions
+    never arrive at all - the callers' arm is ``except Exception``, so
+    ``CancelledError``, ``KeyboardInterrupt``, ``SystemExit``, and
+    ``GeneratorExit`` all bypass BY INHERITANCE rather than by a hard-coded name
+    list that a future ``BaseException`` subclass would fall through, and a
+    shutdown delivered mid-guard still unwinds (a contained ``CancelledError``
+    would hang the connection's own teardown instead).
+
+    The close goes through the handler's ``websocket`` adapter, the same object
+    upstream's ``handle_invalid_message`` closes with, so the refusal is on the
+    same wire path as every other protocol refusal. A close that raises an
+    ordinary ``Exception`` is logged and swallowed: the connection is already
+    ending (the loop is gone), and a refusal that cannot be written has no
+    second refusal to retry with - unlike a revocation, no security state
+    depends on this close being observed. A close that raises a process-level
+    exception propagates, for the same reason the guard itself catches only
+    ``Exception``: a teardown unwinding through this frame must still unwind.
+
+    Why this is not ``_strawberry_patches.py``'s job: that patch translates the
+    ``RecursionError``/``UnicodeDecodeError`` that upstream's ``except
+    json.JSONDecodeError`` misses on the HTTP tier, at ``BaseView.parse_json``.
+    The WebSocket never enters ``parse_json`` - upstream's Channels adapter
+    iterates ``view.decode_json`` directly - so a pathologically nested frame
+    overflows the interpreter's stack INSIDE the ``async for`` over
+    ``iter_json``, unwinds the whole loop, and lands here. A stack overflow
+    unwound to THIS frame is safe to respond to: the exception has already
+    unwound the deep parse frames, and the refusal below runs from this
+    shallow frame.
+    """
+    if isinstance(exc, _CLIENT_FRAME_SHAPE_ESCAPES):
+        code = _INVALID_MESSAGE_CLOSE_CODE
+        reason = _INVALID_FRAME_CLOSE_REASON
+        logger.exception(
+            "GraphQLWebSocketConsumer: a client-supplied frame escaped the %s message loop "
+            "with a raw exception; the connection is refused with the protocol's own "
+            "invalid-message close (fail-closed) rather than left open with a message loop "
+            "that can never run again.",
+            protocol,
+        )
+    else:
+        code = _INTERNAL_ERROR_CLOSE_CODE
+        reason = _INTERNAL_ERROR_CLOSE_REASON
+        logger.exception(
+            "GraphQLWebSocketConsumer: a server-side failure escaped the %s message loop; "
+            "the connection is refused with the transport's internal-error close, which "
+            "tells the client nothing about the failure. This is a package or consumer bug "
+            "rather than a malformed frame, and the traceback recorded here is the only "
+            "place it is reported.",
+            protocol,
+        )
+    try:
+        await handler.websocket.close(code=code, reason=reason)
+    except Exception:
+        # ``Exception`` for the same reason the callers' guard does: an ordinary
+        # failure is contained, while a process-level exception (cancellation
+        # included) bypasses by inheritance and unwinds the teardown.
+        logger.exception(
+            "GraphQLWebSocketConsumer: the %s message loop was contained, but the refusal "
+            "close could not be committed to the transport; the connection is ending "
+            "without a close frame rather than staying open with a message loop that can "
+            "never run again.",
+            protocol,
+        )
+
+
 async def _refreshed_actor(scope: Any) -> Any:
     """Reload the connection's session and resolve its actor, or ``AnonymousUser``.
 
@@ -1476,7 +1644,55 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
         async def handle_subscribe(self, message: Any) -> None:
             if not await revalidate_operation_actor(self):
                 return
+            # Floor strawberry (0.316.x) parses ``payload["query"]`` in this
+            # method; graphql-core's lexer raises ``TypeError`` on a non-string
+            # and that escape used to kill the message loop. Later releases
+            # parse inside the operation task. Contain the non-string here as
+            # an operation error so the loop survives on every supported
+            # release rather than taking the loop-containment close.
+            payload = message.get("payload")
+            if (
+                isinstance(payload, dict)
+                and "query" in payload
+                and not isinstance(payload["query"], str)
+            ):
+                await self.send_message(
+                    {
+                        "id": message["id"],
+                        "type": "error",
+                        "payload": [{"message": "Query must be a string."}],
+                    },
+                )
+                return
             await super().handle_subscribe(message)
+
+        async def handle(self) -> None:
+            """Contain a message-loop escape, closing under the code that fits its cause.
+
+            The dispatch loop above this method is upstream's, and a frame the
+            dispatcher cannot shape (a non-object message, an unhashable id, a
+            hostile payload) raises straight out of it. Contained here rather
+            than in ``handle_message`` because the one exception class that
+            cannot be shaped per-message - the ``RecursionError`` a nested
+            document raises inside ``iter_json`` - unwinds the loop from the
+            ``async for`` itself, where no per-message wrapper runs.
+
+            The containment catches every ordinary escape but does not describe
+            them all the same way: ``_contain_message_loop_failure`` spends the
+            invalid-message close only for a client frame-shape escape, and the
+            transport's internal-error close for a server-side failure, so the
+            reason on the wire is never a false accusation against the frame.
+            """
+            try:
+                await super().handle()
+            except Exception as exc:
+                # ``Exception``, not ``BaseException`` minus a hard-coded trio:
+                # the containment's contract is "ordinary non-cancellation
+                # failure", and the language already draws that line. Cancellation
+                # (a ``BaseException``), ``KeyboardInterrupt``, ``SystemExit`` and
+                # ``GeneratorExit`` all bypass by inheritance, present and future
+                # subclasses included - no hand-maintained list can drift.
+                await _contain_message_loop_failure(self, exc, "graphql-transport-ws")
 
     class _RevalidatingGraphQLWSHandler(base_consumer_cls.graphql_ws_handler_class):
         """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
@@ -1490,6 +1706,22 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             if not await revalidate_operation_actor(self):
                 return
             await super().handle_start(message)
+
+        async def handle(self) -> None:
+            """The legacy handler's identical loop containment.
+
+            Upstream's legacy loop is THINNER than transport-ws's, not sturdier:
+            its dispatcher catches nothing, and ``cleanup_operation`` indexes
+            ``self.tasks`` unconditionally, so a ``stop`` for an id that was
+            never started kills the loop outright. The legacy protocol therefore
+            needs the guard at least as much, and gets the identical one,
+            including the client-shape / server-side close split - see the
+            transport-ws override above for the full rationale.
+            """
+            try:
+                await super().handle()
+            except Exception as exc:
+                await _contain_message_loop_failure(self, exc, "legacy graphql-ws")
 
     class _RevocationGatedWebSocketAdapter(base_consumer_cls.websocket_adapter_class):
         """The outbound checkpoint, on the seam both protocols share.

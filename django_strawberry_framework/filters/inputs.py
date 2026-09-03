@@ -36,7 +36,7 @@ from django_filters.utils import get_model_field
 from strawberry import UNSET, relay
 
 from ..conf import hide_flat_filters_setting
-from ..exceptions import ConfigurationError, _safe_arg_repr
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..registry import register_subsystem_clear
 from ..utils.converters import MRO_CONTINUE, convert_with_mro
 from ..utils.input_values import is_inactive_value
@@ -213,9 +213,8 @@ LOGIC_OPERATORS_BY_PYTHON_ATTR: Mapping[str, LogicOperatorDescriptor] = MappingP
 # field_specs + factory caches + ``_lifecycle`` binding). This module keeps
 # the spec-named public wrappers and the disjoint per-subsystem ledgers.
 # ``clear_filter_input_namespace`` leaves class objects parked in
-# ``filters.inputs.__dict__`` -- ``setattr`` on the next materialize replaces
-# them in place. Stripping via ``delattr`` would break ``strawberry.lazy(...)``
-# holders whose autouse reload did not also reload the consumer module.
+# ``filters.inputs.__dict__``, per the parked-globals lifecycle stated on
+# ``utils/inputs.py::make_input_namespace``.
 _materialized_names: dict[str, type]
 _field_specs: dict[tuple[type[FilterSet], str], FieldSpec]
 (
@@ -583,6 +582,7 @@ def normalize_input_value(
         return None
 
     def _gid_multi(_filter: Filter) -> Any:
+        _require_list_container(_filter, raw_value, "GlobalID list")
         return [_encode_global_id_input(item) for item in raw_value]
 
     def _gid(_filter: Filter) -> Any:
@@ -591,12 +591,14 @@ def normalize_input_value(
     def _csv(_filter: Filter) -> Any:
         # ``in`` / ``range`` generated CSV filters consume a list; unwrap
         # any enum members per element (parity with ``ListFilter`` below).
+        _require_list_container(_filter, raw_value, "CSV membership list")
         return [_unwrap_enum_member(item) for item in raw_value]
 
     def _range(matched: Filter) -> Any:
         return _normalize_range_value(matched, raw_value, field_name=field_name)
 
     def _list(_filter: Filter) -> Any:
+        _require_list_container(_filter, raw_value, "list input")
         return [_unwrap_enum_member(item) for item in raw_value]
 
     def _typed(_filter: Filter) -> object:
@@ -623,6 +625,30 @@ def normalize_input_value(
         scalar_registry={},
         fallthrough_error_factory=_unexpected_filter_dispatch,
     )
+
+
+def _require_list_container(filter_instance: Filter, raw_value: Any, shape: str) -> None:
+    """Fail loud when a list-consuming normalize arm receives another container.
+
+    ``GlobalIDMultipleChoiceFilter`` / ``BaseCSVFilter`` (``in`` / ``range``)
+    / ``ListFilter`` / ``ArrayFilter`` normalize by iterating ``raw_value``.
+    The schema declares every such input as a GraphQL list, so the wire can
+    only deliver a list; the reachable non-list shapes are direct-Python
+    ``apply_sync`` caller mistakes. The previous arms SPLATTED whatever they
+    were handed: a ``{'start': 1, 'end': 5}`` patch normalized to its KEYS
+    (``['start', 'end']``) and a string normalized to its CHARACTERS -- both
+    silently dropped the intended predicate and poisoned the form-data dict
+    with junk members. The shape is invalid, not merely iterable, so it
+    raises the typed ``ConfigurationError`` (fail loud, never a silent
+    keys-for-values swap).
+    """
+    if not isinstance(raw_value, (list, tuple)):
+        raise ConfigurationError(
+            f"{filter_instance.__class__.__name__} consumes a list of values for its "
+            f"{filter_instance.field_name!r} input, but received a non-list container "
+            f"({_safe_type_name(raw_value)} {_safe_arg_repr(raw_value)}) for the {shape}; "
+            "send a list (the GraphQL schema already rejects this shape over the wire).",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1030,10 +1056,11 @@ def clear_filter_input_namespace() -> None:
 
     Thin family wrapper over the ``make_set_input_namespace`` heavy clear
     (ledger, ``_field_specs``, ``FilterArgumentsFactory`` caches, every
-    ``FilterSet`` subclass's ``_lifecycle`` binding attrs). Materialized
-    class objects stay parked in ``filters.inputs.__dict__`` so held
-    ``strawberry.lazy(...)`` LazyTypes keep resolving across autouse reloads
-    that do not also reload the holder (e.g. ``test_scalars_api.py`` reloads
+    ``FilterSet`` subclass's ``_lifecycle`` binding attrs). Materialized class
+    objects stay parked in ``filters.inputs.__dict__`` per the parked-globals
+    lifecycle stated on ``utils/inputs.py::make_input_namespace`` - which is what
+    keeps held ``strawberry.lazy(...)`` LazyTypes resolving across an autouse
+    reload that does not also reload the holder (``test_scalars_api.py`` reloads
     only its own app's schema).
     """
     _clear_input_namespace()

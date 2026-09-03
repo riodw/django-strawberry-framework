@@ -494,7 +494,17 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
       ``getattr(root, name)`` wrapped in ``try/except DoesNotExist`` so
       the resolver returns ``None`` when the reverse row is absent.
     - Forward FK / forward OneToOne: ``getattr(root, name)`` - returns
-      the related instance, or ``None`` if the FK is nullable and unset.
+      the related instance, or ``None`` if the FK is nullable and unset,
+      or ``None`` when the FK does not resolve to a row (the same
+      absence-containment class the reverse OneToOne branch applies:
+      the descriptor raises the target's ``DoesNotExist`` for a dangling
+      FK column or an unsaved instance's unset non-null FK). The catch is
+      the target's ``DoesNotExist`` ONLY - never a bare ``AttributeError``
+      - so a consumer's own descriptor or property raising one keeps
+      raising: that is a programming error, not an absent row. On a
+      non-nullable wire field the ``None`` return still surfaces through
+      graphql-core's non-null completion guard, so a real absence stays an
+      error, never a silent empty answer.
 
     B3: all resolvers now accept ``info`` (Strawberry injects it
     automatically) and call ``_check_n1`` whenever a strictness other
@@ -618,6 +628,25 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
         return _name_resolver(reverse_one_to_one_resolver, field_name)
 
+    # Absence containment for the forward descriptor read. The ORM signals
+    # "this FK does not resolve to a row" by raising the target model's
+    # ``DoesNotExist`` - a dangling FK column read through the descriptor, or
+    # an unsaved instance's unset non-null FK. Django raises the per-relation
+    # ``RelatedObjectDoesNotExist`` subclass, which inherits from BOTH that
+    # ``DoesNotExist`` and ``AttributeError``; catching the ``DoesNotExist``
+    # side alone is therefore sufficient AND is the point: a bare
+    # ``AttributeError`` arm would additionally swallow one raised by a
+    # consumer's own descriptor / property or a typo'd accessor, turning a
+    # programming error into a silent null. The empty-tuple fallback (a
+    # relation double with no ``DoesNotExist``) deliberately catches nothing
+    # for the same reason.
+    related_does_not_exist: tuple[type[BaseException], ...] = (
+        (field_meta.related_model.DoesNotExist,)
+        if field_meta.related_model is not None
+        and hasattr(field_meta.related_model, "DoesNotExist")
+        else ()
+    )
+
     def forward_resolver(root: Any, info: Info) -> Any:
         context = getattr(info, "context", None)
         # FK-id elision (spec-011 Decision 7) and the N+1 probe both key off the
@@ -642,7 +671,13 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             if in_async_context() and _will_lazy_load_single(root, field_name):
 
                 async def _resolve_async() -> Any:
-                    related = await sync_to_async(getattr, thread_sensitive=True)(root, field_name)
+                    try:
+                        related = await sync_to_async(getattr, thread_sensitive=True)(
+                            root,
+                            field_name,
+                        )
+                    except related_does_not_exist:
+                        return None
                     if visibility_type is None or related is None:
                         return related
                     # Strictness being off says nothing about what the optimizer
@@ -656,7 +691,10 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
                 return _resolve_async()
 
-            related = getattr(root, field_name)
+            try:
+                related = getattr(root, field_name)
+            except related_does_not_exist:
+                return None
             if visibility_type is None or related is None:
                 return related
             # Strictness being off says nothing about what the optimizer planned,
@@ -704,7 +742,13 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         if in_async_context() and _will_lazy_load_single(root, field_name):
 
             async def _resolve_async() -> Any:
-                related = await sync_to_async(getattr, thread_sensitive=True)(root, field_name)
+                try:
+                    related = await sync_to_async(getattr, thread_sensitive=True)(
+                        root,
+                        field_name,
+                    )
+                except related_does_not_exist:
+                    return None
                 if visibility_type is not None and related is not None:
                     if _optimizer_scoped_relation(
                         info,
@@ -721,7 +765,10 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
             return _resolve_async()
 
-        related = getattr(root, field_name)
+        try:
+            related = getattr(root, field_name)
+        except related_does_not_exist:
+            return None
         if visibility_type is not None and related is not None:
             if _optimizer_scoped_relation(
                 info,

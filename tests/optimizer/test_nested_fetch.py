@@ -132,6 +132,61 @@ def test_resolve_strategy_rejects_hostile_type_and_class_name():
         resolve_strategy(WindowedPrefetchStrategy)
 
 
+def test_resolve_strategy_hostile_str_dunders_stay_typed():
+    """A consumer-supplied str subclass cannot replace the typed rejection.
+
+    Resolving a name dispatches into the selection's dunders while deciding
+    (``__eq__`` for the ``"auto"`` check, ``__hash__`` inside the registry
+    lookup) and while rendering (``__repr__`` in the unknown-name message).
+    Each read is guarded, so a hostile override degrades to the typed
+    ``ConfigurationError`` instead of an arbitrary exception.
+    """
+
+    class HostileEq(str):
+        def __eq__(self, other):
+            raise RuntimeError("hostile eq")
+
+        def __hash__(self):
+            return str.__hash__(self)
+
+    # A hostile ``__eq__`` cannot force a false AUTO_STRATEGY match either:
+    # the comparison reads through the base ``str`` slot, so content decides.
+    assert resolve_strategy(HostileEq("auto")) is AUTO_STRATEGY
+    with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
+        resolve_strategy(HostileEq("correlated"))
+
+    class HostileHash(str):
+        def __hash__(self):
+            raise RuntimeError("hostile hash")
+
+    with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
+        resolve_strategy(HostileHash("correlated"))
+
+    class HostileRepr(str):
+        def __repr__(self):
+            raise RuntimeError("hostile repr")
+
+    with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
+        resolve_strategy(HostileRepr("correlated"))
+
+
+def test_resolve_strategy_raising_plan_attribute_is_not_a_strategy():
+    """A raising ``plan`` attribute reads as "not a strategy", never escapes.
+
+    ``getattr(value, "plan", None)`` only absorbs ``AttributeError``; an
+    attribute read that raises anything else is guarded to the same typed
+    rejection a non-strategy object receives.
+    """
+
+    class RaisingPlan:
+        @property
+        def plan(self):
+            raise RuntimeError("hostile plan read")
+
+    with pytest.raises(ConfigurationError, match="must be a strategy name"):
+        resolve_strategy(RaisingPlan())
+
+
 def test_resolve_strategy_lateral_loads_the_lateral_backend():
     """``"lateral"`` lazily registers and returns the Postgres backend singleton."""
     from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY

@@ -15,7 +15,9 @@ against synthetic ``SimpleNamespace`` fields, so the OneToOne branch can
 be exercised without a real Django OneToOne in the example schema.
 """
 
+import datetime
 import itertools
+import uuid
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +27,7 @@ from apps.products.models import Category, Item
 from django.db import connection as db_connection
 from django.db import models as djmodels
 from django.test import override_settings
+from django.utils import timezone
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
@@ -732,6 +735,289 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
     assert resolver(RootMissingProfile(), fake_info) is None
     assert resolver(RootWithProfile(), fake_info) == "the-profile"
     assert resolver.__name__ == "resolve_profile"
+
+
+# ---------------------------------------------------------------------------
+# Absence containment: a relation that does not resolve to a row collapses to
+# ``None`` instead of letting the ORM's absence signal escape the resolver.
+# Forward and reverse, sync and async, fast path and planned path.
+# ---------------------------------------------------------------------------
+
+
+def _forward_category_resolver():
+    """Build the generated forward resolver for ``Item.category``."""
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    return _make_relation_resolver(Item._meta.get_field("category"), parent_type=Item)
+
+
+def test_forward_resolver_contains_unsaved_instance_does_not_exist():
+    """Forward resolver: an unsaved instance's unset non-null FK collapses to None.
+
+    Django's ``ForwardManyToOneDescriptor`` answers ``item.category`` on an
+    unsaved row with ``RelatedObjectDoesNotExist`` (an ``AttributeError``
+    subclass) raised WITHOUT a query. The generated resolver contains it into
+    ``None`` - the same absent-row contract the reverse OneToOne branch has -
+    instead of letting the ORM exception escape the public resolver boundary.
+    """
+    resolver = _forward_category_resolver()
+    root = Item(name="unsaved")
+    assert root.category_id is None
+    fake_info = SimpleNamespace(context=None, path=None)
+    assert resolver(root, fake_info) is None
+
+
+@pytest.mark.asyncio
+async def test_forward_resolver_async_contains_unsaved_instance_does_not_exist():
+    """Async parity of the unsaved-instance containment (fast path).
+
+    The async branch offloads the unloaded descriptor read through
+    ``sync_to_async``; the absence signal raised inside that thread is
+    contained into ``None`` exactly as the sync branch contains it.
+    """
+    resolver = _forward_category_resolver()
+    root = Item(name="unsaved-async")
+    fake_info = SimpleNamespace(context=None, path=None)
+    assert await resolver(root, fake_info) is None
+
+
+def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist():
+    """Planned-path parity: FK-id elisions armed, unsaved root still contained.
+
+    Arming elisions (with a key that does not match this field) routes the
+    resolve through the planned branch past ``_check_n1``; the descriptor
+    read there carries the same containment as the fast path.
+    """
+    from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
+
+    resolver = _forward_category_resolver()
+    armed = {resolver_key(Item, "category", ("elsewhere", "category"))}
+    fake_info = SimpleNamespace(
+        context={DST_OPTIMIZER_FK_ID_ELISIONS: armed},
+        path=_path("allItems", 0, "category"),
+    )
+    root = Item(name="unsaved-planned")
+    assert resolver(root, fake_info) is None
+
+
+@pytest.mark.asyncio
+async def test_forward_resolver_async_planned_path_contains_unsaved_instance():
+    """Async planned-path parity of the unsaved-instance containment."""
+    from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
+
+    resolver = _forward_category_resolver()
+    armed = {resolver_key(Item, "category", ("elsewhere", "category"))}
+    fake_info = SimpleNamespace(
+        context={DST_OPTIMIZER_FK_ID_ELISIONS: armed},
+        path=_path("allItems", 0, "category"),
+    )
+    root = Item(name="unsaved-async-planned")
+    assert await resolver(root, fake_info) is None
+
+
+@pytest.mark.django_db
+def test_forward_resolver_contains_dangling_fk_through_public_schema():
+    """A dangling FK read through a real schema execution stays contained.
+
+    The category row is deleted with constraint checks disabled, emulating a
+    data-integrity anomaly (a restore, a partial import, manual SQL). The
+    forward resolver's descriptor read raises ``Category.DoesNotExist`` at
+    RESOLVE time; the containment collapses it to ``None``, so the raw ORM
+    absence signal never reaches graphql-core's error layer - the wire sees
+    only the non-null completion guard for the non-nullable field.
+    """
+    from apps.products import services
+
+    services.seed_data(1)
+    category = Category.objects.first()
+    assert category is not None
+    item = Item.objects.filter(category=category).first()
+    assert item is not None
+    disabled = db_connection.disable_constraint_checking()
+    try:
+        with db_connection.cursor() as cursor:
+            cursor.execute("DELETE FROM products_category WHERE id = %s", [category.pk])
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+
+        class ItemType(DjangoType):
+            class Meta:
+                model = Item
+                fields = ("id", "name", "category")
+
+        finalize_django_types()
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            def items(self) -> list[ItemType]:
+                return Item.objects.filter(pk=item.pk)
+
+        result = strawberry.Schema(query=Query).execute_sync(
+            "{ items { name category { name } } }",
+        )
+        assert result.errors is not None and len(result.errors) == 1
+        original = result.errors[0].original_error
+        # The ORM absence signal must not surface as the error's cause: the
+        # only error left is graphql-core's own non-null completion guard.
+        assert not isinstance(original, AttributeError)
+    finally:
+        # Remove every row whose FK now dangles off the deleted category,
+        # children before parents, BEFORE re-enabling constraint checks so the
+        # fixture teardown's ``PRAGMA foreign_key_check`` sees a consistent
+        # database (the test's transaction rolls back anyway).
+        from apps.products.models import Entry, Property
+
+        Entry.objects.filter(property__category_id=category.pk).delete()
+        Entry.objects.filter(item__category_id=category.pk).delete()
+        Property.objects.filter(category_id=category.pk).delete()
+        Item.objects.filter(category_id=category.pk).delete()
+        if disabled:
+            db_connection.enable_constraint_checking()
+
+
+def test_o1_reverse_one_to_one_propagates_plain_attribute_error():
+    """Reverse OneToOne: a plain ``AttributeError`` is a BUG, not an absent row.
+
+    The catch is exactly ``related_model.DoesNotExist`` - which Django's
+    per-relation ``RelatedObjectDoesNotExist`` subclasses, so the real absent
+    reverse row is still contained. A plain ``AttributeError`` is not that: it
+    comes from a consumer's own descriptor / property or a typo'd accessor,
+    and swallowing it would turn a programming error into a silent ``null``.
+    It propagates instead.
+    """
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class FakeDoesNotExist(Exception):  # noqa: N818  (mirrors Django's Model.DoesNotExist naming)
+        pass
+
+    fake_field = SimpleNamespace(
+        name="profile",
+        many_to_many=False,
+        one_to_many=False,
+        one_to_one=True,
+        auto_created=True,
+        related_model=SimpleNamespace(DoesNotExist=FakeDoesNotExist),
+    )
+    resolver = _make_relation_resolver(fake_field)
+
+    class RootHostileProfile:
+        @property
+        def profile(self):
+            raise AttributeError("hostile reverse descriptor")
+
+    fake_info = SimpleNamespace(context=None, path=None)
+    with pytest.raises(AttributeError, match="hostile reverse descriptor"):
+        resolver(RootHostileProfile(), fake_info)
+
+
+def test_reverse_one_to_one_real_model_missing_row_contained():
+    """Real reverse OneToOne (library app): unsaved patron resolves to None.
+
+    ``patron.card`` on an unsaved ``Patron`` raises
+    ``MembershipCard.DoesNotExist`` from the descriptor without a query; the
+    generated resolver contains it into ``None``.
+    """
+    from apps.library.models import Patron
+
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    resolver = _make_relation_resolver(Patron._meta.get_field("card"), parent_type=Patron)
+    fake_info = SimpleNamespace(context=None, path=None)
+    assert resolver(Patron(name="No Card"), fake_info) is None
+
+
+@pytest.mark.asyncio
+async def test_reverse_one_to_one_async_contains_missing_row():
+    """Async parity of the real-model reverse OneToOne containment."""
+    from apps.library.models import Patron
+
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    resolver = _make_relation_resolver(Patron._meta.get_field("card"), parent_type=Patron)
+    fake_info = SimpleNamespace(context=None, path=None)
+    assert await resolver(Patron(name="No Card Async"), fake_info) is None
+
+
+@pytest.mark.django_db
+def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
+    """Nullable forward FK pointing at a DELETED row resolves to ``None``.
+
+    The non-nullable dangling case raises ``RelatedObjectDoesNotExist`` (which
+    subclasses ``AttributeError``); the nullable one does NOT - Django's
+    descriptor lets the target's plain ``Model.DoesNotExist`` out of
+    ``get_object()``, and that class is not an ``AttributeError`` at all. Both
+    are the same data-integrity anomaly (a restore, a partial import, manual
+    SQL) and both must collapse to ``None``, so the nullable spelling is
+    pinned explicitly rather than assumed to ride on the other one's catch.
+
+    ``ScalarSpecimen.parent`` is the example project's only nullable forward
+    FK; the target row is removed with constraint checking off so the column
+    survives the delete instead of cascading.
+    """
+    from apps.scalars.models import ScalarSpecimen
+
+    def create_specimen(label, *, parent=None):
+        return ScalarSpecimen.objects.create(
+            label=label,
+            occurred_on=datetime.date(2026, 1, 1),
+            occurred_at=timezone.now(),
+            occurred_time=datetime.time(12, 0),
+            payload={},
+            external_id=uuid.uuid4(),
+            parent=parent,
+        )
+
+    parent = create_specimen("dangling-fk-parent")
+    child = create_specimen("dangling-fk-child", parent=parent)
+    resolver = _make_relation_resolver(
+        ScalarSpecimen._meta.get_field("parent"),
+        parent_type=ScalarSpecimen,
+    )
+    fake_info = SimpleNamespace(context=None, path=None)
+    disabled = db_connection.disable_constraint_checking()
+    try:
+        with db_connection.cursor() as cursor:
+            cursor.execute("DELETE FROM scalars_scalarspecimen WHERE id = %s", [parent.pk])
+        # Re-read so the instance carries the dangling column with an EMPTY
+        # relation cache: the row created above still holds the parent object
+        # in ``_state.fields_cache`` and would answer from it without a query.
+        dangling = ScalarSpecimen.objects.get(pk=child.pk)
+        assert dangling.parent_id == parent.pk
+        assert resolver(dangling, fake_info) is None
+    finally:
+        # Clear the dangling column BEFORE re-enabling constraint checks so
+        # the fixture teardown's ``PRAGMA foreign_key_check`` sees a
+        # consistent database (the test's transaction rolls back anyway).
+        ScalarSpecimen.objects.filter(pk=child.pk).update(parent=None)
+        if disabled:
+            db_connection.enable_constraint_checking()
+
+
+def test_forward_resolver_propagates_consumer_attribute_error():
+    """A consumer descriptor raising ``AttributeError`` is NOT swallowed.
+
+    The containment catches the target's ``DoesNotExist`` only. A plain
+    ``AttributeError`` from a consumer-authored property / descriptor (or a
+    typo'd accessor) is a programming error: collapsing it to ``None`` would
+    answer the query with a silent ``null`` and hide the bug, so it
+    propagates out of the resolver unchanged.
+    """
+    resolver = _forward_category_resolver()
+
+    class HostileItem:
+        """Stands in for a consumer overriding the relation with a broken property."""
+
+        @property
+        def category(self):
+            raise AttributeError("consumer descriptor bug")
+
+    fake_info = SimpleNamespace(context=None, path=None)
+    with pytest.raises(AttributeError, match="consumer descriptor bug"):
+        resolver(HostileItem(), fake_info)
 
 
 @pytest.mark.django_db

@@ -478,3 +478,84 @@ def test_mutation_field_metadata_passthrough():
     field = mutation_type.fields["createItem"]
     assert field.description == "Create a new item entity"
     assert field.deprecation_reason == "Use createItemV2 instead"
+
+
+# ---------------------------------------------------------------------------
+# Hostile directives containment (hunt 0.0.15)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bare", ["@deprecated", b"@deprecated"])
+def test_bare_string_or_bytes_directives_raise_at_construction(bare):
+    """A bare str / bytes `directives` is rejected at the construction line.
+
+    Strawberry consumes field directives lazily at class decoration / SDL render,
+    so an unvalidated value fails THERE, far from the assignment line: a bare
+    `str` is iterated character-wise and raises a raw
+    `AttributeError: 'str' object has no attribute '__strawberry_directive__'`
+    at schema build, while a `bytes` (iterating into ints) builds silently and
+    crashes SDL render the same way. The factory must fail loud as
+    `ConfigurationError` naming `DjangoMutationField` at the assignment line -
+    the same fail-loud posture the auth fixed-field factories carry (the
+    containment is single-sited in
+    `utils/directives.py::validated_field_directives` and shared with them).
+    """
+    _declare_item_primaries()
+    CreateItem, _, _ = _operation_mutations()
+
+    with pytest.raises(ConfigurationError, match="directives must be a sequence"):
+        DjangoMutationField(CreateItem, directives=bare)
+
+
+def test_hostile_directives_iterator_raises_at_construction():
+    """An iterator that raises midway fails as ConfigurationError, never ValueError."""
+    _declare_item_primaries()
+    CreateItem, _, _ = _operation_mutations()
+
+    class HostileDirectives:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise ValueError("boom")
+
+    with pytest.raises(ConfigurationError, match="directives could not be read") as exc:
+        DjangoMutationField(CreateItem, directives=HostileDirectives())
+    assert isinstance(exc.value.__cause__, ValueError)
+
+
+def test_non_iterable_directives_raise_configuration_error():
+    """A non-iterable `directives` value fails loud instead of a raw TypeError."""
+    _declare_item_primaries()
+    CreateItem, _, _ = _operation_mutations()
+
+    with pytest.raises(ConfigurationError, match="directives could not be read") as exc:
+        DjangoMutationField(CreateItem, directives=42)
+    assert isinstance(exc.value.__cause__, TypeError)
+
+
+def test_valid_directives_reach_the_built_field():
+    """A real directive sequence survives the containment and lands on the field.
+
+    The happy-path pin over the containment: the tuple conversion must forward a
+    genuine directive sequence unchanged, and the built schema renders it on the
+    field's SDL - the containment rejects hostile shapes without swallowing the
+    supported one.
+    """
+    from strawberry.schema_directive import Location, schema_directive
+
+    @schema_directive(locations=[Location.FIELD_DEFINITION], name="tagged")
+    class Tagged:
+        value: str
+
+    _declare_item_primaries()
+    CreateItem, _, _ = _operation_mutations()
+
+    @strawberry.type
+    class Mutation:
+        create_item = DjangoMutationField(CreateItem, directives=[Tagged(value="x")])
+
+    finalize_django_types()
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
+    sdl = str(schema)
+    assert '@tagged(value: "x")' in sdl

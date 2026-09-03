@@ -527,6 +527,40 @@ def test_dynamic_filterset_cache_collapses_exclude_order():
 
 
 @pytest.mark.django_db
+def test_get_filterset_class_collapses_exclude_none_with_absent():
+    """``exclude=None`` is "no exclusions" (django-filter reads ``exclude or []``).
+
+    A falsy exclude must collapse onto the absent slot: keeping it as an
+    extras discriminator minted two ``<Model>AutoFilter`` classes for one
+    logical declaration, and the second BFS build then failed the
+    duplicate-``__name__`` collision check.
+    """
+    via_absent = get_filterset_class(None, model=Category, fields={"name": ["exact"]})
+    via_none = get_filterset_class(
+        None,
+        model=Category,
+        fields={"name": ["exact"]},
+        exclude=None,
+    )
+    assert via_absent is via_none
+    _ = FilterArgumentsFactory(via_absent).arguments
+    _ = FilterArgumentsFactory(via_none).arguments  # must not raise
+
+
+@pytest.mark.django_db
+def test_get_filterset_class_requires_fields_or_exclude_when_dynamic():
+    """A dynamic factory must reject a Meta with neither ``fields`` nor ``exclude``.
+
+    django-filter's metaclass hard-asserts that a ``Meta.model`` declares at
+    least one of the two; without the pre-validation that raw
+    ``AssertionError`` escaped ``get_filterset_class`` instead of the
+    package's typed ``ConfigurationError``.
+    """
+    with pytest.raises(ConfigurationError, match="requires `fields` or `exclude`"):
+        get_filterset_class(None, model=Category)
+
+
+@pytest.mark.django_db
 def test_dynamic_filterset_cache_does_not_replace_csv_filters():
     """The cookbook's ``replace_csv_filters`` rewrap is dropped per spec-027.
 

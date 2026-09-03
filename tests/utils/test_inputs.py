@@ -15,11 +15,11 @@ import strawberry
 
 from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.utils.canonical import base_container_values
 from django_strawberry_framework.utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
     GeneratedInputFieldSpec,
     InputFieldSpec,
-    _base_meta_values,
     _sorted_meta_values,
     build_strawberry_input_class,
     create_dynamic_set_class,
@@ -466,9 +466,9 @@ def test_make_hashable_meta_value_allows_shared_acyclic_containers():
     assert make_hashable_meta_value([shared, shared]) == (("exact",), ("exact",))
 
 
-def test_base_meta_values_reads_builtin_dict_items():
+def test_base_container_values_reads_builtin_dict_items():
     """The container reader exposes built-in dict entries without invoking overrides."""
-    assert _base_meta_values({"name": 1}) == (("name", 1),)
+    assert base_container_values({"name": 1}) == (("name", 1),)
 
 
 def test_normalize_set_meta_wraps_unreadable_reserved_key_membership():
@@ -505,6 +505,27 @@ def test_normalize_field_name_sequence_wraps_hostile_iterators():
 
     with pytest.raises(ConfigurationError, match="readable sequence"):
         normalize_field_name_sequence(_HostileSequence(), flavor="Probe")
+
+
+def test_normalize_field_name_sequence_rejects_unordered_sets():
+    """A set / frozenset is rejected: its iteration order varies per process.
+
+    The serializer flavor folds the DECLARED order into the generated input
+    type name (``rest_framework/inputs.py::serializer_input_type_name``
+    concatenates per-field tokens in walk order), so an unordered container
+    would make the same declaration produce different type names - and SDL
+    field orders - under different ``PYTHONHASHSEED`` values. The model / form
+    flavors sort their name sets (``name_set_input_type_name``); the shape
+    contract is owned once, here.
+    """
+    with pytest.raises(ConfigurationError, match="ordered sequence of field name strings"):
+        normalize_field_name_sequence({"b", "a"}, label="fields", flavor="SerializerMutation")
+    with pytest.raises(ConfigurationError, match="ordered sequence of field name strings"):
+        normalize_field_name_sequence(
+            frozenset(("b", "a")),
+            label="exclude",
+            flavor="SerializerMutation",
+        )
 
 
 def test_meta_sorting_wraps_a_hostile_generic_iterator():
@@ -711,6 +732,75 @@ def test_create_dynamic_set_class_requires_model():
             getter_name="get_probeset_class",
             explicit_param="probeset_class",
         )
+
+
+def test_normalize_meta_drops_falsy_exclude():
+    """django-filter reads exclusions as ``exclude or []``: every falsy spelling
+
+    (``None``, an empty container) is "no exclusions" and must drop the key
+    entirely, so the absent-vs-falsy pair cannot split a Layer-6 cache slot
+    via an extras discriminator. Truthy containers still canonicalize.
+    """
+    for falsy in (
+        None,
+        [],
+        (),
+        set(),
+        frozenset(),
+    ):
+        normalized = normalize_set_meta_for_factory(
+            {"model": object, "fields": ["name"], "exclude": falsy},
+            reserved_keys=frozenset(),
+        )
+        assert "exclude" not in normalized
+    canonical = normalize_set_meta_for_factory(
+        {"model": object, "fields": ["name"], "exclude": ("b", "a")},
+        reserved_keys=frozenset(),
+    )
+    assert canonical["exclude"] == ["a", "b"]
+
+
+def test_create_dynamic_set_class_enforces_fields_or_exclude_only_when_flag_set():
+    """The fields/exclude pre-validation is opt-in per base class.
+
+    The filter side sets ``require_fields_or_exclude`` because django-filter's
+    metaclass hard-asserts a ``Meta.model`` declares at least one of the two;
+    the order side's plain ``type`` metaclass accepts a fields-less Meta, so
+    the default keeps that lifecycle intact.
+    """
+    # A real model class: the Django-model check must pass so the flag's own
+    # rejection is what fires.
+    from apps.products.models import Category
+
+    fields_less = {"model": Category}
+    with pytest.raises(ConfigurationError, match="requires `fields` or `exclude`"):
+        create_dynamic_set_class(
+            dict(fields_less),
+            set_base_class=object,
+            auto_name_suffix="AutoProbe",
+            getter_name="get_probeset_class",
+            explicit_param="probeset_class",
+            require_fields_or_exclude=True,
+        )
+    # Default off: the fields-less Meta builds (the order-side lifecycle).
+    built = create_dynamic_set_class(
+        dict(fields_less),
+        set_base_class=object,
+        auto_name_suffix="AutoProbe",
+        getter_name="get_probeset_class",
+        explicit_param="probeset_class",
+    )
+    assert built.__name__ == "CategoryAutoProbe"
+    # exclude alone satisfies the requirement (django-filter: all-fields-minus).
+    exclude_only = create_dynamic_set_class(
+        {"model": Category, "exclude": ["name"]},
+        set_base_class=object,
+        auto_name_suffix="AutoProbe",
+        getter_name="get_probeset_class",
+        explicit_param="probeset_class",
+        require_fields_or_exclude=True,
+    )
+    assert exclude_only.__name__ == "CategoryAutoProbe"
 
 
 def test_make_dynamic_set_getter_collapses_equivalent_meta_and_passthroughs_explicit():
@@ -995,3 +1085,175 @@ def test_generated_input_arguments_factory_tolerates_none_or_missing_related_att
     input_cls = factory.arguments
     assert input_cls is not None
     assert input_cls.__name__ == "SetWithNoneRelatedInput"
+
+
+def test_build_strawberry_input_class_rejects_empty_specs_with_the_callers_remedy():
+    """The zero-field guard lives at the construction site, not only at its callers.
+
+    Strawberry rejects an empty input object at ``Schema(...)`` build with a raw
+    ``ValueError`` naming the GENERATED type, which tells a consumer nothing
+    about the class they wrote. A caller that knows the better remedy supplies
+    it; one that does not is unaffected, because
+    ``mutations/inputs.py`` legitimately builds an empty generated REMAINDER
+    when a consumer ``input_class`` supplies the fields.
+    """
+    with pytest.raises(ConfigurationError, match="remedy from the caller"):
+        build_strawberry_input_class(
+            "EmptyInputType",
+            [],
+            empty_message="EmptyInputType has no fields; here is the remedy from the caller.",
+        )
+
+    # No message: the empty build is permitted, for the merged-override caller.
+    built = build_strawberry_input_class("EmptyMergedInputType", [])
+    assert built.__name__ == "EmptyMergedInputType"
+
+
+def test_emit_rejects_graphql_name_collision_across_distinct_python_attrs():
+    """The emit scaffold's SECOND arm: two members collapsing onto one GraphQL name.
+
+    ``foo_bar`` and ``fooBar`` flatten to distinct python attrs, but
+    ``graphql_camel_name`` sends both to ``fooBar`` -- the same silent-overwrite
+    class as the attr collision, rejected before the later member clobbers the
+    earlier one's field in the generated input dataclass.
+    """
+
+    class _ProbeSet:
+        __qualname__ = "_ProbeSet"
+
+    field_specs: dict = {}
+    with pytest.raises(ConfigurationError, match="GraphQL input field name 'fooBar'"):
+        emit_set_input_field_triples(
+            _ProbeSet,
+            [("foo_bar", object()), ("fooBar", object())],
+            related_target_of=lambda _t, _e: (False, None),
+            related_source_path_of=lambda t, _e: t,
+            leaf_of=lambda _t, _pa, _e: (int | None, _t),
+            input_type_name_for=lambda cls: cls.__name__,
+            module_path=__name__,
+            field_specs=field_specs,
+        )
+    assert field_specs == {}
+
+
+def test_emit_rejects_flatten_collision_between_traversal_and_declared_member():
+    """``a__b`` (a relation traversal) flattens onto the declared member ``a_b``."""
+
+    class _ProbeSet:
+        __qualname__ = "_ProbeSet"
+
+    with pytest.raises(ConfigurationError, match="both generate the input attribute 'a_b'"):
+        emit_set_input_field_triples(
+            _ProbeSet,
+            [("a_b", object()), ("a__b", object())],
+            related_target_of=lambda _t, _e: (False, None),
+            related_source_path_of=lambda t, _e: t,
+            leaf_of=lambda _t, _pa, _e: (int | None, _t),
+            input_type_name_for=lambda cls: cls.__name__,
+            module_path=__name__,
+            field_specs={},
+        )
+
+
+def test_emit_stages_field_specs_atomically_across_a_clean_walk_then_collision():
+    """``field_specs`` rows commit only after the WHOLE set walks clean.
+
+    Writing provenance rows as each field is emitted left the family table
+    half-populated when a later member collided -- a schema build that failed
+    loud but not cleanly. The staged batch is dropped on the collision, so
+    rows emitted by earlier clean members do not survive either.
+    """
+
+    class _ProbeSet:
+        __qualname__ = "_ProbeSet"
+
+    def _emit(entries, field_specs):
+        return emit_set_input_field_triples(
+            _ProbeSet,
+            entries,
+            related_target_of=lambda _t, _e: (False, None),
+            related_source_path_of=lambda t, _e: t,
+            leaf_of=lambda _t, _pa, _e: (int | None, _t),
+            input_type_name_for=lambda cls: cls.__name__,
+            module_path=__name__,
+            field_specs=field_specs,
+        )
+
+    # A collision on the FIRST colliding pair commits nothing.
+    collision: dict = {}
+    with pytest.raises(ConfigurationError, match="both generate the input attribute"):
+        _emit([("a_b", object()), ("a__b", object())], collision)
+    assert collision == {}
+
+    # Clean members that emit BEFORE the late colliding member drop too.
+    late: dict = {}
+    with pytest.raises(ConfigurationError, match="both generate the input attribute"):
+        _emit([("a_b", object()), ("b", object()), ("a__b", object())], late)
+    assert late == {}
+
+    # The clean walk still commits every row.
+    clean: dict = {}
+    triples = _emit([("a_b", object()), ("b", object())], clean)
+    assert [triple[0] for triple in triples] == ["a_b", "b"]
+    assert set(clean) == {(_ProbeSet, "a_b"), (_ProbeSet, "b")}
+
+
+def test_make_hashable_meta_value_lands_hostile_hash_and_wrong_type_hash_opaque():
+    """A ``__hash__`` that raises OR returns a non-int lands the opaque token.
+
+    CPython rejects a non-int ``__hash__`` return with ``TypeError``, so both
+    hostile spellings reach the same ``except`` and must not escape the walk.
+    """
+
+    class _RaisingHash:
+        def __hash__(self):
+            raise RuntimeError("boom")
+
+    class _WrongTypeHash:
+        def __hash__(self):
+            return "not an int"  # noqa: PLE0309 -- the hostile spelling under test
+
+    for value in (_RaisingHash(), _WrongTypeHash()):
+        result = make_hashable_meta_value(value)
+        hash(result)  # the landed token is itself hashable
+        assert isinstance(result, tuple)
+        assert result[0] == "__unhashable_meta_value__"
+
+
+def test_opaque_meta_token_never_collides_with_a_real_string_value():
+    """The marker string lives inside a TUPLE token, so a real value cannot alias it.
+
+    A meta value that happens to BE the string ``__unhashable_meta_value__``
+    hashes to itself -- a plain ``str``, never the 3-tuple the opaque path
+    emits -- so the two cannot collapse onto one cache-key slot.
+    """
+    from django_strawberry_framework.utils.inputs import _opaque_meta_value
+
+    class Unhashable:
+        __hash__ = None
+
+    token = _opaque_meta_value(Unhashable())
+    assert isinstance(token, tuple) and token[0] == "__unhashable_meta_value__"
+    assert make_hashable_meta_value("__unhashable_meta_value__") == ("__unhashable_meta_value__")
+
+
+def test_make_hashable_meta_value_depth_boundary_is_exact():
+    """``_MAX_META_VALUE_DEPTH`` allows exactly 65 nested containers, rejects 66.
+
+    The root sits at depth 0 and each nesting adds one; the guard fires when a
+    container would be walked at depth 65. Pinning the exact boundary keeps an
+    off-by-one from ever shipping in either direction.
+    """
+
+    def nested(count: int) -> list:
+        value: list = []
+        cursor = value
+        for _ in range(count):
+            child: list = []
+            cursor.append(child)
+            cursor = child
+        return value
+
+    make_hashable_meta_value(nested(64))  # 65 lists: innermost at depth 64, allowed
+    with pytest.raises(ConfigurationError, match="maximum supported container depth"):
+        make_hashable_meta_value(nested(65))  # 66 lists: innermost at depth 65

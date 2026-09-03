@@ -243,11 +243,16 @@ class Command(BaseCommand):
 
         Dispatch is most-specific first:
 
-        1. A Relay-Node-suppressed pk wins over everything - its
-           ``id: GlobalID!`` is interface-supplied, so it is absent from
-           ``origin.__annotations__`` and must not be read there (a relation pk
-           on a Relay type, e.g. ``OneToOneField(primary_key=True)``, would
-           otherwise reach ``_relation_row`` and ``KeyError``).
+        1. A Relay-Node-suppressed NON-relation pk wins over the scalar branch -
+           its ``id: GlobalID!`` is interface-supplied, so it is absent from
+           ``origin.__annotations__`` and must not be read there. A RELATION pk
+           (``OneToOneField(primary_key=True)``, an MTI parent link) is NOT
+           suppressed: ``_build_annotations`` routes every relation field
+           through its relation branch before the pk-suppression check, so a
+           relation pk keeps its auto-synthesized annotation, finalize resolves
+           it, and the schema exposes the resolved relation type - never the
+           interface's GlobalID row. Falling through to ``_relation_row`` is
+           safe: the annotation is present, so no ``KeyError``.
         2. A consumer-authored field (``definition.consumer_authored_fields``)
            is next: ``_build_annotations`` deliberately skips auto-synthesis for
            it (the four-corner override contract in ``types/base.py``), so
@@ -268,15 +273,26 @@ class Command(BaseCommand):
     def _is_suppressed_relay_pk(definition: object, field: models.Field) -> bool:
         """Return whether ``field`` is the Relay-Node-suppressed primary key.
 
-        On a Relay-Node-shaped type the pk ``continue``s past ``convert_scalar``
-        (the interface supplies ``id: GlobalID!``), so it is absent from
-        ``origin.__annotations__`` and must not be indexed there. Shape uses
-        the shared ``types/base.py::_is_relay_shaped`` predicate - the same
-        gate ``_build_annotations`` used when it suppressed the pk - so a
+        On a Relay-Node-shaped type a NON-relation pk ``continue``s past
+        ``convert_scalar`` (the interface supplies ``id: GlobalID!``), so it is
+        absent from ``origin.__annotations__`` and must not be indexed there.
+        A RELATION pk is never suppressed: ``_build_annotations`` routes every
+        relation field through its relation branch BEFORE the pk-suppression
+        check, so a relation pk (``OneToOneField(primary_key=True)``, an MTI
+        parent link) keeps its auto-synthesized annotation and finalize
+        resolves it to the target type - the schema surface shows the relation,
+        not the interface's ``id: GlobalID!``. Checking ``field.is_relation``
+        first mirrors that branch order, so the command reports the relation
+        row the schema actually builds instead of a GlobalID row Strawberry
+        never emits for it. Shape uses the shared
+        ``types/base.py::_is_relay_shaped`` predicate - the same gate
+        ``_build_annotations`` used when it suppressed the pk - so a
         Meta-declared ``relay.Node``, a ``CustomNode(relay.Node)`` interface,
         and direct ``class Foo(DjangoType, relay.Node)`` inheritance stay in
         lockstep with synthesis.
         """
+        if field.is_relation:
+            return False
         if not _is_relay_shaped(definition.origin, definition.interfaces):
             return False
         return field.name == definition.model._meta.pk.name

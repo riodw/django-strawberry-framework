@@ -316,17 +316,35 @@ class TestClient(BaseGraphQLTestClient):
 
         The path-keyed ``files=`` contract (spec-043 Decision 9) makes the
         client - not the server - the owner of the multipart ``map``: each key
-        is a dotted variable path (dict keys and list indexes) and ``variables``
-        must carry a ``None`` placeholder at exactly that path. Walking the path
-        here fails a typo or a malformed call at the source, naming the bad path,
-        rather than emitting a spec-invalid envelope the server has to diagnose
-        later. Explicit ``AssertionError`` (not a bare ``assert``) so the guard
-        holds under ``python -O``, matching the empty-``variables`` guard above.
+        is a dotted variable path (dict keys and array indexes) and ``variables``
+        must carry a ``None`` placeholder at exactly that path. The walk models
+        the POST-serialization shape the map points into: ``json.dumps`` renders
+        dict (and dict subclass) values as JSON objects and list / tuple values
+        as JSON arrays, so both array flavors carry indexed placeholders alike.
+        Walking the path here fails a typo or a malformed call at the source,
+        naming the bad path, rather than emitting a spec-invalid envelope the
+        server has to diagnose later - which is also why an empty dotted segment
+        (an object path like ``variables.`` that can never name a GraphQL
+        variable) and a container whose length cannot be read are rejected here
+        instead of being emitted. Explicit ``AssertionError`` (not a bare
+        ``assert``) so the guard holds under ``python -O``, matching the
+        empty-``variables`` guard above.
         """
         for key in files:
             current: Any = variables
             for segment in key.split("."):
-                if isinstance(current, list):
+                # An empty segment can never name a GraphQL variable (variable
+                # names are non-empty), so a map entry built from one - the ``""``
+                # key's ``variables.`` path, or ``variables.data.`` for a ``""``
+                # field - would be a spec-invalid envelope only the server could
+                # diagnose (an opaque 400 naming no path). Fail at the source.
+                if not segment:
+                    raise AssertionError(
+                        f"files= path {_safe_arg_repr(key)} has an empty dotted segment: "
+                        f"multipart object paths are dot-separated non-empty names, so the "
+                        f"emitted map entry could never name a GraphQL variable.",
+                    )
+                if isinstance(current, (list, tuple)):
                     # Multipart operation paths use ``object-path`` numeric segments:
                     # a list index is its canonical non-negative decimal rendering.
                     # Guard the conversion itself because digit-like Unicode and very
@@ -335,16 +353,23 @@ class TestClient(BaseGraphQLTestClient):
                         index = int(segment)
                     except ValueError:
                         index = None
-                    if (
-                        index is None
-                        or index < 0
-                        or str(index) != segment
-                        or index >= len(current)
-                    ):
+                    try:
+                        size = len(current)
+                    except Exception as exc:
+                        # A container whose length is unreadable cannot be verified
+                        # to carry the placeholder - a malformed call, failed with
+                        # the guard's uniform type so a hostile ``__len__`` cannot
+                        # replace the guard with a raw exception escape.
+                        raise AssertionError(
+                            f"files= path {_safe_arg_repr(key)} has no matching placeholder in "
+                            f"variables: the array holding {_safe_arg_repr(segment)} has an "
+                            f"unreadable length, so the placeholder cannot be verified.",
+                        ) from exc
+                    if index is None or index < 0 or str(index) != segment or index >= size:
                         raise AssertionError(
                             f"files= path {_safe_arg_repr(key)} has no matching placeholder in "
                             f"variables: {_safe_arg_repr(segment)} is not a valid index into a "
-                            f"{len(current)}-item list.",
+                            f"{size}-item array.",
                         )
                     current = current[index]
                 elif isinstance(current, dict):

@@ -594,6 +594,69 @@ def test_safe_text_is_the_shared_str_renderer():
     assert _safe_text(_RaisingStr()) == "<unprintable _RaisingStr>"
 
 
+def test_safe_text_strips_a_str_subclass_returned_by_tp_str():
+    """A ``tp_str`` render that is a ``str`` SUBCLASS is stripped before the truthiness check.
+
+    CPython returns a ``tp_str`` result unchanged when it is a ``str`` subclass,
+    so without the base-``str``-slot strip the ``rendered or fallback``
+    truthiness check dispatched the leaked subclass's hostile ``__len__`` OUT
+    of this renderer (a raw ``RuntimeError`` replacing the promised typed
+    envelope), and its overridden ``__str__`` / ``__format__`` would run inside
+    the caller's f-string while the envelope was still being assembled.
+    """
+
+    class _LeakedRender(str):
+        def __str__(self) -> str:
+            raise RuntimeError("leaked-subclass __str__ ran")
+
+        def __format__(self, format_spec: str) -> str:
+            raise RuntimeError("hostile __format__ detonated")
+
+        def __len__(self) -> int:
+            raise RuntimeError("hostile __len__ detonated")
+
+    class _LeakyStrFactory:
+        def __str__(self) -> str:
+            return _LeakedRender("from-factory")
+
+    rendered = _safe_text(_LeakyStrFactory())
+    assert type(rendered) is str
+    assert rendered == "from-factory"
+    # The caller's f-string interpolation of the render never detonates either.
+    assert f"{rendered}" == "from-factory"
+    # The empty-render fallback rung stays reachable through the base slot.
+    assert _safe_text("", fallback="<unknown>") == "<unknown>"
+
+
+def test_write_error_envelope_survives_hostile_str_returning_message_object():
+    """The shared envelope ctor survives a message leaf whose str leaks a subclass.
+
+    ``field_error`` is the single FieldError leaf constructor; a validator or
+    serializer error whose message is a non-str object whose ``__str__``
+    returns a hostile ``str`` subclass used to detonate inside ``_str_list``
+    during envelope assembly, escaping the write pipeline as a raw
+    ``RuntimeError`` instead of a field-keyed ``FieldError``.
+    """
+
+    class _HostileRender(str):
+        def __str__(self) -> str:
+            raise RuntimeError("leaked-subclass __str__ ran")
+
+        def __format__(self, format_spec: str) -> str:
+            raise RuntimeError("hostile __format__ detonated")
+
+        def __len__(self) -> int:
+            raise RuntimeError("hostile __len__ detonated")
+
+    class _StrFactoryMessage:
+        def __str__(self) -> str:
+            return _HostileRender("hostile message")
+
+    leaf = _errors_module.field_error("name", ["fine", _StrFactoryMessage()])
+    assert leaf.field == "name"
+    assert leaf.messages == ["fine", "hostile message"]
+
+
 def test_safe_text_is_single_sourced_across_consumer_modules():
     """utils.errors and types.converters import the ONE renderer, not local twins."""
 

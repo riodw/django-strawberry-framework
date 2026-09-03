@@ -144,7 +144,10 @@ def strawberry_config(
 
     The keyword-only ``extra_scalar_map`` lets consumers register their own
     scalars alongside the package defaults; collisions with package-defined
-    keys raise ``ValueError`` (per spec-025 Decision 4). Every other keyword
+    keys raise ``ValueError`` (per spec-025 Decision 4). A mapping that cannot
+    be materialized - or whose keys raise while being hashed or compared
+    against the package keys - is rejected with ``ValueError`` too: consumer
+    key code never replaces the factory's typed boundary. Every other keyword
     argument in ``**config_kwargs`` is forwarded verbatim to
     ``StrawberryConfig(...)`` (e.g. ``auto_camel_case``, ``relay_max_results``).
     Passing ``scalar_map=`` directly is rejected with ``ValueError`` because
@@ -155,21 +158,28 @@ def strawberry_config(
         raise ValueError(
             "strawberry_config() owns scalar_map; pass consumer scalars with extra_scalar_map=...",
         )
-    if extra_scalar_map is None:
-        extra: dict[object, ScalarDefinition] = {}
-    else:
-        try:
-            # ``dict`` deliberately retains Strawberry's permissive key/value
-            # contract, while materializing once gives each call an isolated
-            # map.  A hostile mapping must not replace the promised factory
-            # boundary with its own arbitrary exception.
-            extra = dict(extra_scalar_map)
-        except BaseException as exc:
-            raise ValueError(
-                "strawberry_config(extra_scalar_map=...) must be materializable; "
-                f"got {_safe_arg_repr(extra_scalar_map)}.",
-            ) from exc
-    collisions = _PACKAGE_SCALAR_MAP.keys() & extra.keys()
+    try:
+        # ``dict`` deliberately retains Strawberry's permissive key/value
+        # contract, while materializing once gives each call an isolated
+        # map.  Materialization is only the FIRST dispatch into consumer key
+        # code, so the guard owns every later one too: the key-set
+        # intersection (``&``) and the merge into the fresh result dict
+        # re-hash the materialized keys and, on a hash collision, compare
+        # them - which runs a hostile key's ``__eq__`` even though ``dict()``
+        # itself succeeded.  A hostile mapping must not replace the promised
+        # factory boundary with its own arbitrary exception, whichever of
+        # these operations detonates it.
+        extra: dict[object, ScalarDefinition] = (
+            {} if extra_scalar_map is None else dict(extra_scalar_map)
+        )
+        collisions = _PACKAGE_SCALAR_MAP.keys() & extra.keys()
+        merged: dict[object, ScalarDefinition] = dict(_PACKAGE_SCALAR_MAP)
+        merged.update(extra)
+    except BaseException as exc:
+        raise ValueError(
+            "strawberry_config(extra_scalar_map=...) must be materializable with "
+            f"keys that hash and compare safely; got {_safe_arg_repr(extra_scalar_map)}.",
+        ) from exc
     if collisions:
         raise ValueError(
             "strawberry_config(extra_scalar_map=...) cannot redeclare package-defined scalars: "
@@ -177,8 +187,6 @@ def strawberry_config(
             "Define a Strawberry custom scalar of a different NewType / class "
             "to register under a separate key.",
         )
-    merged: dict[object, ScalarDefinition] = dict(_PACKAGE_SCALAR_MAP)
-    merged.update(extra)
     return StrawberryConfig(scalar_map=merged, **config_kwargs)
 
 
@@ -188,4 +196,12 @@ def _safe_scalar_map_key_label(key: object) -> str:
         name = getattr(key, "__name__", None)
     except BaseException:
         name = None
-    return name if isinstance(name, str) else _safe_arg_repr(key)
+    # A ``__name__`` that is a ``str`` subclass is read through the base
+    # ``str`` slot (parity with ``exceptions.py::_safe_type_name``): handing
+    # the subclass onward would let its ``__str__`` / ``__format__`` run -
+    # and its ``__lt__`` under ``sorted()`` - while the collision message is
+    # assembled, replacing the factory's ValueError with an arbitrary
+    # consumer exception.
+    if isinstance(name, str):
+        return str.__str__(name)
+    return _safe_arg_repr(key)

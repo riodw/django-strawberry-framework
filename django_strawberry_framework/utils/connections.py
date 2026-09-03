@@ -12,12 +12,15 @@ IDENTICALLY, or optimizer-on and optimizer-off behavior can split:
   reverse / limit rule, so the resolve-time window matches the plan-time window
   by construction (spec-033 Decision 4 / Decision 5, the cursor-parity
   invariant's resolve-time half).
-* The connection sidecar kwarg family (``CONNECTION_SIDECAR_KWARGS`` and the
-  presence predicates) - the walker refuses to window-plan a sidecar-bearing
-  nested connection, and the resolver refuses to consume a window when sidecar
-  kwargs are present (spec-032 Decision 6). Those two decisions must always use
-  the same kwarg family; a future sidecar (e.g. ``search``) is then a one-line
-  edit here rather than synchronized edits across the planner and resolver.
+* The connection sidecar kwarg names and the presence predicates over them -
+  the walker refuses to window-plan a sidecar-bearing nested connection, and
+  the resolver refuses to consume a window when sidecar kwargs are present
+  (spec-032 Decision 6). Those two decisions must always read the same kwarg
+  family, which is why the extraction and both predicates live here rather
+  than at either caller. A future sidecar (e.g. ``search``) is NOT a one-line
+  edit: ``connection_sidecar_inputs_from_kwargs`` returns a NAMED pair and
+  every caller destructures it, so a third member is a deliberate signature
+  change that surfaces at each consumer instead of being silently absorbed.
 
 This module depends on neither ``connection.py`` nor ``optimizer/walker.py`` so
 both can import it without a cycle. Plan-time argument coercion (an inline Int
@@ -41,6 +44,7 @@ from strawberry.relay.utils import SliceMetadata
 
 from ..exceptions import OptimizerError
 from ..resource_policy import effective_bound, policy_from_info
+from .input_values import is_inactive_value
 from .typing import schema_config_from_info
 
 # The connection sidecar argument names, in BOTH vocabularies the shared
@@ -57,7 +61,15 @@ from .typing import schema_config_from_info
 CONNECTION_FILTER_KWARG = "filter"
 CONNECTION_ORDER_KWARG = "order_by"
 CONNECTION_ORDER_KWARG_GRAPHQL = "orderBy"
-CONNECTION_SIDECAR_KWARGS = (CONNECTION_FILTER_KWARG, CONNECTION_ORDER_KWARG)
+
+#: The sentinel row an n+1 next-page probe overfetches, in BOTH pagination
+#: domains: the window domain (a row-number ceiling or in-branch ``LIMIT``
+#: raised by this much) and the value domain (``connection.py``'s keyset page,
+#: which fetches ``page_size + this`` and truncates). The two derive their page
+#: flags differently - row-number based vs ``len``-based - and that difference is
+#: deliberate, but the SENTINEL COUNT is one fact, and it was a bare ``1``
+#: in each domain under a docstring claiming the arithmetic had a single owner.
+NEXT_PAGE_PROBE_ROWS = 1
 
 
 class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, not a surfaced error
@@ -101,11 +113,39 @@ def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any] | None) -> tupl
     return kwargs.get(CONNECTION_FILTER_KWARG), order_by_input
 
 
+def is_supplied(value: Any) -> bool:
+    """Return whether a connection argument was actually supplied by the client.
+
+    The connection surfaces' spelling of the package's ONE active-input rule,
+    ``utils/input_values.py::is_inactive_value``, whose docstring already
+    claims to be that single rule. It was being re-typed as
+    ``value is not None and value is not strawberry.UNSET`` at 15 sites across
+    the two connection modules - the exact inverse, hand-written each time.
+
+    The rule lives in ``input_values.py`` (which deliberately imports no
+    strawberry, so the traversal primitives stay usable below the schema
+    layer); only the ``UNSET`` sentinel binding lives here.
+    """
+    return not is_inactive_value(value, unset_sentinel=strawberry.UNSET)
+
+
+def is_backward_shape(first: Any, last: Any) -> bool:
+    """Return whether the pagination arguments describe a BACKWARD (``last``-only) page.
+
+    The core Relay shape test: ``last`` was given as an ``int`` and ``first``
+    was not. It was spelled inline at four sites, each ANDing a different extra
+    term onto the same core - ``not before_supplied`` in the window derivation,
+    ``not last_zero_quirk`` in the keyset resolver, nothing at all in the keyset
+    bounds. Those extra terms are real per-site differences and stay explicit at
+    their call sites; what is shared is only this core, so a change to the core
+    is one edit and the variation between the sites stays visible.
+    """
+    return isinstance(last, int) and not isinstance(first, int)
+
+
 def has_connection_sidecar_input(*, filter_input: Any, order_by_input: Any) -> bool:
     """Return whether either already-extracted sidecar input is present."""
-    return (filter_input is not None and filter_input is not strawberry.UNSET) or (
-        order_by_input is not None and order_by_input is not strawberry.UNSET
-    )
+    return is_supplied(filter_input) or is_supplied(order_by_input)
 
 
 def has_connection_sidecar_kwargs(kwargs: dict[str, Any] | None) -> bool:
@@ -257,15 +297,17 @@ class WindowRangePlan:
 
     @property
     def _probe_increment(self) -> int:
-        """The sentinel-row count the probe adds to a fetch bound (1 iff probing).
+        """The sentinel-row count the probe adds to a fetch bound (the sentinel iff probing).
 
-        The single owner of the n+1 arithmetic: ``fetch_upper_bound`` and
-        ``fetch_limit`` both add THIS instead of each spelling their own ``+1``,
-        so the sentinel policy has one place to change and the two bounds cannot
-        drift. Zero when the probe is off, so both bounds equal their page
-        semantics by construction.
+        The window domain's owner of the n+1 arithmetic: ``fetch_upper_bound``
+        and ``fetch_limit`` both add THIS instead of each spelling their own
+        ``+1``, so the two bounds cannot drift. Zero when the probe is off, so
+        both bounds equal their page semantics by construction. The sentinel
+        COUNT itself is ``NEXT_PAGE_PROBE_ROWS``, shared with the value domain's
+        keyset page in ``connection.py`` - which always probes, so it adds the
+        constant unconditionally rather than through this gate.
         """
-        return 1 if self.next_page_probe else 0
+        return NEXT_PAGE_PROBE_ROWS if self.next_page_probe else 0
 
     @property
     def fetch_upper_bound(self) -> int | None:
@@ -625,9 +667,9 @@ def derive_connection_window_bounds(
         last=last,
         max_results=effective_max_results,
     )
-    before_supplied = before is not None and before is not strawberry.UNSET
-    after_supplied = after is not None and after is not strawberry.UNSET
-    reverse = isinstance(last, int) and not isinstance(first, int) and not before_supplied
+    before_supplied = is_supplied(before)
+    after_supplied = is_supplied(after)
+    reverse = is_backward_shape(first, last) and not before_supplied
     if slice_meta.start < 0:
         raise TypeError("Argument 'after' contains a non-existing value.")
     if slice_meta.end < 0:
@@ -671,27 +713,38 @@ def assert_relay_pagination_bound(argument: str, value: Any, *, cap: int) -> Non
         raise ValueError(f"Argument '{argument}' cannot be higher than {cap}.")
 
 
+def relay_max_results_from_info(info: Any) -> int | None:
+    """Read the configured ``relay_max_results``, or ``None`` when none is reachable.
+
+    THE config dig, for both sides of the cursor-parity invariant's keyset leg.
+    ``schema_config_from_info`` handles the two ``info`` shapes: the resolve-time
+    Strawberry ``Info`` that ``SliceMetadata.from_arguments`` expects, and the
+    plan-time raw graphql-core ``GraphQLResolveInfo`` whose ``.schema`` is a bare
+    ``GraphQLSchema`` with no ``.config`` (the optimizer walker's middleware
+    layer). Neither caller dereferences ``info.schema.config`` itself.
+
+    Returning ``None`` rather than a default is deliberate and is the whole
+    difference from :func:`resolve_relay_max_results`: the planner needs "no
+    cap configured" to stay distinguishable so the engine default applies
+    downstream, while the resolver must land on a concrete number.
+    """
+    return getattr(schema_config_from_info(info), "relay_max_results", None)
+
+
 def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
     """Resolve the effective ``relay_max_results`` cap for a keyset window.
 
     Precedence mirrors ``SliceMetadata.from_arguments``: an explicit
-    ``max_results`` wins; otherwise the Strawberry schema config is read via
-    ``schema_config_from_info`` (BOTH the resolve-time Strawberry ``Info``
-    shape and the plan-time graphql-core ``_strawberry_schema`` shape) and
-    finally Strawberry's documented default. One config dig shared with the
-    planner's ``_relay_max_results_from_info`` (which returns ``None`` instead
-    of this terminal default) so the plan-time and resolve-time caps read the
-    same attribute path (the cursor-parity invariant's keyset leg).
+    ``max_results`` wins; otherwise :func:`relay_max_results_from_info` reads the
+    schema config, and finally Strawberry's documented default applies. The dig
+    itself is shared with the planner so the plan-time and resolve-time caps
+    cannot read different attribute paths.
     """
-    if max_results is not None and max_results is not strawberry.UNSET:
+    if is_supplied(max_results):
         cap = max_results
     else:
-        configured = getattr(schema_config_from_info(info), "relay_max_results", None)
-        cap = (
-            configured
-            if configured is not None and configured is not strawberry.UNSET
-            else _RELAY_MAX_RESULTS_DEFAULT
-        )
+        configured = relay_max_results_from_info(info)
+        cap = configured if is_supplied(configured) else _RELAY_MAX_RESULTS_DEFAULT
     # The request policy is a CEILING over whichever cap won above, never a
     # replacement for it: a connection can be narrower than the policy and can
     # never be wider (``resource_policy.py::effective_bound``). This is the seam
@@ -735,8 +788,8 @@ def derive_keyset_window_bounds(
       the bound), matching the offset path's flow where the guard raises
       before any window is consumed.
     """
-    before_supplied = before is not None and before is not strawberry.UNSET
-    if before_supplied or (isinstance(last, int) and not isinstance(first, int)):
+    before_supplied = is_supplied(before)
+    if before_supplied or is_backward_shape(first, last):
         raise UnwindowableConnection
     cap = resolve_relay_max_results(info, max_results)
     assert_relay_pagination_bound("first", first, cap=cap)

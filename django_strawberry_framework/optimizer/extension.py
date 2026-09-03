@@ -47,6 +47,7 @@ from graphql.language.printer import print_ast
 from graphql.type.definition import GraphQLInterfaceType
 from strawberry.extensions import SchemaExtension
 
+from ..exceptions import _safe_arg_repr
 from ..registry import registry
 from ..utils.querysets import normalize_query_source
 from ..utils.typing import (
@@ -126,6 +127,26 @@ _node_children_with_runtime_prefix = node_children_with_runtime_prefix
 _response_key = response_key
 
 _MAX_PLAN_CACHE_SIZE = 256
+
+#: The strictness vocabulary ``DjangoOptimizerExtension`` accepts. A module
+#: constant so the validator and the rejection message cannot drift apart.
+_STRICTNESS_MODES = ("off", "warn", "raise")
+
+
+def _is_valid_strictness(strictness: Any) -> bool:
+    """Content-match ``strictness`` against the strictness vocabulary.
+
+    The membership read never dispatches into the candidate value's dunders: a
+    ``str`` candidate is compared through the base ``str`` slot (content decides,
+    the same slot discipline ``nested_fetch.resolve_strategy`` documents), and a
+    non-``str`` candidate is rejected without any equality probe. A hostile
+    ``__eq__`` can therefore neither force a false match nor replace the typed
+    ``ValueError`` with its own exception.
+    """
+    if not isinstance(strictness, str):
+        return False
+    return any(str.__eq__(strictness, mode) is True for mode in _STRICTNESS_MODES)
+
 
 # The Relay pagination argument names whose variable-supplied values must key
 # the plan cache when they appear on a NON-ROOT field node (the planner bakes
@@ -922,8 +943,8 @@ class DjangoOptimizerExtension(SchemaExtension):
         # rather than being silently absorbed.
         super().__init__(execution_context=execution_context)
         self.execution_context = execution_context
-        if strictness not in ("off", "warn", "raise"):
-            msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"
+        if not _is_valid_strictness(strictness):
+            msg = f"strictness must be 'off', 'warn', or 'raise', got {_safe_arg_repr(strictness)}"
             raise ValueError(msg)
         self.strictness = strictness
         # The nested-connection fetch strategy is fixed per extension INSTANCE
@@ -1083,8 +1104,8 @@ class DjangoOptimizerExtension(SchemaExtension):
            the return-type resolution the connection field does NOT need
            (the connection field's return type is the connection type, not the
            node type).
+
         """
-        result, is_queryset = normalize_query_source(result)
         # TODO(spec-050 slice 2): Recognize querysets' exact async-completion
         # adapter before step 1. Pseudocode: unwrap its inner final sliced
         # queryset; create one local ``finish(value)`` that rewraps ``value`` for
@@ -1095,6 +1116,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         # type early returns as well as the optimized tail. Package tests must
         # assert adapter identity plus inner low/high marks on all three exits;
         # response/SQL-only assertions cannot detect a silent optimizer bypass.
+        result, is_queryset = normalize_query_source(result)
         if not is_queryset:
             return result
         # G1 (spec-035 Decision 3): a consumer-evaluated root queryset passes
@@ -1273,7 +1295,14 @@ class DjangoOptimizerExtension(SchemaExtension):
             # sweep even when they were inserted early.
             to_remove = max(1, _MAX_PLAN_CACHE_SIZE // 4)
             for _ in range(min(to_remove, len(self._plan_cache))):
-                self._plan_cache.popitem(last=False)
+                # One extension instance is shared across a threaded / ASGI
+                # execution; another request's eviction sweep can drain the
+                # cache between the length read above and this pop, exactly
+                # like the concurrent-eviction races the hit path and the
+                # document-key cache guard with ``suppress``. A lost eviction
+                # only costs a stale entry, so the sweep absorbs the KeyError.
+                with suppress(KeyError):
+                    self._plan_cache.popitem(last=False)
         if plan.cacheable:
             self._plan_cache[cache_key] = plan
         elif exec_memo is not None:

@@ -59,6 +59,7 @@ from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError, _safe_arg_repr
+from ..utils.directives import validated_field_directives
 from .inputs import INPUTS_MODULE_PATH
 from .operations import operation_takes_data, operation_takes_id
 
@@ -301,6 +302,13 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     # through the built field's ``strawberry-definition`` extension and wraps the field's
     # execution in the completion-spanning transaction.
     setattr(_resolve, MUTATION_CLASS_MARKER, mutation_cls)
+    # The hostile-container containment for the directives iterable, shared with every
+    # other field factory in the package (``utils/directives.py::validated_field_directives``
+    # owns the one check and its rationale): a bare string would be iterated
+    # character-wise and a hostile iterator raising mid-iteration would escape raw at
+    # schema build - or, for the byte flavors, silently build then crash SDL render.
+    # Validate before handing to Strawberry so the factory fails loud HERE.
+    directives = validated_field_directives("DjangoMutationField", directives)
     return strawberry.field(
         resolver=_resolve,
         description=description,

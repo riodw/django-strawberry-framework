@@ -42,7 +42,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from strawberry.utils.inspect import in_async_context
 
-from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..exceptions import ConfigurationError
 from ..mutations.fields import (
     DjangoMutationField,
     _lazy_ref,
@@ -68,6 +68,7 @@ from ..mutations.sets import (
     register_mutation as record_mutation_declaration,
 )
 from ..registry import register_subsystem_clear, registry
+from ..utils.directives import validated_field_directives
 from ..utils.permissions import request_from_info
 from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.sessions import actor_transition
@@ -177,21 +178,75 @@ class _AuthMutationMetaSnapshot:
     pinned operation string - it is deliberately NOT a ``_ValidatedMutationMeta``
     (which would require ``model`` / ``operation`` constructor kwargs a model-less
     session field does not have).
+
+    Sealed once ``__init__`` finishes (0.0.15 authorization hardening), mirroring
+    ``mutations/sets.py::_ValidatedMutationMeta``: the holder's snapshot is the
+    per-request authorization source for the fixed auth surfaces
+    (``login`` / ``logout`` / ``current_user`` ride ``DjangoMutation.check_permission``
+    by call), and a ``has_permission`` hook runs inside the walk with the holder
+    class in hand - a mutable slot would let one request's hook rebind the
+    validated set for every later login/logout/me request. Sealed snapshots
+    refuse writes and deletes with ``ConfigurationError``.
     """
 
-    __slots__ = ("operation", "permission_classes")
+    __slots__ = ("_sealed", "operation", "permission_classes")
 
-    def __init__(self, operation: str, permission_classes: list[Any]) -> None:
+    def __init__(self, operation: str, permission_classes: tuple[Any, ...]) -> None:
+        self._sealed = False
         self.operation = operation
         self.permission_classes = permission_classes
+        self._sealed = True
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_sealed", False):
+            raise ConfigurationError(
+                f"The auth permission holder's validated snapshot is sealed and {name!r} "
+                "cannot be reassigned; authorization configuration is captured once at "
+                "declaration time.",
+            )
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        raise ConfigurationError(
+            "The auth permission holder's validated snapshot is sealed; attributes cannot "
+            "be deleted. Authorization configuration is captured once at declaration time.",
+        )
+
+
+class _SealedAuthHolderMeta(type):
+    """Seals the synthesized auth holder's ``_mutation_meta`` head (0.0.15 auth hardening).
+
+    Mirrors ``mutations/sets.py::make_meta_validating_metaclass``: a holder's
+    ``_mutation_meta`` is stashed exactly once at synthesis; a post-declaration
+    rebind of that head (a plain attribute statement inside a ``has_permission``
+    hook, which receives the holder) would replace the fixed auth surface's
+    per-request authorization source with a hook-chosen record. Creation is the
+    one honored write; rebinding or deletion raises ``ConfigurationError``.
+    """
+
+    def __setattr__(cls, name: str, value: Any) -> None:
+        if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
+            raise ConfigurationError(
+                f"{cls.__name__}._mutation_meta is sealed and cannot be rebound; the auth "
+                "surface's validated permission set is captured once at declaration time.",
+            )
+        super().__setattr__(name, value)
+
+    def __delattr__(cls, name: str) -> None:
+        if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
+            raise ConfigurationError(
+                f"{cls.__name__}._mutation_meta is sealed and cannot be deleted; the "
+                "validated authorization snapshot is captured once at declaration time.",
+            )
+        super().__delattr__(name)
 
 
 def _make_permission_holder(
     operation: str,
     holder_name: str,
-    permission_classes: list[Any],
+    permission_classes: tuple[Any, ...],
 ) -> type:
-    """Synthesize the module-internal permission holder for one fixed auth field.
+    """Synthesize the module-internal permission holder for one fixed auth surface.
 
     The ONE holder-synthesis site the three fixed factories share (spec-040 D3 /
     P4): a tiny zero-arg-constructible class carrying the duck-typed shape
@@ -209,7 +264,7 @@ def _make_permission_holder(
     ``operation`` / ``data``, never on the mutation object (Decision 5's
     documented, not factory-guarded, constraint).
     """
-    return type(
+    return _SealedAuthHolderMeta(
         holder_name,
         (),
         {
@@ -243,7 +298,7 @@ def _declared_auth_surface(surface: str) -> type | None:
 def _reject_conflicting_permission_classes(
     surface: str,
     declared_cls: type,
-    permission_classes: list[Any],
+    permission_classes: tuple[Any, ...],
 ) -> None:
     """Raise unless a repeat declaration's ``permission_classes`` match the cached one.
 
@@ -368,27 +423,12 @@ def _make_auth_field(
     ``(name, annotation)`` list of keyword-only GraphQL args (empty for ``logout`` /
     ``me``).
     """
-    # Hostile-container containment for the directives iterable (axis 1 / 4):
-    # a bare string would be iterated character-wise and a hostile iterator
-    # raising mid-iteration would escape as ValueError/TypeError. Validate before
-    # handing to Strawberry so the factory fails loud as ConfigurationError.
-    if isinstance(directives, (str, bytes)):
-        raise ConfigurationError(
-            "auth field directives must be a sequence of directive instances; "
-            f"got {_safe_arg_repr(directives)}.",
-        )
-    try:
-        directives = tuple(directives)
-    except (
-        TypeError,
-        ValueError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise ConfigurationError(
-            f"auth field directives could not be read ({_safe_type_name(exc)}).",
-        ) from exc
+    # Hostile-container containment for the directives iterable rides the shared
+    # ``utils/directives.py::validated_field_directives`` (single-sited for every field
+    # factory): a bare string would be iterated character-wise and a hostile iterator
+    # raising mid-iteration would escape raw. Validate before handing to Strawberry so
+    # the factory fails loud as ConfigurationError.
+    directives = validated_field_directives("auth field", directives)
 
     def _resolve(root: Any, info: Any, **kwargs: Any) -> Any:  # noqa: ARG001
         if in_async_context():
@@ -418,14 +458,15 @@ def _authenticated_actor_or_none(request: Any) -> Any:
     (``actor is not None`` / the actor itself) so the classification cannot drift
     between the two fields.
 
-    Exception containment (hunt 0.0.14): a hostile ``request.user`` descriptor
-    or a hostile ``user.is_authenticated`` that raises ``TypeError`` /
-    ``ValueError`` / ``AttributeError`` / ``KeyError`` / ``IndexError`` must
-    not escape as an unhandled top-level error. Those shapes collapse to
-    anonymous (``None``) - a fail-closed nullable return - while any other
-    exception (e.g. a ``DatabaseError`` from a ``SimpleLazyObject`` that hits
-    the DB) is left to propagate so a real store outage is not hidden as
-    anonymous.
+    Exception containment (hunt 0.0.14 + 0.0.15): a hostile ``request.user``
+    descriptor, a hostile ``user.is_authenticated`` read, a hostile legacy
+    callable, or a hostile ``is_authenticated`` VALUE whose truthiness
+    (``__bool__`` / ``__len__``) raises ``TypeError`` / ``ValueError`` /
+    ``AttributeError`` / ``KeyError`` / ``IndexError`` must not escape as an
+    unhandled top-level error. Those shapes collapse to anonymous (``None``) -
+    a fail-closed nullable return - while any other exception (e.g. a
+    ``DatabaseError`` from a ``SimpleLazyObject`` that hits the DB) is left to
+    propagate so a real store outage is not hidden as anonymous.
     """
     try:
         user = getattr(request, "user", None)
@@ -469,8 +510,23 @@ def _authenticated_actor_or_none(request: Any) -> Any:
         with contextlib.suppress(BaseException):
             is_authenticated.close()
         return None
-    if is_authenticated:
-        return user
+    # Truthiness is the FOURTH hostile surface (hunt 0.0.15): the read and the
+    # legacy-callable call above are contained, but a value whose ``__bool__``
+    # / ``__len__`` raises would escape here. The same five shapes collapse to
+    # anonymous; anything else still propagates (the fail-closed rule is
+    # unchanged - a hostile truthiness classifies as anonymous, never as
+    # authenticated).
+    try:
+        if is_authenticated:
+            return user
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ):
+        return None
     return None
 
 
@@ -1060,13 +1116,14 @@ def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
     ``validate_password`` + ``set_password`` are the ONLY auth-specific steps.
     """
     from ..mutations import resolvers
+    from ..utils.errors import FIELD_ERROR_CODE_INVALID, field_error, null_field_error
     from ..utils.write_values import unencodable_text_error
 
     user, m2m_assignments, exclude, raw_password = decoded
     if raw_password is None:
-        return [resolvers.field_error("password", "This field cannot be null.", codes="null")]
+        return [null_field_error("password")]
     if not isinstance(raw_password, str):
-        return [resolvers.field_error("password", "Invalid password.", codes="invalid")]
+        return [field_error("password", "Invalid password.", codes=FIELD_ERROR_CODE_INVALID)]
     # ``password`` rides the D6 exclusion seam, so it bypasses the shared decode's
     # scalar storability preflight (``decode_scalar_leaf``) that every other input
     # scalar - including this register's own ``username`` - runs through. A

@@ -67,6 +67,8 @@ from .list_field import _validate_relay_djangotype_target
 from .registry import register_subsystem_clear
 from .resource_policy import check_deadline
 from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id
+from .utils.directives import validated_field_directives
+from .utils.errors import GLOBALID_INVALID_ERROR_CODE, coded_error_extensions
 from .utils.querysets import (
     coerce_field_value_or_none,
     model_for,
@@ -116,7 +118,7 @@ def _decode_or_graphql_error(gid: str) -> tuple[type, str]:
     except ConfigurationError as exc:
         raise GraphQLError(
             f"Invalid GlobalID: {exc}",
-            extensions={"code": "GLOBALID_INVALID"},
+            extensions=coded_error_extensions(GLOBALID_INVALID_ERROR_CODE),
         ) from exc
 
 
@@ -451,6 +453,12 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
     """
     if target_type is not None:
         _validate_node_target(target_type, field="DjangoNodeField")
+    # Contain the directives forward BEFORE the declaration ledger is appended: a
+    # rejected construction must not leave a phantom entry behind the finalize-time
+    # no-Node-types check. See ``utils/directives.py::validated_field_directives`` -
+    # Strawberry consumes the iterable lazily, so a bare string builds a field out of
+    # characters and a hostile iterator escapes raw at schema build / SDL render.
+    directives = validated_field_directives("DjangoNodeField", directives)
     _node_fields_declared.append("DjangoNodeField")
 
     def _resolve(
@@ -533,6 +541,8 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
     """
     if target_type is not None:
         _validate_node_target(target_type, field="DjangoNodesField")
+    # Same containment and same ordering rationale as ``DjangoNodeField``'s.
+    directives = validated_field_directives("DjangoNodesField", directives)
     _node_fields_declared.append("DjangoNodesField")
 
     def _resolve(

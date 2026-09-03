@@ -45,7 +45,7 @@ from django.db import models
 from strawberry import relay
 from strawberry.utils.str_converters import to_camel_case
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
 from ..types.converters import convert_scalar, scalar_for_field
@@ -62,6 +62,7 @@ from ..utils.inputs import (
     name_set_input_type_name,
     optional_input_field,
     pascalize_token,
+    resolve_effective_fields,
 )
 from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_many
 from ..utils.strings import graphql_camel_name
@@ -92,6 +93,29 @@ EXCLUDED: str = "excluded"
 # "build a create input" from "build a partial input".
 CREATE: str = "create"
 PARTIAL: str = "partial"
+
+
+def _frozenset_of_attr_names(value: Any, *, parameter: str) -> frozenset[str]:
+    """Freeze ``value`` into a python-attr-name set, rejecting bare ``str`` / ``bytes``.
+
+    The one normalizer behind ``build_mutation_input``'s ``overrides`` and
+    ``mutation_input_field_specs``' ``excluded_attrs``: both parameters are SETS
+    of python attr names (order-free, duplicate-free), so any non-``None``
+    iterable freezes through ``frozenset`` - a one-shot iterator is consumed
+    exactly once, which is the contract. A bare ``str`` (or ``bytes``, whose
+    items are byte INTEGERS) is the one shape that would iterate as CHARACTERS,
+    silently matching no input attribute - and, while non-empty, satisfying the
+    ``not overrides`` half of the empty-input guard - so it fails loud instead,
+    mirroring ``utils/inputs.py::normalize_field_name_sequence``'s bare-string
+    rejection for the ``fields`` / ``exclude`` sequences.
+    """
+    if isinstance(value, (str, bytes)):
+        raise ConfigurationError(
+            f"DjangoMutation input {parameter} must be a collection of python attribute "
+            f"names, not a bare string: {_safe_arg_repr(value)}. A bare string would "
+            "iterate as characters, silently matching no input attribute.",
+        )
+    return frozenset(value or ())
 
 
 @strawberry.type
@@ -246,26 +270,20 @@ def editable_input_fields(
     timestamps and any consumer ``editable=False`` column), and reverse
     relations (no ``column`` attribute and not ``many_to_many``).
 
-    Then narrowed by the mutation's own ``fields`` / ``exclude`` (at most one
-    may be supplied; ``ConfigurationError`` names any unknown field so a typo
-    fails loud rather than silently dropping a column).
-    """
-    # Freeze caller-provided sequences before the validation walk. The normal
-    # metaclass path already snapshots ``Meta.fields`` / ``Meta.exclude`` as
-    # tuples, but this public generator is also used directly by the auth and
-    # form adapters. Reusing a one-shot iterator for the unknown-name check and
-    # the narrowing pass would otherwise consume it and silently select no
-    # fields (or exclude none).
-    if fields is not None:
-        fields = tuple(fields)
-    if exclude is not None:
-        exclude = tuple(exclude)
-    if fields is not None and exclude is not None:
-        raise ConfigurationError(
-            f"DjangoMutation for {model.__name__} declares both `fields` and `exclude`; "
-            "supply at most one.",
-        )
+    Then narrowed by the mutation's own ``fields`` / ``exclude`` through the
+    shared ``utils/inputs.py::resolve_effective_fields`` spine (at most one may
+    be supplied; ``ConfigurationError`` names any unknown field so a typo fails
+    loud rather than silently dropping a column). Only the BASIS - which columns
+    are editable at all - is this flavor's own; the narrowing rules are the same
+    ones the form and serializer flavors run.
 
+    Routing through the spine also means this generator now normalizes its
+    sequences the way the metaclass path already did: a bare string and a
+    duplicate name are rejected here too. That matters because this is a PUBLIC
+    generator the auth and form adapters call directly, bypassing
+    ``mutations/sets.py::DjangoMutation._validate_meta`` - so a malformed
+    declaration reaching it used to iterate as characters or collapse silently.
+    """
     selected: list[models.Field] = []
     for field in model._meta.get_fields():
         if getattr(field, "many_to_many", False):
@@ -287,24 +305,18 @@ def editable_input_fields(
             selected.append(field)
 
     by_name = {field.name: field for field in selected}
-    if fields is not None:
-        unknown = [name for name in fields if name not in by_name]
-        if unknown:
-            raise ConfigurationError(
-                f"DjangoMutation for {model.__name__} declares `fields` naming "
-                f"non-editable or unknown field(s): {sorted(unknown)!r}.",
-            )
-        return [by_name[name] for name in fields]
-    if exclude is not None:
-        unknown = [name for name in exclude if name not in by_name]
-        if unknown:
-            raise ConfigurationError(
-                f"DjangoMutation for {model.__name__} declares `exclude` naming "
-                f"non-editable or unknown field(s): {sorted(unknown)!r}.",
-            )
-        excluded = set(exclude)
-        return [field for field in selected if field.name not in excluded]
-    return selected
+    # No ``empty_message``: the model flavor's empty-input rejection is
+    # override-aware (a consumer ``input_class`` may supply the fields), so it
+    # stays downstream at the build site where the overrides are known.
+    effective = resolve_effective_fields(
+        by_name,
+        fields=fields,
+        exclude=exclude,
+        subject=f"DjangoMutation for {model.__name__}",
+        seq_flavor="DjangoMutation",
+        unknown_noun="non-editable or unknown field(s)",
+    )
+    return list(effective.values())
 
 
 def input_field_required(field: models.Field) -> bool:
@@ -512,14 +524,16 @@ def mutation_input_field_specs(
 
     ``excluded_attrs`` is the spec-040 D6 exclusion seam: those python attrs are
     recorded with kind ``EXCLUDED`` so the decode capture handler runs instead of
-    the column/relation handler. Kind classification is the shared
+    the column/relation handler. A bare ``str`` / ``bytes`` is rejected
+    (``ConfigurationError``) - a string would iterate as characters and silently
+    disable the seam by matching no attribute. Kind classification is the shared
     ``model_column_write_kind``: the resolution above leaves ``django_field``
     either an indexed forward relation or a non-relation concrete column, so the
     classifier is total here (no per-index kind branches). ``target_name`` is
     the model attr the decode writes (``category_id`` for a forward FK /
     OneToOne, the field name for a scalar / M2M).
     """
-    excluded = frozenset(excluded_attrs)
+    excluded = _frozenset_of_attr_names(excluded_attrs, parameter="excluded_attrs")
     fk_by_attr, m2m_by_name = _relation_field_index(model)
     specs: list[InputFieldSpec] = []
     model_fields: dict[str, Any] = {}
@@ -786,7 +800,10 @@ def build_mutation_input(
     honored, not clobbered. ``mutations/sets.py`` wires it from
     ``Meta.input_class`` / ``Meta.partial_input_class``; a direct caller may pass
     it explicitly. File/image columns now participate in this skip like any
-    scalar (spec-037 lifted the spec-036 carve-out).
+    scalar (spec-037 lifted the spec-036 carve-out). A bare ``str`` / ``bytes``
+    is rejected (``ConfigurationError``): a string would iterate as characters,
+    silently overriding nothing - and, while non-empty, bypassing the
+    empty-input guard below.
 
     ``shape`` is the precomputed ``MutationInputShape``: the bind passes
     the one it already computed for the cache key so the selected fields + type
@@ -807,7 +824,7 @@ def build_mutation_input(
     # Strawberry input definition. Freeze any direct iterable as well: checking
     # membership in a one-shot iterator once per model field would consume it,
     # causing later overrides to be emitted and clobbered in the merged input.
-    overrides = frozenset(overrides or ())
+    overrides = _frozenset_of_attr_names(overrides, parameter="overrides")
 
     triples: list[tuple[str, Any, dict[str, Any]]] = []
     selected_names: list[_GeneratedInputFieldName] = []
@@ -851,7 +868,11 @@ def build_mutation_input(
         # ``ConfigurationError`` naming the mutation's model, before the schema
         # build (spec-036 - empty input must fail at the framework boundary). A
         # consumer ``input_class`` supplying field(s) keeps ``overrides`` non-empty,
-        # so a merged input whose generated remainder is empty is NOT rejected.
+        # so a merged input whose generated remainder is empty is NOT rejected -
+        # which is exactly why this guard stays here rather than moving onto
+        # ``build_strawberry_input_class``'s ``empty_message`` seam like the
+        # set-family factory's did: the construction site sees only the generated
+        # triples and cannot know an override half is coming.
         kind = "create" if operation_kind == CREATE else "update"
         raise ConfigurationError(
             f"DjangoMutation {kind} input for {model.__name__} has no fields; "
@@ -877,6 +898,13 @@ def build_mutation_input(
         check_graphql_names=True,
     )
     return build_strawberry_input_class(type_name, triples)
+
+
+# The attr names a generated payload namespace already claims; an
+# ``object_slot`` equal to one of these would collapse onto the same dict key
+# when the namespace is assembled, silently dropping the object field (or
+# being overwritten by the ``errors`` list default).
+_RESERVED_PAYLOAD_ATTRS: frozenset[str] = frozenset({"ok", "errors"})
 
 
 def payload_object_slot(primary_type: type) -> str:
@@ -908,7 +936,11 @@ def build_payload_type(
       never a ``property``-named field. Fields: ``<object_slot>: object_type | None``
       (nullable - ``null`` on a validation failure) and ``errors:
       list[FieldError]`` (the non-null list of non-null ``FieldError`` the spec
-      writes ``[FieldError!]!``). ``object_type`` is referenced directly: by the
+      writes ``[FieldError!]!``). A supplied ``object_slot`` must be a valid
+      Python identifier outside the reserved ``ok`` / ``errors`` attrs - a
+      colliding slot would silently lose the object field to the duplicate
+      namespace key - so a bad value fails loud as a ``ConfigurationError``.
+      ``object_type`` is referenced directly: by the
       time the phase-2.5 bind calls this, the read ``DjangoType`` is a real
       class, so a direct ``object_type | None`` annotation resolves at schema build
       (the genuine import-time forward-ref hazard is the ``DjangoMutationField``
@@ -928,6 +960,13 @@ def build_payload_type(
         }
     else:
         slot = object_slot if object_slot is not None else payload_object_slot(object_type)
+        if not isinstance(slot, str) or not slot.isidentifier() or slot in _RESERVED_PAYLOAD_ATTRS:
+            raise ConfigurationError(
+                f"object_slot {_safe_arg_repr(slot)} is not a usable payload object-field "
+                "name: it must be a valid Python identifier outside the reserved payload "
+                f"attributes {sorted(_RESERVED_PAYLOAD_ATTRS)!r}. Omit object_slot, or "
+                "pass payload_object_slot(object_type).",
+            )
         namespace = {
             "__annotations__": {slot: object_type | None, "errors": list[FieldError]},
             slot: None,

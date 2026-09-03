@@ -203,6 +203,86 @@ def test_mro_walk_bypasses_hostile_field_metaclass_hashing():
         form_converter.convert_form_field(hostile_form)
 
 
+def test_mro_walk_bypasses_a_hostile_metaclass_mro_property():
+    """A metaclass ``__mro__`` PROPERTY cannot raise into the walk.
+
+    ``type.__getattribute__`` still honors a data descriptor defined ON the
+    metaclass: a property there wins over ``type``'s own ``__mro__`` getset
+    inside CPython's ``type_getattro`` algorithm. The skeleton therefore reads
+    the MRO through ``type.__dict__``'s raw descriptor, so a raising property
+    lands the typed unsupported-field error instead of a raw ``RuntimeError``
+    escaping schema build.
+    """
+
+    class RaisingMroMeta(type):
+        @property
+        def __mro__(cls):
+            raise RuntimeError("hostile __mro__ property")
+
+    class HostileFormField(forms.Field, metaclass=RaisingMroMeta):
+        pass
+
+    class HostileSerializerField(serializers.Field, metaclass=RaisingMroMeta):
+        pass
+
+    hostile_form = object.__new__(HostileFormField)
+    hostile_serializer = object.__new__(HostileSerializerField)
+    hostile_serializer.field_name = "hostile"
+
+    with pytest.raises(ConfigurationError, match="Unsupported form field type"):
+        form_converter.convert_form_field(hostile_form)
+    with pytest.raises(ConfigurationError, match="Unsupported serializer field type"):
+        ser_converter.convert_serializer_field(hostile_serializer)
+
+
+def test_mro_walk_ignores_a_fake_mro_claiming_a_registered_class():
+    """A lying ``__mro__`` naming a registered class cannot silently convert.
+
+    An impostor field whose metaclass property claims CharField's MRO must
+    reach the typed unsupported-field fallthrough (its REAL class is an
+    unregistered ``forms.Field`` subclass), not resolve the registry hit and
+    crash later on a missing attribute.
+    """
+
+    class FakeMroMeta(type):
+        @property
+        def __mro__(cls):
+            return (forms.CharField, object)
+
+    class ImpostorFormField(forms.Field, metaclass=FakeMroMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="Unsupported form field type"):
+        form_converter.convert_form_field(object.__new__(ImpostorFormField))
+
+
+def test_registry_walk_scans_a_snapshot_not_a_live_items_view():
+    """The identity scan runs over a C-level registry snapshot.
+
+    Iterating the live registry (``for ... in registry.items()``) fails with
+    ``RuntimeError: dictionary changed size during iteration`` when the
+    process-global serializer registry is mutated by a concurrent consumer
+    registration mid-walk. The walk copies the registry once (an exact-dict
+    C-level copy runs no user protocol and is atomic under the GIL) and scans
+    the snapshot, so an ``items()`` that fails the way a mutated dict does
+    cannot abort a conversion.
+    """
+
+    class MutatedDuringIteration(dict):
+        """Registry whose ``items()`` fails the way a mutated dict does."""
+
+        def items(self):
+            raise RuntimeError("dictionary changed size during iteration")
+
+    result = convert_with_mro(
+        _Child(),
+        isinstance_prechecks=[],
+        scalar_registry=MutatedDuringIteration({_Child: "registry-value"}),
+        fallthrough_error_factory=lambda _f: AssertionError("should not raise"),
+    )
+    assert result == "registry-value"
+
+
 # ---------------------------------------------------------------------------
 # Scalar-table VALUE shape (make_scalar_converter / finish_field_conversion)
 # ---------------------------------------------------------------------------

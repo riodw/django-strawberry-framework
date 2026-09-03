@@ -106,6 +106,16 @@ def _is_unexpected(error: Any) -> bool:
     error whose ``original_error`` a consumer deliberately typed as a
     ``GraphQLError`` travels unchanged.
 
+    The ``original_error`` read is a DIRECT attribute access rather than a
+    defaulted ``getattr`` on purpose: a defaulted ``getattr`` cannot tell an
+    attribute that is ABSENT from one whose read RAISES, and "absent" is the
+    deliberate-delivery answer. An error object that will not let the rule read
+    behind it (a ``GraphQLError`` subclass whose ``original_error`` property
+    raises, reachable only from a consumer extension that put its own object in
+    the result's error list) is exactly an error the policy cannot vouch for, so
+    the read's failure is contained by the caller's per-entry degrade - the
+    fail-closed direction - instead of being answered as if it said "deliberate".
+
     The rule is structural rather than an allowlist of ``extensions.code``
     values on purpose: an allowlist must be extended by every future rejection
     site and fails OPEN when it is not, while this fails CLOSED for every new
@@ -113,7 +123,7 @@ def _is_unexpected(error: Any) -> bool:
     """
     if not isinstance(error, GraphQLError):
         return True
-    original = getattr(error, "original_error", None)
+    original = error.original_error
     if original is None:
         return False
     return not isinstance(original, GraphQLError)
@@ -159,22 +169,55 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
     because whatever was read is what failed; and no correlation id is minted,
     because there is no exception this one could be resolved to in the log. The
     server-side log record names the failure instead.
+
+    The policy's ``message`` is the one thing still worth reading - it is what
+    this floor exists to publish - but the read is guarded, because the floor
+    itself is what every other failure lands on and a floor that can raise is
+    not a floor. A defaulted ``getattr`` would not be enough: it suppresses only
+    ``AttributeError``, and a policy that is an ``ErrorPolicy`` subclass whose
+    ``message`` is a raising property passes the ``isinstance`` gate in
+    ``schema_error_policy`` while raising anything else (``schema_error_policy``
+    can catch a hostile read on the SCHEMA, but a hostile read on an admitted
+    policy object is this function's to survive). A non-string or empty message
+    is likewise refused: the floor's whole output is one publishable string, so
+    anything else is replaced by the package default's message, which validated
+    itself at construction.
     """
-    message = getattr(policy, "message", DEFAULT_ERROR_POLICY.message)
+    try:
+        message: Any = policy.message
+    except Exception:
+        message = None
+    if not isinstance(message, str) or not message:
+        message = DEFAULT_ERROR_POLICY.message
     return GraphQLError(message=message)
 
 
 def masking_is_active(policy: ErrorPolicy) -> bool:
     """Whether ``policy`` masks anything for the operation being answered now.
 
-    Both seams ask this one question, so neither can drift on the ``DEBUG``
-    gate. ``settings.DEBUG`` is read per operation rather than captured at schema
-    construction: a schema object outlives a settings override, and the answer
-    that matters is the one true while the response is being built. The gate opens
-    only for the exact boolean ``True``; a malformed truthy setting such as the
-    string ``"False"`` must not silently turn a deployment's fail-closed mask off.
+    Both reads fail toward MASKING, because this is the question the mask asks:
+    a policy whose ``enabled`` read raises - an ``ErrorPolicy`` subclass can
+    smuggle a raising property past the ``isinstance`` gate in
+    ``schema_error_policy`` - is treated as enabled, and a ``DEBUG`` that cannot
+    be read at all is treated as not exactly ``True``. An unreadable ``DEBUG`` is
+    not hypothetical: deleting the attribute (the proxy caches reads in its own
+    ``__dict__``, so both layers must lose it) or answering a schema outside a
+    configured Django process both raise on the read, and letting that escape
+    would answer a masking question by exception - the query teardown would catch
+    it into a whole-result floor and destroy healthy data beside the errors it
+    should have masked, and the subscription seam would surface it mid-stream.
+    A gate that cannot read its inputs therefore keeps the mask ON, which is the
+    only direction that cannot leak.
     """
-    return policy.enabled and settings.DEBUG is not True
+    try:
+        enabled = policy.enabled
+    except Exception:
+        return True
+    try:
+        debug = settings.DEBUG
+    except Exception:
+        debug = None
+    return enabled and debug is not True
 
 
 def is_maskable_result(value: Any) -> bool:
@@ -230,6 +273,13 @@ def mask_execution_result(result: Any, policy: ErrorPolicy) -> Any:
     originals, so an extension reading ``original_error`` after this ran still
     reads what was raised.
 
+    The error list is MATERIALIZED before the emptiness check: a container that
+    answers falsy while carrying entries (a lying ``__len__`` or ``__bool__``)
+    would otherwise be waved through unclassified - the truthiness test trusts
+    the container, iteration is what can be verified. The generator / iterator
+    error list a stock result never carries is consumed by the same
+    materialization, which is also what keeps ``zip``'s arity comparison honest.
+
     Order and arity are preserved - every error keeps its position whether it was
     masked or not, so a client matching errors to its document by index is
     unaffected.
@@ -243,9 +293,11 @@ def mask_execution_result(result: Any, policy: ErrorPolicy) -> Any:
     """
     try:
         errors = result.errors
-        if not errors:
+        if errors is None:
             return result
         errors_list = list(errors)
+        if not errors_list:
+            return result
         replacements = [_replacement_for(error, policy) for error in errors_list]
         if all(new is old for new, old in zip(replacements, errors_list, strict=True)):
             return result

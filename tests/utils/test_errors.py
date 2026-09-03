@@ -1,13 +1,30 @@
 """Shared mutation-error constructors remain total over hostile metadata."""
 
+import ast
+from pathlib import Path
+
 import pytest
 from django.core.exceptions import ValidationError
 
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
+from django_strawberry_framework.utils import errors as errors_module
 from django_strawberry_framework.utils.errors import (
+    FIELD_ERROR_CODE_CONFLICT,
+    FIELD_ERROR_CODE_CONSTRAINT,
+    FIELD_ERROR_CODE_INVALID,
+    FIELD_ERROR_CODE_NOT_FOUND,
+    FIELD_ERROR_CODE_NULL,
+    FIELD_ERROR_CODE_PROTECTED,
+    FIELD_ERROR_CODE_TRUNCATED,
+    FILTER_INVALID_ERROR_CODE,
+    GLOBALID_INVALID_ERROR_CODE,
+    GLOBALID_UNVALIDATABLE_ERROR_CODE,
+    coded_error_extensions,
+    empty_validation_error,
     field_error,
     integrity_error_field_errors,
     join_error_path,
+    null_field_error,
     relation_field_error,
     validation_error_to_field_errors,
 )
@@ -320,3 +337,178 @@ def test_integrity_error_field_errors_shape_and_sentinel():
 def test_join_error_path_variations(prefix, segment, expected):
     """Verify join_error_path joins prefixes and child segments correctly."""
     assert join_error_path(prefix, segment) == expected
+
+
+# -------------------------------------------------------------------------
+# The error-code vocabulary: public wire contract (bug-hunt batch 13 pins)
+# -------------------------------------------------------------------------
+
+
+def test_field_error_code_vocabulary_is_the_public_wire_contract():
+    assert FIELD_ERROR_CODE_INVALID == "invalid"
+    assert FIELD_ERROR_CODE_NULL == "null"
+    assert FIELD_ERROR_CODE_CONSTRAINT == "constraint"
+    assert FIELD_ERROR_CODE_NOT_FOUND == "not_found"
+    assert FIELD_ERROR_CODE_PROTECTED == "protected"
+    assert FIELD_ERROR_CODE_CONFLICT == "conflict"
+    assert FIELD_ERROR_CODE_TRUNCATED == "truncated"
+    assert GLOBALID_INVALID_ERROR_CODE == "GLOBALID_INVALID"
+    assert GLOBALID_UNVALIDATABLE_ERROR_CODE == "GLOBALID_UNVALIDATABLE"
+    assert FILTER_INVALID_ERROR_CODE == "FILTER_INVALID"
+    for name in (
+        "FIELD_ERROR_CODE_INVALID",
+        "FIELD_ERROR_CODE_NULL",
+        "FIELD_ERROR_CODE_CONSTRAINT",
+        "FIELD_ERROR_CODE_NOT_FOUND",
+        "FIELD_ERROR_CODE_PROTECTED",
+        "FIELD_ERROR_CODE_CONFLICT",
+        "FIELD_ERROR_CODE_TRUNCATED",
+        "GLOBALID_INVALID_ERROR_CODE",
+        "GLOBALID_UNVALIDATABLE_ERROR_CODE",
+        "FILTER_INVALID_ERROR_CODE",
+        "coded_error_extensions",
+        "empty_validation_error",
+        "null_field_error",
+    ):
+        assert name in errors_module.__all__
+
+
+def test_coded_error_extensions_shape():
+    assert coded_error_extensions("GLOBALID_INVALID") == {"code": "GLOBALID_INVALID"}
+    assert coded_error_extensions("FILTER_INVALID", errors={"name": "bad"}) == {
+        "code": "FILTER_INVALID",
+        "errors": {"name": "bad"},
+    }
+    assert coded_error_extensions("X", bound=5, limit=3, charged=7) == {
+        "code": "X",
+        "bound": 5,
+        "limit": 3,
+        "charged": 7,
+    }
+
+
+def test_null_field_error_and_empty_validation_error_leaf_shapes():
+    null_leaf = null_field_error("categoryId")
+    assert null_leaf.field == "categoryId"
+    assert null_leaf.messages == ["This field cannot be null."]
+    assert null_leaf.codes == [FIELD_ERROR_CODE_NULL]
+    assert null_leaf.path == ["categoryId"]
+
+    root_empty = empty_validation_error()
+    assert root_empty.field == NON_FIELD_ERROR_KEY
+    assert root_empty.messages == ["Validation failed without error details."]
+    assert root_empty.codes == [FIELD_ERROR_CODE_INVALID]
+    assert root_empty.path == []
+
+    named_empty = empty_validation_error("name")
+    assert named_empty.field == "name"
+    assert named_empty.path == ["name"]
+
+
+def test_conflict_code_reaches_the_leaf_through_the_public_ctor():
+    leaf = field_error(
+        "id",
+        "The row was changed or removed by a concurrent operation; retry.",
+        codes=FIELD_ERROR_CODE_CONFLICT,
+    )
+
+    assert leaf.field == "id"
+    assert leaf.codes == [FIELD_ERROR_CODE_CONFLICT]
+    assert leaf.path == ["id"]
+
+
+def test_validation_error_mapper_keys_django_non_field_bucket_to_sentinel():
+    exception = ValidationError(
+        {"__all__": [ValidationError("model wide", code="mw")], "name": [ValidationError("bad")]},
+    )
+
+    by_field = {error.field: error for error in validation_error_to_field_errors(exception)}
+
+    assert by_field[NON_FIELD_ERROR_KEY].path == []
+    assert by_field[NON_FIELD_ERROR_KEY].messages == ["model wide"]
+    assert by_field[NON_FIELD_ERROR_KEY].codes == ["mw"]
+    assert by_field["name"].messages == ["bad"]
+
+
+def test_field_error_degrades_a_midway_raising_iterator_to_one_unprintable_leaf():
+    class _MidwayIterator:
+        consumed = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            self.consumed += 1
+            if self.consumed > 1:
+                raise RuntimeError("midway iterator failure")
+            return "first message"
+
+    iterator = _MidwayIterator()
+    error = field_error("name", iterator)
+
+    assert iterator.consumed >= 1
+    assert error.messages == ["<unprintable _MidwayIterator>"]
+
+
+def test_validation_error_mapper_drops_a_hostile_truthiness_leaf_code():
+    class _HostileBoolCode(int):
+        def __bool__(self):
+            raise RuntimeError("hostile code truthiness")
+
+    class _Leaf:
+        code = _HostileBoolCode(1)
+
+    class _MalformedValidationError:
+        error_dict = None
+        error_list = (_Leaf(),)
+        messages = ("msg",)
+
+    (error,) = validation_error_to_field_errors(_MalformedValidationError())
+
+    assert error.messages == ["msg"]
+    assert error.codes == []
+
+
+def test_errors_module_performs_no_settings_reads():
+    """The error leaf module is configuration-free (layering pin)."""
+    source = Path(errors_module.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename="errors.py")
+
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in ("DEBUG", "settings"):
+            hits.append(f"attr {node.attr} @ line {node.lineno}")
+        if isinstance(node, ast.Name) and node.id in ("settings", "conf"):
+            hits.append(f"name {node.id} @ line {node.lineno}")
+
+    assert hits == [], hits
+
+
+@pytest.mark.parametrize(
+    "atom",
+    [
+        "atom list",
+        b"atom list",
+        bytearray(b"atom list"),
+        memoryview(b"atom list"),
+    ],
+)
+def test_validation_error_mapper_treats_a_text_atom_error_list_as_one_leaf(atom):
+    """A text atom planted in the ``error_list`` slot is ONE leaf, never iterated.
+
+    The hostile slot shape would otherwise explode into per-character /
+    per-byte leaves (and per-character code reads); ``_validation_leaves``
+    returns the atom itself as the single leaf, whose own ``code`` read then
+    fails contained.
+    """
+
+    class _TextAtomErrorList:
+        error_dict = None
+        error_list = atom
+        messages = ("whole-object",)
+
+    (error,) = validation_error_to_field_errors(_TextAtomErrorList())
+
+    assert error.field == NON_FIELD_ERROR_KEY
+    assert error.messages == ["whole-object"]
+    assert error.codes == []

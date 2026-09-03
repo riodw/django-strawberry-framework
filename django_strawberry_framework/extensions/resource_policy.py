@@ -20,11 +20,17 @@ Three passes, in the order a request meets them:
    fragment nor a directive can hide a selection from accounting.
 3. **Value budget** (the same walk). Every argument's value - literal, variable,
    or a literal object with variables spliced into it - is charged against the
-   input-cardinality bounds, typed by the argument's own GraphQL input type. The
-   walk is iterative and every container is cycle-guarded against its own
-   ancestor path, so a self-referential value cannot spin it while every
-   reference is still charged; it runs entirely on coerced-shape input, so no id
-   is decoded and no queryset is built before it either passes or rejects.
+   input-cardinality bounds, typed by the argument's own GraphQL input type
+   and, for a package-generated write input, by the bind-time field specs the
+   owning mutation stashed. The specs are what classify a RELATION list: a
+   multi-relation write input is charged against the relation-id bounds
+   whether its ids render as Relay ``GlobalID``s or as raw pks, which a
+   scalar-name rule cannot see (a raw-pk relation list is ``[Int!]`` on the
+   wire). The walk is iterative and every container is cycle-guarded against
+   its own ancestor path, so a self-referential value cannot spin it while
+   every reference is still charged; it runs entirely on coerced-shape input,
+   so no id is decoded and no queryset is built before it either passes or
+   rejects.
 
 Where each pass reaches, stated as the boundary rather than as parity:
 
@@ -56,7 +62,6 @@ from graphql import (
     GraphQLInputObjectType,
     GraphQLInterfaceType,
     GraphQLList,
-    GraphQLNonNull,
     GraphQLObjectType,
     InlineFragmentNode,
     OperationDefinitionNode,
@@ -72,6 +77,7 @@ from graphql.language.token_kind import TokenKind
 from graphql.utilities import value_from_ast_untyped
 from strawberry.extensions.base_extension import SchemaExtension
 
+from ..mutations.fields import MUTATION_CLASS_MARKER
 from ..resource_policy import (
     DEFAULT_RESOURCE_POLICY,
     DST_RESOURCE_DEADLINE,
@@ -80,7 +86,11 @@ from ..resource_policy import (
     ResourcePolicy,
     stash_resource_policy,
 )
-from ..utils.context import clear_context_key, get_context_value, stash_on_context
+from ..utils.context import (
+    restored_context_keys,
+)
+from ..utils.inputs import RELATION_MULTI
+from ..utils.typing import unwrap_non_null
 
 __all__ = ("DjangoResourcePolicyExtension",)
 
@@ -106,9 +116,20 @@ _CLOSE_TOKEN_KINDS: frozenset[TokenKind] = frozenset(
 
 #: The GraphQL scalar names the value budget classifies by name rather than by
 #: Python shape. ``ID`` is every Relay ``GlobalID`` on the wire; ``Upload`` is
-#: this package's file scalar.
+#: this package's file scalar. The ``ID`` name is the FALLBACK classification
+#: for an id list the package did not generate: a relation's bind specs (see
+#: ``_mutation_input_specs``) outrank it, because a raw-pk relation list is
+#: typed ``[Int!]`` on the wire and evades a name-keyed rule entirely.
 _ID_SCALAR_NAME = "ID"
 _UPLOAD_SCALAR_NAME = "Upload"
+
+#: The graphql-core extension key Strawberry writes onto every converted field,
+#: argument, and input field, carrying the Strawberry definition backref
+#: (``strawberry.schema.schema_converter``). The resource policy reads it to
+#: reach a mutation field's owning class, the same bridge
+#: ``schema.py::DjangoMutationExecutionContext`` uses for the
+#: completion-spanning transaction.
+_STRAWBERRY_DEFINITION_BACKREF = "strawberry-definition"
 
 #: The argument name that marks a Relay node-refetch id list
 #: (``relay.py::DjangoNodesField``'s ``nodes(ids: [ID!]!)``).
@@ -125,7 +146,6 @@ _EDGE_MARKER_FIELDS = frozenset({"node", "cursor"})
 _SCHEMA_META_FIELD = "__schema"
 _TYPE_META_FIELD = "__type"
 _TYPENAME_META_FIELD = "__typename"
-_MISSING_CONTEXT_VALUE = object()
 
 
 def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
@@ -147,7 +167,20 @@ def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
     - ``depth`` is a running bracket balance, so it is a true nesting depth only
       for a balanced document. An unbalanced one is a syntax error by
       construction and is answered as one.
+
+    A value that is not text at all is declined, not scanned: anything that is
+    not a ``str`` carries no tokens to charge, and handing it to the lexer would
+    raise a raw ``TypeError`` / ``AttributeError`` / ``KeyError`` from inside
+    graphql-core at exactly the input the exception-containment invariant says
+    must never escape an input decoder. The transports that type-check the query
+    before the extension runs (both HTTP views) make this unreachable there; the
+    WebSocket path performs no such check, so the decline is the scanner's own
+    contract rather than a transport's favor. What the request is answered with
+    is then the parse's and the error policy's business, exactly as for any
+    other document the scan cannot charge.
     """
+    if not isinstance(query, str):
+        return
     if not query:
         return
     lexer = Lexer(Source(query))
@@ -180,6 +213,52 @@ def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
         if isinstance(exc, ResourceLimitExceeded):
             raise
         return
+
+
+def _mutation_input_specs(field_def: Any) -> Mapping[str, Any] | None:
+    """Return the bound mutation's per-input-field spec map, or ``None``.
+
+    The bridge from the walker's graphql-core view to the bind-time reverse map
+    the write flavors stash on their mutation class (``_input_field_specs``):
+    the GraphQL field's ``strawberry-definition`` extension carries the
+    synthesized resolver the ``DjangoMutationField`` factory stamped with the
+    mutation class (``mutations/fields.py::MUTATION_CLASS_MARKER``), and the
+    class's spec records carry the decode kind per input field - which is what
+    says a list input is a RELATION rather than a membership list, regardless
+    of whether the related type renders its ids as ``GlobalID`` (``ID``) or raw
+    pks (``Int``). The records are the same ones the request-time decode walks,
+    so the budget cannot disagree with the decode about what a field IS.
+
+    ``None`` for any field that is not a package-generated mutation - a query,
+    a consumer-written resolver, an unbound target - which leaves the list
+    classification to the id scalar name, the only signal left. There is no
+    shape under which a spec says one thing and the wire another: the specs are
+    recorded from the SAME merged input dataclass the schema materialized.
+    """
+    strawberry_field = (getattr(field_def, "extensions", None) or {}).get(
+        _STRAWBERRY_DEFINITION_BACKREF,
+    )
+    resolver = getattr(getattr(strawberry_field, "base_resolver", None), "wrapped_func", None)
+    mutation_cls = getattr(resolver, MUTATION_CLASS_MARKER, None)
+    specs = getattr(mutation_cls, "_input_field_specs", None)
+    if not specs:
+        return None
+    return {spec.graphql_name: spec for spec in specs}
+
+
+def _nested_specs_map(spec: Any) -> Mapping[str, Any] | None:
+    """Return the field-spec map of a NESTED input's own fields, or ``None``.
+
+    A serializer nested-serializer field records its nested rows' own reverse
+    map on the enclosing field's spec (``InputFieldSpec.nested_specs``), so a
+    relation list one level down - a nested ``altBranches`` raw-pk list - is
+    classified by the same bind signal as a top-level one. ``None`` for every
+    non-nested field, which is every field of every non-serializer flavor.
+    """
+    nested = getattr(spec, "nested_specs", None)
+    if not nested:
+        return None
+    return {nested_spec.graphql_name: nested_spec for nested_spec in nested}
 
 
 def _closes_a_cycle(container: Any, path: tuple[Any, ...]) -> bool:
@@ -256,6 +335,7 @@ class _ValueBudget:
         *,
         in_mutation: bool,
         argument: str,
+        specs: Mapping[str, Any] | None = None,
     ) -> None:
         """Charge one argument's whole value tree against every value bound.
 
@@ -267,10 +347,27 @@ class _ValueBudget:
         bounded by ``max_input_nodes``: a value that reaches the same container
         through many references pays a node per reference and runs out of node
         budget rather than running long.
+
+        Each entry also carries the BIND FIELD-SPEC of the input field whose
+        value it is (plus the spec map of the container it hangs under, when
+        the declared input type is one the package generated): the field-level
+        signal that classifies a list as a relation set rather than a
+        membership list, independent of the id scalar's wire name. ``specs``
+        seeds the root entry for the one argument a generated mutation's input
+        was built for; ``None`` leaves every level classified by type shape
+        alone.
         """
-        stack: list[tuple[Any, Any, tuple[Any, ...]]] = [(input_type, value, ())]
+        stack: list[tuple[Any, Any, tuple[Any, ...], Any, Any]] = [
+            (
+                input_type,
+                value,
+                (),
+                None,
+                specs,
+            ),
+        ]
         while stack:
-            node_type, node_value, path = stack.pop()
+            node_type, node_value, path, spec, spec_map = stack.pop()
             self.nodes += 1
             self._reject(
                 "max_input_nodes",
@@ -282,8 +379,7 @@ class _ValueBudget:
                 len(path),
                 "an argument value nests lists or input objects deeper than the policy allows",
             )
-            while isinstance(node_type, GraphQLNonNull):
-                node_type = node_type.of_type
+            node_type = unwrap_non_null(node_type)
             if node_value is None:
                 continue
             if isinstance(node_type, GraphQLList):
@@ -294,6 +390,8 @@ class _ValueBudget:
                     path,
                     in_mutation,
                     argument,
+                    spec,
+                    spec_map,
                 ):
                     # GraphQL coerces a bare value supplied for a list input into a
                     # one-item list. Charge that synthetic container just as the
@@ -312,26 +410,46 @@ class _ValueBudget:
                         1,
                         in_mutation=in_mutation,
                         argument=argument,
+                        spec=spec,
                     )
-                    stack.append((node_type.of_type, node_value, (*path, object())))
+                    stack.append(
+                        (
+                            node_type.of_type,
+                            node_value,
+                            (*path, object()),
+                            None,
+                            _nested_specs_map(spec),
+                        ),
+                    )
                 continue
             if isinstance(node_value, (list, tuple, Mapping)):
                 # An untyped container: a JSON-shaped custom scalar, or a value
                 # whose Python shape does not match its declared input type.
                 # Charged for width and nodes, with no family classification -
                 # the family bounds are type-driven and there is no type here.
-                self._charge_container(node_value, stack, node_type, path, in_mutation, argument)
+                self._charge_container(
+                    node_value,
+                    stack,
+                    node_type,
+                    path,
+                    in_mutation,
+                    argument,
+                    spec,
+                    spec_map,
+                )
                 continue
             self._charge_leaf(node_type, node_value)
 
     def _charge_container(
         self,
         value: Any,
-        stack: list[tuple[Any, Any, tuple[Any, ...]]],
+        stack: list[tuple[Any, Any, tuple[Any, ...], Any, Any]],
         node_type: Any,
         path: tuple[Any, ...],
         in_mutation: bool,
         argument: str,
+        spec: Any,
+        spec_map: Mapping[str, Any] | None,
     ) -> bool:
         """Charge a list or mapping's width and queue its children; ``False`` if neither.
 
@@ -353,7 +471,20 @@ class _ValueBudget:
             child_path = (*path, value)
             for name, item in value.items():
                 field_def = item_type.get(name) if item_type is not None else None
-                stack.append((getattr(field_def, "type", None), item, child_path))
+                # Specs resolve only under a declared input object: a hostile
+                # mapping parked under a scalar argument is charged, never
+                # classified, and a child's own spec map comes from ITS field
+                # spec's nested records (``nested_specs``), never inherited.
+                field_spec = spec_map.get(name) if item_type is not None and spec_map else None
+                stack.append(
+                    (
+                        getattr(field_def, "type", None),
+                        item,
+                        child_path,
+                        field_spec,
+                        _nested_specs_map(field_spec),
+                    ),
+                )
             return True
         if not isinstance(value, (list, tuple)):
             return False
@@ -371,12 +502,27 @@ class _ValueBudget:
                 width,
                 in_mutation=in_mutation,
                 argument=argument,
+                spec=spec,
             )
             item_type = node_type.of_type
         else:
             item_type = None
         child_path = (*path, value)
-        stack.extend((item_type, item, child_path) for item in value)
+        # List items hang under the FIELD that declared the list, so each item
+        # carries that field's spec map: a nested row's own fields classify from
+        # the row's own specs. The item itself is not a field value, so its spec
+        # is ``None`` and its family comes from the item type.
+        item_specs_map = _nested_specs_map(spec)
+        stack.extend(
+            (
+                item_type,
+                item,
+                child_path,
+                None,
+                item_specs_map,
+            )
+            for item in value
+        )
         return True
 
     def _charge_list_family(
@@ -386,16 +532,26 @@ class _ValueBudget:
         *,
         in_mutation: bool,
         argument: str,
+        spec: Any = None,
     ) -> None:
-        """Charge a list against the input family its item type places it in.
+        """Charge a list against the input family its field places it in.
 
-        The classification is type-driven, and stated once so it cannot drift:
+        The classification is driven by the field's bind spec when the field is
+        one the package generated (``_mutation_input_specs``), and falls back to
+        the item TYPE's name when there is no spec. Stated once so it cannot
+        drift:
 
         - a list of input objects is a **nested row set** (a nested serializer or
           formset payload);
-        - a list of ``ID`` inside a **mutation** operation is a **relation id
-          set**, charged both against the current mutation field and against the
-          request's aggregate;
+        - a list a bind spec records ``relation_multi`` is a **relation id set**
+          whether its ids render as ``GlobalID``s or as raw pks, charged both
+          against the current mutation field and against the request's
+          aggregate - the spec is the write input's own record of what the
+          field IS, and the decode charges itself against the same record, so
+          the budget cannot disagree with the decode about what a list is;
+        - otherwise a list of ``ID`` inside a **mutation** operation is a
+          **relation id set** (the fallback for an id list the package did not
+          generate, e.g. a plain ``strawberry.Schema`` input);
         - a list of ``ID`` under an argument named ``ids`` in a **query** is a
           **node-refetch id set**;
         - every other list is a **membership list** (an ``in`` lookup and its
@@ -409,20 +565,12 @@ class _ValueBudget:
                 "a nested input-object list carries more rows than the policy allows",
             )
             return
+        if in_mutation and spec is not None and spec.kind == RELATION_MULTI:
+            self._charge_relation_ids(width)
+            return
         if named is not None and named.name == _ID_SCALAR_NAME:
             if in_mutation:
-                self.relation_ids_this_field += width
-                self.relation_ids_total += width
-                self._reject(
-                    "max_relation_ids_per_mutation",
-                    self.relation_ids_this_field,
-                    "one mutation field carries more relation ids than the policy allows",
-                )
-                self._reject(
-                    "max_relation_ids_total",
-                    self.relation_ids_total,
-                    "the request carries more relation ids in aggregate than the policy allows",
-                )
+                self._charge_relation_ids(width)
                 return
             if argument == _NODE_IDS_ARGUMENT:
                 self._reject(
@@ -435,6 +583,27 @@ class _ValueBudget:
             "max_membership_items",
             width,
             "a membership list carries more items than the policy allows",
+        )
+
+    def _charge_relation_ids(self, width: int) -> None:
+        """Charge ``width`` relation ids against the per-field and aggregate bounds.
+
+        One body for both classification signals (the bind spec's
+        ``relation_multi`` kind and the ``ID``-scalar fallback) so the two
+        counters cannot charge differently under the two spellings of the same
+        write.
+        """
+        self.relation_ids_this_field += width
+        self.relation_ids_total += width
+        self._reject(
+            "max_relation_ids_per_mutation",
+            self.relation_ids_this_field,
+            "one mutation field carries more relation ids than the policy allows",
+        )
+        self._reject(
+            "max_relation_ids_total",
+            self.relation_ids_total,
+            "the request carries more relation ids in aggregate than the policy allows",
         )
 
     def _charge_leaf(self, node_type: Any, value: Any) -> None:
@@ -626,9 +795,7 @@ def _collection_rows(
     """
     if node.name.value == _CONNECTION_MARKER_FIELD and _is_connection_type(parent_type):
         return None
-    unwrapped = field_type
-    while isinstance(unwrapped, GraphQLNonNull):
-        unwrapped = unwrapped.of_type
+    unwrapped = unwrap_non_null(field_type)
     if isinstance(unwrapped, GraphQLList):
         return policy.max_list_rows
     if _is_connection_type(get_named_type(unwrapped)):
@@ -654,9 +821,7 @@ def _is_connection_type(candidate: Any) -> bool:
     edges = candidate.fields.get(_CONNECTION_MARKER_FIELD)
     if edges is None:
         return False
-    unwrapped = edges.type
-    while isinstance(unwrapped, GraphQLNonNull):
-        unwrapped = unwrapped.of_type
+    unwrapped = unwrap_non_null(edges.type)
     if not isinstance(unwrapped, GraphQLList):
         return False
     edge = get_named_type(unwrapped.of_type)
@@ -748,8 +913,15 @@ def charge_document(
             field_def = _field_definition(graphql_schema, parent, node.name.value)
             if field_def is None:
                 continue
+            # A generated top-level mutation field carries its bind-time spec
+            # map, which classifies the write input's fields for the whole
+            # argument walk below. Resolved per field (not per request) because
+            # the map belongs to THE field's mutation class; ``begin_mutation_field``
+            # keeps the per-field relation counter scoped to exactly this field.
+            field_specs = None
             if in_mutation and parent is root:
                 values.begin_mutation_field()
+                field_specs = _mutation_input_specs(field_def)
             for argument in node.arguments:
                 argument_def = field_def.args.get(argument.name.value)
                 if argument_def is None:
@@ -759,6 +931,7 @@ def charge_document(
                     value_from_ast_untyped(argument.value, op_variables),
                     in_mutation=in_mutation,
                     argument=argument.name.value,
+                    specs=field_specs,
                 )
             child_multiplier = multiplier
             rows = _collection_rows(policy, parent, field_def.type, node, op_variables)
@@ -815,31 +988,16 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         """Publish the policy, charge the document, and restore nested context state."""
         policy = self._resolved_policy()
         context = self.execution_context.context
-        previous_policy = get_context_value(
-            context,
-            DST_RESOURCE_POLICY,
-            _MISSING_CONTEXT_VALUE,
-        )
-        previous_deadline = get_context_value(
-            context,
-            DST_RESOURCE_DEADLINE,
-            _MISSING_CONTEXT_VALUE,
-        )
-        try:
+        # The absent-vs-``None`` distinction and the put-it-back-on-exception
+        # rule are ``utils/context.py``'s (``restored_context_keys``), which is
+        # where the ``MISSING`` sentinel that decides "clear" from "restore"
+        # lives. This extension used to mint its own sentinel and hand-roll the
+        # round trip, one ``is`` comparison away from restoring a key that was
+        # never set.
+        with restored_context_keys(context, DST_RESOURCE_POLICY, DST_RESOURCE_DEADLINE):
             stash_resource_policy(context, policy)
             scan_document_text(policy, self.execution_context.query)
             yield
-        finally:
-            self._restore_context_value(context, DST_RESOURCE_POLICY, previous_policy)
-            self._restore_context_value(context, DST_RESOURCE_DEADLINE, previous_deadline)
-
-    @staticmethod
-    def _restore_context_value(context: Any, key: str, value: Any) -> None:
-        """Restore one prior context value or clear it when the key was absent."""
-        if value is _MISSING_CONTEXT_VALUE:
-            clear_context_key(context, key)
-        else:
-            stash_on_context(context, key, value)
 
     def on_execute(self) -> Iterator[None]:
         """Charge the validated document's shape and every argument value, then execute."""

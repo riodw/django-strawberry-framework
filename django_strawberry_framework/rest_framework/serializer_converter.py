@@ -998,6 +998,15 @@ def resolve_serializer_field(
             _reject_unsupported_relation_field(field)
             related_model = column.related_model
             _reject_relation_cardinality_mismatch(field, column)
+            # The guard has aligned the serializer field's cardinality with the model
+            # relation's collection shape, so the emitted kind follows the SERIALIZER
+            # field's cardinality: a many field over a one_to_many rel (a reverse FK /
+            # GenericRelation - collection-shaped but many_to_many=False) emits a list
+            # id input, never the single id the column classifier alone would produce.
+            # The runtime ``ManyRelatedField`` validates a list of pks, and the generated
+            # input must describe the same shape the runtime serializer validates.
+            if _relation_cardinality(field):
+                kind = RELATION_MULTI
             # spec-039 M3: the serializer flavor requires a registered primary DjangoType for
             # the target (stricter than the model fallback). Resolve + validate it
             # via ``primary_of`` so the id type is the SAME Relay-vs-raw-pk decision

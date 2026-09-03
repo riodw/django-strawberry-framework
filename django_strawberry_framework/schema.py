@@ -250,8 +250,19 @@ class DjangoMutationExecutionContext(ExecutionContext):
         would miss it; the before/after length comparison over
         ``_execution_errors`` stays valid on either of graphql-core's
         error-container shapes because both are append-only during execution.
+
+        An UNREADABLE container (a raising ``errors`` access or ``__len__``)
+        cannot certify the window stayed error-free, so it fails closed: the
+        rollback is marked here and the read's failure re-raised, letting the
+        caller's ``finally`` exit the atomic - the write is rolled back and the
+        failure surfaces, never a commit behind an uncertified window.
         """
-        if len(self._execution_errors()) > errors_before:
+        try:
+            errors_now = len(self._execution_errors())
+        except Exception:
+            transaction.set_rollback(True, using=alias)
+            raise
+        if errors_now > errors_before:
             transaction.set_rollback(True, using=alias)
 
     def _execute_mutation_field_sync(
@@ -280,8 +291,13 @@ class DjangoMutationExecutionContext(ExecutionContext):
             if not atomic.__exit__(type(exc), exc, exc.__traceback__):
                 raise
             return None  # pragma: no cover - ``atomic.__exit__`` never suppresses.
-        self._rollback_for_new_errors(errors_before, alias)
-        atomic.__exit__(None, None, None)
+        try:
+            self._rollback_for_new_errors(errors_before, alias)
+        finally:
+            # The window's atomic exits even when the rollback decision itself
+            # raises, so a hostile error container cannot abandon an open
+            # transaction on the connection.
+            atomic.__exit__(None, None, None)
         return result
 
     async def _execute_mutation_field_async(
@@ -331,8 +347,13 @@ class DjangoMutationExecutionContext(ExecutionContext):
                 return None  # pragma: no cover - ``atomic.__exit__`` never suppresses.
 
             def _exit_clean() -> None:
-                self._rollback_for_new_errors(errors_before, alias)
-                atomic.__exit__(None, None, None)
+                try:
+                    self._rollback_for_new_errors(errors_before, alias)
+                finally:
+                    # Mirror of the sync guard: the atomic exits even when the
+                    # rollback decision raises, so the alias lock is never
+                    # released over an abandoned open transaction.
+                    atomic.__exit__(None, None, None)
 
             await run_in_one_sync_boundary(_exit_clean)
             return result

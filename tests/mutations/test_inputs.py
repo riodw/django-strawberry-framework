@@ -1610,3 +1610,137 @@ def test_field_error_payload_uses_a_strawberry_type():
     assert hasattr(payload, "__strawberry_definition__")
     # Guard against accidental input-vs-type confusion: payloads are output types.
     assert not strawberry.type(payload).__strawberry_definition__.is_input
+
+
+def test_editable_input_fields_normalizes_its_declared_sequences():
+    """A bare string or a duplicate name is rejected here too, not only at the metaclass.
+
+    ``editable_input_fields`` is a PUBLIC generator the auth and form adapters
+    call directly, bypassing ``DjangoMutation._validate_meta``. It used to freeze
+    its sequences with a bare ``tuple(...)``, so a bare string reaching it
+    iterated as characters and a duplicate name collapsed silently - both
+    malformed declarations that the same narrowing spine already rejected for
+    the form and serializer flavors.
+    """
+    with pytest.raises(ConfigurationError, match="not a bare string"):
+        editable_input_fields(product_models.Item, fields="name")
+    with pytest.raises(ConfigurationError, match="duplicate field name"):
+        editable_input_fields(product_models.Item, fields=("name", "name"))
+
+
+# ---------------------------------------------------------------------------
+# Attr-name-set parameters reject bare strings (overrides / excluded_attrs)
+# ---------------------------------------------------------------------------
+
+
+def test_build_mutation_input_rejects_bare_string_overrides():
+    """A bare ``str`` / ``bytes`` ``overrides`` fails loud instead of char-splitting.
+
+    ``overrides`` freezes through ``frozenset``, so a bare string used to iterate
+    as CHARACTERS (bytes as byte INTEGERS) - silently matching no input attr, so
+    the caller's override never applied and, while non-empty, the garbage set
+    satisfied the ``not overrides`` half of the empty-input guard. The same
+    iterate-as-characters defect class ``normalize_field_name_sequence`` rejects
+    loudly for ``fields`` / ``exclude`` (the row above), so the set-shaped
+    siblings reject it too.
+    """
+    with pytest.raises(ConfigurationError, match="overrides"):
+        build_mutation_input(
+            product_models.Item,
+            operation_kind=CREATE,
+            primary_type=ItemType,
+            overrides="category_id",
+        )
+    with pytest.raises(ConfigurationError, match="overrides"):
+        build_mutation_input(
+            product_models.Item,
+            operation_kind=CREATE,
+            primary_type=ItemType,
+            overrides=b"name",
+        )
+
+
+def test_bare_string_overrides_cannot_bypass_the_empty_input_guard():
+    """No zero-field input class escapes via a garbage ``overrides`` string.
+
+    A model with no editable columns + ``overrides="x"`` used to return an empty
+    input class (the char-split set satisfied the guard's ``not overrides``);
+    Strawberry only rejected it later at ``Schema(...)`` build with a raw
+    ``ValueError``. The generator's fail-loud boundary now holds either way: the
+    bare string is rejected before the guard can be satisfied by it.
+    """
+
+    class NoEditable(models.Model):
+        created_date = models.DateTimeField(auto_now_add=True)
+        updated_date = models.DateTimeField(auto_now=True)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class NoEditableType(DjangoType, relay.Node):
+        class Meta:
+            model = NoEditable
+            fields = ("id",)
+
+    with pytest.raises(ConfigurationError, match="(overrides|has no fields)"):
+        build_mutation_input(
+            NoEditable,
+            operation_kind=CREATE,
+            primary_type=NoEditableType,
+            overrides="x",
+        )
+
+
+def test_mutation_input_field_specs_rejects_bare_string_excluded_attrs():
+    """A bare ``str`` / ``bytes`` ``excluded_attrs`` fails loud, keeping the D6 seam honest.
+
+    ``excluded_attrs`` records the spec-040 D6 capture attrs; frozen through
+    ``frozenset``, a bare string used to split into characters that matched no
+    attr, silently leaving every spec kind as its column/relation kind (the
+    ``password`` capture seam would simply not fire). Sets of names reject the
+    bare-string shape like every other names-parameter surface.
+    """
+
+    @strawberry.input
+    class NameProbe:
+        name: str
+
+    with pytest.raises(ConfigurationError, match="excluded_attrs"):
+        mutation_input_field_specs(
+            product_models.Item,
+            NameProbe,
+            excluded_attrs="name",
+        )
+    with pytest.raises(ConfigurationError, match="excluded_attrs"):
+        mutation_input_field_specs(
+            product_models.Item,
+            NameProbe,
+            excluded_attrs=b"name",
+        )
+
+
+def test_build_payload_type_rejects_reserved_or_invalid_object_slot():
+    """A payload ``object_slot`` colliding with ``ok`` / ``errors`` (or not an identifier)
+    fails loud.
+
+    The payload namespace dict keys the object slot beside ``errors`` (and the
+    model-less ``ok``), so a slot named ``errors`` used to collapse onto the
+    duplicate dict key and silently build a payload with NO object field, and a
+    non-identifier slot exploded later inside dataclass codegen with a cryptic
+    ``SyntaxError`` (``__dataclass_dflt_node-x__``). The builder rejects both at
+    the framework boundary; the uniform slots (``node`` / ``result``) and the
+    auto-derivation keep building (pinned by the payload rows above).
+    """
+    _, relay_type = _make_relay_target()
+    for bad_slot in (
+        "errors",
+        "ok",
+        "node-x",
+        5,
+    ):
+        with pytest.raises(ConfigurationError, match="object_slot"):
+            build_payload_type(
+                "CreateThing",
+                object_type=relay_type,
+                object_slot=bad_slot,  # type: ignore[arg-type]
+            )

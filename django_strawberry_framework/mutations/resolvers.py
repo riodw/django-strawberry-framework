@@ -85,8 +85,13 @@ from ..optimizer.extension import (
 from ..relay import GlobalIDDecode, decode_model_global_id
 from ..resource_policy import check_deadline
 from ..utils.errors import (
+    FIELD_ERROR_CODE_INVALID,
+    FIELD_ERROR_CODE_NOT_FOUND,
+    FIELD_ERROR_CODE_NULL,
+    FIELD_ERROR_CODE_PROTECTED,
     field_error,
     integrity_error_field_errors,
+    null_field_error,
     validation_error_to_field_errors,
 )
 from ..utils.inputs import FILE, RELATION_MULTI, RELATION_SINGLE
@@ -462,7 +467,7 @@ def _explicit_null_error(django_field: Any, field_name: str, value: Any) -> Fiel
         return None
     if django_field.null:
         return None
-    return field_error(field_name, "This field cannot be null.", codes="null")
+    return null_field_error(field_name)
 
 
 def _make_aware_if_naive(value: Any) -> Any:
@@ -511,7 +516,7 @@ def _decode_single_relation_id(
     if value is None:
         if getattr(relation_field, "null", False):
             return None, None
-        return None, field_error(graphql_name, "This field cannot be null.", codes="null")
+        return None, null_field_error(graphql_name)
     pks, error = decode_visible_relation_ids(
         [value],
         graphql_name=graphql_name,
@@ -571,7 +576,7 @@ def _relation_null_error(field_name: str) -> FieldError:
     return field_error(
         field_name,
         f"Relation {field_name!r} cannot be null; send an empty list to clear it.",
-        codes="null",
+        codes=FIELD_ERROR_CODE_NULL,
     )
 
 
@@ -1081,7 +1086,7 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
             field_error(
                 "",
                 "Cannot delete: other rows reference this one and are protected.",
-                codes="protected",
+                codes=FIELD_ERROR_CODE_PROTECTED,
             ),
         ]
     except IntegrityError:
@@ -1227,7 +1232,7 @@ def coerce_lookup_id(
 
 def not_found_error() -> FieldError:
     """Build the not-found ``FieldError`` on ``id`` (hidden or missing - no existence leak)."""
-    return field_error("id", "No matching row found.", codes="not_found")
+    return field_error("id", "No matching row found.", codes=FIELD_ERROR_CODE_NOT_FOUND)
 
 
 def _invalid_lookup_id_error() -> FieldError:
@@ -1238,7 +1243,7 @@ def _invalid_lookup_id_error() -> FieldError:
     failure is determined from the id's type slot alone, without a DB read, so it
     reveals nothing about row existence (spec-036 Decision 10).
     """
-    return field_error("id", "Invalid id.", codes="invalid")
+    return field_error("id", "Invalid id.", codes=FIELD_ERROR_CODE_INVALID)
 
 
 def payload_cls_for(mutation_cls: type) -> type:

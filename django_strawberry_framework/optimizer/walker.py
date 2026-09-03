@@ -13,7 +13,11 @@ from strawberry.utils.str_converters import to_camel_case
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
-from ..utils.querysets import apply_type_visibility_sync
+from ..utils.querysets import (
+    _UNRECOMPOSED_CHILD_POLICY,
+    apply_type_visibility_sync,
+    base_queryset,
+)
 from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from ..utils.typing import schema_config_from_info
@@ -375,17 +379,22 @@ def _build_child_queryset(
     model's own ``_default_manager.all()`` (NOT ``initial_queryset(target_type)``
     - the prefetch child is keyed on ``field.related_model``).
     """
-    queryset = field.related_model._default_manager.all()
+    queryset = base_queryset(field.related_model)
     if has_custom_qs:
-        # ``allow_sliced=True``: a nested-connection child may legitimately return a
-        # sliced queryset, and the plan's own gate
+        # ``_UNRECOMPOSED_CHILD_POLICY``: a nested-connection child may legitimately
+        # return a sliced queryset, and the plan's own gate
         # (``nested_fetch.py::unwindowable_child_queryset_reason``) detects that shape
         # and degrades to the fully-unplanned per-parent fallback WITHOUT recomposing
         # filters / ordering, so the seal's slice rejection (which exists because
         # recomposing surfaces would raise a raw ``TypeError``) must not pre-empt the
         # designed degradation (``spec-045-visibility_boundary-0_0_14`` Decision 5
         # degrade-to-unplanned).
-        queryset = apply_type_visibility_sync(target_type, queryset, info, allow_sliced=True)
+        queryset = apply_type_visibility_sync(
+            target_type,
+            queryset,
+            info,
+            policy=_UNRECOMPOSED_CHILD_POLICY,
+        )
     return queryset
 
 

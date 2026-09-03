@@ -296,6 +296,71 @@ def test_hostile_user_descriptor_raising_collapses_to_anonymous_null():
     assert res2.errors is None, res2.errors
     assert res2.data["me"] is None
 
+    # Hunt 0.0.15 - the hostile TRUTHINESS surface: a value whose ``__bool__``
+    # / ``__len__`` raises is the fourth contained shape (the read succeeds;
+    # the classification's ``if is_authenticated:`` evaluation raises).
+    class _BoolRaisingValue:
+        def __bool__(self):
+            raise ValueError("hostile truthiness")
+
+    class _LenOnlyRaiser:
+        def __len__(self):
+            raise TypeError("hostile len truthiness")
+
+    class HostileBoolValueUser:
+        def __init__(self):
+            self.is_authenticated = _BoolRaisingValue()
+
+    class HostileLenValueUser:
+        def __init__(self):
+            self.is_authenticated = _LenOnlyRaiser()
+
+    bool_req = RequestFactory().post("/graphql/")
+    bool_req.user = HostileBoolValueUser()
+    bool_res = schema.execute_sync(_ME_Q, context_value=bool_req)
+    assert bool_res.errors is None, bool_res.errors
+    assert bool_res.data["me"] is None
+
+    len_req = RequestFactory().post("/graphql/")
+    len_req.user = HostileLenValueUser()
+    len_res = schema.execute_sync(_ME_Q, context_value=len_req)
+    assert len_res.errors is None, len_res.errors
+    assert len_res.data["me"] is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_hostile_truthiness_collapses_to_anonymous_null():
+    """Async parity for the fourth contained shape (hunt 0.0.15).
+
+    The async body bridges to the SAME sync body inside the ONE
+    ``sync_to_async`` boundary, so the hostile-truthiness containment must hold
+    identically there: a value whose ``__bool__`` / ``__len__`` raises after a
+    successful read classifies the request as anonymous and resolves ``me`` to
+    ``null``, never an unhandled top-level error.
+    """
+
+    class _BoolRaisingValue:
+        def __bool__(self):
+            raise TypeError("hostile async truthiness")
+
+    class _LenOnlyRaiser:
+        def __len__(self):
+            raise ValueError("hostile async len truthiness")
+
+    schema = _me_schema()
+
+    bool_req = RequestFactory().post("/graphql/")
+    bool_req.user = type("U", (), {"is_authenticated": _BoolRaisingValue()})()
+    res = await schema.execute(_ME_Q, context_value=bool_req)
+    assert res.errors is None, res.errors
+    assert res.data["me"] is None
+
+    len_req = RequestFactory().post("/graphql/")
+    len_req.user = type("U", (), {"is_authenticated": _LenOnlyRaiser()})()
+    res2 = await schema.execute(_ME_Q, context_value=len_req)
+    assert res2.errors is None, res2.errors
+    assert res2.data["me"] is None
+
 
 def test_current_user_hostile_directives_raise_configuration_error():
     """A hostile ``directives`` iterable or a bare string must raise ``ConfigurationError``."""

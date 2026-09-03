@@ -389,11 +389,11 @@ def test_permission_classes_defaults_to_django_model_permission():
             model = product_models.Item
             operation = "create"
 
-    assert CreateItem._mutation_meta.permission_classes == [DjangoModelPermission]
+    assert CreateItem._mutation_meta.permission_classes == (DjangoModelPermission,)
 
 
 def test_permission_classes_explicit_override_honored():
-    """An explicit ``permission_classes`` list is stored verbatim."""
+    """An explicit ``permission_classes`` list is stored verbatim (as the immutable tuple)."""
 
     class AllowAll:
         def has_permission(
@@ -412,11 +412,11 @@ def test_permission_classes_explicit_override_honored():
             operation = "create"
             permission_classes = [AllowAll]
 
-    assert CreateItem._mutation_meta.permission_classes == [AllowAll]
+    assert CreateItem._mutation_meta.permission_classes == (AllowAll,)
 
 
-def test_permission_classes_tuple_is_normalized_to_list():
-    """A tuple ``permission_classes`` is normalized to a list."""
+def test_permission_classes_sequence_is_normalized_to_an_immutable_tuple():
+    """A tuple ``permission_classes`` is normalized to the stored tuple (immutable snapshot)."""
 
     class AllowAll:
         def has_permission(
@@ -435,7 +435,7 @@ def test_permission_classes_tuple_is_normalized_to_list():
             operation = "create"
             permission_classes = (AllowAll,)
 
-    assert CreateItem._mutation_meta.permission_classes == [AllowAll]
+    assert CreateItem._mutation_meta.permission_classes == (AllowAll,)
 
 
 def test_permission_classes_bare_class_raises():
@@ -1835,7 +1835,7 @@ def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out():
         SimpleNamespace(),
         flavor="DjangoMutation",
     )
-    assert classes == [DjangoModelPermission]
+    assert classes == (DjangoModelPermission,)
     assert lock is True
 
     classes, lock = model_backed_permission_and_lock(
@@ -1843,7 +1843,7 @@ def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out():
         SimpleNamespace(select_for_update=False, permission_classes=[]),
         flavor="DjangoMutation",
     )
-    assert classes == []
+    assert classes == ()
     assert lock is False
 
 
@@ -2133,3 +2133,107 @@ def test_validate_permission_classes_custom_base_label_and_flavor_forwarding():
             SimpleNamespace(permission_classes=[123]),
             flavor="DjangoModelFormMutation",
         )
+
+
+class _HostileHashStr(str):
+    """A str subclass whose __hash__ raises (hostile-Meta containment parity test)."""
+
+    def __hash__(self) -> int:
+        raise RuntimeError("hostile hash")
+
+
+def test_django_mutation_validate_meta_hostile_hash_operation_safe_containment():
+    """DjangoMutation._validate_meta with hostile-hash operation raises typed ConfigurationError.
+
+    A str subclass's __hash__ may raise; frozenset membership hashes its probe, so
+    a raw RuntimeError would escape the validation check meant to reject the value.
+    The operation membership test is guarded by _safe_frozenset_membership, which
+    answers False on any hash failure and routes to the ordinary typed reject.
+    """
+    _declare_products_primaries()
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation BadOpMutation\.Meta\.operation must be one of",
+    ):
+
+        class BadOpMutation(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = _HostileHashStr("create")
+
+
+def test_require_non_delete_operation_hostile_hash_safe_containment():
+    """require_non_delete_operation with hostile-hash operation raises typed ConfigurationError.
+
+    The shared non-delete reject used by form and serializer flavors also guards
+    its frozenset membership test against hash failures.
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.mutations.sets import require_non_delete_operation
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"SerializerMutation BadOpMutation\.Meta\.operation must be one of",
+    ):
+        require_non_delete_operation(
+            "SerializerMutation",
+            "BadOpMutation",
+            SimpleNamespace(operation=_HostileHashStr("create")),
+        )
+
+
+def test_django_mutation_input_type_name_delete_operation_raises_typed_reject():
+    """DjangoMutation.input_type_name on a validated delete raises ConfigurationError.
+
+    A direct consumer call to input_type_name on a delete mutation (unusual,
+    as the framework gates the data: ref at the field factory) must fail loud
+    as a typed ConfigurationError, not a raw KeyError from indexing
+    NON_DELETE_OPERATION_INPUT_KIND. The reject mirrors _materialize_input_for's
+    .get() delete short-circuit.
+    """
+    _declare_products_primaries()
+
+    class DeleteItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "delete"
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoMutation DeleteItem declares operation='delete', which is id-only and materializes no input",
+    ):
+        DeleteItem.input_type_name(DeleteItem._mutation_meta)
+
+
+def test_make_declaration_registry_identity_dedup_hostile_eq_safe_containment():
+    """make_declaration_registry dedupes by identity, not __eq__, avoiding hostile metaclass escapes.
+
+    The register ledger's ``list.__contains__`` dispatches each entry's __eq__
+    (a consumer-supplied metaclass may override with a raising body), so an
+    ``is`` identity scan replaces the ``not in`` check. This keeps hostile
+    __eq__ from escaping as a raw RuntimeError at class registration.
+    """
+    from django_strawberry_framework.mutations.sets import make_declaration_registry
+
+    reg = make_declaration_registry("ProbeRegistry")
+
+    class HostileEqMeta(type):
+        def __eq__(cls, other: object) -> bool:
+            raise RuntimeError("hostile eq")
+
+    class FirstClass:
+        pass
+
+    class SecondClass(metaclass=HostileEqMeta):
+        pass
+
+    reg.register(FirstClass)
+    # No RuntimeError: identity scan, not equality check.
+    reg.register(SecondClass)
+    assert len(reg.store) == 2
+
+    # Re-register the same object (identity) is deduplicated silently.
+    reg.register(FirstClass)
+    assert len(reg.store) == 2

@@ -3,6 +3,7 @@
 # `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
 # without importing strawberry directly; this is part of the DRF-shaped public surface.
 import logging
+from typing import Any
 
 # Canonical package logger. Declared at the top-level package so the
 # string ``"django_strawberry_framework"`` lives in exactly one source
@@ -90,7 +91,7 @@ _DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
 }
 
 
-def __getattr__(name: str) -> type:
+def __getattr__(name: str) -> Any:
     """Resolve the DRF-soft-dependency names lazily through the DRF import guard (spec-039 Decision 12).
 
     PEP 562 module-level ``__getattr__``: ``from django_strawberry_framework import

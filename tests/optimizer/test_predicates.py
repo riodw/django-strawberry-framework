@@ -16,7 +16,7 @@ removed.
 
 import pytest
 from apps.library.models import Book, Branch, Genre, Loan, Patron, Shelf
-from django.db import connection
+from django.db import connection, router
 from django.db.models import Q, Value
 from django.test.utils import CaptureQueriesContext
 
@@ -194,6 +194,39 @@ def test_same_alias_guard():
     inner = correlated_inner_root(Book.objects.all()).using("nonexistent")
     with pytest.raises(OptimizerError, match="database-alias mismatch"):
         attach_exists(Book.objects.all(), inner)
+
+
+def test_alias_mismatch_message_reports_the_compared_values(monkeypatch):
+    """The mismatch guard snapshots both ``.db`` resolutions before comparing
+    and formats its message from the snapshots.
+
+    ``.db`` re-resolves through the router on every read of a hint-less
+    queryset, so a stateful router whose answers change between reads must see
+    the guard report the aliases the comparison actually saw -- never a
+    re-resolution inside the message f-string, which could claim a mismatch
+    between two identical aliases (and would read the router a third time).
+    """
+    reads = {"n": 0}
+
+    def flip(model_instance=None, **hints):
+        reads["n"] += 1
+        return "default" if reads["n"] % 2 else "nonexistent"
+
+    monkeypatch.setattr(router, "db_for_read", flip)
+    outer = Book.objects.all()  # hint-less: .db resolves through the router
+    inner = correlated_inner_root(outer)  # router read 1 pins the inner to 'default'
+    assert inner.db == "default"
+    reads_after_build = reads["n"]
+
+    with pytest.raises(OptimizerError) as exc:
+        attach_exists(outer, inner)
+
+    message = str(exc.value)
+    assert "inner 'default'" in message, message
+    assert "outer 'nonexistent'" in message, message
+    # Exactly one router read per queryset during attach: the outer read the
+    # comparison performed (the inner was pinned at build time).
+    assert reads["n"] - reads_after_build == 1, message
 
 
 def test_database_alias_preserved():

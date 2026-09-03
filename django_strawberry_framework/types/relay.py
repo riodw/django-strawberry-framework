@@ -430,6 +430,15 @@ def _resolve_globalid_strategy(
 # neither set: they are encode-only in 0.0.9 (no decode path), so the decoder's
 # "no decode for these" contract IS their absence from both memberships - there
 # is deliberately no ``{"callable", "custom"}`` literal.
+#
+# ``MODEL_LABEL_STRATEGIES`` answers BOTH directions - which strategies EMIT a
+# model label and which ACCEPT one on decode - because for the framework
+# strategies the two coincide. That is why ``_emits_model_label`` and
+# ``_accepts_model_label_decode`` have identical bodies and are still two names:
+# they are read by opposite halves of the contract (the encoder closure and the
+# routing audit; the decode-Step-2 enforcement). The asymmetry note belongs
+# here, on the shared set - split the set, not just the predicates, if encode
+# and decode acceptance ever diverge.
 MODEL_LABEL_STRATEGIES = frozenset({"model", "type+model"})
 TYPE_NAME_STRATEGIES = frozenset({"type", "type+model"})
 
@@ -449,10 +458,9 @@ def _accepts_model_label_decode(effective_strategy: str | None) -> bool:
 
     Identical membership to ``_emits_model_label`` - ``model`` and ``type+model``
     both decode model labels - but named distinctly because the audit's
-    ``accepts_model_label(primary)`` predicate and the decode-Step-2
-    enforcement read the *acceptance* side. Encode and decode acceptance of the
-    model-label shape coincide for the framework strategies, so one frozenset
-    serves both; split them if a divergence ever surfaces.
+    ``accepts_model_label(primary)`` predicate and the decode-Step-2 enforcement
+    read the *acceptance* side. Why one frozenset serves both directions is
+    stated on ``MODEL_LABEL_STRATEGIES`` itself.
     """
     return effective_strategy in MODEL_LABEL_STRATEGIES
 

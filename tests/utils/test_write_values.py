@@ -25,6 +25,7 @@ from django_strawberry_framework.utils.write_values import (
     decode_visible_relation_ids,
     decoded_into,
     file_into,
+    materialize_relation_id_container,
     relation_into,
     scalar_into,
     store_decoded,
@@ -177,6 +178,83 @@ def test_decode_visible_relation_ids_maps_malformed_containers_to_relation_error
             async_recourse="Use a synchronous visibility hook.",
         )
         assert pks is None
+        assert error is not None
+        assert error.field == "categoryIds"
+
+
+def test_materialize_relation_id_container_rejects_text_mapping_and_non_iterable_atoms():
+    """Text / mapping atoms (including SUBCLASSES) and non-iterables are the uniform error.
+
+    A text atom iterated would decompose into per-character "ids" and a mapping
+    into per-key "ids"; a non-iterable would raise ``TypeError`` out of ``list()``.
+    Subclassing is pinned because ``isinstance`` accepts a subclass: the atom set
+    must classify by type relationship, not exact type.
+    """
+
+    class _TextSub(str):
+        pass
+
+    class _MappingSub(dict):
+        pass
+
+    for values in (
+        "12",
+        _TextSub("ab"),
+        b"12",
+        bytearray(b"1"),
+        memoryview(b"1"),
+        {"a": 1},
+        _MappingSub({"a": 1}),
+        7,
+        object(),
+    ):
+        provided_values, error = materialize_relation_id_container(values, "categoryIds")
+        assert provided_values is None
+        assert error is not None
+        assert error.field == "categoryIds"
+
+
+def test_materialize_relation_id_container_materializes_once_and_contains_failures():
+    """Legitimate iterables materialize ONCE; iteration failures stay in the envelope.
+
+    A one-shot generator is fully consumed by the materialization (exactly one
+    pass - the decoded set is what the container yielded, never a re-iteration),
+    while a generator raising midway, an ``__iter__`` raising ``BaseException``,
+    and an ``__iter__`` returning a non-iterator all collapse to the uniform
+    field-keyed error instead of escaping the resolver.
+    """
+
+    class _HostileBaseException(BaseException):
+        pass
+
+    consumed: list[int] = []
+
+    def _one_shot():
+        for item in (1, 2):
+            consumed.append(item)
+            yield item
+
+    class _MidwayRaise:
+        def __iter__(self):
+            yield 1
+            raise RuntimeError("midway")
+
+    class _BaseExceptionIter:
+        def __iter__(self):
+            raise _HostileBaseException("hostile")
+
+    class _NonIterator:
+        def __iter__(self):
+            return 42  # not an iterator
+
+    provided_values, error = materialize_relation_id_container(_one_shot(), "categoryIds")
+    assert error is None
+    assert provided_values == [1, 2]
+    assert consumed == [1, 2]
+
+    for values in (_MidwayRaise(), _BaseExceptionIter(), _NonIterator()):
+        provided_values, error = materialize_relation_id_container(values, "categoryIds")
+        assert provided_values is None
         assert error is not None
         assert error.field == "categoryIds"
 
@@ -642,3 +720,306 @@ def test_decode_provided_fields_short_circuits_on_handler_error():
     assert error.codes == ["custom_error"]
     assert len(failing_handler_called) == 1
     assert len(scalar_handler_called) == 0
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_hidden_and_missing_are_indistinguishable():
+    """A visibility-hook-hidden row gets the SAME envelope as a missing one, at both seams.
+
+    The cross-flavor security invariant on the batch path: the one ``pk__in``
+    visibility query runs through the related primary's ``get_queryset``, so a
+    row the writer cannot see is absent from the present-set and the subset
+    check maps it to the same ``relation_field_error`` a missing pk yields -
+    no existence leak (identical field, messages, and codes), and a mixed
+    visible+hidden batch fails all-or-nothing. The single-relation decoder
+    (``decode_visible_relation`` via ``visible_related_object``) is pinned to
+    the same indistinguishability.
+    """
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.finalizer import finalize_django_types
+
+    class HiddenPinType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.exclude(name="HiddenCat")
+
+    finalize_django_types()
+    recourse = "Use a synchronous visibility hook."
+    visible = Category.objects.create(name="VisibleCat")
+    hidden = Category.objects.create(name="HiddenCat")
+
+    def shape(error):
+        return (error.field, tuple(error.messages or []), tuple(error.codes or []))
+
+    _, error_hidden = decode_visible_relation_ids(
+        [hidden.pk],
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+    )
+    _, error_missing = decode_visible_relation_ids(
+        [999999],
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+    )
+    assert error_hidden is not None, "hidden row was attached - visibility bypass"
+    assert shape(error_hidden) == shape(error_missing), "existence leak on the batch seam"
+
+    pks, error = decode_visible_relation_ids(
+        [visible.pk, hidden.pk],
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+    )
+    assert pks is None
+    assert error is not None
+
+    _, single_hidden = decode_visible_relation(
+        hidden.pk,
+        graphql_name="categoryId",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+        skip=lambda value: value is None,
+        project=lambda obj: obj.pk,
+    )
+    _, single_missing = decode_visible_relation(
+        999999,
+        graphql_name="categoryId",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+        skip=lambda value: value is None,
+        project=lambda obj: obj.pk,
+    )
+    assert single_hidden is not None, "hidden row attached at the single seam"
+    assert shape(single_hidden) == shape(single_missing), "existence leak on the single seam"
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
+    """GlobalID members decode end-to-end at the batch seam and still batch to ONE query.
+
+    A valid ``GlobalID`` beside a raw pk decodes both to real pks and confirms
+    visibility in the single ``pk__in`` query (the GlobalID decode itself is
+    non-raising and query-free for a pk ``id_attr``); a wrong-model GlobalID
+    and a malformed pk token are the uniform field-keyed error.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    from django_strawberry_framework.types.base import DjangoType
+    from django_strawberry_framework.types.finalizer import finalize_django_types
+
+    class GidBatchPinType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    recourse = "Use a synchronous visibility hook."
+    row = Category.objects.create(name="GidBatch")
+
+    with CaptureQueriesContext(connection) as ctx:
+        pks, error = decode_visible_relation_ids(
+            [relay.GlobalID("products.category", str(row.pk)), row.pk],
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse=recourse,
+        )
+    assert error is None
+    assert pks == [row.pk, row.pk]
+    assert len(ctx.captured_queries) == 1
+
+    for bad_gid in (
+        relay.GlobalID("unknown.model", str(row.pk)),
+        relay.GlobalID("products.category", "not-a-pk"),
+    ):
+        pks, error = decode_visible_relation_ids(
+            [bad_gid],
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse=recourse,
+        )
+        assert pks is None
+        assert error is not None
+        assert error.field == "categoryIds"
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_materializes_generators_once_and_clears_empty():
+    """A one-shot generator container is materialized ONCE; an empty one clears query-free.
+
+    End-to-end over the batch seam: the container is consumed exactly once by
+    the materialization (never re-iterated at the decode layer), and a
+    generator yielding nothing is a valid M2M clear that returns ``[]``
+    WITHOUT touching the DB.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    created = [Category.objects.create(name=f"Gen{i}") for i in range(2)]
+    consumed: list[int] = []
+
+    def _one_shot():
+        for item in created:
+            consumed.append(item.pk)
+            yield item.pk
+
+    pks, error = decode_visible_relation_ids(
+        _one_shot(),
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse="Use a synchronous visibility hook.",
+    )
+    assert error is None
+    assert pks == [item.pk for item in created]
+    assert consumed == [item.pk for item in created]
+
+    def _empty():
+        yield from ()
+
+    with CaptureQueriesContext(connection) as ctx:
+        pks, error = decode_visible_relation_ids(
+            _empty(),
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse="Use a synchronous visibility hook.",
+        )
+    assert error is None
+    assert pks == []
+    assert ctx.captured_queries == []
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained():
+    """Hostile member shapes collapse to the uniform error or coerce visibly - never raw.
+
+    ``None`` as a MEMBER or as the whole container, an out-of-range int (the
+    ``OverflowError`` guard), lexical strings the pk field's ``to_python``
+    governs, and bools all either fail the type check into the field-keyed
+    ``relation_field_error`` or coerce through the pk field and pass the same
+    visibility gate as any other pk - no raw ``TypeError`` / ``ValueError`` /
+    ``OverflowError`` escapes the resolver.
+    """
+    category = Category.objects.create(name="BoundaryTarget")
+    recourse = "Use a synchronous visibility hook."
+
+    for bad_container in (None, [None]):
+        pks, error = decode_visible_relation_ids(
+            bad_container,
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse=recourse,
+        )
+        assert pks is None
+        assert error is not None
+        assert error.field == "categoryIds"
+
+    for member in (
+        10**30,
+        "",
+        "0x10",
+        "12.0",
+        True,
+        False,
+    ):
+        pks, error = decode_visible_relation_ids(
+            [member],
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse=recourse,
+        )
+        assert (pks is None) == (error is not None), f"ambiguous decode for {member!r}"
+        if error is not None:
+            assert error.field == "categoryIds"
+
+    # A string the pk field coerces to a REAL pk passes the same visibility
+    # gate as the int literal (to_python mechanics are the documented contract).
+    pks, error = decode_visible_relation_ids(
+        [str(category.pk)],
+        graphql_name="categoryIds",
+        related_model=Category,
+        info=None,
+        async_recourse=recourse,
+    )
+    assert error is None
+    assert pks == [category.pk]
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query():
+    """Duplicate pks are a stringified SUBSET test, not a count match - accepted, one query.
+
+    ``pks_all_present`` collapses duplicates, so a repeated pk neither fails
+    the membership check (a len-compare would) nor adds a second query.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    first = Category.objects.create(name="DupA")
+    second = Category.objects.create(name="DupB")
+    with CaptureQueriesContext(connection) as ctx:
+        pks, error = decode_visible_relation_ids(
+            [first.pk, second.pk, first.pk],
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse="Use a synchronous visibility hook.",
+        )
+    assert error is None
+    assert pks == [first.pk, second.pk, first.pk]
+    assert len(ctx.captured_queries) == 1
+
+
+def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
+    """``extra_handlers`` entries are FULL handlers and replace the scalar fallback.
+
+    The spread-last map keys by ``spec.kind``, so an override under the scalar
+    kind wins over the returned ``scalar_handler`` fallback in
+    ``decode_provided_fields`` - the documented serializer nested-override
+    shape (its values are ``decoded_into``-composed handlers, not decode pairs).
+    """
+
+    @strawberry.input
+    class NameInput:
+        name: str = "x"
+
+    dest: dict[str, object] = {}
+
+    def custom(spec, value):
+        dest[spec.target_name] = f"custom-{value}"
+        return None
+
+    handlers, _ = decode_field_handlers(
+        dest,
+        info=None,
+        single=None,
+        multi=None,
+        extra_handlers={SCALAR: custom},
+    )
+    spec = _spec(attr="name", kind=SCALAR, target="name")
+    error = decode_provided_fields(
+        [spec],
+        NameInput(),
+        handlers=handlers,
+        scalar_handler=lambda item, value: (_ for _ in ()).throw(AssertionError("default ran")),
+    )
+    assert error is None
+    assert dest == {"name": "custom-x"}

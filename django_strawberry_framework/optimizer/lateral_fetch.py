@@ -1119,12 +1119,16 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
 def _order_columns(order_by: tuple, child_meta: Any) -> tuple[tuple[str, bool], ...] | None:
     """Map the deterministic order onto local concrete columns, or ``None``.
 
-    The lateral builder renders plain ``"column" ASC/DESC`` entries (matching
+    The lateral builder renders plain ``"column ASC/DESC"`` entries (matching
     what Django emits on Postgres for string orderings, so window row numbers
-    cannot drift from the windowed body's). Expression entries, relation
-    traversals, ``"?"``, and names that are not local concrete fields
-    downgrade to windowed.
+    cannot drift from the windowed body's). An EMPTY order, expression entries,
+    relation traversals, ``"?"``, and names that are not local concrete fields
+    downgrade to windowed: the lateral branch cannot render ``OVER (ORDER BY
+    )`` (or an ``ORDER BY  LIMIT`` page), while the windowed body it mirrors
+    renders a valid orderless window for the same request.
     """
+    if not order_by:
+        return None
     columns: list[tuple[str, bool]] = []
     for entry in order_by:
         if not isinstance(entry, str):

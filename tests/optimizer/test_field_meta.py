@@ -186,6 +186,74 @@ def test_from_django_field_many_to_many():
     assert fm.nullable is False
 
 
+def test_from_django_field_non_column_relations_stamp_attname_none():
+    """Relations that store no column stamp ``attname=None``.
+
+    Django fills ``attname`` with the RELATION NAME on a forward
+    ``ManyToManyField``, a ``GenericRelation``, and a ``GenericForeignKey``
+    (``set_attributes_from_name`` runs on every named field). Django 6.1
+    also sets ``concrete = False`` on those shapes; Django 5.2 reports a
+    forward M2M as ``concrete = True`` with the same poisoned attname.
+    The ``attname`` slot promises a real DB column or ``None``, and the
+    walker appends it to ``plan.only_fields`` verbatim - a poisoned value
+    emitted dead projection entries Django silently drops at compile time.
+    The stamp must drop the value on every supported Django; healthy
+    shapes keep their real columns.
+    """
+    gfk = next(
+        field
+        for field in TaggedItem._meta.get_fields()
+        if field.__class__.__name__ == "GenericForeignKey"
+    )
+    assert FieldMeta.from_django_field(Book._meta.get_field("genres")).attname is None
+    assert FieldMeta.from_django_field(Branch._meta.get_field("tags")).attname is None
+    assert FieldMeta.from_django_field(gfk).attname is None
+    # Healthy shapes keep their real columns.
+    assert FieldMeta.from_django_field(Item._meta.get_field("category")).attname == "category_id"
+    assert FieldMeta.from_django_field(Item._meta.get_field("name")).attname == "name"
+
+
+def test_from_django_field_duck_typed_double_keeps_attname_without_concrete():
+    """A non-M2M descriptor that omits ``concrete`` keeps its attname.
+
+    The gate drops a poisoned attname when the field POSITIVELY declares
+    ``concrete = False`` or ``many_to_many`` (Django 5.2 forward M2M is
+    concrete). Resolver test doubles routed through
+    ``_field_meta_for_resolver`` carry ``attname`` without a ``concrete``
+    attribute and must keep it, or the FK-id stub builder
+    (``_build_fk_id_stub``) would silently stop firing for them.
+    """
+    double = SimpleNamespace(
+        name="author",
+        is_relation=True,
+        attname="author_id",
+        related_model=Category,
+        target_field=SimpleNamespace(name="id", attname="id"),
+    )
+    fm = FieldMeta.from_django_field(double)
+    assert fm.attname == "author_id"
+
+
+def test_from_django_field_django_52_m2m_shape_stamps_attname_none():
+    """Django 5.2 forward M2M is ``concrete=True`` with ``attname == name``.
+
+    The ``concrete is False`` arm (Django 6.1's real M2M / generic shapes)
+    does not fire here; ``many_to_many`` is what drops the poisoned value
+    so this shape cannot depend on a floor Django to be tested.
+    """
+    double = SimpleNamespace(
+        name="genres",
+        is_relation=True,
+        many_to_many=True,
+        concrete=True,
+        attname="genres",
+        related_model=Genre,
+    )
+    fm = FieldMeta.from_django_field(double)
+    assert fm.attname is None
+    assert fm.many_to_many is True
+
+
 def test_from_django_field_generic_relation():
     """A ``GenericRelation`` populates the content-type / object-id slots and classifies generic.
 
@@ -587,6 +655,36 @@ def test_definition_field_map_respects_fields_filter():
 # ---------------------------------------------------------------------------
 # Walker uses the cached map
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_walker_plan_never_projects_non_column_relation_names():
+    """``plan.only_fields`` carries no non-column relation names.
+
+    The unregistered fallback path stamps the same ``FieldMeta`` the
+    definition-backed map uses, so the walker audit exercises the real
+    projection writers: before the stamp fix, selecting a forward M2M
+    (``genres``) or a ``GenericRelation`` (``tags``) appended those relation
+    names to ``plan.only_fields`` (``walker.py::_record_relation_access``
+    reads the attname verbatim), producing dead entries Django drops at
+    compile time. A forward FK keeps its real connector column.
+    """
+    from django_strawberry_framework.optimizer.walker import plan_optimizations
+
+    def sel(name, children=()):
+        return SimpleNamespace(name=name, selections=list(children), arguments=None, alias=None)
+
+    m2m_plan = plan_optimizations([sel("genres", [sel("id"), sel("name")])], Book, None)
+    assert "genres" not in m2m_plan.only_fields
+    assert len(m2m_plan.prefetch_related) == 1
+
+    generic_plan = plan_optimizations([sel("tags", [sel("id")])], Branch, None)
+    assert "tags" not in generic_plan.only_fields
+    assert len(generic_plan.prefetch_related) == 1
+
+    forward_plan = plan_optimizations([sel("category", [sel("id"), sel("name")])], Item, None)
+    assert "category_id" in forward_plan.only_fields
+    assert "category" in forward_plan.select_related
 
 
 @pytest.mark.django_db

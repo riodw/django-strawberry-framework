@@ -833,3 +833,39 @@ def test_no_active_source_uses_a_forbidden_optimizer_extensions_form():
         + "\n".join(violations)
         + f"\nUse a factory over a singleton scoped to that construction site: {OPTIMIZER_FIX}"
     )
+
+
+def test_channels_floor_constant_matches_the_pyproject_dependency_row():
+    """The one Channels floor the install hints name is the one the project pins.
+
+    ``CHANNELS_FLOOR`` is interpolated into all four ``pip install
+    'channels>=...'`` hints, so the hints cannot drift from each other. What no
+    other test can see is the second place the floor is written: the
+    ``channels[daphne]`` dev-group row in ``pyproject.toml``. Nothing imports a
+    TOML dependency row, so a bump on either side used to be silently one-sided
+    - which is exactly how the router's "three places that must agree" comment
+    came to name the wrong number of places.
+    """
+    from django_strawberry_framework.utils.imports import CHANNELS_FLOOR
+
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    rows = re.findall(r'"channels\[daphne\]>=([0-9][^"]*)"', text)
+    assert rows == [CHANNELS_FLOOR], (rows, CHANNELS_FLOOR)
+
+
+def test_strawberry_floor_constant_matches_the_pyproject_dependency_row():
+    """The Strawberry floor the router's hint recommends is the one the project requires.
+
+    The mirror of the Channels row above, for the same drift class: the router's
+    broken-``strawberry.channels`` hint used to interpolate a hard literal that
+    nothing compared against the ``strawberry-graphql`` row in
+    ``pyproject.toml``, so a floor raise on either side was silently one-sided
+    and the hint could advise installing a version the install itself rejects.
+    Parsed exactly like the Channels row so the two pins cannot diverge in
+    method.
+    """
+    from django_strawberry_framework.utils.imports import STRAWBERRY_FLOOR
+
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    rows = re.findall(r'"strawberry-graphql>=([0-9][^"]*)"', text)
+    assert rows == [STRAWBERRY_FLOOR], (rows, STRAWBERRY_FLOOR)

@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import strawberry
+from apps.library.models import Branch
+from django.db import connection
 from graphql import ExecutionContext
 
 from django_strawberry_framework.error_policy import ErrorPolicy
@@ -24,6 +26,7 @@ from django_strawberry_framework.schema import (
     _with_error_policy_extension,
     _with_resource_policy_extension,
 )
+from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 
 
 class CustomErrorPolicyExtension(DjangoErrorPolicyExtension):
@@ -295,6 +298,119 @@ def test_execute_mutation_field_sync_exception_rolls_back():
         pytest.raises(RuntimeError, match="sync field crash"),
     ):
         ctx.execute_field(ctx.schema.mutation_type, None, [MagicMock()], None)
+
+
+class FlipFlopErrorList:
+    """Friendly on the first ``len`` (the window opens), hostile on the second
+    (the rollback decision) - the shape that reaches past ``errors_before``."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __len__(self) -> int:
+        self.calls += 1
+        if self.calls == 1:
+            return 0
+        raise RuntimeError("hostile len on rollback read")
+
+
+class _ModelLessMutationMeta:
+    model = None
+
+
+#: The row the patched resolver writes inside the open window. Both rows below
+#: assert its ABSENCE afterwards, which is the half a closed-transaction
+#: assertion cannot see: an atomic that exits WITHOUT the rollback mark exits
+#: cleanly and commits, so ``connection.in_atomic_block`` is false either way and
+#: the row is the only witness that says which of the two happened.
+_ROLLBACK_PROBE_NAME = "hostile-error-container-rollback-probe"
+
+
+def _write_the_rollback_probe_row(*args, **kwargs):
+    """Write inside the window, then return cleanly - a resolver that already wrote."""
+    del args, kwargs
+    Branch.objects.create(name=_ROLLBACK_PROBE_NAME)
+    return "ok"
+
+
+def _rollback_probe_row_exists() -> bool:
+    """True when the window committed the probe row instead of rolling it back."""
+    return Branch.objects.filter(name=_ROLLBACK_PROBE_NAME).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_sync_window_hostile_error_container_rolls_back_and_leaks_no_transaction():
+    """A hostile error container rolls the window back; it cannot abandon it either.
+
+    ``_rollback_for_new_errors`` runs between the atomic enter and exit, so a
+    container that reads fine at open and raises at the close-time read must
+    fail closed - rollback marked, atomic exited, failure surfaced - and never
+    leave an open transaction on the connection
+    (schema.py::DjangoMutationExecutionContext._rollback_for_new_errors).
+
+    The row assertion is what pins the ROLLBACK half. Deleting the
+    ``transaction.set_rollback(True, using=alias)`` call in that method's
+    ``except Exception`` arm - the one guarding the ``len`` read - leaves the
+    exception propagating and the ``finally`` in
+    ``schema.py::DjangoMutationExecutionContext._execute_mutation_field_sync``
+    still exiting the atomic, so the transaction closes and
+    ``connection.in_atomic_block`` is false exactly as it is now, but the exit
+    COMMITS: the probe row written inside the window survives a window the
+    package could not certify. Only the absence assertion below fails there.
+    """
+    ctx = DjangoMutationExecutionContext.__new__(DjangoMutationExecutionContext)
+    ctx.schema = MagicMock()
+    ctx.collected_errors = SimpleNamespace(errors=FlipFlopErrorList())
+
+    with (
+        patch.object(ctx, "_marked_mutation_class", return_value=_ModelLessMutationMeta),
+        patch.object(ExecutionContext, "execute_field", side_effect=_write_the_rollback_probe_row),
+        pytest.raises(RuntimeError, match="hostile len"),
+    ):
+        ctx.execute_field(ctx.schema.mutation_type, None, [MagicMock()], None)
+
+    assert not connection.in_atomic_block
+    assert not _rollback_probe_row_exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_transaction():
+    """The async window's clean exit obeys the same containment, rollback included.
+
+    The rollback decision raising must not skip the atomic exit, which would
+    release the alias lock over an abandoned open transaction - and the write
+    the window was holding must not survive it either. Deleting the
+    ``transaction.set_rollback(True, using=alias)`` call in the ``except
+    Exception`` arm of
+    ``schema.py::DjangoMutationExecutionContext._rollback_for_new_errors``
+    commits the probe row here through ``_exit_clean``'s ``finally``, with the
+    transaction still closed and the alias lock still released; the absence
+    assertion is the only one that notices.
+
+    Everything that touches the ORM runs through
+    ``run_in_one_sync_boundary``'s ``thread_sensitive=True`` worker - the same
+    worker the window's ``atomic.__enter__`` / ``__exit__`` run in, and
+    therefore the same Django connection the transaction is open on. Writing or
+    reading from the event-loop thread would be a different connection (and
+    Django's own async-unsafe refusal).
+    """
+    ctx = DjangoMutationExecutionContext.__new__(DjangoMutationExecutionContext)
+    ctx.schema = MagicMock()
+    ctx.collected_errors = SimpleNamespace(errors=FlipFlopErrorList())
+
+    def _write_in_the_window_worker(*args, **kwargs):
+        return run_in_one_sync_boundary(_write_the_rollback_probe_row, *args, **kwargs)
+
+    with (
+        patch.object(ctx, "_marked_mutation_class", return_value=_ModelLessMutationMeta),
+        patch.object(ExecutionContext, "execute_field", side_effect=_write_in_the_window_worker),
+        pytest.raises(RuntimeError, match="hostile len"),
+    ):
+        await ctx.execute_field(ctx.schema.mutation_type, None, [MagicMock()], None)
+
+    assert not connection.in_atomic_block
+    assert not await run_in_one_sync_boundary(_rollback_probe_row_exists)
 
 
 @pytest.mark.asyncio

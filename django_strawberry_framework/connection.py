@@ -59,7 +59,7 @@ from strawberry.types import Info, get_object_definition
 from strawberry.utils.await_maybe import AwaitableOrValue
 from strawberry.utils.inspect import in_async_context
 
-from .exceptions import ConfigurationError, _safe_type_name
+from .exceptions import _safe_type_name
 from .keyset import (
     CursorColumn,
     DeclaredCursorState,
@@ -67,6 +67,7 @@ from .keyset import (
     _is_supported_cursor_field,
     decode_keyset_cursor,
     encode_keyset_cursor,
+    keyset_contract_error,
     order_fingerprint,
     resolve_declared_cursor_state,
 )
@@ -98,22 +99,26 @@ from .types.resolvers import _check_n1
 from .utils.connections import (
     CONNECTION_FILTER_KWARG,
     CONNECTION_ORDER_KWARG,
+    NEXT_PAGE_PROBE_ROWS,
     UnwindowableConnection,
     assert_relay_pagination_bound,
     connection_sidecar_inputs_from_kwargs,
     derive_connection_window_bounds,
     derive_keyset_window_bounds,
     has_connection_sidecar_input,
+    is_backward_shape,
+    is_supplied,
     resolve_relay_max_results,
     split_window_rows,
     window_range_plan,
 )
+from .utils.directives import validated_field_directives
 from .utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
     model_for,
-    normalize_query_source,
+    prepared_resolver_source,
     reject_async_iterable_in_sync_context,
     reject_awaitable_sync_source,
     reject_residual_async_source,
@@ -398,11 +403,7 @@ def _resolve_from_window(
     # (``window_range_plan`` drops a probe request off a non-probe shape).
     # Probe and counted-keyset cannot both fire: ``count_absent`` means the
     # annotation is missing, ``keyset_counted`` means it is present.
-    keyset_seek_supplied = (
-        keyset_state is not None
-        and keyset_after is not None
-        and keyset_after is not strawberry.UNSET
-    )
+    keyset_seek_supplied = keyset_state is not None and is_supplied(keyset_after)
     range_plan = window_range_plan(
         offset=offset,
         limit=limit,
@@ -683,9 +684,7 @@ def _consume_window(
                 reverse=bounds.reverse,
                 want_count=want_count,
                 keyset_state=keyset_state,
-                keyset_after=(
-                    after if keyset_state is not None and after is not strawberry.UNSET else None
-                ),
+                keyset_after=(after if keyset_state is not None and is_supplied(after) else None),
                 **kwargs,
             )
         if built is not None:
@@ -861,23 +860,20 @@ def _keyset_order_state(
         parsed = _keyset_order_ref(entry)
         field = None if parsed is None else _resolve_order_path_field(model, parsed[1])
         if parsed is None or field is None:
-            raise GraphQLError(
-                "This connection uses keyset cursors (Meta.cursor_field), which "
+            raise keyset_contract_error(
                 "require every ordering entry to be a database column; the "
                 "requested order cannot anchor stable cursors. Remove the "
                 "unsupported orderBy entry or paginate under the default order.",
             )
         ref, name, descending = parsed
         if getattr(field, "null", False):
-            raise GraphQLError(
-                "This connection uses keyset cursors (Meta.cursor_field), which "
+            raise keyset_contract_error(
                 f"require non-nullable ordering columns; '{name}' is nullable. "
                 "Order by a non-nullable column or paginate under the default "
                 "order.",
             )
         if not _is_supported_cursor_field(field):
-            raise GraphQLError(
-                "This connection uses keyset cursors (Meta.cursor_field), which "
+            raise keyset_contract_error(
                 f"require portable ordering semantics; '{name}' is a JSONField, "
                 "whose ordering differs between database backends. Order by a "
                 "scalar column or paginate under the default order.",
@@ -991,16 +987,15 @@ def _resolve_keyset_connection(
     and counts via ``acount``.
     """
     if not isinstance(nodes, models.QuerySet):
-        raise GraphQLError(
-            "This connection uses keyset cursors (Meta.cursor_field), which "
+        raise keyset_contract_error(
             "seek and mint from database rows; the connection resolver must "
             "return a QuerySet (or a Manager), not a plain iterable.",
         )
     _guard_source_not_pre_sliced(nodes)
     columns, fingerprint, queryset = _keyset_order_state(state, nodes)
     count_source = queryset
-    after_supplied = after is not None and after is not strawberry.UNSET
-    before_supplied = before is not None and before is not strawberry.UNSET
+    after_supplied = is_supplied(after)
+    before_supplied = is_supplied(before)
     if after_supplied:
         cursor = decode_keyset_cursor(after, columns, fingerprint=fingerprint, argument="after")
         queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor).q())
@@ -1024,10 +1019,8 @@ def _resolve_keyset_connection(
         IndexError,
     ) as exc:
         raise GraphQLError(str(exc)) from exc
-    last_zero_quirk = (
-        isinstance(last, int) and last == 0 and not isinstance(first, int) and not before_supplied
-    )
-    backward = isinstance(last, int) and not isinstance(first, int) and not last_zero_quirk
+    last_zero_quirk = is_backward_shape(first, last) and last == 0 and not before_supplied
+    backward = is_backward_shape(first, last) and not last_zero_quirk
     # Strawberry's ``edges[-0:]`` quirk means ``last: 0`` serves the rows it
     # materialized. Preserve that compatibility, but never let the quirk bypass
     # the connection's existing Relay cap: fetch at most ``cap + 1`` so the
@@ -1038,7 +1031,11 @@ def _resolve_keyset_connection(
         else (last if backward else (first if isinstance(first, int) else cap))
     )
     fetch_queryset = queryset.reverse() if backward else queryset
-    fetch_limit = page_size + 1
+    # The keyset page ALWAYS probes: ``hasNextPage`` here is data-driven off the
+    # overfetched sentinel, so the increment is unconditional rather than gated
+    # the way the window domain's ``_probe_increment`` is. The sentinel count is
+    # the same fact in both domains.
+    fetch_limit = page_size + NEXT_PAGE_PROBE_ROWS
 
     if not should_resolve_list_connection_edges(info):
         # ``ListConnection`` parity: nothing under ``edges`` / ``pageInfo``
@@ -1125,8 +1122,8 @@ def _guard_first_and_last(first: int | None, last: int | None) -> None:
     ``ConfigurationError``. Single-sited so the literal lives once and both the
     base and the generated ``<TypeName>Connection`` reuse it.
     """
-    first_supplied = first is not None and first is not strawberry.UNSET
-    last_supplied = last is not None and last is not strawberry.UNSET
+    first_supplied = is_supplied(first)
+    last_supplied = is_supplied(last)
     if first_supplied and last_supplied:
         raise GraphQLError(
             "Connection arguments `first` and `last` are mutually exclusive; supply only one.",
@@ -1426,9 +1423,18 @@ def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
 def _attach_count_sync(conn: Any, nodes: Any, *, want_count: bool) -> Any:
     """Attach the post-filter pre-slice count to a resolved connection (sync)."""
     _guard_total_count_countable(nodes, want_count=want_count)
-    # The bound ``.count`` is passed lazily: ``_set_total_count`` only calls
-    # it when the count was requested (no COUNT query otherwise).
-    return _set_total_count(conn, want_count=want_count, value=nodes.count)
+    if not want_count:
+        # The ``.count`` READ must be gated on ``want_count`` even though the
+        # CALL already is: ``value=nodes.count`` evaluates the attribute
+        # EAGERLY, and a non-queryset source without a ``.count`` attribute (a
+        # generator, a set, a one-shot iterator - shapes the consumer-resolver
+        # contract admits) would raise ``AttributeError`` on every page whose
+        # selection did not include ``totalCount``. The guard above has
+        # already raised for the ``totalCount``-selected-over-a-non-queryset
+        # shape, so past this point ``want_count=True`` implies a QuerySet and
+        # the bound method is safe to read (and only called when wanted).
+        return conn
+    return _set_total_count(conn, want_count=True, value=nodes.count)
 
 
 async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bool) -> Any:
@@ -1511,6 +1517,34 @@ def _guard_sidecar_input_against_non_queryset(source: Any, *, has_sidecar_input:
             "and cannot apply to a plain iterable. Return a QuerySet (or a "
             "Manager) from the connection resolver, or omit `filter:` / `orderBy:`.",
         )
+
+
+def _guard_non_queryset_iterable(source: Any) -> None:
+    """Raise ``GraphQLError`` when the connection resolver returned a non-iterable.
+
+    The consumer-``resolver=`` contract (spec-030 Decision 7) admits three
+    source shapes: a QuerySet / Manager and a plain iterable. A scalar
+    (``None``, an ``int``) is neither: Relay's ``ListConnection`` slicer first
+    tries a slice subscript, catches the ``TypeError``, and then trips its own
+    bare ``assert isinstance(nodes, (Iterable, Iterator))`` - a BLANK
+    ``AssertionError`` (empty message) at the GraphQL boundary. Failing closed
+    here names the contract instead - symmetric with the sidecar-input and
+    pre-sliced guards: a structural misuse of the connection ``resolver=``
+    contract surfaces as a package error, never a leaked engine internal.
+    Objects iterating only through ``__getitem__`` (no ``__iter__``) stay
+    admitted: the slicer's slice-subscript path paginates them, and so do the
+    async shapes (``AsyncIterator`` / ``AsyncIterable``) the async execution
+    color streams.
+    """
+    if isinstance(source, (Iterable, AsyncIterable)) or hasattr(source, "__getitem__"):
+        return
+    raise GraphQLError(
+        f"A connection resolver returned {_safe_type_name(source)}, which is "
+        "neither a QuerySet (or a Manager) nor a plain iterable. A connection "
+        "field paginates by slicing or iterating its source, so return a "
+        "QuerySet (or a Manager), or an iterable of nodes, from the connection "
+        "resolver.",
+    )
 
 
 def _guard_source_not_pre_sliced(source: models.QuerySet) -> None:
@@ -1645,37 +1679,68 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
 
 def _prepare_pipeline_source(
     source: Any,
+    target_type: type,
     *,
+    async_guard: Any,
     filter_input: Any,
     order_by_input: Any,
 ) -> tuple[Any, bool]:
-    """Normalize the pipeline source and apply the non-queryset sidecar guard.
+    """Normalize the pipeline source and apply the connection's per-branch guards.
 
-    The color-agnostic head shared by ``_pipeline_sync`` / ``_pipeline_async``:
-    a ``Manager`` is coerced to its ``QuerySet``; a non-queryset iterable passes
-    the ``filter:`` / ``orderBy:`` guard here and is returned with
-    ``is_queryset=False`` so the caller short-circuits and returns it unchanged.
-    A QuerySet passes the pre-sliced guard (the connection reorders and slices it,
-    both illegal on an already-sliced query) before flowing into the colored
-    steps. Returns ``(source, is_queryset)`` rather than returning early itself so
-    the sync and async pipelines keep their colored steps (the
-    ``apply_type_visibility_*`` calls) explicit, never hidden behind a maybe-await
-    abstraction. The ``Manager`` -> ``QuerySet`` coercion + is-queryset decision
-    is the shared ``utils/querysets.py::normalize_query_source`` contract; only
-    the connection's GraphQL-specific guards stay local here.
+    The color-agnostic head shared by ``_pipeline_sync`` / ``_pipeline_async``.
+    The refusal + coercion + is-queryset decision is
+    ``utils/querysets.py::prepared_resolver_source``, shared with the list
+    field's two runners - including the ORDER, because a value that slips past
+    the async refusal lands in the non-queryset branch and is passed through
+    with the ``get_queryset`` hook never run. What stays here are the
+    connection's own GraphQL-specific guards, one per branch: a value that is
+    neither QuerySet nor iterable is refused outright (Relay's slicer would
+    leak its blank ``AssertionError``), a non-queryset iterable cannot answer
+    ``filter:`` / ``orderBy:``, and a QuerySet must not arrive pre-sliced (the
+    connection reorders and slices it, both illegal on an already-sliced
+    query).
+
+    Returns ``(source, is_queryset)`` rather than returning early itself so the
+    sync and async pipelines keep their colored ``apply_type_visibility_*`` steps
+    explicit, never hidden behind a maybe-await abstraction.
     """
-    source, is_queryset = normalize_query_source(source)
-    if not is_queryset:
-        _guard_sidecar_input_against_non_queryset(
-            source,
-            has_sidecar_input=has_connection_sidecar_input(
-                filter_input=filter_input,
-                order_by_input=order_by_input,
-            ),
-        )
-        return source, False
-    _guard_source_not_pre_sliced(source)
-    return source, True
+    has_sidecar_input = has_connection_sidecar_input(
+        filter_input=filter_input,
+        order_by_input=order_by_input,
+    )
+
+    def non_queryset_guard(value: Any) -> None:
+        # The shape gate runs BEFORE the usage guards: a scalar is wrong
+        # regardless of any input supplied, while the sidecar rule reads
+        # naturally only once the value IS a plain iterable.
+        _guard_non_queryset_iterable(value)
+        _guard_sidecar_input_against_non_queryset(value, has_sidecar_input=has_sidecar_input)
+
+    return prepared_resolver_source(
+        source,
+        target_type,
+        async_guard=async_guard,
+        non_queryset_guard=non_queryset_guard,
+        queryset_guard=_guard_source_not_pre_sliced,
+    )
+
+
+def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> tuple[tuple, ...]:
+    """Return the ``(set_class, input)`` sidecar steps this call actually applies.
+
+    The gate is one rule - supplied AND declared - and the ORDER is contractual
+    (filter narrows, then orderBy sorts). Both were spelled out twice, once per
+    colored pipeline, so a change to either was a two-site edit with no gate
+    between the halves. The colored ``apply_sync`` / ``apply_async`` dispatch
+    deliberately stays at each caller: the ``await`` is written where it
+    happens, never hidden behind a maybe-await.
+    """
+    steps = []
+    if is_supplied(filter_input) and definition.filterset_class is not None:
+        steps.append((definition.filterset_class, filter_input))
+    if is_supplied(order_by_input) and definition.orderset_class is not None:
+        steps.append((definition.orderset_class, order_by_input))
+    return tuple(steps)
 
 
 def _pipeline_sync(
@@ -1700,21 +1765,18 @@ def _pipeline_sync(
     the same boundary through ``post_process_queryset_result_sync``.
     """
     definition = target_type.__django_strawberry_definition__
-    reject_awaitable_sync_source(source, target_type)
     source, is_queryset = _prepare_pipeline_source(
         source,
+        target_type,
+        async_guard=reject_awaitable_sync_source,
         filter_input=filter_input,
         order_by_input=order_by_input,
     )
     if not is_queryset:
         return source
     qs = apply_type_visibility_sync(target_type, source, info)
-    filter_supplied = filter_input is not None and filter_input is not strawberry.UNSET
-    order_by_supplied = order_by_input is not None and order_by_input is not strawberry.UNSET
-    if filter_supplied and definition.filterset_class is not None:
-        qs = definition.filterset_class.apply_sync(filter_input, qs, info)
-    if order_by_supplied and definition.orderset_class is not None:
-        qs = definition.orderset_class.apply_sync(order_by_input, qs, info)
+    for set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
+        qs = set_class.apply_sync(value, qs, info)
     return _finalize_queryset(target_type, qs, info)
 
 
@@ -1737,21 +1799,18 @@ async def _pipeline_async(
     before ``_prepare_pipeline_source`` can treat it as a plain iterable.
     """
     definition = target_type.__django_strawberry_definition__
-    reject_residual_async_source(source, target_type)
     source, is_queryset = _prepare_pipeline_source(
         source,
+        target_type,
+        async_guard=reject_residual_async_source,
         filter_input=filter_input,
         order_by_input=order_by_input,
     )
     if not is_queryset:
         return source
     qs = await apply_type_visibility_async(target_type, source, info)
-    filter_supplied = filter_input is not None and filter_input is not strawberry.UNSET
-    order_by_supplied = order_by_input is not None and order_by_input is not strawberry.UNSET
-    if filter_supplied and definition.filterset_class is not None:
-        qs = await definition.filterset_class.apply_async(filter_input, qs, info)
-    if order_by_supplied and definition.orderset_class is not None:
-        qs = await definition.orderset_class.apply_async(order_by_input, qs, info)
+    for set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
+        qs = await set_class.apply_async(value, qs, info)
     return _finalize_queryset(target_type, qs, info)
 
 
@@ -2114,27 +2173,13 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
             "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)"
         ),
     )
-    if isinstance(directives, (str, bytes)):
-        raise ConfigurationError(
-            "DjangoConnectionField directives must be a sequence of directive instances; "
-            f"got {_safe_type_name(directives)}.",
-        )
-    try:
-        directives = tuple(directives)
-    except (
-        TypeError,
-        ValueError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise ConfigurationError(
-            f"DjangoConnectionField directives could not be read ({_safe_type_name(exc)}).",
-        ) from exc
     return relay.connection(
         _connection_type_for(target_type),
         resolver=_build_connection_resolver(target_type, resolver),
         description=description,
         deprecation_reason=deprecation_reason,
-        directives=directives,
+        # One shared gate for every field factory (list, mutation, node, auth,
+        # connection): a bare string would iterate char-wise into Strawberry and
+        # a hostile sequence would escape raw; see ``utils/directives.py``.
+        directives=validated_field_directives("DjangoConnectionField", directives),
     )

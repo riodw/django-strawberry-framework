@@ -247,6 +247,49 @@ def test_phase_2_5_non_import_get_fields_failure_rewraps_as_configuration_error(
     assert isinstance(exc_info.value.__cause__, ValueError)
 
 
+def test_phase_2_5_non_order_set_related_target_raises_uniform_error():
+    """A ``RelatedOrder`` resolving to a non-``OrderSet`` class surfaces typed at finalize.
+
+    The target-type gate on ``RelatedOrder.orderset`` raises
+    ``ConfigurationError`` at the subpass-2 Layer-2 walk (``_expand_orderset``
+    forces ``related.orderset``), which propagates BY IDENTITY (the
+    ``except ConfigurationError: raise`` pass-through) -- the mis-wiring can
+    no longer survive until subpass 4's BFS materialization, where it used to
+    leak a raw ``AttributeError`` (``type_name_for`` missing on the target)
+    outside the uniform rewrap.
+    """
+
+    class NotAnOrderSet:
+        pass
+
+    class BookOrder(OrderSet):
+        shelf = RelatedOrder(NotAnOrderSet, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf")
+            orderset_class = BookOrder
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    # The typed gate's message, propagated by identity (no subpass-2 rewrap).
+    assert "BookOrder" in msg
+    assert "NotAnOrderSet" in msg
+    assert "OrderSet subclass" in msg
+    assert "raised during expansion" not in msg
+
+
 def test_phase_2_5_configuration_error_during_expansion_propagates_by_identity():
     """A ``ConfigurationError`` from the subpass-2 expansion re-raises unchanged.
 

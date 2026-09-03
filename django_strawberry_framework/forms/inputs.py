@@ -41,13 +41,19 @@ wrapper, in the spirit of ``mutations/inputs.py``.
 
 from __future__ import annotations
 
+import keyword
 from typing import Any
 
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
-from django.db import models
 
-from ..exceptions import ConfigurationError
+from ..exceptions import (
+    ConfigurationError,
+    _safe_arg_repr,
+    _safe_class_name,
+    _safe_text,
+    _safe_type_name,
+)
 from ..mutations.inputs import (
     CREATE,
     PARTIAL,
@@ -142,15 +148,10 @@ def clear_form_input_namespace() -> None:
     """Reset the form-input ledger for a fresh build.
 
     Clears ``_materialized_names`` (via the ``make_input_namespace`` clear) so
-    ``materialize_form_input_class`` re-emits on the next finalize. **Materialized
-    class objects are intentionally left parked** in ``forms.inputs.__dict__`` per
-    the shared parked-globals lifecycle (see
-    ``mutations/inputs.py::clear_mutation_input_namespace``):
-    ``materialize_form_input_class`` overwrites the module global via ``setattr``
-    on the next finalize, so a parked class is replaced in place once the rebuild
-    runs. Stripping it via ``delattr`` would break any ``strawberry.lazy(...)``
-    LazyType held by a consumer module whose autouse-reload fixture did NOT also
-    reload the holder.
+    ``materialize_form_input_class`` re-emits on the next finalize. Materialized
+    class objects stay parked in ``forms.inputs.__dict__`` per the
+    parked-globals lifecycle stated on
+    ``utils/inputs.py::make_input_namespace``.
 
     Like ``clear_mutation_input_namespace`` (and unlike the set families' clear),
     this resets only the module-level ledger it owns - the form subsystem has no
@@ -183,8 +184,19 @@ def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:
     discoverable, request-independent stable field shape (spec-038 Decision 7). The overridable
     ``get_form_fields(cls)`` classmethod on the base delegates here for its
     default; this module ships the module-level discovery function only.
+
+    The read is guarded: a consumer having clobbered ``base_fields`` to a
+    non-mapping raises a typed ``ConfigurationError`` naming the form (the bind's
+    default hook delegates here, so a corrupted basis can never escape the
+    schema-time build as a raw ``TypeError`` / ``ValueError``).
     """
-    return dict(form_class.base_fields)
+    try:
+        return dict(form_class.base_fields)
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"DjangoFormMutation for {form_class.__name__} get_form_fields() must return "
+            "a mapping of field names to forms.Field instances.",
+        ) from exc
 
 
 def _form_field_basis(
@@ -198,23 +210,53 @@ def _form_field_basis(
     form's class-level ``base_fields`` through ``get_form_fields``. Copying the
     mapping keeps later narrowing/build passes from observing caller mutation,
     while the hook remains responsible for returning a request-independent
-    field representation.
+    field representation. The default ``base_fields`` acquisition is guarded
+    alongside the hook mapping: a corrupted ``base_fields`` (a consumer having
+    clobbered the class attribute) raises this same typed diagnostic naming the
+    form instead of a raw ``TypeError`` out of ``dict(form_class.base_fields)``.
     """
-    source = get_form_fields(form_class) if form_fields is None else form_fields
     try:
+        source = get_form_fields(form_class) if form_fields is None else form_fields
         basis = dict(source)
     except BaseException as exc:
         raise ConfigurationError(
             f"DjangoFormMutation for {form_class.__name__} get_form_fields() must return "
             "a mapping of field names to forms.Field instances.",
         ) from exc
-    invalid_names = [name for name in basis if not isinstance(name, str)]
+    # A field name becomes a generated input attribute (the dataclass renders it
+    # into ``__init__``), so only a non-keyword identifier can survive the build:
+    # a hook returning "" / "with space" / "9lead" / "class" would otherwise pass
+    # the string check and detonate as a raw ``SyntaxError`` out of the generated
+    # ``__init__`` source at input-class construction. ``base_fields`` keys are
+    # always identifiers (declared form attributes / model columns), so this
+    # rejects only names that could never have built an input. The per-name
+    # interrogation is guarded: a hook-supplied ``str`` subclass whose
+    # ``isidentifier`` (or ``__hash__`` under ``keyword.iskeyword``) raises cannot
+    # be interrogated at all, so it is invalid by the same rule instead of
+    # escaping this typed boundary as the raw exception.
+    invalid_names = []
+    for name in basis:
+        try:
+            invalid = (
+                not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name)
+            )
+        except BaseException:
+            invalid = True
+        if invalid:
+            invalid_names.append(name)
     invalid_fields = [name for name, field in basis.items() if not isinstance(field, forms.Field)]
     if invalid_names or invalid_fields:
+        # Each entry renders through ``_safe_arg_repr``: this message is assembled
+        # at the raise site, so a hook-supplied key with a hostile ``__repr__``
+        # must not replace the typed diagnostic with the repr's own exception
+        # (the ``exceptions.py::describe_value`` failure mode - a rejection
+        # message cannot fail on the value it is rejecting). The per-entry join
+        # keeps the benign ``['a', 'b']`` list-repr byte shape.
         raise ConfigurationError(
             f"DjangoFormMutation for {form_class.__name__} get_form_fields() must return "
             "a mapping of string names to forms.Field instances; invalid names "
-            f"{invalid_names!r}, invalid fields {invalid_fields!r}.",
+            f"[{', '.join(_safe_arg_repr(name) for name in invalid_names)}], invalid "
+            f"fields [{', '.join(_safe_arg_repr(name) for name in invalid_fields)}].",
         )
     return basis
 
@@ -230,6 +272,80 @@ def normalize_form_field_basis(
             "a mapping of field names to forms.Field instances, not None.",
         )
     return _form_field_basis(form_class, form_fields)
+
+
+def _related_model_of(field: forms.Field) -> Any:
+    """Return a column-less relation field's ``queryset.model``, or ``None``.
+
+    The annotation input the build reads through
+    ``_model_less_relation_annotation`` (``annotate_queryset_relation(
+    field.queryset, ...)``). A field without a ``queryset`` attribute (every
+    scalar) and a queryset-less field (the request-scoped-choices idiom, whose
+    build-time annotation raises its own typed error when emitted) project
+    ``None``. A hostile attribute that raises here projects ``None`` instead of
+    escaping the identity walk: the projection must never fail where the build
+    would not (an EXCLUDED field with a broken ``queryset`` builds fine today),
+    and the build re-reads ``field.queryset`` unguarded where the field is
+    actually emitted.
+    """
+    try:
+        return getattr(field.queryset, "model", None)
+    except BaseException:
+        return None
+
+
+def _form_basis_content_identity(
+    form_class: type[forms.BaseForm],
+    form_fields: Any = None,
+) -> tuple:
+    """Return a hashable projection of the hook basis that determines input content.
+
+    The per-shape build cache (``forms/sets.py::_cached_build_form_input``) keys
+    on the shape identity ``(form_class, operation_kind, effective field set,
+    THIS projection)``. The projection captures every per-field quantity the
+    build consumes - the converter-dispatch type (``type(field)``, the MRO walk
+    in ``convert_form_field``), the ONE requiredness decision
+    (``converter.form_field_required`` with the field's backing column, the
+    same resolution the build site uses), and a column-less relation field's
+    related model (``_related_model_of``, which fixes the
+    Relay-``GlobalID``-vs-raw-pk id annotation) - so two calls with identical
+    projections build identical input classes and MUST dedupe onto one class
+    object (the per-shape dedupe contract: two mutations over one form +
+    effective set reuse one input, however their bases were produced - the
+    default hook, one hook shared on an intermediate base, or two different
+    hook functions), while any content difference (a stateful
+    ``get_form_fields`` hook returning a different requiredness per class, a
+    swapped queryset model) lands on a distinct key, builds separately, and
+    stays LOUD at the materialize ledger instead of silently sharing a wrong
+    shape. Field-instance identity is deliberately NOT part of the projection
+    (bases are rebuilt per call); the content tuple is the stable quantity.
+
+    ``form_fields`` is the (already normalized or ``None``) hook basis; ``None``
+    resolves through ``get_form_fields`` exactly as the build does. Resolution
+    and the per-field walk are guarded: a hostile basis is reported as the same
+    typed ``ConfigurationError`` the build raises (never a raw escape from the
+    cache-key assembly), chained from the original failure.
+    """
+    try:
+        basis = _form_field_basis(form_class, form_fields)
+        return tuple(
+            (
+                name,
+                type(field),
+                form_field_required(field, column=_model_column_for(form_class, name)),
+                _related_model_of(field),
+            )
+            for name, field in basis.items()
+        )
+    except ConfigurationError:
+        raise
+    except BaseException as exc:
+        detail = _safe_text(exc) or "no detail"
+        raise ConfigurationError(
+            f"DjangoFormMutation for {form_class.__name__} get_form_fields() must return "
+            "a mapping of field names to forms.Field instances; reading the field basis "
+            f"for the input shape identity raised {type(exc).__name__}: {detail}.",
+        ) from exc
 
 
 def resolve_effective_form_fields(
@@ -327,16 +443,36 @@ def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
     Treating them as columns would mis-emit a relation id input (``itemsId``) or
     crash on missing related models.
     """
-    meta = getattr(form_class, "_meta", None)
-    model = getattr(meta, "model", None)
+    try:
+        meta = getattr(form_class, "_meta", None)
+        model = getattr(meta, "model", None)
+    except BaseException as exc:
+        # The corrupted-internals twin of the guarded ``base_fields`` read: a
+        # ``_meta.model`` read that RAISES is a clobbered form class, so it fails
+        # loud as the typed diagnostic naming the form - never as a raw exception
+        # out of the schema-time build, and never a silent ``None`` that would
+        # mis-type the field through the model-less table.
+        raise ConfigurationError(
+            f"DjangoFormMutation for {_safe_class_name(form_class)} could not read "
+            f"form_class._meta.model while resolving the backing column for field "
+            f"{_safe_arg_repr(name)}; the form's internals are corrupted "
+            f"({_safe_type_name(exc)}: {_safe_text(exc)}).",
+        ) from exc
     if model is None:
         return None
     try:
         column = model._meta.get_field(name)
     except FieldDoesNotExist:
         return None
-    if isinstance(column, models.ForeignObjectRel):
-        return None
+    except BaseException as exc:
+        # ``get_field`` only ever raises ``FieldDoesNotExist`` for a healthy
+        # model; any other raise is corrupted model internals, and like the
+        # ``_meta.model`` arm above it fails loud typed instead of raw.
+        raise ConfigurationError(
+            f"DjangoFormMutation for {_safe_class_name(form_class)} could not resolve the "
+            f"backing model column for field {_safe_arg_repr(name)}; "
+            f"model._meta.get_field raised {_safe_type_name(exc)}: {_safe_text(exc)}.",
+        ) from exc
     if getattr(column, "is_relation", False):
         if getattr(column, "many_to_many", False):
             if not is_forward_many_to_many(column):
@@ -540,11 +676,18 @@ def build_form_input_class(
     required on update). Optional fields widen ``annotation | None`` + a
     ``strawberry.UNSET`` default, the ``036`` shape.
 
-    Returns ``(input_cls, field_specs)`` - the UNMATERIALIZED
-    ``@strawberry.input`` class and the per-field reverse-map records. The
-    phase-2.5 bind calls ``materialize_form_input_class`` to pin the class as a
-    module global.
+    ``operation_kind`` is part of the generator's pinned vocabulary (the three
+    kinds re-exported / declared on this module): anything else is a
+    misconfiguration the generator would otherwise silently resolve to a
+    create-shaped input, so it fails loud naming the form and the received
+    value.
     """
+    if operation_kind not in CREATE_SHAPED_KINDS | {PARTIAL}:
+        raise ConfigurationError(
+            f"DjangoFormMutation input build for {form_class.__name__} received "
+            f"out-of-vocabulary operation_kind {operation_kind!r}; expected CREATE, "
+            "FORM, or PARTIAL.",
+        )
     effective = resolve_effective_form_fields(
         form_class,
         fields=fields,
@@ -725,7 +868,21 @@ def build_form_inputs(
     that hook the guard cannot know which fields the override injects, so it
     trusts the explicit override - surfaced here as an explicit parameter so the
     bind can pass ``guard_required=False``, never hard-coded always-on.
+
+    The create-side ``operation_kind`` is guarded to the create-shaped
+    vocabulary (``CREATE`` / ``FORM``): a ``PARTIAL`` or out-of-vocabulary kind
+    here would silently build a degenerate pair (both halves partial-shaped and
+    partial-named, colliding at materialization), so it fails loud naming the
+    form and the received value - the partial is built by passing
+    ``operation_kind=PARTIAL`` to ``build_form_input_class``.
     """
+    if operation_kind not in CREATE_SHAPED_KINDS:
+        raise ConfigurationError(
+            f"DjangoFormMutation create input for {form_class.__name__} received "
+            f"out-of-vocabulary operation_kind {operation_kind!r}; the create/partial pair "
+            "builder takes a create-shaped kind (CREATE or FORM) and always builds the "
+            "partial side itself (build_form_input_class with operation_kind=PARTIAL).",
+        )
     effective = resolve_effective_form_fields(
         form_class,
         fields=fields,

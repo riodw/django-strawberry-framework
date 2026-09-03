@@ -1301,6 +1301,38 @@ class CreateShelfWithInjectedTopic(SerializerMutation):
         return {"topic": "stamped-by-injection"}
 
 
+class UpdateBookWithInjectedStatus(SerializerMutation):
+    """UPDATE a ``Book`` narrowing away a REQUIRED ``status`` and INJECTING it via ``Meta.injected_fields``.
+
+    ``StatusStampBookSerializer`` declares a serializer-only ``status`` ``ChoiceField``
+    (required, write-only); this update mutation narrows the partial input to ``title``
+    (dropping ``status``), declares ``Meta.injected_fields = ("status",)``, and supplies the
+    value from the SANCTIONED ``get_serializer_injected_data`` hook. The injected spec is
+    resolved under the update's ``PartialInput`` provisional so its generated enum identity
+    matches the runtime-agreement guard's re-derivation (a serializer-only ``ChoiceField``'s
+    enum name derives from that provisional). The live test posts ``{title}`` (no ``status``
+    input) and reads the injected ``status`` back off the written ``subtitle``.
+    """
+
+    class Meta:
+        serializer_class = serializers.StatusStampBookSerializer
+        operation = "update"
+        fields = ("title",)
+        injected_fields = ("status",)
+        permission_classes = []
+
+    def get_serializer_injected_data(
+        self,
+        info,
+        *,
+        data,
+        hook_context,
+    ):
+        # Supply the narrowed-away required ``status`` (the injection contract
+        # Meta.injected_fields declares - keys must match it exactly).
+        return {"status": "active"}
+
+
 class CreateBranchWithNestedShelves(SerializerMutation):
     """Create a ``Branch`` with an EXPLICIT opt-in nested writable ``shelves`` list.
 
@@ -1436,6 +1468,7 @@ class Mutation:
     update_book_via_serializer_with_lock = DjangoMutationField(
         UpdateBookViaSerializerWithLock,
     )
+    update_book_with_injected_status = DjangoMutationField(UpdateBookWithInjectedStatus)
     create_branch_with_nested_shelves = DjangoMutationField(
         CreateBranchWithNestedShelves,
     )

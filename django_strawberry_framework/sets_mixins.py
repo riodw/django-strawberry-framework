@@ -24,10 +24,14 @@ future set family does not copy the related-declaration +
 metaclass + expansion lifecycle a fourth time:
 
 - ``RelatedSetTargetMixin`` -- the idempotent owner-bind + lazy target-class
-  property machinery, parameterized by the per-family attr names.
+  property machinery, parameterized by the per-family attr names and the
+  family-supplied ``_validate_target`` resolved-target gate.
 - ``collect_related_declarations`` -- the metaclass collect-and-bind step.
 - ``expanded_once`` -- the class-level expansion cache + reentry-guard skeleton
   shared by ``FilterSet.get_filters`` / ``OrderSet.get_fields``.
+- ``require_re_readable_field_declaration`` -- the ``Meta.fields`` shape gate
+  both families run before their first consumption, since both expansions may
+  re-run and a one-shot declaration is exhausted by the first walk.
 - ``SetLifecycleAttrs`` -- the per-family binding-state descriptor naming the
   ``registry.clear()`` reset attrs (owner / expansion cache / reentry guard) in
   one place instead of re-spelled tuples.
@@ -42,13 +46,13 @@ sets.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from django.utils.module_loading import import_string
 
-from .exceptions import ConfigurationError
+from .exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from .utils.input_values import SetInputTraversal, is_inactive_value
 from .utils.permissions import (
     active_permission_targets,
@@ -178,6 +182,18 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
       resolution scope for an unqualified string target
       (``"bound_filterset"`` / ``"bound_orderset"``).
 
+    Plus one family-supplied hook: ``_validate_target`` is the resolved-target
+    TYPE gate (raise ``ConfigurationError`` for anything outside the family).
+    Firing it inside ``_resolved_target`` -- not inline in each family's
+    property getter -- means every read of a resolved target is family-checked
+    at the one seam all of them share (the Layer-5 BFS enqueue in
+    ``utils/inputs.py::GeneratedInputArgumentsFactory._ensure_built``, the
+    families' expansions, the finalizer's target audit, the permission
+    traversal), and a future set family cannot lose the gate by writing its
+    property getter as a bare ``_resolved_target()`` read. The base
+    implementation is abstract on purpose: a hookless subclass fails loud at
+    first resolved read instead of silently accepting any target.
+
     Subclasses keep their family-named public surface (``bind_filterset`` +
     ``.filterset`` / ``bind_orderset`` + ``.orderset``) as thin wrappers over
     ``_bind_owner`` / ``_resolved_target`` / ``_set_target``, so the public
@@ -193,16 +209,53 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
             setattr(self, self._owner_attr, owner)
 
     def _resolved_target(self) -> Any:
-        """Resolve the (possibly-lazy) target class on first access and re-store it."""
+        """Resolve the (possibly-lazy) target class on first access and re-store it.
+
+        The family gate (``_validate_target``) fires here, AFTER the re-store,
+        exactly where the pre-hook property getters sat relative to this call:
+        a failed read leaves the slot resolved and re-raises on every retry,
+        the same observable behavior the inline family gates had.
+        """
         resolved = self.resolve_lazy_class(
             getattr(self, self._target_attr),
             getattr(self, self._owner_attr, None),
         )
         setattr(self, self._target_attr, resolved)
+        if resolved is not None:
+            # ``None`` is the shared skip-silently placeholder (the branch is
+            # skipped at input emission and BFS enqueue) -- it never reaches
+            # the family gate.
+            self._validate_target(resolved)
         return resolved
 
+    def _validate_target(self, resolved: Any) -> None:
+        """Family hook: reject a resolved target outside the family.
+
+        Called with every non-``None`` RESOLVED target -- strings / callables
+        have already been through ``resolve_lazy_class``. Families override
+        this with their ``issubclass`` check and declaration-naming
+        ``ConfigurationError``; the base raises so a hookless subclass (a
+        future set family that forgot the gate) fails loud at first resolved
+        read instead of accepting any target.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} must supply a `_validate_target()` family gate "
+            "(raise ConfigurationError for a resolved target outside the family); "
+            "the resolution seam validates every read, so a hookless related "
+            "declaration would otherwise accept any target.",
+        )
+
     def _set_target(self, value: Any) -> None:
-        """Substitute the target class (the ``.<target>`` setter seam)."""
+        """Substitute the target class (the ``.<target>`` setter seam).
+
+        A pure store, deliberately unvalidated: the setter accepts the same
+        possibly-lazy shapes as the constructor (string / callable / class /
+        ``None``), and validating here would either import eagerly on
+        assignment (breaking the lazy-string contract) or fork the acceptance
+        rules. The substituted value is family-checked on the next read
+        through ``_resolved_target`` -- the seam that owns resolution owns
+        validation.
+        """
         setattr(self, self._target_attr, value)
 
 
@@ -361,6 +414,75 @@ def should_cache_expansion(cls: type, *, related_attr: str, target_slot: str) ->
     )
 
 
+# Text atoms are ``Collection``s of CHARACTERS, never of field names, so they
+# are excluded from the re-readable contract even though they satisfy it
+# structurally. ``memoryview`` is included for the same reason: it is sized,
+# iterable and supports ``in``, so ``Collection`` accepts it.
+_TEXT_ATOM_TYPES: tuple[type, ...] = (
+    str,
+    bytes,
+    bytearray,
+    memoryview,
+)
+
+# The half of the rejection message that states the CONTRACT rather than the
+# per-family list of legal ``Meta.fields`` spellings. Shared so the two
+# families cannot describe one rule in two vocabularies.
+RE_READABLE_FIELDS_HELP = (
+    "Accepted: a re-readable collection of field names -- list, tuple, set, "
+    "frozenset, dict keys/values, or another sized collection; not a one-shot "
+    "iterator or generator, and not a bare string."
+)
+
+
+def is_re_readable_field_declaration(value: Any) -> bool:
+    """Return whether ``value`` is a container a set expansion may walk repeatedly.
+
+    ``collections.abc.Collection`` IS the contract: ``__len__`` + ``__iter__`` +
+    ``__contains__`` together mean the object holds its members rather than
+    producing them, so a second walk yields the same field names as the first.
+    That admits every shipped declaration shape (list / tuple / set / frozenset
+    / dict) plus the view and range shapes a consumer legitimately computes
+    (``some_dict.keys()``, ``some_dict.values()``, ``range(...)``, any custom
+    ``Collection``), and rejects the one-shot shapes (generators, ``iter(...)``,
+    ``map`` / ``filter`` objects) that expand correctly ONCE and silently to
+    nothing afterwards. The check is structural, so a hostile ``__iter__`` is
+    never entered: an object that only defines ``__iter__`` is not a
+    ``Collection``.
+    """
+    return isinstance(value, Collection) and not isinstance(value, _TEXT_ATOM_TYPES)
+
+
+def require_re_readable_field_declaration(
+    set_cls: type,
+    value: Any,
+    *,
+    subject: str,
+    accepted: str,
+) -> None:
+    """Fail closed when a family's ``Meta.fields`` cannot be walked twice.
+
+    Both set families re-run their expansion: ``FilterSetOptions`` stores
+    ``Meta.fields`` verbatim and upstream ``get_fields`` consumes it into a
+    fresh ``OrderedDict`` per call, and ``OrderSet._expand_meta_fields`` re-runs
+    whenever a lazy related target keeps ``should_cache_expansion`` from writing
+    the cache. A one-shot declaration therefore expands correctly on the first
+    walk and silently to an EMPTY or partial field set on every later one, which
+    is why the shape is rejected before the first iteration rather than after
+    the divergence.
+
+    ``subject`` is the family label and ``accepted`` the family's own list of
+    legal ``Meta.fields`` spellings (the filter family also accepts a lookup-bag
+    dict and both accept ``'__all__'``); the contract sentence itself is shared.
+    """
+    if is_re_readable_field_declaration(value):
+        return
+    raise ConfigurationError(
+        f"{subject} {set_cls.__qualname__}.Meta.fields must be {accepted}; got "
+        f"{_safe_type_name(value)} ({_safe_arg_repr(value)}). {RE_READABLE_FIELDS_HELP}",
+    )
+
+
 @dataclass(frozen=True)
 class SetLifecycleAttrs:
     """The class-level lifecycle attribute names a set family resets / caches under.
@@ -402,20 +524,27 @@ class ActiveInputPermissionAttrs:
 
     The permission *mechanics* are single-sited in ``utils/permissions.py``.
     What used to be re-spelled on ``FilterSet`` and ``OrderSet`` as twin
-    thin wrappers is the family shape: which related collection to walk,
-    which child-set attribute to recurse through, which field-spec map
-    supplies ``django_source_path``, whether the input is a top-level list
-    (order) or a struct with ``UNSET`` defaults (filter), and the GraphQL
-    family label ``request_from_info`` puts in ``ConfigurationError``.
+    thin wrappers is the family shape.
+
+    Five of its axes are not permission axes at all - they are the neutral
+    traversal shape ``utils/input_values.py::SetInputTraversal`` already
+    declares, and this class used to re-declare them field-for-field and copy
+    them across in a constructor that called itself "the ONE translation". It
+    CONTAINS that shape instead, so a sixth traversal axis is one edit rather
+    than three plus a declaration per family, and the gate-time and apply-time
+    classifications are the same object rather than two objects a copy keeps in
+    step.
+
+    What stays here are the two axes the traversal has no opinion on:
+    ``target_attr`` (the attribute on a declared related object that resolves
+    the child set - ``filterset`` / ``orderset``, used only by the permission
+    recursion) and ``family_label`` (the GraphQL family name
+    ``request_from_info`` puts in a ``ConfigurationError``).
     """
 
     family_label: str
-    related_attr: str
     target_attr: str
-    field_specs: Mapping[Any, Any]
-    logic_keys: frozenset[str] = frozenset()
-    unset_sentinel: Any = None
-    handle_top_level_list: bool = False
+    traversal: SetInputTraversal
 
 
 class ActiveInputPermissionMixin:
@@ -445,27 +574,22 @@ class ActiveInputPermissionMixin:
     def _input_traversal(cls) -> SetInputTraversal:
         """Derive the family's canonical active-input traversal config.
 
-        The ONE translation of the grammar ``_permission`` declares into the
-        ``SetInputTraversal`` shape ``utils.input_values.iter_active_fields``
-        consumes. Both family normalizers (``FilterSet._normalize_input`` /
+        The family's ``_permission`` CONTAINS the ``SetInputTraversal`` that
+        ``utils.input_values.iter_active_fields`` consumes, so this is a read
+        rather than the field-for-field copy it used to be. Both family
+        normalizers (``FilterSet._normalize_input`` /
         ``orders.inputs.normalize_input_value``) and the permission walkers
-        classify input through this derivation, so apply-time and gate-time
+        classify input through this one object, so apply-time and gate-time
         classification cannot drift apart -- a divergence would let a field be
         filtered without its permission gate (or gate a field never applied).
-        Values flow by reference: ``field_specs`` is the same map the family's
-        ``inputs`` module mutates in place at bind time. Built per call rather
-        than cached as a module singleton, which is what let a subclass's
-        ``_permission`` override reach the apply path at all; the construction is
-        a sub-microsecond dataclass build against a handful of calls per request.
+
+        Read off ``cls`` on every call, never cached at module import: that is
+        what lets a subclass's ``_permission`` override reach the apply path at
+        all. ``field_specs`` inside the traversal is the same map the family's
+        ``inputs`` module mutates in place at bind time, so it flows by
+        reference exactly as before.
         """
-        cfg = cls._permission
-        return SetInputTraversal(
-            field_specs=cfg.field_specs,
-            related_attr=cfg.related_attr,
-            logic_keys=cfg.logic_keys,
-            unset_sentinel=cfg.unset_sentinel,
-            handle_top_level_list=cfg.handle_top_level_list,
-        )
+        return cls._permission.traversal
 
     @classmethod
     def _request_from_info(cls, info: Any) -> Any:
@@ -485,7 +609,7 @@ class ActiveInputPermissionMixin:
         return extract_branch_value(
             input_value,
             field_name,
-            unset_sentinel=cls._permission.unset_sentinel,
+            unset_sentinel=cls._permission.traversal.unset_sentinel,
         )
 
     @classmethod
@@ -498,9 +622,9 @@ class ActiveInputPermissionMixin:
         return active_related_branches(
             cls,
             input_value,
-            related_attr=cfg.related_attr,
-            unset_sentinel=cfg.unset_sentinel,
-            handle_top_level_list=cfg.handle_top_level_list,
+            related_attr=cfg.traversal.related_attr,
+            unset_sentinel=cfg.traversal.unset_sentinel,
+            handle_top_level_list=cfg.traversal.handle_top_level_list,
         )
 
     @staticmethod
@@ -547,12 +671,12 @@ class ActiveInputPermissionMixin:
         return active_permission_targets(
             cls,
             input_value,
-            field_specs=cfg.field_specs,
-            related_attr=cfg.related_attr,
-            logic_keys=cfg.logic_keys,
+            field_specs=cfg.traversal.field_specs,
+            related_attr=cfg.traversal.related_attr,
+            logic_keys=cfg.traversal.logic_keys,
             fallback_path=cls._permission_fallback_path,
-            unset_sentinel=cfg.unset_sentinel,
-            handle_top_level_list=cfg.handle_top_level_list,
+            unset_sentinel=cfg.traversal.unset_sentinel,
+            handle_top_level_list=cfg.traversal.handle_top_level_list,
         )
 
     @classmethod
@@ -605,7 +729,7 @@ class ActiveInputPermissionMixin:
         ``_prepare_permission_input``.
         """
         cls._prepare_permission_input(input_value)
-        if is_inactive_value(input_value, unset_sentinel=cls._permission.unset_sentinel):
+        if is_inactive_value(input_value, unset_sentinel=cls._permission.traversal.unset_sentinel):
             return
         cls._check_permission_depth(_depth)
         if _fired is None:
@@ -619,7 +743,7 @@ class ActiveInputPermissionMixin:
             fired=_fired,
             bare=bare,
             target_attr=cfg.target_attr,
-            related_attr=cfg.related_attr,
+            related_attr=cfg.traversal.related_attr,
             depth=_depth,
         )
         cls._run_logic_permission_checks(

@@ -97,18 +97,106 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 from collections.abc import AsyncIterator, MutableMapping
 from typing import Any
 
 __all__ = (
     "ConnectionActorState",
+    "ScopeSingletonMessages",
     "actor_lease",
     "actor_transition",
     "connection_actor_state",
     "connection_was_authenticated",
     "note_authenticated_actor",
+    "scope_key",
+    "scope_singleton",
     "session_store_class",
 )
+
+
+def scope_key(name: str) -> str:
+    """Build the collision-resistant ASGI scope key for ``name``.
+
+    An ASGI scope is a shared namespace: Channels, Django, and any consumer
+    middleware write into the same mapping, so every key this package stores is
+    namespaced with the distribution name. That namespacing was hand-spelled at
+    each key, which is a convention nothing enforced - one key written without
+    the prefix collides silently, and the collision surfaces as corrupted state
+    on a security path rather than as an error.
+    """
+    return f"__django_strawberry_framework_{name}__"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ScopeSingletonMessages:
+    """The four consumer-facing failures :func:`scope_singleton` can report.
+
+    Declared as DATA per call site rather than interleaved with the control
+    flow, because the wordings are genuinely per-surface (the auth boundary
+    names the lock; the revalidation boundary names the actor state) while the
+    algorithm must not be. Making them a required field set also means a new
+    failure mode added to the algorithm cannot be added at one call site and
+    forgotten at the other: it is a field, so every site must answer it.
+
+    ``corrupted`` is a format template receiving ``actual`` (the safely-rendered
+    type name of whatever was found in the slot).
+    """
+
+    unreadable: str
+    unstorable: str
+    uninspectable: str
+    corrupted: str
+
+
+def scope_singleton(
+    scope: MutableMapping[str, Any],
+    key: str,
+    *,
+    factory: Any,
+    expect: type,
+    messages: ScopeSingletonMessages,
+) -> Any:
+    """Return the scope's singleton under ``key``, creating it on first use.
+
+    The per-scope lazy singleton, once. Nothing the package owns runs early
+    enough to seed a scope (it arrives from Channels' middleware stack), and a
+    connection that never reaches the feature must not pay for one, so every
+    per-scope object is created on first use.
+
+    Two properties are load-bearing and are why this is one body rather than
+    two:
+
+    * **No ``await`` between the read and the store.** The get-or-create is
+      therefore atomic on the event loop, and two operations multiplexed on one
+      connection cannot each create their own object - which for a lock would
+      mean no serialization at all.
+    * **A corrupted slot is a typed error, never a silent replacement.** Every
+      read, store and type test is contained, because the scope is a mapping
+      other software also writes to: finding the wrong object there means
+      something else owns the key, and quietly overwriting it would trade a
+      loud configuration error for two systems sharing one slot.
+    """
+    from ..exceptions import ConfigurationError, _safe_type_name
+
+    try:
+        value = scope.get(key)
+    except BaseException as exc:
+        raise ConfigurationError(messages.unreadable) from exc
+    if value is None:
+        value = factory()
+        try:
+            scope[key] = value
+        except BaseException as exc:
+            raise ConfigurationError(messages.unstorable) from exc
+        return value
+    try:
+        matches = isinstance(value, expect)
+    except BaseException as exc:
+        raise ConfigurationError(messages.uninspectable) from exc
+    if not matches:
+        raise ConfigurationError(messages.corrupted.format(actual=_safe_type_name(value)))
+    return value
 
 
 def session_store_class() -> type:
@@ -119,7 +207,12 @@ def session_store_class() -> type:
     callers named in the module docstring. The resolution goes through Django's
     own ``import_string``, so a consumer-authored engine subclass resolves
     identically to a shipped one. ``settings`` is read at CALL time, never
-    captured, so ``override_settings(SESSION_ENGINE=...)`` is honored.
+    captured, so ``override_settings(SESSION_ENGINE=...)`` is honored. A
+    deployment-supplied engine that is a hostile ``str`` subclass is flattened
+    through the base ``str`` slot before it reaches either interpolation below,
+    so a raising ``__format__`` / ``__repr__`` cannot replace the typed
+    ``ConfigurationError`` with an arbitrary consumer exception while the import
+    path or the rejection message is being assembled.
     """
     from django.conf import settings
     from django.utils.module_loading import import_string
@@ -147,6 +240,13 @@ def session_store_class() -> type:
         raise ConfigurationError(
             "SESSION_ENGINE must be a non-empty string; got empty value.",
         )
+    # ``engine`` came from the deployment and may be a ``str`` subclass whose
+    # dunders raise. ``str.__str__`` on a non-exact ``str`` returns a plain base
+    # copy without dispatching the subclass's ``__str__``, so both f-string
+    # interpolations below (the import path here and the ``{engine!r}`` tail at
+    # the raise site) render through C slots that cannot run consumer code - the
+    # same guarantee ``describe_value`` gives the non-string rejection above.
+    engine = str.__str__(engine)
     try:
         return import_string(f"{engine}.SessionStore")
     except (
@@ -164,11 +264,20 @@ def session_store_class() -> type:
 
 
 #: The private scope key one connection's ``ConnectionActorState`` is stored
-#: under. Namespaced with the distribution name exactly like
+#: under, namespaced through the shared :func:`scope_key` builder alongside
 #: ``auth/sessions.py::_SCOPE_LOCK_KEY`` and
-#: ``consumers.py::_REVALIDATED_AT_SCOPE_KEY``, so it can never collide with an
-#: ASGI key set by Channels, Django, or consumer middleware.
-_ACTOR_STATE_SCOPE_KEY = "__django_strawberry_framework_connection_actor_state__"
+#: ``consumers.py::_REVALIDATED_AT_SCOPE_KEY``.
+_ACTOR_STATE_SCOPE_KEY = scope_key("connection_actor_state")
+
+_ACTOR_STATE_MESSAGES = ScopeSingletonMessages(
+    unreadable="The WebSocket revalidation state could not be read from the scope.",
+    unstorable="The WebSocket revalidation state could not be stored on the scope.",
+    uninspectable="The WebSocket revalidation state could not be inspected.",
+    corrupted=(
+        "The WebSocket revalidation state is corrupted; expected a "
+        "ConnectionActorState, got {actual}."
+    ),
+)
 
 
 class ConnectionActorState:
@@ -212,35 +321,13 @@ def connection_actor_state(scope: MutableMapping[str, Any]) -> ConnectionActorSt
     pay for one. The get-or-create has no ``await`` between the read and the
     store, so it is atomic on the event loop.
     """
-    from ..exceptions import ConfigurationError
-
-    try:
-        state = scope.get(_ACTOR_STATE_SCOPE_KEY)
-    except BaseException as exc:
-        raise ConfigurationError(
-            "The WebSocket revalidation state could not be read from the scope.",
-        ) from exc
-    if state is None:
-        state = ConnectionActorState()
-        try:
-            scope[_ACTOR_STATE_SCOPE_KEY] = state
-        except BaseException as exc:
-            raise ConfigurationError(
-                "The WebSocket revalidation state could not be stored on the scope.",
-            ) from exc
-    else:
-        try:
-            is_state = isinstance(state, ConnectionActorState)
-        except BaseException as exc:
-            raise ConfigurationError(
-                "The WebSocket revalidation state could not be inspected.",
-            ) from exc
-        if not is_state:
-            raise ConfigurationError(
-                "The WebSocket revalidation state is corrupted; expected a "
-                f"ConnectionActorState, got {type(state).__name__}.",
-            )
-    return state
+    return scope_singleton(
+        scope,
+        _ACTOR_STATE_SCOPE_KEY,
+        factory=ConnectionActorState,
+        expect=ConnectionActorState,
+        messages=_ACTOR_STATE_MESSAGES,
+    )
 
 
 def note_authenticated_actor(scope: MutableMapping[str, Any]) -> None:

@@ -21,10 +21,14 @@ where they matter. What is left here is the surface a request cannot express:
 - the value walker's IDENTITY contracts, which need constructed object graphs a
   JSON body cannot express: a container referenced twice charged twice, two
   distinct-but-equal containers both charged, and cycles closing onto a parent
-  and onto a grandparent through both container families; and
+  and onto a grandparent through both container families;
 - the connection SHAPE test from both sides, against probe types that borrow the
   ``edges`` name without the edge shape - which the example schema, having only
-  real connections, cannot supply.
+  real connections, cannot supply; and
+- the ID-scalar FALLBACK half of the relation-list classification, which a
+  mutation the package did not generate (no bind specs) rides - the example
+  schema's writes are all package-generated, so their spec-keyed twins are
+  pinned live.
 """
 
 from __future__ import annotations
@@ -132,8 +136,33 @@ def test_an_invalid_execution_deadline_is_rejected(value):
 
 @pytest.mark.parametrize("value", [None, 1, 0.5])
 def test_a_valid_execution_deadline_is_accepted(value):
-    """The deadline is the one optional bound, and it accepts a float."""
+    """The deadline is the one optional bound, and it accepts a float.
+
+    The positive control for ``_is_valid_deadline``: without it the rejection
+    tests above would still pass if the domain check refused everything.
+    """
     assert ResourcePolicy(execution_deadline_seconds=value).execution_deadline_seconds == value
+
+
+def test_a_hostile_numeric_deadline_subclass_is_typed_rejected():
+    """A deployment-supplied numeric SUBCLASS whose comparison raises is a hostile
+    configuration object: the domain check cannot classify it, so the answer is
+    the typed ``ConfigurationError``, never the raw arithmetic error leaking out
+    of schema construction.
+    """
+
+    class HostileFloat(float):
+        def __gt__(self, other):
+            raise RuntimeError("hostile __gt__ detonated")
+
+    with pytest.raises(ConfigurationError, match="execution_deadline_seconds"):
+        ResourcePolicy(execution_deadline_seconds=HostileFloat(1.0))
+
+
+def test_a_huge_int_deadline_overflows_the_finite_check_into_the_typed_rejection():
+    """``isfinite(float(10**600))`` overflows; the rejection must stay typed."""
+    with pytest.raises(ConfigurationError, match="execution_deadline_seconds"):
+        ResourcePolicy(execution_deadline_seconds=10**600)
 
 
 def test_the_package_default_policy_is_bounded_on_every_axis():
@@ -172,6 +201,20 @@ def test_an_explicit_mapping_is_applied_over_the_package_defaults():
 
 def test_no_source_at_all_resolves_to_the_package_defaults():
     assert resolve_resource_policy(None) is DEFAULT_RESOURCE_POLICY
+
+
+def test_an_instance_through_the_setting_slot_is_used_as_is(settings):
+    """The setting slot and the explicit argument are one ladder with two spellings.
+
+    A pre-validated ``ResourcePolicy`` behind ``RESOURCE_POLICY`` is the same
+    trusted declaration the ``DjangoSchema(resource_policy=...)`` argument
+    accepts, so it must resolve to exactly that instance. (Probed by the hunt:
+    rejecting it here produced a typed message naming ``ResourcePolicy`` as the
+    received type while claiming the value must be a ``ResourcePolicy``.)
+    """
+    policy = ResourcePolicy(max_depth=3)
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RESOURCE_POLICY": policy}
+    assert resolve_resource_policy(None) is policy
 
 
 def test_the_setting_supplies_the_policy_when_no_argument_does(settings):
@@ -414,6 +457,39 @@ def test_a_passed_deadline_with_no_policy_behind_it_still_rejects():
     assert "unknown" in caught.value.message
 
 
+def test_a_hostile_deadline_subclass_fails_closed_instead_of_crashing_the_seam():
+    """A numeric SUBCLASS whose comparisons raise cannot certify its budget.
+
+    The deadline stash is a process-internal derived value, but the context is
+    consumer-owned, so a hostile numeric can sit under the key. The seam must
+    fail closed on the same typed path a passed deadline takes rather than leak
+    the raw comparison error out of a collection resolver.
+    """
+
+    class HostileFloat(float):
+        def __gt__(self, other):
+            raise RuntimeError("hostile __gt__")
+
+        def __lt__(self, other):
+            raise RuntimeError("hostile __lt__")
+
+        def __le__(self, other):
+            # ``monotonic >= stash`` dispatches to the REFLECTED ``__le__`` first
+            # (a float subclass wins the reversed slot), so this is the dunder
+            # that actually detonates inside the seam.
+            raise RuntimeError("hostile __le__ detonated")
+
+        def __ge__(self, other):
+            raise RuntimeError("hostile __ge__ detonated")
+
+    context = {DST_RESOURCE_DEADLINE: HostileFloat(time.monotonic())}
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        check_deadline(SimpleNamespace(context=context))
+    assert caught.value.bound == "execution_deadline_seconds"
+    assert caught.value.limit == 0
+    assert "unknown" in caught.value.message
+
+
 # ---------------------------------------------------------------------------
 # ``bounded_rows``
 # ---------------------------------------------------------------------------
@@ -435,6 +511,37 @@ def test_bounded_rows_bounds_a_non_subscriptable_iterable():
             return iter(range(10))
 
     assert bounded_rows(_Rows(), info) == [0, 1]
+
+
+@pytest.mark.parametrize(
+    "mapping_cls",
+    [dict, None],
+    ids=["plain-dict", "guarded-mapping-subclass"],
+)
+def test_bounded_rows_bounds_a_mapping_shaped_result(mapping_cls):
+    """A MAPPING-shaped result is bounded via ``islice``, never a raw ``KeyError``.
+
+    A mapping answers a slice subscript with ``KeyError`` on interpreters where
+    slices hash - a plain ``dict`` there, and a dict subclass whose
+    ``__getitem__`` guards its keys everywhere - so the unsliceable fallback
+    must absorb ``KeyError`` alongside ``TypeError``. The alternative was a raw
+    ``KeyError`` escaping a collection resolver exactly because the result was a
+    shape nobody anticipated, which is the same "bound silently stops applying"
+    failure the fallback exists to prevent.
+    """
+
+    class _GuardedDict(dict):
+        def __getitem__(self, key):
+            raise KeyError("guarded")
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = (
+        _GuardedDict({"a": 1, "b": 2, "c": 3})
+        if mapping_cls is None
+        else mapping_cls({"a": 1, "b": 2, "c": 3})
+    )
+    assert bounded_rows(source, info) == ["a", "b"]
 
 
 def test_bounded_rows_honours_a_trusted_widening():
@@ -490,6 +597,61 @@ async def test_bounded_rows_async_preserves_source_errors_when_cleanup_fails():
     # The source error stays primary AND the masked cleanup failure rides along as
     # a note -- the half that separates this from a plain re-raise.
     assert any("cleanup failed" in note for note in getattr(caught.value, "__notes__", []))
+
+
+async def test_bounded_rows_async_survives_a_hostile_notes_list_on_the_source_error():
+    """A hostile non-iterable ``__notes__`` on the source error must not mask it.
+
+    The cleanup failure is attached as a note so the source error stays primary;
+    the attachment is a diagnostic, so a hostile note surface (an int where the
+    note protocol wants a list) must be swallowed rather than replace the source
+    error with the attachment's own ``TypeError``. The assertion inspects the
+    caught error's own attributes rather than ``pytest.raises(match=...)``:
+    pytest's matcher stringifies ``__notes__`` too, so handing it this hostile
+    surface would detonate the matcher, not the seam under test.
+    """
+
+    class HostileNotesRows:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            error = ValueError("source failed")
+            error.__notes__ = 42  # hostile: not a list
+            raise error
+
+        async def aclose(self):
+            raise RuntimeError("cleanup failed")
+
+    with pytest.raises(ValueError) as caught:
+        await bounded_rows_async(HostileNotesRows(), SimpleNamespace(context={}))
+    assert str(caught.value) == "source failed"
+    # The hostile surface itself survived untouched: the containment swallowed
+    # its own TypeError without ever writing over the source error's notes.
+    assert caught.value.__notes__ == 42
+
+
+async def test_bounded_rows_async_hostile_notes_property_getter_does_not_mask_the_source():
+    """An unreadable ``__notes__`` descriptor must not replace the source error."""
+
+    class HostileError(Exception):
+        __notes__ = property(lambda self: (_ for _ in ()).throw(RuntimeError("getter")))  # type: ignore[assignment]
+
+    class BrokenRows:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise HostileError("source failed")
+
+        async def aclose(self):
+            raise RuntimeError("cleanup failed")
+
+    # No ``match=`` here for the same reason: pytest's matcher reads
+    # ``__notes__`` to render the exception, and this surface raises on read.
+    with pytest.raises(HostileError) as caught:
+        await bounded_rows_async(BrokenRows(), SimpleNamespace(context={}))
+    assert str(caught.value) == "source failed"
 
 
 async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_error():
@@ -553,6 +715,43 @@ async def test_bounded_rows_async_exhausted_iterator_without_truncation():
     assert rows.closed is False
 
 
+# TODO(spec-050 slice 3): Pin the new offset/requested-limit arms at the shared
+# raw-list seam; do not duplicate list-field argument validation here.
+#
+# Pseudocode:
+#
+# - Parametrize sequences and non-subscriptable iterables over omitted
+#   coordinates, offset only, smaller requested limit, offset + limit, overshoot,
+#   and trusted declared widening. Assert exact ``[start:stop]`` results and that
+#   the shipped three-positional-argument call still binds ``declared``. Offset
+#   ONLY (no requested limit) must stop at ``offset + effective_ceiling``, not
+#   only the combined offset+limit shape.
+# - Positive-offset arithmetic over an ASYNC iterator belongs here, not live:
+#   the public list field rejects positive offset on an async-only source
+#   (spec-050 Decision 8) while this seam supports it for shape completeness.
+# - Pin the DECLINED sync cleanup contract: a retained sync generator truncated
+#   by a window is still suspended and resumable afterward, its ``finally`` not
+#   yet run. This card promises early-exit cleanup for async-only sources only,
+#   so the assertion exists to make a later symmetric card an explicit flip.
+# - Give the unsliceable iterable counters around ``__iter__`` / ``__next__``
+#   and a patched ``islice`` seam. ``requested_limit=0`` must return ``[]``
+#   without constructing islice or advancing; a positive window consumes
+#   exactly offset + returned rows and never the next item.
+# - Give the async-only source counters for iterator acquisition, ``__anext__``,
+#   and ``aclose``. Zero limit acquires and closes once with zero advances;
+#   reaching the exclusive stop closes; offset overshoot that naturally
+#   exhausts does not close; source failure plus cleanup failure keeps the
+#   source primary with one note; cleanup-only failure remains primary. Cover
+#   a source holding EXACTLY ``offset + limit`` rows beside one holding fewer,
+#   so an accepted-stop close is distinguished from an observed natural
+#   exhaustion. The zero-advance witness is the iterator's OWN ``aclose``
+#   counter, never an async generator's body ``finally``: ``aclose()`` before
+#   the first advance does not enter the body, so no ``finally`` runs.
+# - Spy on ``check_deadline`` and ``effective_bound``. Each coordinate-bearing
+#   invocation calls each shared policy seam once before any source advance,
+#   and relation-list callers with no coordinates retain the old prefix bound.
+
+
 # ---------------------------------------------------------------------------
 # The pre-parse text scan
 # ---------------------------------------------------------------------------
@@ -561,6 +760,40 @@ async def test_bounded_rows_async_exhausted_iterator_without_truncation():
 def test_an_absent_document_charges_nothing():
     scan_document_text(DEFAULT_RESOURCE_POLICY, None)
     scan_document_text(DEFAULT_RESOURCE_POLICY, "")
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        123,
+        b"{ a }",
+        ["{ a }"],
+        {"query": "{ a }"},
+        3.5,
+        object(),
+        True,
+    ],
+    ids=[
+        "int",
+        "bytes",
+        "list",
+        "dict",
+        "float",
+        "object",
+        "bool",
+    ],
+)
+def test_a_non_string_query_is_declined_not_scanned(hostile):
+    """A non-string query is declined, never handed to the lexer.
+
+    Handing a truthy non-string to the lexer raised a raw ``TypeError`` /
+    ``AttributeError`` / ``KeyError`` from inside graphql-core at exactly the
+    input the exception-containment invariant says must never escape an input
+    decoder. The HTTP transports type-check the query before the extension runs,
+    but the WebSocket path does not, so the decline is the scanner's own
+    contract: a value that is not text carries no tokens to charge.
+    """
+    scan_document_text(DEFAULT_RESOURCE_POLICY, hostile)
 
 
 def test_a_malformed_document_is_left_to_the_real_parser():
@@ -673,6 +906,24 @@ class _Probe:
 _PROBE_SCHEMA = strawberry.Schema(query=_Probe)
 
 
+@strawberry.type
+class _WriteProbe:
+    """A plain ``strawberry.Schema`` mutation root - no package bind specs anywhere.
+
+    The ID-scalar fallback in ``_charge_list_family`` exists for exactly this
+    schema shape: a mutation the package did not generate carries no
+    ``_input_field_specs`` map, so an id list is classified by its scalar name,
+    exactly as before the spec signal existed.
+    """
+
+    @strawberry.mutation
+    def tag(self, tags: list[strawberry.ID] | None = None) -> str:
+        return "ok"
+
+
+_PROBE_WRITE_SCHEMA = strawberry.Schema(query=_Probe, mutation=_WriteProbe)
+
+
 def _charge(
     document,
     variables=None,
@@ -686,6 +937,41 @@ def _charge(
         variables or {},
         operation_name,
     )
+
+
+def _charge_write(document, variables=None, policy=None):
+    """Charge a mutation document against the plain-schema probe (no bind specs)."""
+    charge_document(
+        policy or DEFAULT_RESOURCE_POLICY,
+        _PROBE_WRITE_SCHEMA._schema,
+        parse(document),
+        variables or {},
+        None,
+    )
+
+
+def test_an_id_list_in_a_plain_mutation_charges_the_relation_fallback():
+    """The ID-scalar fallback keeps charging relation ids without bind specs.
+
+    The spec rule only ever ADDS a classification signal for writes the
+    package generated; a plain ``strawberry.Schema`` mutation has none, and its
+    ``[ID]`` list must keep charging ``max_relation_ids_per_mutation`` by name -
+    the same contract the GlobalID twins pin live over the generated write.
+    """
+    _charge_write("mutation T($tags: [ID!]) { tag(tags: $tags) }", {"tags": ["a", "b"]})
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge_write(
+            "mutation T($tags: [ID!]) { tag(tags: $tags) }",
+            {"tags": ["x", "y"]},
+            policy=ResourcePolicy(max_relation_ids_per_mutation=1),
+        )
+    assert caught.value.bound == "max_relation_ids_per_mutation"
+    assert caught.value.charged == 2
+
+
+def test_an_absent_optional_argument_value_is_charged_as_nothing():
+    """A ``None`` argument value (an omitted optional variable) charges no leaves."""
+    _charge("query T($t: [String!]) { echo(tags: $t) }", {"t": None})
 
 
 def test_only_the_named_operation_is_charged():

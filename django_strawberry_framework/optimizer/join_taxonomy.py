@@ -53,7 +53,13 @@ import enum
 from dataclasses import dataclass
 from typing import Any
 
-from ..utils.relations import RelationKind, relation_kind
+from ..utils.relations import (
+    RelationKind,
+    relation_attr,
+    relation_bool,
+    relation_kind,
+    safe_truthy,
+)
 
 
 class LateralJoinShape(enum.Enum):
@@ -80,32 +86,22 @@ WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 )
 
 
+# This module's never-raises contract is now a stated MODE of the shared
+# relation readers rather than a parallel family beside them: one read body,
+# one truth test, two failure policies. The local names stay so the 22 call
+# sites below read as taxonomy code, and so the lenient policy is declared once
+# here instead of at each of them.
 def _safe_getattr(value: object, name: str, default: Any = None) -> Any:
     """Read a descriptor attribute without letting malformed doubles escape."""
-    try:
-        return getattr(value, name, default)
-    except BaseException:
-        return default
+    return relation_attr(value, name, default, lenient=True)
 
 
-def _safe_truthy(value: object) -> bool:
-    """Ask a value for its truth, treating a raising truth test as false.
-
-    Containing the READ is only half the boundary: ``_safe_getattr`` hands back
-    whatever it found, so every ``if`` / ``or`` / ``not`` applied to that result
-    is a second escape route one frame later. A double whose ``__bool__`` raises
-    would otherwise break this module's never-raises contract after the read
-    itself was safely contained.
-    """
-    try:
-        return bool(value)
-    except BaseException:
-        return False
+_safe_truthy = safe_truthy
 
 
 def _safe_flag(value: object, name: str) -> bool:
     """Read a boolean relation flag, guarding both the read and its truth test."""
-    return _safe_truthy(_safe_getattr(value, name, False))
+    return relation_bool(value, name, False, lenient=True)
 
 
 def _first_truthy(*values: Any) -> Any:

@@ -163,9 +163,13 @@ def _validate_schema_field_map(name: str, field_map: Any) -> dict[str, serialize
                 f"({_safe_arg_repr(entry)})",
             )
             continue
-        if not isinstance(field_name, str):
+        # The PLAIN-string gate (the ``_hook_mapping`` precedent): a ``str`` subclass key
+        # carries overridable ``__hash__`` / ``__ne__`` and would detonate the downstream
+        # ``normalized[...] = field`` dict-set or comparisons with an arbitrary consumer
+        # exception, so only an exact ``str`` key may proceed to any dispatch on it.
+        if type(field_name) is not str:
             errors.append(
-                f"a field-map key must be a string; got {_safe_arg_repr(field_name)}",
+                f"a field-map key must be a plain string; got {_safe_arg_repr(field_name)}",
             )
             continue
         if not isinstance(field, serializers.Field):
@@ -181,7 +185,16 @@ def _validate_schema_field_map(name: str, field_map: Any) -> dict[str, serialize
                 f"field {field_name!r} has a field_name descriptor that could not be read",
             )
             continue
-        if bound_name != field_name:
+        # The bound-name VALUE is untrusted (only its READ was guarded above): a hostile
+        # ``__ne__`` on it must not escape the comparison as a raw exception.
+        try:
+            name_mismatch = bound_name != field_name
+        except BaseException:
+            errors.append(
+                f"field {field_name!r} has a field_name whose comparison failed",
+            )
+            continue
+        if name_mismatch:
             errors.append(
                 f"field-map key {field_name!r} does not match the DRF field's bound name "
                 f"{_safe_arg_repr(bound_name)}",
@@ -287,17 +300,20 @@ def _validate_serializer_nested_fields(
     ``Meta.nested_fields`` is the explicit opt-in for nested serializer writes: a
     ``{field_name: NestedSerializerConfig}`` map. Validated all at class creation:
 
-    - it must be a mapping of ``str -> NestedSerializerConfig`` (a wrong container / wrong value
-      type fails loud);
+    - it must be a mapping of plain ``str -> NestedSerializerConfig`` (a wrong container /
+      wrong value type fails loud; the plain-string gate is the resolver-tier ``_hook_mapping``
+      precedent, so no hostile key object can destabilize the downstream key-hashing consumers);
     - each key must name a field in the schema-time ``field_map`` that IS a nested
       ``Serializer`` / ``ListSerializer`` (a typo / non-nested field fails loud - the deeper
       per-level key validation runs in the recursive build);
-    - the serializer MUST override the write method the ``operation`` uses (``create()`` for
-      create, ``update()`` for update): DRF's default ``ModelSerializer`` method ``assert``s
-      against nested writable data (a raw ``AssertionError`` that would escape the envelope), so
-      the framework requires the override up front - the "only pass nested data to a serializer
-      that implements the nested write correctly" contract. The framework NEVER auto-saves the
-      nested relation; the serializer author's overridden method owns the write.
+    - when ANY nested field is declared, the serializer MUST override the write method the
+      ``operation`` uses (``create()`` for create, ``update()`` for update): DRF's default
+      ``ModelSerializer`` method ``assert``s against nested writable data (a raw
+      ``AssertionError`` that would escape the envelope), so the framework requires the override
+      up front - the "only pass nested data to a serializer that implements the nested write
+      correctly" contract. An EMPTY declaration passes no nested data and demands no override
+      (the falsy-means-absent convention every other consumer applies). The framework NEVER
+      auto-saves the nested relation; the serializer author's overridden method owns the write.
 
     Returns the normalized ``dict`` (``None`` when unset).
     """
@@ -308,8 +324,37 @@ def _validate_serializer_nested_fields(
             f"SerializerMutation {name}.Meta.nested_fields must be a mapping of "
             f"{{field_name: NestedSerializerConfig}}; got {_safe_arg_repr(nested_fields)}.",
         )
+    # The SAME untrusted-mapping containment the schema field map applies: the hook/Meta
+    # boundary materializes ``.items()`` and unpacks each entry under a guard, so a hostile
+    # mapping (a raising ``items()``, a midway-raising iterator, a wrong-arity entry) becomes
+    # the typed configuration error instead of leaking a raw ``RuntimeError`` / ``ValueError``
+    # during class creation.
+    try:
+        entries = tuple(nested_fields.items())
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"SerializerMutation {name}.Meta.nested_fields returned a mapping that could not "
+            "be materialized; use a stable mapping of field name -> NestedSerializerConfig.",
+        ) from exc
     normalized: dict[str, NestedSerializerConfig] = {}
-    for field_name, config in nested_fields.items():
+    for entry in entries:
+        try:
+            field_name, config = entry
+        except BaseException:
+            raise ConfigurationError(
+                f"SerializerMutation {name}.Meta.nested_fields has an entry that could not be "
+                f"unpacked as (field_name, NestedSerializerConfig) ({_safe_arg_repr(entry)}).",
+            ) from None
+        # The PLAIN-string gate (the ``_hook_mapping`` precedent): a non-``str`` or
+        # ``str``-subclass key would detonate ``field_map.get()`` (unhashable), the error
+        # message renders below (a hostile ``__repr__``), or the ``normalized`` dict-set
+        # (a hostile ``__hash__``) with a raw consumer exception, so only an exact ``str``
+        # key may proceed to any dispatch on it.
+        if type(field_name) is not str:
+            raise ConfigurationError(
+                f"SerializerMutation {name}.Meta.nested_fields keys must be plain strings; "
+                f"got {_safe_arg_repr(field_name)}.",
+            )
         if not isinstance(config, NestedSerializerConfig):
             raise ConfigurationError(
                 f"SerializerMutation {name}.Meta.nested_fields[{field_name!r}] must be a "
@@ -330,6 +375,12 @@ def _validate_serializer_nested_fields(
                 "PrimaryKeyRelatedField).",
             )
         normalized[field_name] = config
+    if not normalized:
+        # An EMPTY declaration is no declaration (the ``_assert_schema_source_ownership`` /
+        # ``validate_nested_config_keys`` falsy-means-absent convention): it passes no nested
+        # data to the serializer, so the write-method-override requirement is vacuous and an
+        # explicit ``{}`` must not spuriously demand a create()/update() override.
+        return normalized
     write_method = _SERIALIZER_OPERATION_NESTED_WRITE_METHOD[operation]
     if getattr(serializer_class, write_method) is getattr(
         serializers.ModelSerializer,
@@ -795,6 +846,7 @@ class SerializerMutation(DjangoMutation):
             serializer_class,
             field_map,
             meta.injected_fields,
+            operation_kind=operation_kind,
         )
         effective_names = tuple(
             resolve_effective_serializer_fields(

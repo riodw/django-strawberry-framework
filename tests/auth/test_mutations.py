@@ -279,7 +279,62 @@ def test_registry_clear_drains_ledger_and_resets_conflict_state():
     login_mutation(permission_classes=[_AllowAll])
     fresh_holder = _declared_auth_surface("login")
     assert fresh_holder is not stale_holder
-    assert fresh_holder._mutation_meta.permission_classes == [_AllowAll]
+    assert fresh_holder._mutation_meta.permission_classes == (_AllowAll,)
+
+
+def test_auth_permission_holder_snapshot_is_sealed():
+    """A fixed-surface holder's validated snapshot refuses writes and deletes (0.0.15).
+
+    The holder's duck-typed snapshot IS the fixed auth surface's per-request
+    authorization source (``login`` / ``logout`` / ``current_user`` ride
+    ``DjangoMutation.check_permission`` by call, which reads
+    ``type(self)._mutation_meta.permission_classes``), so it is SEALED once
+    ``__init__`` finishes - mirroring ``mutations/sets.py::_ValidatedMutationMeta``.
+    A mutable slot would let one request's ``has_permission`` hook (which receives
+    the holder) rebind the validated set - e.g. to the empty allow-any posture -
+    for every later login/logout/me request.
+    """
+    logout_mutation()
+    snapshot = _declared_auth_surface("logout")._mutation_meta
+    assert isinstance(snapshot, auth_mutations._AuthMutationMetaSnapshot)
+    assert snapshot.permission_classes == ()  # the documented AllowAny auth default
+    with pytest.raises(ConfigurationError, match="sealed"):
+        snapshot.permission_classes = (_DenyAll,)
+    with pytest.raises(ConfigurationError, match="sealed"):
+        del snapshot.permission_classes
+    with pytest.raises(ConfigurationError, match="sealed"):
+        snapshot.operation = "login"
+    # The declared configuration is untouched by all three attempts.
+    assert snapshot.permission_classes == ()
+    assert snapshot.operation == "logout"
+
+
+def test_auth_permission_holder_head_is_sealed():
+    """A synthesized holder's ``_mutation_meta`` head is write-once (0.0.15 hardening).
+
+    ``_SealedAuthHolderMeta`` mirrors the write-flavor metaclass guard: a
+    ``has_permission`` hook receives the holder, so an unguarded head would let
+    one request swap the fixed surface's validated record for a hook-chosen
+    namespace - the persistent cross-request bypass class. Synthesis is the one
+    honored write; rebinding and deletion raise ``ConfigurationError``.
+    """
+    logout_mutation()
+    holder = _declared_auth_surface("logout")
+    original = holder._mutation_meta
+    with pytest.raises(ConfigurationError, match="sealed and cannot be rebound"):
+        holder._mutation_meta = SimpleNamespace(permission_classes=())
+    with pytest.raises(ConfigurationError, match="sealed and cannot be deleted"):
+        del holder._mutation_meta
+    # The synthesized snapshot survived both attempts, record identity included.
+    assert isinstance(holder._mutation_meta, auth_mutations._AuthMutationMetaSnapshot)
+    assert holder._mutation_meta is original
+    assert holder._mutation_meta.permission_classes == ()
+    # Unrelated class attributes stay writable and deletable: only the
+    # ``_mutation_meta`` head is sealed.
+    holder._primary_type = None
+    assert holder._primary_type is None
+    del holder._primary_type
+    assert "_primary_type" not in holder.__dict__
 
 
 def test_registry_clear_does_not_import_the_auth_subsystem():
@@ -433,6 +488,93 @@ def test_logout_without_auth_middleware_is_anonymous_and_flushes_the_session():
     custom_res = schema.execute_sync(_LOGOUT_Q, context_value=custom_req)
     assert custom_res.errors is None, custom_res.errors
     assert custom_res.data["logout"] == {"ok": False, "errors": []}
+
+
+# --- Hostile is_authenticated VALUE truthiness (hunt 0.0.15) -------------------
+
+
+class _BoolRaisingValue:
+    """An ``is_authenticated`` value whose ``bool()`` raises (the documented five)."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def __bool__(self):
+        raise self._exc
+
+
+class _LenOnlyRaiser:
+    """A sequence-style value: truthiness rides ``__len__``, which raises."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def __len__(self):
+        raise self._exc
+
+
+class _HostileValueUser:
+    """A user-like actor whose ``is_authenticated`` attribute holds a hostile value."""
+
+    def __init__(self, value):
+        self.is_authenticated = value
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        TypeError,
+        ValueError,
+        AttributeError,
+        KeyError,
+        IndexError,
+    ],
+)
+def test_hostile_is_authenticated_value_truthiness_collapses_to_anonymous(raised):
+    """A hostile is_authenticated VALUE whose truthiness raises collapses to anonymous.
+
+    The FOURTH hostile surface (hunt 0.0.15): the 0.0.14 containment covered the
+    descriptor read and the legacy-callable call, but the final truthiness
+    evaluation was unguarded - a value whose ``__bool__`` / ``__len__`` raises
+    escaped as a top-level error out of the logout ``ok`` capture AND ``me``.
+    The same five shapes collapse to anonymous (fail-closed), while any other
+    exception still propagates (the documented asymmetry: a DatabaseError is
+    never hidden as anonymous).
+    """
+    request = _session_request()
+    request.user = _HostileValueUser(_BoolRaisingValue(raised("truthiness boom")))
+    assert auth_mutations._authenticated_actor_or_none(request) is None
+    # The len-only form: truthiness rides ``__len__`` when ``__bool__`` is absent.
+    request2 = _session_request()
+    request2.user = _HostileValueUser(_LenOnlyRaiser(raised("len boom")))
+    assert auth_mutations._authenticated_actor_or_none(request2) is None
+
+
+@pytest.mark.django_db
+def test_logout_with_hostile_is_authenticated_value_never_false_success():
+    """A hostile is_authenticated VALUE on the LIVE logout surface: contained capture, fail-closed teardown.
+
+    Two layers on the live logout surface (hunt 0.0.15): the ``ok`` CAPTURE is
+    contained by ``_authenticated_actor_or_none`` (the hostile truthiness
+    collapses to anonymous, so ``ok`` is False - never a false ``ok: true``),
+    but Django's native ``auth.logout`` re-reads ``user.is_authenticated``
+    truthiness itself before its flush (upstream ``logout``), so the hostile
+    value surfaces as a top-level teardown error exactly like a raising
+    ``user_logged_out`` receiver. The resolver's fail-closed treatment holds:
+    no success payload, and the compensation anonymizes the local actor.
+    """
+    schema = _login_logout_schema()
+    request = _session_request()
+    request.user = _HostileValueUser(_BoolRaisingValue(TypeError("truthiness boom")))
+    request.session["logout_residue"] = "must be flushed"
+    request.session.save()
+    res = schema.execute_sync(_LOGOUT_Q, context_value=request)
+    assert res.errors is not None  # no false ``{ok: true}`` success payload
+    assert isinstance(res.errors[0].original_error, TypeError)
+    assert isinstance(request.user, AnonymousUser)  # the compensation anonymized the actor
+    # The crash precedes Django's flush, so nothing was invalidated and the
+    # payload never claims it was (no false clean-state claim).
+    assert request.session.get("logout_residue") == "must be flushed"
 
 
 def test_login_only_bind_emits_no_orphan_logout_payload():

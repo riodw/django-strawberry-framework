@@ -56,9 +56,14 @@ from ..exceptions import (
     _safe_arg_repr,
     _safe_type_name,
 )
-from ..utils.imports import require_optional_module
+from ..utils.imports import CHANNELS_FLOOR, require_optional_module
 from ..utils.permissions import ChannelsRequestAdapter
-from ..utils.sessions import session_store_class
+from ..utils.sessions import (
+    ScopeSingletonMessages,
+    scope_key,
+    scope_singleton,
+    session_store_class,
+)
 
 # The single channels-ABSENT install hint for the auth transport (mirrors
 # ``routers.py::_CHANNELS_INSTALL_HINT`` but keyed to this feature so hint strings
@@ -68,14 +73,31 @@ from ..utils.sessions import session_store_class
 # raises this rather than swallowing the failure into a later ``AttributeError``.
 _CHANNELS_INSTALL_HINT = (
     "A Channels request scope reached the auth session boundary, but channels is not "
-    "installed. Install it with `pip install 'channels>=4.3.2'` (the package's verified "
-    "Channels floor)."
+    f"installed. Install it with `pip install 'channels>={CHANNELS_FLOOR}'` (the package's "
+    "verified Channels floor)."
 )
 
 # The private, collision-resistant scope key the per-scope ``asyncio.Lock`` is
 # stored under. Namespaced with the distribution name so it can never collide
 # with an ASGI key set by Channels, Django, or consumer middleware.
-_SCOPE_LOCK_KEY = "__django_strawberry_framework_auth_session_lock__"
+_SCOPE_LOCK_KEY = scope_key("auth_session_lock")
+
+# The per-scope lazy singleton itself is ``utils/sessions.py::scope_singleton``
+# (shared with the WebSocket revalidation state, which had the same
+# read / create-with-no-await / validate-or-fail-closed body); only these four
+# wordings are the auth boundary's own.
+_SCOPE_LOCK_MESSAGES = ScopeSingletonMessages(
+    unreadable="The auth session boundary could not read the Channels request scope.",
+    unstorable="The auth session boundary could not store the per-scope session lock.",
+    uninspectable=(
+        "The auth session boundary requires an asyncio.Lock per scope, but the "
+        "stored value could not be inspected."
+    ),
+    corrupted=(
+        "The auth session boundary requires an asyncio.Lock per scope, but got a "
+        "{actual}; the per-scope lock is corrupted."
+    ),
+)
 
 
 class Transport(enum.Enum):
@@ -294,33 +316,13 @@ async def scope_session_lock(adapter: ChannelsRequestAdapter) -> AsyncIterator[a
     only ever reach the native async body, never the bridge.
     """
     scope = _require_mutable_scope(adapter)
-    try:
-        lock = scope.get(_SCOPE_LOCK_KEY)
-    except BaseException as exc:
-        raise ConfigurationError(
-            "The auth session boundary could not read the Channels request scope.",
-        ) from exc
-    if lock is None:
-        lock = asyncio.Lock()
-        try:
-            scope[_SCOPE_LOCK_KEY] = lock
-        except BaseException as exc:
-            raise ConfigurationError(
-                "The auth session boundary could not store the per-scope session lock.",
-            ) from exc
-    else:
-        try:
-            is_lock = isinstance(lock, asyncio.Lock)
-        except BaseException as exc:
-            raise ConfigurationError(
-                "The auth session boundary requires an asyncio.Lock per scope, but the "
-                "stored value could not be inspected.",
-            ) from exc
-        if not is_lock:
-            raise ConfigurationError(
-                "The auth session boundary requires an asyncio.Lock per scope, but got a "
-                f"{_safe_type_name(lock)}; the per-scope lock is corrupted.",
-            )
+    lock = scope_singleton(
+        scope,
+        _SCOPE_LOCK_KEY,
+        factory=asyncio.Lock,
+        expect=asyncio.Lock,
+        messages=_SCOPE_LOCK_MESSAGES,
+    )
     try:
         await lock.acquire()
     except ConfigurationError:

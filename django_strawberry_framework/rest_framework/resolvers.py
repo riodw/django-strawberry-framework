@@ -140,6 +140,9 @@ from ..mutations.resolvers import (
     run_write_pipeline_sync,
 )
 from ..utils.errors import (
+    FIELD_ERROR_CODE_INVALID,
+    FIELD_ERROR_CODE_TRUNCATED,
+    empty_validation_error,
     field_error,
     integrity_error_field_errors,
     join_error_path,
@@ -320,7 +323,7 @@ def _decode_input_object(
         return {}, field_error(
             path_prefix or NON_FIELD_ERROR_KEY,
             "Invalid input object.",
-            codes="invalid",
+            codes=FIELD_ERROR_CODE_INVALID,
         )
     provided_data: dict[str, Any] = {}
 
@@ -374,7 +377,11 @@ def _decode_nested(
         try:
             items = list(value)
         except Exception:
-            return None, field_error(path_prefix, "Expected a list of items.", codes="invalid")
+            return None, field_error(
+                path_prefix,
+                "Expected a list of items.",
+                codes=FIELD_ERROR_CODE_INVALID,
+            )
         decoded_items: list[dict[str, Any] | None] = []
         for index, item in enumerate(items):
             item_path = join_error_path(path_prefix, str(index))
@@ -463,7 +470,7 @@ def serializer_errors_to_field_errors(
                     field_error(
                         NON_FIELD_ERROR_KEY,
                         "Too many validation error details to report; the list was truncated.",
-                        codes="truncated",
+                        codes=FIELD_ERROR_CODE_TRUNCATED,
                     ),
                 )
                 return flattened
@@ -485,13 +492,7 @@ def serializer_errors_to_field_errors(
             active.discard(id(node))
             frames.pop()
     if not flattened and not prefix:
-        return [
-            field_error(
-                prefix,
-                "Validation failed without error details.",
-                codes="invalid",
-            ),
-        ]
+        return [empty_validation_error(prefix)]
     return flattened
 
 
@@ -549,11 +550,7 @@ def _error_leaf(errors: Any, prefix: str) -> FieldError:
         )
         and not leaf_codes
     ):
-        return field_error(
-            prefix,
-            "Validation failed without error details.",
-            codes="invalid",
-        )
+        return empty_validation_error(prefix)
     return field_error(
         prefix,
         errors,
@@ -646,7 +643,13 @@ def _hook_mapping(mutation_cls: type, hook_name: str, value: Any) -> dict[str, A
     The three serializer hooks that return keyword/data mappings are consumer extension points.
     A malformed ``None`` / sequence / stateful mapping must not leak a raw ``TypeError`` from
     ``dict(...)`` into GraphQL; reject it at the hook boundary with the same
-    ``ConfigurationError`` used for other reserved-key violations.
+    ``ConfigurationError`` used for other reserved-key violations. A mapping whose keys are not
+    strings is malformed too: non-string keys would escape the typed boundary as a raw
+    ``TypeError`` later (``keywords must be strings`` from ``serializer_class(**kwargs)`` /
+    ``serializer.save(**save_kwargs)``), so they are rejected here with every other malformed
+    shape; the str-key gate also keeps every downstream key-hashing consumer (the exact-match
+    injection comparison, the shadow/model-field save-kwarg checks) operating on plain string
+    keys no hostile key object can destabilize.
     """
     if not isinstance(value, Mapping):
         raise ConfigurationError(
@@ -654,12 +657,20 @@ def _hook_mapping(mutation_cls: type, hook_name: str, value: Any) -> dict[str, A
             f"got {_safe_type_name(value)}.",
         )
     try:
-        return dict(value)
+        materialized = dict(value)
     except BaseException as exc:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.{hook_name} returned a mapping that "
             "could not be materialized for the serializer pipeline.",
         ) from exc
+    offenders = sorted({key for key in materialized if type(key) is not str}, key=repr)
+    if offenders:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}.{hook_name} returned a mapping with "
+            f"non-string key(s) {[repr(key) for key in offenders]!r}; hook mappings become "
+            "serializer kwargs / data keys, so every key must be a plain string.",
+        )
+    return materialized
 
 
 # Leaf value types the frozen hook view may expose BY REFERENCE: each cannot be

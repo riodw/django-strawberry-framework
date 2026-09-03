@@ -23,11 +23,15 @@ from django_strawberry_framework.utils.input_values import (
     LEAF,
     LOGIC,
     RELATED,
+    RelatedDeclarationError,
     SetInputTraversal,
+    assert_set_traversal_depth,
     input_field_value,
     is_inactive_value,
     iter_active_fields,
     iter_input_items,
+    related_declaration_mapping,
+    set_traversal_depth_cap,
 )
 
 # ---------------------------------------------------------------------------
@@ -460,3 +464,163 @@ def test_default_set_input_traversal_depth():
     """DEFAULT_SET_INPUT_TRAVERSAL_DEPTH provides a neutral recursion ceiling across set families."""
     assert DEFAULT_SET_INPUT_TRAVERSAL_DEPTH == 8
     assert FilterSet._MAX_LOGIC_DEPTH == DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
+
+
+# ---------------------------------------------------------------------------
+# related_declaration_mapping -- the shared related-declaration front half
+# ---------------------------------------------------------------------------
+
+
+def test_related_declaration_mapping_treats_absent_and_none_as_no_declarations():
+    """An absent or explicitly-``None`` declaration is "no related fields", not an error."""
+
+    class _Absent:
+        pass
+
+    class _None:
+        related_orders = None
+
+    marker = {"shelf": object()}
+
+    class _Mapping:
+        related_orders = marker
+
+    assert related_declaration_mapping(_Absent, "related_orders") == {}
+    assert related_declaration_mapping(_None, "related_orders") == {}
+    assert related_declaration_mapping(_Mapping, "related_orders") is marker
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [],
+        42,
+        "nope",
+        {"a": 1}.keys(),
+        set(),
+    ],
+)
+def test_related_declaration_mapping_rejects_non_mappings(bad):
+    """A present declaration that is not a Mapping is rejected before any indexing."""
+
+    class _Set:
+        related_orders = bad
+
+    with pytest.raises(RelatedDeclarationError) as excinfo:
+        related_declaration_mapping(_Set, "related_orders")
+    assert excinfo.value.kind == "not_mapping"
+
+
+def test_related_declaration_mapping_wraps_an_unreadable_class_attribute():
+    """A class attribute read that raises is wrapped, chaining the original cause."""
+
+    class _HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "related_orders":
+                raise RuntimeError("hostile class read")
+            return super().__getattribute__(name)
+
+    class _Set(metaclass=_HostileMeta):
+        pass
+
+    with pytest.raises(RelatedDeclarationError) as excinfo:
+        related_declaration_mapping(_Set, "related_orders")
+    assert excinfo.value.kind == "unreadable"
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+def test_iter_active_fields_contains_a_hostile_config_related_attr_read():
+    """The traversal config's attribute NAME read is contained like every other read.
+
+    ``related_declaration_mapping`` contains the class-side read; the config-side
+    ``related_attr`` read dispatches consumer code too (the config is a public
+    dataclass a test double may replace), and the walker must type its failure
+    like the rest of the walk instead of letting it escape raw.
+    """
+
+    class _HostileConfig:
+        unset_sentinel = strawberry.UNSET
+        handle_top_level_list = False
+
+        @property
+        def related_attr(self):
+            raise RuntimeError("hostile config related_attr")
+
+    with pytest.raises(
+        ConfigurationError,
+        match="related-field declarations could not be read",
+    ):
+        list(iter_active_fields(object, {"name": "x"}, _HostileConfig()))
+
+
+# ---------------------------------------------------------------------------
+# Depth-cap helpers -- one budget, shared sentence, defensive label read
+# ---------------------------------------------------------------------------
+
+
+def test_set_traversal_depth_cap_resolves_the_family_budget():
+    """A declared int knob is honored; absent/None/non-int knobs take the neutral default."""
+
+    class _OrderLike:
+        pass
+
+    class _NoneKnob:
+        _MAX_LOGIC_DEPTH = None
+
+    class _Raised:
+        _MAX_LOGIC_DEPTH = 12
+
+    class _Garbage:
+        _MAX_LOGIC_DEPTH = "10"
+
+    assert set_traversal_depth_cap(_OrderLike) == DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
+    assert set_traversal_depth_cap(_NoneKnob) == DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
+    assert set_traversal_depth_cap(_Raised) == 12
+    assert set_traversal_depth_cap(_Garbage) == DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
+
+
+def test_assert_set_traversal_depth_enforces_the_declared_budget():
+    """Depths within budget pass silently; past budget raises the shared typed sentence."""
+
+    class _Set:
+        _MAX_LOGIC_DEPTH = 4
+
+    assert_set_traversal_depth(_Set, 4, branch="related-branch", input_noun="related")
+    with pytest.raises(ConfigurationError, match=r"_Set: related-branch nesting exceeded"):
+        assert_set_traversal_depth(_Set, 5, branch="related-branch", input_noun="related")
+
+
+def test_assert_set_traversal_depth_words_knobless_sets_with_the_default_sentence():
+    """A set with no ``_MAX_LOGIC_DEPTH`` knob is capped at the neutral default."""
+
+    class _OrderLike:
+        pass
+
+    with pytest.raises(
+        ConfigurationError,
+        match="nesting exceeded the maximum traversal depth \\(8\\)",
+    ):
+        assert_set_traversal_depth(
+            _OrderLike,
+            DEFAULT_SET_INPUT_TRAVERSAL_DEPTH + 1,
+            branch="related-branch",
+            input_noun="related",
+        )
+
+
+def test_depth_cap_error_label_reads_qualname_defensively():
+    """A hostile ``__qualname__`` read falls back to the safe type name without escaping."""
+
+    class _HostileMeta(type):
+        def __getattribute__(cls, name):
+            if name == "__qualname__":
+                raise RuntimeError("hostile qualname")
+            return super().__getattribute__(name)
+
+    class _Set(metaclass=_HostileMeta):
+        _MAX_LOGIC_DEPTH = 1
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        assert_set_traversal_depth(_Set, 2, branch="related-branch", input_noun="related")
+    assert "hostile qualname" not in str(excinfo.value)
+    assert "nesting exceeded" in str(excinfo.value)

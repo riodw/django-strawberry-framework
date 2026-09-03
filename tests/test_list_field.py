@@ -46,6 +46,8 @@ from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db import models
 from django.db.models import Prefetch
+from strawberry.schema_directive import Location as _DirectiveLocation
+from strawberry.schema_directive import schema_directive as _schema_directive
 from strawberry.types import Info
 
 from django_strawberry_framework import (
@@ -172,6 +174,175 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
         match=r"DjangoListField resolver must be callable\.",
     ):
         DjangoListField(_T, resolver="not callable")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Hostile constructor seams (0.0.15 hunt). The guards' rejection messages
+# interpolate deployment-supplied values, so each render must be guarded, the
+# definition READ must be contained, and the ``directives=`` forward must
+# carry the same hostile-container containment every field factory now shares
+# (``utils/directives.py::validated_field_directives``) and
+# ``connection.py::DjangoConnectionField`` still inlines.
+# ---------------------------------------------------------------------------
+
+
+class _HostileRepr:
+    """A deployment value whose repr detonates."""
+
+    def __repr__(self) -> str:
+        raise RuntimeError("hostile __repr__ detonated")
+
+
+class _HostileNameMeta(type):
+    """A metaclass whose ``__name__`` read detonates.
+
+    CPython enforces a str ``__qualname__`` at class creation but NOT a
+    readable ``__name__``: the property shadows the ``type.__name__`` getset
+    descriptor in the metaclass MRO.
+    """
+
+    @property
+    def __name__(cls) -> str:  # type: ignore[override]
+        raise RuntimeError("hostile __name__ detonated")
+
+
+class _DefinitionTrapMeta(type):
+    """A metaclass whose ``__getattr__`` raises a NON-AttributeError for the definition."""
+
+    def __getattr__(cls, name: str):
+        if name == "__django_strawberry_definition__":
+            raise RuntimeError("hostile definition read detonated")
+        raise AttributeError(name)
+
+
+class _ExplodingDirectives:
+    """A hostile directives container that raises mid-iteration."""
+
+    def __iter__(self):
+        yield _ProbeTag()
+        raise ValueError("hostile iterator detonated midway")
+
+
+@_schema_directive(locations=[_DirectiveLocation.FIELD_DEFINITION], name="probeTag")
+class _ProbeTag:
+    """A REAL directive instance for the pass-through positive control."""
+
+    marker: str = "probe"
+
+
+def test_djangolistfield_non_class_guard_survives_a_hostile_repr() -> None:
+    """The non-class arm renders through ``_safe_arg_repr`` (mutation-guard parity).
+
+    Pre-fix the raise-site f-string interpolated ``{target_type!r}`` directly,
+    so a hostile ``__repr__`` detonated the message assembly and the raw
+    RuntimeError replaced the promised typed rejection.
+    """
+    with pytest.raises(ConfigurationError, match="requires a DjangoType class"):
+        DjangoListField(_HostileRepr())  # type: ignore[arg-type]
+
+
+def test_djangolistfield_non_djangotype_guard_survives_a_hostile_metaclass_name() -> None:
+    """The subclass arm renders through ``_safe_class_name``.
+
+    Pre-fix ``{target_type.__name__}`` detonated on a metaclass whose
+    ``__name__`` property raises.
+    """
+
+    class NotADjangoType(metaclass=_HostileNameMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="requires a DjangoType subclass"):
+        DjangoListField(NotADjangoType)
+
+
+def test_djangolistfield_unregistered_guard_survives_a_hostile_metaclass_name() -> None:
+    """The own-class arm renders ``_safe_class_name`` for BOTH name interpolations.
+
+    Pre-fix ``{target_type.__name__}`` appeared twice in the message and either
+    read detonated the assembly.
+    """
+
+    class AbstractBase(DjangoType, metaclass=_HostileNameMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="is not a registered DjangoType"):
+        DjangoListField(AbstractBase)
+
+
+def test_djangolistfield_definition_read_failure_is_typed_not_raw() -> None:
+    """A raising non-AttributeError from the definition read fails the typed reject.
+
+    ``getattr(target, name, None)`` suppresses only ``AttributeError``; pre-fix
+    a metaclass ``__getattr__`` raising anything else escaped raw instead of
+    reaching the "not a registered DjangoType" rejection (fail closed - a
+    read that cannot be answered is a target that cannot be PROVEN
+    registered).
+    """
+
+    class TrappedBase(DjangoType, metaclass=_DefinitionTrapMeta):
+        pass
+
+    with pytest.raises(ConfigurationError, match="is not a registered DjangoType"):
+        DjangoListField(TrappedBase)
+
+
+def test_djangolistfield_rejects_bare_string_directives() -> None:
+    """A bare str is iterated element-wise by Strawberry - rejected typed instead."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField directives must be a sequence of directive instances",
+    ):
+        DjangoListField(_DirectiveHolderType(), directives="not-a-directive-list")  # type: ignore[arg-type]
+
+
+def test_djangolistfield_rejects_bare_bytes_directives() -> None:
+    """A bare bytes iterates into ints downstream - rejected typed instead."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField directives must be a sequence of directive instances",
+    ):
+        DjangoListField(_DirectiveHolderType(), directives=b"\x01\x02")  # type: ignore[arg-type]
+
+
+def test_djangolistfield_rejects_non_iterable_directives() -> None:
+    """A non-iterable detonated raw TypeError inside strawberry.field pre-fix."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField directives could not be read",
+    ):
+        DjangoListField(_DirectiveHolderType(), directives=42)  # type: ignore[arg-type]
+
+
+def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
+    """An iterator raising midway escaped raw ValueError pre-fix - now typed."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField directives could not be read",
+    ):
+        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())  # type: ignore[arg-type]
+
+
+def test_djangolistfield_passes_real_directive_instances_through() -> None:
+    """Positive control: a real directive instance tuple constructs unchanged."""
+    field = DjangoListField(_DirectiveHolderType(), directives=(_ProbeTag(),))
+    assert field is not None
+
+
+def test_djangolistfield_default_directives_omitted_constructs() -> None:
+    """Positive control: the () default keeps constructing (no new posture)."""
+    field = DjangoListField(_DirectiveHolderType())
+    assert field is not None
+
+
+def _DirectiveHolderType() -> type:
+    """A concrete DjangoType the directives rows can bind (guards run first)."""
+
+    class DirectiveHolderType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    return DirectiveHolderType
 
 
 # ``test_djangolistfield_rejects_non_bool_nullable_list`` is deliberately NOT

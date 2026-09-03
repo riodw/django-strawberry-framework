@@ -20,7 +20,7 @@ import json
 import pytest
 from apps.products.services import TEST_USER_PASSWORD, create_users
 from django.contrib.auth import get_user_model
-from django.test import Client
+from django.test import Client, override_settings
 from graphql_client import assert_graphql_success as _graphql_data
 
 # A password that passes all four fakeshop ``AUTH_PASSWORD_VALIDATORS`` and is
@@ -245,6 +245,45 @@ def test_weak_password_register_envelope_keys_to_password_not_all():
     assert messages == ["This password is too common.", "This password is entirely numeric."]
     assert payload["errors"][0]["codes"] == ["password_too_common", "password_entirely_numeric"]
     assert not get_user_model().objects.filter(username="weak_pw_user").exists()
+
+
+# A consumer validator using Django's documented DICT error form
+# (``ValidationError({'password': [...]})``, keyed per field). ``validate_password``
+# re-raises through the list-form wrapper, whose constructor flattens dict-form
+# entries into scalar leaves, so the register write step's ``error_list`` /
+# ``leaf.code`` walk still sees only scalar leaves - pinned here so the manual
+# walk's reliance on that upstream normalization is explicit (hunt 0.0.15).
+class DictFormPasswordValidator:
+    def validate(self, password, user=None):
+        from django.core.exceptions import ValidationError
+
+        raise ValidationError({"password": ["Password policy violated."]})
+
+
+@pytest.mark.django_db
+@override_settings(
+    AUTH_PASSWORD_VALIDATORS=[{"NAME": "test_auth_api.DictFormPasswordValidator"}],
+)
+def test_dict_form_validator_error_still_keys_to_password_not_a_crash():
+    """A dict-form validator ``ValidationError`` still yields the password-keyed envelope.
+
+    ``validate_password`` wraps every validator-raised ``ValidationError`` in a
+    LIST-form ``ValidationError``, whose constructor flattens dict-form entries
+    into scalar leaves - so the write step's ``error_list`` / ``leaf.code`` walk
+    never sees the raw dict form. The envelope stays the single ``password``
+    key with the dict leaf's message (and no code - the flattened scalar leaf
+    carries none), never a raw ``AttributeError`` (a 500).
+    """
+    create_users(1)
+    payload = _graphql_data(
+        _REGISTER,
+        variables={"d": {"username": "dict_form_user", "password": _STRONG_PASSWORD}},
+    )["register"]
+    assert payload["node"] is None
+    assert [error["field"] for error in payload["errors"]] == ["password"]
+    assert payload["errors"][0]["messages"] == ["Password policy violated."]
+    assert payload["errors"][0]["codes"] == []
+    assert not get_user_model().objects.filter(username="dict_form_user").exists()
 
 
 @pytest.mark.django_db

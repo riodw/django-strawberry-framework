@@ -458,6 +458,35 @@ class BookSerializer(serializers.ModelSerializer):
         fields = ("title", "subtitle", "circulation_status")
 
 
+class StatusStampBookSerializer(serializers.ModelSerializer):
+    """A ``Book`` serializer with a REQUIRED serializer-only ``status`` a mutation narrows away + INJECTS on UPDATE.
+
+    ``status`` is a serializer-only ``ChoiceField`` (no ``Book`` column) - a WRITE-ONLY,
+    REQUIRED upgrade to a generated GraphQL enum. An UPDATE ``SerializerMutation`` narrows the
+    partial input to ``title`` (dropping ``status``) and declares
+    ``Meta.injected_fields = ("status",)`` + a ``get_serializer_injected_data`` override; the
+    injected spec is resolved under the update's ``PartialInput`` provisional so its generated
+    enum identity matches the runtime-agreement guard's re-derivation. ``update()`` pops the
+    injected ``status`` and stamps it into ``subtitle`` so the live test can read the injected
+    value off the written row.
+    """
+
+    status = serializers.ChoiceField(
+        choices=[("active", "Active"), ("retired", "Retired")],
+        required=True,
+        write_only=True,
+    )
+
+    class Meta:
+        model = Book
+        fields = ("title", "status")
+
+    def update(self, instance, validated_data):
+        status = validated_data.pop("status")
+        validated_data["subtitle"] = f"status:{status}"
+        return super().update(instance, validated_data)
+
+
 class BookGenresSerializer(serializers.ModelSerializer):
     """A ``Book`` serializer exposing the ``genres`` M2M for the update list-relation matrix (hardening).
 

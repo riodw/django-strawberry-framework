@@ -1161,12 +1161,15 @@ def _bind_set_owner_common(
     unrelated to the owner's (``definition.model`` must BE the set's model or
     derive from it; otherwise the set's lookups would run against a queryset of
     the wrong model, and the mismatch surfaces here at finalize rather than as
-    an opaque query-time ``FieldError``). Re-binding the same
-    ``(set_cls, definition)`` pair is idempotent (partial-finalize recovery). A
-    second, distinct owner runs the optional pre-check then the declared-
-    relation-target agreement walk: every declared related target must resolve
-    to the EXACT same ``DjangoTypeDefinition`` AND ``graphql_type_name`` across
-    both owners.
+    an opaque query-time ``FieldError``). A NON-CLASS ``Meta.model`` (the
+    order side reads the raw ``Meta`` with no metaclass validation, so the
+    Django lazy-ref string idiom reaches here) raises the same family
+    mismatch error instead of leaking ``issubclass()``'s raw ``TypeError``.
+    Re-binding the same ``(set_cls, definition)`` pair is idempotent
+    (partial-finalize recovery). A second, distinct owner runs the optional
+    pre-check then the declared-relation-target agreement walk: every declared
+    related target must resolve to the EXACT same ``DjangoTypeDefinition``
+    AND ``graphql_type_name`` across both owners.
 
     Scope note: ``related_target_for`` resolves via the process-global
     ``registry.primary_for(target_model)`` keyed on the TARGET model -- not the
@@ -1181,8 +1184,12 @@ def _bind_set_owner_common(
     if (
         set_model is not None
         and definition.model is not None
-        and not issubclass(definition.model, set_model)
+        and (not isinstance(set_model, type) or not issubclass(definition.model, set_model))
     ):
+        # A non-class ``set_model`` (e.g. the Django lazy-ref string idiom on
+        # the order side, which reads the RAW ``Meta.model`` with no
+        # metaclass validation) must raise the family model-mismatch error
+        # rather than leak ``issubclass()``'s raw ``TypeError``.
         raise ConfigurationError(format_model_mismatch(set_cls, definition))
     previous: DjangoTypeDefinition | None = getattr(set_cls, "_owner_definition", None)
     if previous is None:
@@ -1485,7 +1492,16 @@ def _format_owner_set_model_mismatch_error(
     wrapper passes its words. Messages stay byte-identical to the family
     originals (spec-053 Decision 7).
     """
-    set_model_name = _safe_class_name(set_model) if set_model is not None else "<unset>"
+    # Class values render through the class-name renderer; a non-class
+    # ``Meta.model`` (the string lazy-ref idiom on the raw-Meta order side,
+    # or any other non-class value) renders through the guarded repr so the
+    # message names the declared VALUE, not the value's type name. The
+    # ``<unset>`` label keeps the None-shape contract for a defensive call.
+    set_model_name = (
+        (_safe_class_name(set_model) if isinstance(set_model, type) else _safe_arg_repr(set_model))
+        if set_model is not None
+        else "<unset>"
+    )
     noun = family.lower()
     return (
         f"{family} {_safe_class_name(set_cls, qualified=True)} is declared as the {meta_key} "

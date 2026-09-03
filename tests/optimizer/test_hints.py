@@ -185,6 +185,74 @@ class TestStrategyFactory:
         with pytest.raises(ConfigurationError, match="WindowedPrefetchStrategy"):
             OptimizerHint.strategy(WindowedPrefetchStrategy)  # type: ignore[arg-type]
 
+    def test_strategy_hostile_selection_values_stay_typed(self) -> None:
+        """A hostile selection value cannot replace the typed strategy rejection.
+
+        The typed contract is owned by ``resolve_strategy`` itself: its
+        dunder reads are guarded (the ``__eq__`` check reads through the
+        base ``str`` slot, the registry lookup absorbs a raising
+        ``__hash__``, the message renders through ``_safe_arg_repr``, and a
+        raising ``plan`` attribute reads as "not a strategy"), so a hostile
+        value degrades to the typed ``ConfigurationError`` raised directly -
+        no raw exception escapes, and the hint boundary needs no containment.
+        """
+        from django_strawberry_framework.exceptions import ConfigurationError
+        from django_strawberry_framework.optimizer.nested_fetch import (
+            WINDOWED_STRATEGY,
+            resolve_strategy,
+        )
+
+        class HostileRepr(str):
+            def __repr__(self):
+                raise RuntimeError("repr should never run")
+
+        class HostileEq(str):
+            def __eq__(self, other):
+                raise RuntimeError("eq should never run")
+
+            def __hash__(self):
+                return str.__hash__(self)
+
+        class HostileHash(str):
+            def __hash__(self):
+                raise RuntimeError("hash should never run")
+
+        class HostileGetattr:
+            def __getattr__(self, name):
+                raise RuntimeError("getattr should never run")
+
+        # Unknown names raise the unknown-name rejection rendered safely.
+        for hostile in (HostileRepr("winowed"), HostileHash("winowed")):
+            with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
+                OptimizerHint.strategy(hostile)  # type: ignore[arg-type]
+            with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
+                OptimizerHint(nested_strategy=hostile)  # type: ignore[arg-type]
+        # A raising ``__getattr__`` reads as "not a strategy", typed the same way.
+        with pytest.raises(ConfigurationError, match="must be a strategy name"):
+            OptimizerHint.strategy(HostileGetattr())  # type: ignore[arg-type]
+        # Content decides through the base ``str`` slot: a hostile ``__eq__``
+        # can neither force a false AUTO_STRATEGY match nor break a valid name.
+        # (Even the assertion reads through the base slot - ``==`` on the
+        # carried instance would dispatch back into the hostile override.)
+        carried = OptimizerHint.strategy(HostileEq("windowed")).nested_strategy
+        assert str.__eq__(carried, "windowed") is True
+        assert resolve_strategy(HostileEq("windowed")) is WINDOWED_STRATEGY
+
+    def test_strategy_hostile_rejection_is_raised_directly(self) -> None:
+        """The typed rejection needs no containment chain: nothing escapes first."""
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        class HostileHash(str):
+            def __hash__(self):
+                raise RuntimeError("hash should never run")
+
+        with pytest.raises(
+            ConfigurationError,
+            match="Unknown nested_connection_strategy",
+        ) as exc_info:
+            OptimizerHint.strategy(HostileHash("winowed"))  # type: ignore[arg-type]
+        assert exc_info.value.__cause__ is None
+
     def test_public_annotations_resolve_at_runtime(self) -> None:
         """``typing.get_type_hints(OptimizerHint)`` resolves ``StrategySelection``.
 

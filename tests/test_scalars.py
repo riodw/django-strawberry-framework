@@ -473,6 +473,68 @@ def test_strawberry_config_collision_message_survives_hostile_key():
     assert "cannot redeclare" in str(excinfo.value)
 
 
+def test_strawberry_config_hostile_key_eq_raising_is_contained():
+    """A key whose ``__eq__`` raises cannot escape the factory's ValueError boundary.
+
+    ``dict()`` materialization is only the FIRST dispatch into consumer key
+    code: the collision-check intersection (``keys() & keys()``) and the merge
+    into the fresh result dict re-hash the materialized keys and, on a hash
+    collision with a package key, compare them - running a hostile ``__eq__``
+    that materialization never reached. The guard owns every key-dispatch
+    operation, so the promised boundary holds however the hostile key
+    detonates (spec-025 Decision 4 containment).
+    """
+
+    class _ExplodingEqKey:
+        def __hash__(self):
+            return hash(BigInt)
+
+        def __eq__(self, other):
+            raise RuntimeError("eq exploded")
+
+        def __repr__(self):
+            return "<ExplodingEqKey>"
+
+    custom_def = strawberry.scalar(name="ExplodingEq", serialize=str, parse_value=str)
+    with pytest.raises(ValueError, match="must be materializable") as excinfo:
+        strawberry_config(extra_scalar_map={_ExplodingEqKey(): custom_def})
+    # The RuntimeError from ``__eq__`` is chained as ``__cause__``, never
+    # propagated as the factory's own exception.
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert "hash and compare safely" in str(excinfo.value)
+
+
+def test_safe_scalar_map_key_label_normalizes_str_subclass_name():
+    """A ``__name__`` that is a ``str`` subclass is returned as a plain ``str``.
+
+    Handing the subclass onward would let its ``__str__`` / ``__format__`` run
+    - and its ``__lt__`` under ``sorted()`` - while the collision message is
+    assembled, replacing the factory's ``ValueError`` with an arbitrary
+    consumer exception (the same normalization ``exceptions.py::_safe_type_name``
+    applies to its own labels).
+    """
+
+    class _NameStr(str):
+        def __str__(self):
+            raise RuntimeError("str exploded")
+
+        def __format__(self, fmt):
+            raise RuntimeError("format exploded")
+
+        def __lt__(self, other):
+            raise RuntimeError("lt exploded")
+
+    class _Key:
+        __name__ = _NameStr("Poisoned")
+
+    label = _safe_scalar_map_key_label(_Key())
+    assert type(label) is str
+    assert label == "Poisoned"
+    # Even a multi-element sorted()/join over such labels cannot dispatch the
+    # subclass's dunders.
+    assert ", ".join(sorted([label, "AAA"])) == "AAA, Poisoned"
+
+
 def test_strawberry_config_independent_call_returns_independent_instance():
     """Each call returns a fresh ``StrawberryConfig`` with a fresh ``scalar_map`` dict (spec #"Independent return value semantics")."""
     CustomScalar = NewType("CustomScalar", str)

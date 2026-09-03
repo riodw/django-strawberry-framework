@@ -37,6 +37,32 @@ discipline instead of three drifting copies:
   enters: ``require_managed_write`` then ``transaction.atomic`` nested with
   ``write_pipeline``. ``reject_substituted_row`` is the canonical pk-drift
   backstop over ``pks_match`` (callers keep operation-specific error wording).
+
+SECURITY MODEL - stated once here because four functions below were each
+re-arguing it:
+
+**Lexical classification is never a trust boundary in this module.** Reading SQL
+text can tell you what a statement LOOKS like; it cannot tell you what it does
+(a write-capable function invoked through ``SELECT`` reads as a read). So every
+containment claim here is TRANSACTIONAL:
+
+- On the PINNED alias, ``is_read_only_sql``'s allow-list is a PHASE-ORDERING
+  check only - a statement that slips past it still runs inside the pinned
+  transaction and rolls back with it, so the atomicity and alias boundaries are
+  untouched by a misclassification.
+- ACROSS aliases, where a lexical test WOULD have to be a security boundary,
+  none is used: a non-pinned connection rejects every statement outright, and
+  the one narrow exception (the auth aliases, for the duration of
+  ``authorization_phase``) is contained by a DATABASE-ENFORCED read-only
+  transaction that is unconditionally rolled back - never by inspecting the SQL.
+- That barrier is not a sandbox against a HOSTILE backend, and does not claim to
+  be: side-effecting functions and out-of-transaction effects are out of scope,
+  and a backend that cannot provide server-side read-only enforcement fails
+  CLOSED rather than falling back to a lexical approximation.
+
+Each function below keeps only what is local to it - most importantly the
+SQLite ``PRAGMA query_only`` reentrancy argument, which is unique to
+``_enforce_read_only_barrier``.
 """
 
 from __future__ import annotations
@@ -50,8 +76,9 @@ from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, tran
 from django.db.models.fields.files import FieldFile
 from django.db.models.signals import pre_save
 
-from ..exceptions import ConfigurationError
-from ..utils.errors import field_error
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
+from .canonical import base_container_values, canonical_sort_key
 
 # The alias of the completion-spanning transaction ``DjangoSchema``'s execution
 # context opened for the mutation field currently executing. ``None`` means no
@@ -115,15 +142,12 @@ class WriteAliasContext:
     single permission-evaluation call), statements are permitted on the explicitly
     identified ``auth_aliases`` - the aliases the auth machinery (the user model,
     ``auth.Permission`` / ``Group``, ``contenttypes``) reads from, which a
-    divergent read/write router legitimately keeps off the write alias. Containment
-    is transactional, not lexical: ``authorization_phase()`` runs each non-pinned
-    auth alias inside a database-enforced read-only, rolled-back barrier transaction,
-    so no ORDINARY write there commits outside the pinned transaction (the model
-    trusts permission backends to read only - it is not a sandbox against deliberate
-    volatile side effects; see ``authorization_phase``). The exception closes the
-    instant authorization returns: decode / hooks / validation get the strict
-    single-alias guard (a hook cannot reach the auth alias). This replaces the old
-    pre-guard permission-cache warming.
+    divergent read/write router legitimately keeps off the write alias. The
+    containment is the module SECURITY MODEL's (transactional, never lexical) and
+    is built by ``authorization_phase``; what is local here is the SCOPE. The
+    exception closes the instant authorization returns: decode / hooks /
+    validation get the strict single-alias guard (a hook cannot reach the auth
+    alias). This replaces the old pre-guard permission-cache warming.
     """
 
     __slots__ = (
@@ -408,14 +432,21 @@ _READ_ONLY_SQL_PREFIXES = (
 
 
 def _sql_statement_token(sql: Any) -> str:
-    """Return the first meaningful (comment-stripped, uppercased) token of ``sql``."""
+    """Return the first meaningful (comment-stripped, uppercased) token of ``sql``.
+
+    A NON-string statement returns ``""`` - unclassifiable, therefore never
+    read-only (fail closed): reading it would mean running consumer code, and
+    no verdict that code could hand back is load-bearing.
+    """
     # ``execute_wrapper`` receives the object handed to ``cursor.execute``.
     # A consumer can supply a ``str`` subclass whose indexing / slicing methods
     # lie about the statement while the database adapter still executes the
     # subclass's base string content. Normalize through ``str.__str__`` before
     # lexical inspection so the phase guard classifies exactly the text the
     # adapter sees, never consumer-controlled string behavior.
-    text = str.__str__(sql) if isinstance(sql, str) else str(sql)
+    if not isinstance(sql, str):
+        return ""
+    text = str.__str__(sql)
     index = 0
     length = len(text)
     while index < length:
@@ -445,12 +476,11 @@ def is_read_only_sql(sql: Any) -> bool:
     Comment-stripping + an ALLOW-list (never a write-keyword deny-list): a
     statement is read-only only when its first meaningful token is ``SELECT`` or
     a savepoint verb. This is deliberately conservative and still LEXICAL - a
-    write-capable function invoked through ``SELECT`` passes - but on the pinned
-    alias the classification is a PHASE-ORDERING check, not the atomicity or
-    alias boundary: a statement that slips through still runs inside the pinned
-    transaction and rolls back with it. Cross-alias enforcement (where a lexical
-    test WOULD be a security boundary) never uses this: non-pinned connections
-    reject every statement outright.
+    write-capable function invoked through ``SELECT`` passes. Why that is
+    acceptable HERE and nowhere else is the module SECURITY MODEL: on the pinned
+    alias this is a PHASE-ORDERING check, not the atomicity or alias boundary,
+    and cross-alias enforcement never uses it. A non-string statement (whose
+    read would run consumer code) is unclassifiable, so it is never read-only.
     """
     return _sql_statement_token(sql) in _READ_ONLY_SQL_PREFIXES
 
@@ -503,46 +533,32 @@ def pipeline_alias_guard(owner: str, alias: str) -> Any:
     write through another database alias and escape the pinned transaction:
 
     - **Non-pinned connections reject EVERY statement** - with ONE narrow,
-      phase-scoped exception. The guard deliberately does NOT classify statements
-      as reads vs writes across aliases: a lexical keyword test is not a reliable
-      write boundary (leading SQL comments defeat a prefix match, PostgreSQL
-      ``EXPLAIN ANALYZE UPDATE`` executes the write while starting with
-      ``EXPLAIN``, and write-capable functions are invoked through ``SELECT``).
-      The defensible single-alias contract is that the guarded phase talks to ONE
-      database. The exception: DURING the authorization phase
+      phase-scoped exception. No read-vs-write classification is attempted
+      across aliases (the module SECURITY MODEL says why, and the concrete
+      counter-examples are worth keeping: leading SQL comments defeat a prefix
+      match, PostgreSQL ``EXPLAIN ANALYZE UPDATE`` executes the write while
+      starting with ``EXPLAIN``, and write-capable functions are invoked through
+      ``SELECT``). The defensible single-alias contract is that the guarded phase
+      talks to ONE database. The exception: DURING the authorization phase
       (``authorization_phase()``, wrapping only the permission-evaluation call),
       statements on the explicitly identified ``auth_aliases`` are permitted so a
       divergent read/write router can resolve the user + permission set off the
-      write alias. Crucially this does NOT rely on lexical read/write
-      classification (which cannot safely authorize cross-alias execution):
-      ``authorization_phase()`` runs each non-pinned auth alias inside a
-      database-enforced read-only transaction that is unconditionally ROLLED BACK
-      when the phase ends, so an ordinary write a permission backend issues there -
-      including a write-capable function through ``SELECT`` or a ``SELECT INTO`` - is
-      rejected by the server and/or discarded on rollback and cannot commit outside
-      the pinned transaction (the model trusts permission backends to read only; it
-      does not sandbox deliberate volatile side effects like sequence advances).
-      The exception closes when authorization returns, so decode / hooks / validation
-      cannot reach the auth alias at all.
+      write alias - contained by that function's rolled-back read-only barrier,
+      not by reading the SQL. The exception closes when authorization returns, so
+      decode / hooks / validation cannot reach the auth alias at all.
     - **The pinned connection is phased.** Outside the flavor write step
       (``pipeline_write_phase()``), the pipeline is database-read-only:
       permission checks, decoding, hooks, validation, and save-kwargs
       preparation may read but never write, so a statement that is not
       read-only by the conservative ``is_read_only_sql`` allow-list is rejected.
-      On the pinned alias this lexical classification is phase-ordering
-      DISCIPLINE, NOT a security boundary - and deliberately so. Everything on
-      the pinned connection runs inside the mutation's OWN ``transaction.atomic``,
-      so a write the lexical check misses (a write-capable function invoked
-      through ``SELECT``, a ``SELECT INTO``) does not escape any transaction: it
-      commits or rolls back ATOMICALLY with the mutation, exactly like the
-      flavor's own writes. It cannot commit "on its own" and it cannot reach
-      another database. The security boundary the guard enforces is CROSS-ALIAS
-      isolation, and that is transactional, never lexical (non-pinned aliases
-      reject outright; the auth alias runs in a rolled-back barrier). A
-      database-enforced read-only mode on the pinned connection for only the
-      read phase is not achievable without splitting the mutation across
-      transactions and forfeiting that single-transaction atomicity, so lexical
-      discipline backed by atomicity is the deliberate contract here.
+      This is phase-ordering DISCIPLINE, not a security boundary (SECURITY
+      MODEL). The local fact worth stating here is WHY nothing stronger is
+      available: a database-enforced read-only mode on the pinned connection for
+      only the read phase would require splitting the mutation across
+      transactions and forfeiting single-transaction atomicity, so lexical
+      discipline BACKED BY atomicity is the deliberate contract - a write the
+      check misses commits or rolls back with the mutation, exactly like the
+      flavor's own writes.
 
     Django connections are thread-local, so the ``execute_wrapper`` net polices
     only this request's thread; the ``pre_save`` receiver (a global signal) is
@@ -759,7 +775,36 @@ _MUTABLE_SNAPSHOT_TYPES = (
 )
 
 
-class _FileNameSnapshot:
+class _ValueSnapshot:
+    """Base for a by-VALUE field snapshot that knows how to re-compare itself.
+
+    The capture side and the drift side are two halves of one security check,
+    and they used to be two independent ladders over the same kinds - written in
+    opposite directions, in two functions ~250 lines apart. A fourth snapshot
+    kind added to one and missed in the other is not a cosmetic bug: miss it on
+    the capture side and a mutable value is snapshotted by reference, so the
+    drift check compares an object to ITSELF and passes; miss it on the compare
+    side and the wrapper is compared to a live value, so it never matches and
+    every write fails. A silent fail-open or a total fail-closed, decided by
+    which half was edited.
+
+    Making the comparison a method on the wrapper closes the compare side: a new
+    kind is a subclass plus one arm in ``_snapshot_field_value``, and
+    ``assert_no_target_drift`` needs no edit at all.
+
+    Deliberately NOT ``__eq__``: identity/equality short-circuiting on a mutable
+    live object is the exact trap these wrappers exist to avoid, so the
+    comparison has to be a name a reader sees at the call site.
+    """
+
+    __slots__ = ()
+
+    def matches(self, current: Any) -> bool:
+        """Return whether ``current`` still holds the value this snapshot captured."""
+        raise NotImplementedError  # pragma: no cover - abstract base
+
+
+class _FileNameSnapshot(_ValueSnapshot):
     """A ``FieldFile``'s database-relevant value (its ``name``), captured by value.
 
     ``FieldFile`` is a MUTABLE descriptor: a permission method / hook / validator can
@@ -774,6 +819,22 @@ class _FileNameSnapshot:
     def __init__(self, name: Any) -> None:
         self.name = name
 
+    def matches(self, current: Any) -> bool:
+        """Compare the database-relevant ``name``, not the descriptor object.
+
+        A hook that mutates ``instance.<file>.name`` in place keeps the SAME
+        descriptor, so an identity / ``==`` check on the descriptor would miss
+        it. A hook that replaced the attribute with a non-``FieldFile`` is drift
+        too, so the raw value is compared in that case - and a replacement whose
+        equality read is hostile is drift this snapshot cannot rule out:
+        ``False`` (fail closed), never a raw exception.
+        """
+        try:
+            current_name = current.name if isinstance(current, FieldFile) else current
+            return current_name == self.name
+        except Exception:
+            return False
+
 
 # The node budget for one field value's structural fingerprint. Consumer-
 # controlled JSON / array data is walked ITERATIVELY (no recursion, so a
@@ -783,21 +844,64 @@ _SNAPSHOT_NODE_BUDGET = 100_000
 
 
 class _SnapshotClose:
-    """A structural close-marker on the fingerprint stack (distinct from any field value)."""
+    """A structural close-marker on the fingerprint stack (distinct from any field value).
 
-    __slots__ = ("token",)
+    ``container_id`` is set only on a marker that closes a CONTAINER, so popping
+    it also pops that container off the active-path set the cycle guard keeps.
+    A separator marker (the fixed key/value divider inside a dict) carries
+    ``None``.
+    """
 
-    def __init__(self, token: str) -> None:
+    __slots__ = ("container_id", "token")
+
+    def __init__(self, token: str, container_id: int | None = None) -> None:
         self.token = token
+        self.container_id = container_id
 
 
-class _FieldFingerprint:
+class _FieldFingerprint(_ValueSnapshot):
     """A field value's iterative structural fingerprint (compared by digest, never deep-walked)."""
 
     __slots__ = ("digest",)
 
     def __init__(self, digest: str) -> None:
         self.digest = digest
+
+    def matches(self, current: Any) -> bool:
+        """Compare the RECOMPUTED fingerprint: a flat digest, never a deep walk."""
+        return _field_fingerprint(current) == self.digest
+
+
+def _leaf_token(item: Any) -> str:
+    """Render one non-container leaf of the fingerprint without trusting consumer code.
+
+    Two tiers. The immutable BUILT-IN atoms (whose base repr is a complete
+    function of their persisted content) are rendered through the BASE type's
+    unbound slot: a ``str`` / ``int`` subclass's lying ``__repr__`` never runs,
+    the byte strings are read through the buffer (never ``bytes(item)``, whose
+    constructor dispatches a subclass ``__bytes__``), and the tag names the base
+    type that defined the read - not the subclass's claimed ``__name__``.
+    Everything else is opaque: the guarded repr is joined with the type's and
+    the value's IDENTITY, so a constant ``__repr__`` cannot collapse two
+    distinct objects onto one fingerprint. Identity is sound here because a
+    fingerprint is request-scoped - the digest is recomputed from the same live
+    objects within one drift check, never persisted or cached.
+    """
+    if item is None:
+        return "NoneType:None"
+    if isinstance(item, bool):
+        return f"bool:{item}"  # bool cannot be subclassed; str() is the content
+    if isinstance(item, int):
+        return f"int:{int.__repr__(item)}"
+    if isinstance(item, float):
+        return f"float:{float.__repr__(item)}"
+    if isinstance(item, str):
+        return f"str:{str.__repr__(item)}"
+    if isinstance(item, (bytes, bytearray)):
+        # Content-addressed and type-insensitive: bytes and bytearray of one
+        # content are one value to the database write, so they are one leaf here.
+        return f"b:{memoryview(item).tobytes()!r}"
+    return f"{_safe_type_name(item)}:{_safe_arg_repr(item)}:{id(type(item))}:{id(item)}"
 
 
 def _field_fingerprint(value: Any) -> str:
@@ -807,17 +911,35 @@ def _field_fingerprint(value: Any) -> str:
     bytes, so a JSONField / ArrayField value deeper than Python's recursion limit
     is fingerprinted without a ``RecursionError``; a node budget caps total work
     (a value exceeding it is a loud ``ConfigurationError``, not an unbounded walk).
-    Dict keys and set members are emitted in a deterministic order so structurally
-    equal values fingerprint identically. Scalars are tagged by type so ``1`` and
-    ``"1"`` never collide.
+    Dict entries and set members are emitted in a deterministic order so
+    structurally equal values fingerprint identically.
+
+    The walk trusts no consumer-controlled read on the way through, because its
+    output IS a security check (the drift digest):
+
+    - Every container is read through its BASE iterator and every unordered one
+      is ordered by the guarded key (``utils/canonical.py``) - a subclass that
+      reports different contents per call, or a ``__repr__`` that returns a
+      constant, cannot decide what the walk sees.
+    - A dict KEY is walked as a node in its own right (the fixed ``=v`` token
+      separates key from value), so a tuple / frozenset / lying-atom key gets
+      the same hostile-safe treatment as any value - never a ``repr`` label a
+      lying key could forge.
+    - Every leaf is rendered by ``_leaf_token``: content-honest through the
+      base slots for the built-in atoms, identity-discriminated for opaque
+      objects, so two structurally different values can never fingerprint the
+      same.
     """
     parts: list[str] = []
     stack: list[Any] = [value]
+    active: set[int] = set()
     nodes = 0
     while stack:
         item = stack.pop()
         if type(item) is _SnapshotClose:
             parts.append(item.token)
+            if item.container_id is not None:
+                active.discard(item.container_id)
             continue
         nodes += 1
         if nodes > _SNAPSHOT_NODE_BUDGET:
@@ -826,24 +948,59 @@ def _field_fingerprint(value: Any) -> str:
                 "drift detection (exceeded the node budget). Reject rather than risk an "
                 "unbounded walk of consumer-controlled data.",
             )
+        is_container = isinstance(
+            item,
+            (
+                dict,
+                list,
+                tuple,
+                set,
+                frozenset,
+            ),
+        )
+        if is_container:
+            container_id = id(item)
+            if container_id in active:
+                raise ConfigurationError(
+                    "A located row's field value contains a reference cycle and cannot be "
+                    "fingerprinted for pre-save drift detection. Reject rather than walk "
+                    "consumer-controlled data whose structure has no end.",
+                )
+            active.add(container_id)
+            # Every container is read through its BASE iterator
+            # (``utils/canonical.py::base_container_values``) and every unordered
+            # one is ordered by the guarded key, never a bare ``repr``: a subclass
+            # that reports different contents per call, or a ``__repr__`` that
+            # returns a constant, would otherwise let two structurally different
+            # values fingerprint the SAME - and a drift check that cannot tell
+            # them apart is the fail-open this walk exists to prevent.
+            members = base_container_values(item)
         if isinstance(item, dict):
             parts.append("{")
-            stack.append(_SnapshotClose("}"))
-            for key in sorted(item, key=repr, reverse=True):
-                stack.append(item[key])
-                stack.append(_SnapshotClose(f"={key!r}="))
+            stack.append(_SnapshotClose("}", container_id))
+            for key, member in sorted(
+                members,
+                key=lambda pair: canonical_sort_key(pair[0]),
+                reverse=True,
+            ):
+                # The KEY is walked as a node (the same hostile-safe treatment a
+                # value gets), with a fixed divider between key and value - never
+                # a ``repr`` label, which a lying key could forge.
+                stack.append(member)
+                stack.append(_SnapshotClose("=v"))
+                stack.append(key)
         elif isinstance(item, (list, tuple)):
             parts.append("[")
-            stack.append(_SnapshotClose("]"))
-            stack.extend(reversed(item))
+            stack.append(_SnapshotClose("]", container_id))
+            stack.extend(reversed(members))
         elif isinstance(item, (set, frozenset)):
             parts.append("s{")
-            stack.append(_SnapshotClose("}s"))
-            stack.extend(sorted(item, key=repr, reverse=True))
-        elif isinstance(item, (bytes, bytearray)):
-            parts.append(f"b:{bytes(item)!r}")
+            stack.append(_SnapshotClose("}s", container_id))
+            stack.extend(sorted(members, key=canonical_sort_key, reverse=True))
         else:
-            parts.append(f"{type(item).__name__}:{item!r}")
+            # Bytes / bytearray land here too (they are not containers): the
+            # leaf renderer reads their base buffer, never ``bytes(item)``.
+            parts.append(_leaf_token(item))
     return "".join(parts)
 
 
@@ -903,22 +1060,25 @@ def assert_no_target_drift(owner: str, instance: Any) -> None:
     for attname, value in snapshot.items():
         if attname in deferred:
             continue
-        current = getattr(instance, attname)
-        if isinstance(value, _FileNameSnapshot):
-            # A FieldFile: compare the database-relevant ``name`` (a hook that mutates
-            # ``instance.<file>.name`` in place keeps the SAME descriptor object, so an
-            # identity/``==`` check would miss it). A hook that replaced the attribute
-            # with a non-FieldFile is drift too - compare the raw value then.
-            current_name = current.name if isinstance(current, FieldFile) else current
-            drifted = current_name != value.name
-        elif isinstance(value, _FieldFingerprint):
-            # A mutable container: compare the RECOMPUTED iterative fingerprint
-            # (a flat digest ``!=``, never a recursive structural walk of what may
-            # be deep consumer data).
-            drifted = _field_fingerprint(current) != value.digest
-        else:
-            # An immutable scalar snapshotted by reference.
-            drifted = current is not value and current != value
+        try:
+            current = getattr(instance, attname)
+            if isinstance(value, _ValueSnapshot):
+                # Each by-value wrapper owns its own re-comparison, so this dispatch
+                # cannot fall out of step with ``_snapshot_field_value``'s capture
+                # ladder the way two mirrored ladders did.
+                drifted = not value.matches(current)
+            else:
+                # An immutable scalar snapshotted by reference.
+                drifted = current is not value and current != value
+        except ConfigurationError:
+            raise
+        except Exception:
+            # The comparison read itself is consumer-reachable surface (the code
+            # this check polices can plant a hostile ``__eq__`` or break a
+            # descriptor). An UNREADABLE comparison is drift the check cannot
+            # rule out, so it fails closed into the typed envelope below - a raw
+            # exception must never escape the guard.
+            drifted = True
         if drifted:
             raise ConfigurationError(
                 f"{owner}: the located, authorized row was mutated in memory before the "
@@ -985,7 +1145,7 @@ def conflict_error() -> Any:
     return field_error(
         "id",
         "The row was changed or removed by a concurrent operation; retry.",
-        codes="conflict",
+        codes=FIELD_ERROR_CODE_CONFLICT,
     )
 
 

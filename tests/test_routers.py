@@ -97,6 +97,7 @@ GraphQL and exists only to run Django's session lifecycle.
 
 import asyncio
 import contextlib
+import datetime
 import importlib
 import inspect
 import json
@@ -4275,6 +4276,10 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
         await _wait_until(
             lambda: probe.reads == _UPSTREAM_SUBSCRIPTION_LIMIT,
             lambda: f"not every operation was admitted: {probe.reads}",
+            # 100 session revalidations over a contended Postgres (the
+            # package-core shard under xdist) exceeded the 5s default; 30s
+            # is still a stuck-run bound, not a sleep.
+            tries=15000,
         )
 
         # From here the NEXT read fails: operation 101's admission is read 101 and
@@ -5693,3 +5698,465 @@ async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unaut
 
     consumer = MockConsumer(CustomActor())
     assert await consumers_module._actor_is_current(consumer) is True
+
+
+# ---------------------------------------------------------------------------
+# Frame hostility: the message-loop containment.
+#
+# The exception-containment invariant has a THIRD half beside the two
+# revalidation checkpoints: no client-supplied FRAME may kill the connection
+# task. Both handlers' dispatch loops are upstream's own and carry no
+# containment, so before ``_contain_message_loop_failure`` a frame the
+# dispatcher cannot shape - a JSON scalar or array instead of an object, an
+# unhashable operation id, a missing or non-mapping payload, a ``stop`` for an
+# id that was never started, a document nested past the parser's stack budget -
+# raised a raw TypeError/KeyError/RecursionError out of the loop, killed the
+# message-loop task, and left the socket OPEN with nothing reading it: a
+# client-controlled dead connection, never closed, never reclaimed.
+#
+# The rows below drive the LIVE router on BOTH subprotocols, and every one
+# asserts the two halves the defect had: the hostile frame is REFUSED with
+# upstream's own invalid-message close, and the connection ENDS PROPERLY (the
+# close is actually written and the application task exits cleanly - the
+# teardown assertion is what distinguishes "refused" from "dead-but-open",
+# which was the bug).
+#
+# Every live row here is a FRAME-SHAPE escape, which is why they all expect
+# ``4400``. The containment is general but its close is not: an escape that is
+# not a frame-shape problem is a server-side bug and takes ``1011`` /
+# "Internal error" instead, which the scripted-transport rows at the end of the
+# section pin on both protocols.
+# ---------------------------------------------------------------------------
+
+#: Re-typed, like every other contract literal in this module: the close the
+#: message-loop containment spends, so a drift from
+#: ``consumers.py::_INVALID_MESSAGE_CLOSE_CODE`` / ``_INVALID_FRAME_CLOSE_REASON``
+#: fails a row instead of asserting itself.
+_INVALID_FRAME_CLOSE_CODE = 4400
+_INVALID_FRAME_CLOSE_REASON = "Failed to parse message"
+
+#: The other close the containment spends, and the reason the code above is not
+#: the whole story: an escape that is NOT a frame-shape problem is a server-side
+#: bug, and reporting it as a parse failure would blame the client for the
+#: server's defect. Re-typed like every other contract literal here, so a drift
+#: from ``consumers.py::_INTERNAL_ERROR_CLOSE_CODE`` /
+#: ``_INTERNAL_ERROR_CLOSE_REASON`` fails a row instead of asserting itself.
+_INTERNAL_ERROR_CLOSE_CODE = 1011
+_INTERNAL_ERROR_CLOSE_REASON = "Internal error"
+
+#: A syntactically valid JSON document whose parse overflows the interpreter's
+#: C stack, so ``json.loads`` raises ``RecursionError`` from INSIDE the ``async
+#: for`` over ``iter_json``. Spelled as a fixture so the hostile text costs
+#: nothing until a row needs it.
+
+
+@pytest.fixture
+def pathological_json_text() -> str:
+    return "[" * 200_000 + "]" * 200_000
+
+
+def _revalidating_handler_classes():
+    """The two generated handler classes off the mounted consumer class."""
+    consumer_class = _mounted_ws_callback(_router()).consumer_class
+    return (
+        consumer_class.graphql_transport_ws_handler_class,
+        consumer_class.graphql_ws_handler_class,
+    )
+
+
+def _mounted_handler(handler_class, websocket):
+    """Instantiate one generated handler class against a scripted websocket."""
+
+    kwargs = {
+        "view": SimpleNamespace(),
+        "websocket": websocket,
+        "context": {},
+        "root_value": None,
+        "schema": SCHEMA,
+        "max_subscriptions_per_connection": None,
+    }
+    if handler_class.__name__ == "_RevalidatingTransportWSHandler":
+        kwargs["connection_init_wait_timeout"] = datetime.timedelta(seconds=60)
+    else:
+        kwargs["keep_alive"] = False
+        kwargs["keep_alive_interval"] = None
+    return handler_class(**kwargs)
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.parametrize(
+    "frame_text",
+    [
+        pytest.param("[1, 2, 3]", id="json-array"),
+        pytest.param("null", id="json-null"),
+        pytest.param("42", id="json-number"),
+        pytest.param('"hello"', id="json-string"),
+        pytest.param("true", id="json-boolean"),
+        pytest.param("{}", id="object-without-type"),
+    ],
+)
+@pytest.mark.django_db
+async def test_a_non_dispatchable_frame_is_refused_and_the_connection_ends(
+    frame_text,
+    subprotocol,
+):
+    """A frame the dispatcher cannot shape takes upstream's invalid-message close.
+
+    Every literal below used to kill the message-loop task with a raw
+    ``TypeError`` (``message['type']`` indexing a non-object) or ``KeyError``,
+    leaving the socket open with nothing reading it. Now each is refused with
+    the invalid-message close - upstream's own ``4400`` shape on graphql-
+    transport-ws (its ``except KeyError`` already spent it for some shapes),
+    supplied by the package on the legacy protocol where upstream spends no
+    invalid-message close at all - and the teardown completes, which is what
+    distinguishes "refused" from the dead-but-open socket the containment
+    replaces. ``{}`` rides the transport-ws KeyError arm; on legacy it reaches
+    the package's guard through the same refusal.
+    """
+    communicator = _ws_communicator(_router(), subprotocol=subprotocol)
+    connected, _ = await communicator.connect(timeout=10)
+    assert connected
+    try:
+        await communicator.send_json_to({"type": "connection_init"})
+        ack = await communicator.receive_json_from(timeout=10)
+        assert ack["type"] == "connection_ack"
+        await communicator.send_to(text_data=frame_text)
+        output = await communicator.receive_output(timeout=10)
+        assert output["type"] == "websocket.close"
+        assert output["code"] == _INVALID_FRAME_CLOSE_CODE
+        assert output["reason"] == _INVALID_FRAME_CLOSE_REASON
+    finally:
+        # The connection task ENDED: a dead-but-open socket would hang or raise
+        # here, which is the DoS shape this containment exists to prevent.
+        await communicator.disconnect()
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db
+async def test_an_unhashable_operation_id_is_refused_and_the_connection_ends(
+    subprotocol,
+):
+    """An unhashable operation id cannot crash the connection task."""
+    operation_frame = "subscribe" if subprotocol == _TRANSPORT_WS else "start"
+    async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
+        await communicator.send_json_to(
+            {"type": operation_frame, "id": ["nope"], "payload": {"query": "{ ping }"}},
+        )
+        closed, frames = await _drain_until_close(communicator)
+    assert frames == [], frames
+    assert closed["code"] == _INVALID_FRAME_CLOSE_CODE
+    await communicator.disconnect()
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db
+async def test_a_non_mapping_payload_is_refused_and_the_connection_ends_properly(
+    subprotocol,
+):
+    """A non-mapping payload is a refusal, not a dead loop."""
+    operation_frame = "subscribe" if subprotocol == _TRANSPORT_WS else "start"
+    async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
+        await communicator.send_json_to({"type": operation_frame, "id": "1", "payload": "nope"})
+        closed, frames = await _drain_until_close(communicator)
+    assert frames == [], frames
+    assert closed["code"] == _INVALID_FRAME_CLOSE_CODE
+    assert closed["reason"] == _INVALID_FRAME_CLOSE_REASON
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db
+async def test_a_missing_payload_is_refused_per_protocol(subprotocol):
+    """A missing payload field refuses the connection on BOTH protocols.
+
+    Before the containment the two protocols disagreed here: transport-ws's own
+    ``except KeyError`` turned a missing payload into its 4400 refusal, while the
+    legacy loop crashed with a raw ``KeyError('payload')`` and went silent. The
+    refusal is now the same shape on both.
+    """
+    operation_frame = "subscribe" if subprotocol == _TRANSPORT_WS else "start"
+    async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
+        await communicator.send_json_to({"type": operation_frame, "id": "1"})
+        closed, frames = await _drain_until_close(communicator)
+    assert frames == [], frames
+    assert closed["code"] == _INVALID_FRAME_CLOSE_CODE
+    await communicator.disconnect()
+
+
+@pytest.mark.django_db
+async def test_a_legacy_stop_for_an_unstarted_id_is_refused_and_the_connection_ends():
+    """``stop`` for an id that was never started must not kill the legacy loop.
+
+    ``cleanup_operation`` indexes ``self.tasks[operation_id]`` unconditionally, so
+    a client ``stop`` for an id that was never started - or a duplicate ``stop``
+    for one already cleaned up - used to kill the message-loop task outright.
+    The transport-ws protocol's own ``complete`` early-returns for an unknown id,
+    which is the contrast row below.
+    """
+    async with _open_ws(_router(), subprotocol=_LEGACY_WS) as communicator:
+        await communicator.send_json_to({"type": "stop", "id": "nope"})
+        await communicator.send_json_to({"type": "stop", "id": "nope"})
+        closed, frames = await _drain_until_close(communicator)
+    assert frames == [], frames
+    assert closed["code"] == _INVALID_FRAME_CLOSE_CODE
+    await communicator.disconnect()
+
+
+@pytest.mark.django_db
+async def test_a_transport_ws_complete_for_an_unstarted_id_still_leaves_a_live_socket():
+    """The contained-upstream contrast: an unknown ``complete`` is not an error.
+
+    Upstream's own ``cleanup_operation`` early-returns for an id it does not
+    know, so the connection must still be usable after two of them - the row
+    that proves the loop containment did not take over work upstream already
+    contains, and that a surviving connection still answers control frames.
+    """
+    async with _open_ws(_router(), subprotocol=_TRANSPORT_WS) as communicator:
+        await communicator.send_json_to({"type": "complete", "id": "nope"})
+        await communicator.send_json_to({"type": "complete", "id": "nope"})
+        await communicator.send_json_to({"type": "ping"})
+        pong = await communicator.receive_json_from(timeout=10)
+        assert pong == {"type": "pong"}
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db
+async def test_a_stack_overflowing_document_is_refused_and_the_connection_ends(
+    pathological_json_text,
+    subprotocol,
+):
+    """A ``RecursionError`` out of the frame decode is a refusal, not a dead loop.
+
+    The document is syntactically valid JSON whose parse overflows the
+    interpreter's C stack, so ``json.loads`` raises ``RecursionError`` from
+    INSIDE the ``async for`` over ``iter_json`` - upstream's loop has no per-
+    message seam there, and the HTTP tier's ``parse_json`` translation
+    (``_strawberry_patches.py``) is never entered over WebSocket. The contained
+    close arrives on both protocols, and the teardown completes.
+    """
+    async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
+        await communicator.send_to(text_data=pathological_json_text)
+        closed, frames = await _drain_until_close(communicator)
+    assert frames == [], frames
+    assert closed["code"] == _INVALID_FRAME_CLOSE_CODE
+    assert closed["reason"] == _INVALID_FRAME_CLOSE_REASON
+
+
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
+@pytest.mark.django_db
+async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loop(
+    subprotocol,
+):
+    """A non-string ``query`` must not kill the message loop.
+
+    The WebSocket can deliver a non-string ``query``. Floor strawberry parses
+    it in the subscribe handler and graphql-core's lexer raises ``TypeError``;
+    the handler contains that as an operation error. Later releases parse
+    inside the operation task. Either way the loop and the socket stay usable,
+    which the follow-up subscription round trip below proves.
+    """
+    operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
+    async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
+        await communicator.send_json_to(
+            {"type": operation_frame, "id": "1", "payload": {"query": 42}},
+        )
+        # The hostile payload's own failure is the operation task's business -
+        # whichever error frame it answers with is upstream's to send. What this
+        # row pins is the loop's survival: a well-formed operation on the SAME
+        # socket must still be served, and the socket must never close. The
+        # healthy operation is a SUBSCRIPTION on both protocols, because the
+        # legacy ``Schema.subscribe`` rejects a query outright (and emits no
+        # frame for it) - ``_TICK_SUBSCRIPTION`` is the one operation that
+        # round-trips on both.
+        await _send_operation(communicator, _TICK_SUBSCRIPTION, op_id="2")
+        served = False
+        for _ in range(5):
+            message = await communicator.receive_output(timeout=10)
+            if message["type"] == "websocket.close":
+                raise AssertionError("the message loop died on the non-string query")
+            payload = json.loads(message["text"])
+            if payload.get("type") == success_frame and payload.get("id") == "2":
+                served = True
+                break
+        assert served, "the loop must still serve a well-formed operation"
+
+
+# The cancellation and raising-close arms of the loop containment are not
+# reachable from a live socket with deterministic timing, so three unit rows
+# drive them through a handler whose transport is scripted.
+
+
+class _ScriptedTransport:
+    """A websocket stub whose message iterator and close raise what a row needs.
+
+    ``iter_json`` must accept both upstream call shapes (the legacy handler
+    passes ``ignore_parsing_errors=True``; transport-ws passes nothing). Raising
+    ``CancelledError`` from the iterator stands in for the teardown delivered
+    mid-loop, which a live socket only produces with real timing.
+    """
+
+    def __init__(self, iter_exception, close_exception=None):
+        self._iter_exception = iter_exception
+        self._close_exception = close_exception
+        self.closes = []
+
+    def iter_json(self, *, ignore_parsing_errors=False):
+        exception = self._iter_exception
+
+        async def generator():
+            raise exception
+            yield {}  # unreachable: the raise makes this an exhausted-abort iterator
+
+        return generator()
+
+    async def close(self, code, reason):
+        self.closes.append((code, reason))
+        if self._close_exception is not None:
+            raise self._close_exception
+
+
+@pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
+@pytest.mark.parametrize(
+    ("escape", "expected_close", "log_substring"),
+    [
+        pytest.param(
+            TypeError("list indices must be integers or slices, not str"),
+            (_INVALID_FRAME_CLOSE_CODE, _INVALID_FRAME_CLOSE_REASON),
+            "client-supplied frame escaped",
+            id="client-non-object-frame",
+        ),
+        pytest.param(
+            KeyError("payload"),
+            (_INVALID_FRAME_CLOSE_CODE, _INVALID_FRAME_CLOSE_REASON),
+            "client-supplied frame escaped",
+            id="client-missing-field",
+        ),
+        pytest.param(
+            RecursionError("maximum recursion depth exceeded"),
+            (_INVALID_FRAME_CLOSE_CODE, _INVALID_FRAME_CLOSE_REASON),
+            "client-supplied frame escaped",
+            id="client-stack-overflowing-document",
+        ),
+        pytest.param(
+            RuntimeError("the consumer's on_ws_connect hook has a bug"),
+            (_INTERNAL_ERROR_CLOSE_CODE, _INTERNAL_ERROR_CLOSE_REASON),
+            "server-side failure escaped",
+            id="server-side-runtime-error",
+        ),
+        pytest.param(
+            AttributeError("'NoneType' object has no attribute 'schema'"),
+            (_INTERNAL_ERROR_CLOSE_CODE, _INTERNAL_ERROR_CLOSE_REASON),
+            "server-side failure escaped",
+            id="server-side-attribute-error",
+        ),
+    ],
+)
+async def test_the_containment_close_names_whose_fault_the_escape_was(
+    handler_class,
+    escape,
+    expected_close,
+    log_substring,
+    caplog,
+):
+    """A server bug that unwinds the loop is ``1011``, never the parse-failure close.
+
+    The containment catches every ordinary escape, but the two escape families
+    are not the same event. A frame the dispatcher cannot shape raises
+    ``TypeError`` / ``KeyError`` / ``RecursionError`` and is genuinely a parse
+    failure, so it keeps upstream's ``4400`` / "Failed to parse message". Any
+    other escape came from the package or the consumer's own code, and reporting
+    it to the client as a malformed frame is a false accusation that sends the
+    client's operator hunting a frame that was fine; it takes ``1011`` /
+    "Internal error" - graphql-transport-ws's internal-error convention - and
+    the failure is recorded server-side instead.
+
+    The exact close tuple is what pins the non-disclosure: the reason is a fixed
+    string, so no exception type, message, or path reaches the wire under
+    either code. The server-side record is asserted the other way round - the
+    traceback IS attached to the log record, because a package or consumer bug
+    that nobody can see is the failure mode the honest close creates.
+    """
+    transport = _ScriptedTransport(iter_exception=escape)
+    handler = _mounted_handler(handler_class, transport)
+
+    with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+        await handler.handle()
+
+    assert transport.closes == [expected_close]
+    records = [record for record in caplog.records if record.name == "django_strawberry_framework"]
+    assert len(records) == 1, records
+    assert log_substring in records[0].getMessage()
+    # The escape itself is on the record, with its real type and text - the
+    # close said nothing about it, so the log is the only place it is reported.
+    assert records[0].exc_info is not None
+    assert records[0].exc_info[1] is escape
+
+
+@pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
+async def test_a_cancellation_delivered_mid_loop_propagates_untouched(handler_class):
+    """The containment is not a cancellation trap: teardown still unwinds.
+
+    A ``CancelledError`` raised from inside the message loop must reach the
+    caller untouched, and must NOT spend the refusal close - swallowing it here
+    would hang the connection's own teardown, which is why the guard re-raises
+    the cancellation trio explicitly.
+    """
+    transport = _ScriptedTransport(iter_exception=asyncio.CancelledError())
+    handler = _mounted_handler(handler_class, transport)
+    with pytest.raises(asyncio.CancelledError):
+        await handler.handle()
+    assert transport.closes == [], "cancellation must not be translated to a refusal"
+
+
+@pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
+async def test_a_broken_transport_during_the_refusal_is_logged_not_raised(
+    handler_class,
+):
+    """A close that raises still ends the containment; the loop never escapes."""
+    transport = _ScriptedTransport(
+        iter_exception=TypeError("list indices must be integers or slices, not str"),
+        close_exception=OSError("transport gone"),
+    )
+    handler = _mounted_handler(handler_class, transport)
+    # No exception escapes: the containment refused, the refusal could not be
+    # written, and the connection still ends instead of hanging.
+    await handler.handle()
+    assert transport.closes == [(_INVALID_FRAME_CLOSE_CODE, _INVALID_FRAME_CLOSE_REASON)]
+
+
+@pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
+async def test_a_cancellation_during_the_refusal_close_propagates(handler_class):
+    """Cancellation delivered while the refusal is being written propagates."""
+    transport = _ScriptedTransport(
+        iter_exception=TypeError("unsubscriptable object"),
+        close_exception=asyncio.CancelledError(),
+    )
+    handler = _mounted_handler(handler_class, transport)
+    with pytest.raises(asyncio.CancelledError):
+        await handler.handle()
+    # The refusal WAS attempted - the stub records before it raises - and the
+    # cancellation still interrupted it: the interrupted attempt is a recorded
+    # close, not a swallowed one, and the cancellation is what the caller sees.
+    assert transport.closes == [(_INVALID_FRAME_CLOSE_CODE, _INVALID_FRAME_CLOSE_REASON)]
+
+
+@pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
+async def test_a_process_level_exception_bypasses_the_guard(handler_class):
+    """The guard catches ``Exception`` only, BY INHERITANCE, not by name.
+
+    ``GeneratorExit`` and a bespoke ``BaseException`` subclass must both escape
+    the loop containment untouched, spending no refusal close: the containment's
+    contract is ordinary failure, not the whole ``BaseException`` family, so a
+    hard-coded propagation trio would be a list that future subclasses fall
+    through. Driving a ``GeneratorExit`` through a scripted iterator is what a
+    live socket cannot produce with deterministic timing.
+    """
+
+    class _ProcessLevelSentinel(BaseException):
+        """A stand-in for any present or future process-level exception."""
+
+    for bypass in (GeneratorExit(), _ProcessLevelSentinel()):
+        transport = _ScriptedTransport(iter_exception=bypass)
+        handler = _mounted_handler(handler_class, transport)
+        with pytest.raises(type(bypass)):
+            await handler.handle()
+        assert transport.closes == [], "a process-level escape must not be refused"

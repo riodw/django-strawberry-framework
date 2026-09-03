@@ -4,9 +4,17 @@ The spec-027 / spec-028 Decision 8 permission facade lives on ``ActiveInputPermi
 family apply pipelines stay distinct (visibility/form vs ``order_by``).
 """
 
+import pytest
+
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet
 from django_strawberry_framework.orders import OrderSet
-from django_strawberry_framework.sets_mixins import ActiveInputPermissionMixin
+from django_strawberry_framework.sets_mixins import (
+    ActiveInputPermissionMixin,
+    is_re_readable_field_declaration,
+    require_re_readable_field_declaration,
+)
+from django_strawberry_framework.utils.input_values import SetInputTraversal
 
 _SHARED_PERMISSION_METHODS = (
     "_request_from_info",
@@ -38,13 +46,13 @@ def test_permission_facade_methods_are_single_sourced_on_the_mixin():
 
 def test_permission_family_config_stays_on_each_set_class():
     assert FilterSet._permission.family_label == "FilterSet"
-    assert FilterSet._permission.related_attr == "related_filters"
     assert FilterSet._permission.target_attr == "filterset"
-    assert FilterSet._permission.handle_top_level_list is False
+    assert FilterSet._permission.traversal.related_attr == "related_filters"
+    assert FilterSet._permission.traversal.handle_top_level_list is False
     assert OrderSet._permission.family_label == "OrderSet"
-    assert OrderSet._permission.related_attr == "related_orders"
     assert OrderSet._permission.target_attr == "orderset"
-    assert OrderSet._permission.handle_top_level_list is True
+    assert OrderSet._permission.traversal.related_attr == "related_orders"
+    assert OrderSet._permission.traversal.handle_top_level_list is True
 
 
 def test_permission_fallback_path_is_the_family_remap_hook():
@@ -195,6 +203,9 @@ def test_related_set_target_mixin():
         def __init__(self, target):
             self._target = target
 
+        def _validate_target(self, resolved):
+            """Permissive gate -- this test pins the bind/lazy machinery, not the gate."""
+
     class _OwnerOne:
         pass
 
@@ -216,6 +227,84 @@ def test_related_set_target_mixin():
     # _set_target updates target slot
     item._set_target(_AlternativeStub)
     assert item._resolved_target() is _AlternativeStub
+
+
+def test_related_set_target_mixin_hook_is_abstract_without_a_family_validator():
+    """The base ``_validate_target`` fails loud: a hookless subclass cannot read targets.
+
+    The resolution seam is the one site every consumer's resolved target flows
+    through (the Layer-5 BFS enqueue reads the family property, which resolves
+    through ``_resolved_target``), so the family TYPE gate lives on the hook
+    the mixin fires: a future set family that forgets to supply it fails at
+    first resolved read instead of silently accepting any target.
+    """
+    import pytest
+
+    from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
+
+    class _Hookless(RelatedSetTargetMixin):
+        _target_attr = "_target"
+        _owner_attr = "bound_owner"
+
+        def __init__(self, target):
+            self._target = target
+
+    with pytest.raises(NotImplementedError, match="_validate_target"):
+        _Hookless(object())._resolved_target()
+
+
+def test_related_set_target_mixin_gates_resolved_targets_at_the_seam():
+    """A family-supplied validator fires from ``_resolved_target`` on every read.
+
+    Regression pin for the BFS-enqueue lead: gate protection no longer depends
+    on a family property getter re-declaring the check inline. A hostile
+    resolved target is rejected at the shared seam, and the ``None``
+    placeholder passes through without consulting the validator.
+    """
+    import pytest
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
+
+    class _FamilyTarget:
+        pass
+
+    validated = []
+
+    class _FutureFamily(RelatedSetTargetMixin):
+        _target_attr = "_target"
+        _owner_attr = "bound_owner"
+
+        def __init__(self, target):
+            self._target = target
+
+        def _validate_target(self, resolved):
+            validated.append(resolved)
+            if not (isinstance(resolved, type) and issubclass(resolved, _FamilyTarget)):
+                raise ConfigurationError(f"not a _FamilyTarget subclass: {resolved!r}")
+
+    class _Hostile:
+        pass
+
+    assert _FutureFamily(_FamilyTarget)._resolved_target() is _FamilyTarget
+
+    with pytest.raises(ConfigurationError, match="not a _FamilyTarget subclass"):
+        _FutureFamily(_Hostile)._resolved_target()
+
+    # The ``None`` placeholder skips the gate entirely (validator never sees it).
+    assert _FutureFamily(None)._resolved_target() is None
+    assert validated == [_FamilyTarget, _Hostile]
+
+
+def test_both_families_supply_their_own_target_validator():
+    """The shipped families override the hook (a deleted override fails this pin)."""
+    from django_strawberry_framework.filters.base import RelatedFilter
+    from django_strawberry_framework.orders.base import RelatedOrder
+    from django_strawberry_framework.sets_mixins import RelatedSetTargetMixin
+
+    mixin_hook = _unbound(RelatedSetTargetMixin, "_validate_target")
+    assert _unbound(RelatedFilter, "_validate_target") is not mixin_hook
+    assert _unbound(RelatedOrder, "_validate_target") is not mixin_hook
 
 
 def test_collect_related_declarations():
@@ -331,10 +420,12 @@ def test_active_input_permission_mixin_hooks():
     class _ProbePermissionSet(ActiveInputPermissionMixin):
         _permission = ActiveInputPermissionAttrs(
             family_label="Probe",
-            related_attr="related_probe",
             target_attr="probe",
-            field_specs={},
-            unset_sentinel=None,
+            traversal=SetInputTraversal(
+                related_attr="related_probe",
+                field_specs={},
+                unset_sentinel=None,
+            ),
         )
 
     # Hooks execute cleanly as no-ops
@@ -411,10 +502,12 @@ def test_active_input_permission_mixin_delegates_and_fires_checks():
     class _GatedSet(ActiveInputPermissionMixin):
         _permission = ActiveInputPermissionAttrs(
             family_label="Gated",
-            related_attr="related_items",
             target_attr="gated_target",
-            field_specs={},
-            unset_sentinel=None,
+            traversal=SetInputTraversal(
+                related_attr="related_items",
+                field_specs={},
+                unset_sentinel=None,
+            ),
         )
         checked_fields: list[str] = []
 
@@ -536,10 +629,12 @@ def test_active_input_permission_mixin_field_paths_and_branches():
     class _ChildSet(ActiveInputPermissionMixin):
         _permission = ActiveInputPermissionAttrs(
             family_label="ChildSet",
-            related_attr="related_children",
             target_attr="childset",
-            field_specs={"sub_field": types.SimpleNamespace(django_source_path="sub_field")},
-            unset_sentinel=None,
+            traversal=SetInputTraversal(
+                related_attr="related_children",
+                field_specs={"sub_field": types.SimpleNamespace(django_source_path="sub_field")},
+                unset_sentinel=None,
+            ),
         )
 
     class _ParentSet(ActiveInputPermissionMixin):
@@ -551,10 +646,12 @@ def test_active_input_permission_mixin_field_paths_and_branches():
         }
         _permission = ActiveInputPermissionAttrs(
             family_label="ParentSet",
-            related_attr="related_children",
             target_attr="childset",
-            field_specs={"title": types.SimpleNamespace(django_source_path="title")},
-            unset_sentinel=None,
+            traversal=SetInputTraversal(
+                related_attr="related_children",
+                field_specs={"title": types.SimpleNamespace(django_source_path="title")},
+                unset_sentinel=None,
+            ),
         )
 
     parent_input = _ParentInput(title="custom_title", child=_ChildInput(sub_field="sub"))
@@ -575,7 +672,6 @@ def test_family_input_traversal_is_derived_from_the_permission_config():
 
     from django_strawberry_framework.filters.inputs import _field_specs as _filter_specs
     from django_strawberry_framework.orders.inputs import _field_specs as _order_specs
-    from django_strawberry_framework.utils.input_values import SetInputTraversal
 
     filter_traversal = FilterSet._input_traversal()
     assert isinstance(filter_traversal, SetInputTraversal)
@@ -609,12 +705,14 @@ def test_order_normalizer_consumes_the_family_permission_traversal(monkeypatch):
     class _StubFamily(ActiveInputPermissionMixin):
         _permission = ActiveInputPermissionAttrs(
             family_label="StubFamily",
-            related_attr="related_stub",
             target_attr="stubset",
-            field_specs={"a": "spec-a"},
-            logic_keys=frozenset({"custom_op"}),
-            unset_sentinel=sentinel,
-            handle_top_level_list=True,
+            traversal=SetInputTraversal(
+                related_attr="related_stub",
+                field_specs={"a": "spec-a"},
+                logic_keys=frozenset({"custom_op"}),
+                unset_sentinel=sentinel,
+                handle_top_level_list=True,
+            ),
         )
 
     assert order_inputs.normalize_input_value(_StubFamily, None) == []
@@ -651,7 +749,7 @@ def test_filter_normalizer_consumes_the_family_permission_traversal(monkeypatch)
 
 
 def test_filter_normalizer_honors_a_subclass_unset_sentinel_override():
-    """An overridden ``_permission.unset_sentinel`` governs the apply path too.
+    """An overridden ``_permission.traversal.unset_sentinel`` governs the apply path too.
 
     The defect the derived config closes: ``_normalize_input`` used to read a
     module-level singleton pinned to ``UNSET`` while the permission walkers read
@@ -666,7 +764,10 @@ def test_filter_normalizer_honors_a_subclass_unset_sentinel_override():
     marker = object()
 
     class _SentinelOverrideFilter(FilterSet):
-        _permission = replace(FilterSet._permission, unset_sentinel=marker)
+        _permission = replace(
+            FilterSet._permission,
+            traversal=replace(FilterSet._permission.traversal, unset_sentinel=marker),
+        )
 
         class Meta:
             model = Book
@@ -679,3 +780,108 @@ def test_filter_normalizer_honors_a_subclass_unset_sentinel_override():
     # family (whose sentinel IS ``UNSET``) would have skipped instead.
     assert "title" in _SentinelOverrideFilter._normalize_input({"title": UNSET})
     assert FilterSet._normalize_input({"title": UNSET}) == {}
+
+
+# ---------------------------------------------------------------------------
+# The shared ``Meta.fields`` re-readability gate
+# ---------------------------------------------------------------------------
+
+
+def test_re_readable_gate_accepts_every_sized_collection():
+    """The contract is ``Collection``, not a hardcoded builtin allow-list.
+
+    A consumer legitimately computes ``Meta.fields`` from a mapping
+    (``spec.keys()`` / ``spec.values()``), from a ``range``, or from a project
+    container of their own: all of those hold their members, so the expansion
+    re-runs to the same field names. Pinning the accepted set to
+    ``(dict, list, tuple, set, frozenset)`` rejected them for a property they
+    have.
+    """
+
+    class _NameSet:
+        """A minimal ``Collection`` that is none of the builtin containers."""
+
+        def __init__(self, *names):
+            self._names = names
+
+        def __iter__(self):
+            return iter(self._names)
+
+        def __len__(self):
+            return len(self._names)
+
+        def __contains__(self, item):
+            return item in self._names
+
+    accepted = (
+        ["code"],
+        ("code",),
+        {"code"},
+        frozenset({"code"}),
+        {"code": ["exact"]},
+        {"code": ["exact"]}.keys(),
+        {"exact": "code"}.values(),
+        range(3),
+        _NameSet("code"),
+    )
+    for value in accepted:
+        assert is_re_readable_field_declaration(value) is True
+
+
+def test_re_readable_gate_rejects_one_shot_and_text_atoms():
+    """One-shot producers and text atoms are the two rejected shapes.
+
+    A generator / ``iter(...)`` / ``map`` object is exhausted by the first
+    expansion; a ``str`` / ``bytes`` / ``bytearray`` / ``memoryview`` is a
+    collection of CHARACTERS, not of field names, and satisfies ``Collection``
+    structurally, so it needs the explicit exclusion.
+    """
+    rejected = (
+        (name for name in ["code"]),
+        iter(["code"]),
+        map(str, ["code"]),
+        "code",
+        b"code",
+        bytearray(b"code"),
+        memoryview(b"code"),
+        123,
+        object(),
+        None,
+    )
+    for value in rejected:
+        assert is_re_readable_field_declaration(value) is False
+
+
+def test_re_readable_gate_never_iterates_the_declaration():
+    """The gate is structural, so a hostile ``__iter__`` is never entered.
+
+    An object defining only ``__iter__`` is not a ``Collection``, so it is
+    rejected before the walk and its body cannot raise into class creation.
+    """
+
+    class _Boom:
+        def __iter__(self):
+            raise RuntimeError("boom")  # pragma: no cover - never entered
+
+    assert is_re_readable_field_declaration(_Boom()) is False
+
+
+def test_re_readable_gate_message_names_the_receipt_and_the_contract():
+    """The rejection names the offending class, the received type, and what IS accepted."""
+
+    class _Probe:
+        pass
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        require_re_readable_field_declaration(
+            _Probe,
+            (name for name in ["code"]),
+            subject="OrderSet",
+            accepted="'__all__' or a re-readable collection of field names",
+        )
+    message = str(excinfo.value)
+    assert "OrderSet" in message
+    assert "Meta.fields" in message
+    assert "generator" in message
+    assert "re-readable collection of field names" in message
+    assert "not a one-shot iterator or generator" in message

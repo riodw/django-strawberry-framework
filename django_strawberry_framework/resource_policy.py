@@ -58,6 +58,7 @@ from graphql import GraphQLError
 from .conf import resource_policy_setting
 from .exceptions import ConfigurationError, DjangoStrawberryFrameworkError, describe_value
 from .utils.context import clear_context_key, get_context_value, stash_on_context
+from .utils.errors import coded_error_extensions
 from .utils.policies import resolve_policy
 from .utils.querysets import is_async_only_iterable
 
@@ -122,12 +123,12 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
         super().__init__(
             f"Request exceeds the {bound} resource bound: {detail} "
             f"({charged} charged, {limit} allowed).",
-            extensions={
-                "code": RESOURCE_LIMIT_ERROR_CODE,
-                "bound": bound,
-                "limit": limit,
-                "charged": charged,
-            },
+            extensions=coded_error_extensions(
+                RESOURCE_LIMIT_ERROR_CODE,
+                bound=bound,
+                limit=limit,
+                charged=charged,
+            ),
         )
         self.bound = bound
         self.limit = limit
@@ -148,6 +149,27 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
         )
 
 
+def _is_valid_deadline(value: Any) -> bool:
+    """Whether ``value`` sits in the deadline domain (``None`` is decided by the caller).
+
+    The comparison is contained because the value is deployment-supplied: a
+    numeric SUBCLASS whose ``__le__`` / ``__gt__`` raises is a hostile
+    configuration object, and letting that raise escape ``__post_init__``
+    would replace the typed ``ConfigurationError`` every invalid deadline
+    receives with a raw ``RuntimeError`` out of schema construction.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except Exception:
+        # ``isfinite`` overflows on a huge int, and a hostile numeric SUBCLASS
+        # can raise from its own comparison dunder: either way the value cannot
+        # be classified as a positive number of seconds, so the domain check
+        # answers False and the typed rejection fires at the caller.
+        return False
+
+
 def _require_positive_int(value: Any, label: str) -> None:
     """Reject a non-positive-integer bound under whatever name declared it.
 
@@ -163,6 +185,10 @@ def _require_positive_int(value: Any, label: str) -> None:
         )
 
 
+# TODO(spec-050 slice 5): When list windows ship, revise this class docstring's
+# ``max_list_rows`` entry to distinguish a returned-row ceiling and a separate
+# accepted-skip ceiling from total physical database rows scanned. Preserve the
+# deadline docstring's two ``bounded_rows`` cooperative seams unchanged.
 @dataclass(frozen=True)
 class ResourcePolicy:
     """The immutable per-request resource budget.
@@ -288,28 +314,12 @@ class ResourcePolicy:
         for field in fields(self):
             value = getattr(self, field.name)
             if field.name == "execution_deadline_seconds":
-                if value is None:
+                if value is None or _is_valid_deadline(value):
                     continue
-                if isinstance(value, float):
-                    finite = math.isfinite(value)
-                elif isinstance(value, int):
-                    try:
-                        finite = math.isfinite(float(value))
-                    except OverflowError:
-                        finite = False
-                else:
-                    finite = False
-                if (
-                    isinstance(value, bool)
-                    or not isinstance(value, (int, float))
-                    or not finite
-                    or value <= 0
-                ):
-                    raise ConfigurationError(
-                        "ResourcePolicy.execution_deadline_seconds must be None or a "
-                        f"positive number of seconds; got {describe_value(value)}.",
-                    )
-                continue
+                raise ConfigurationError(
+                    "ResourcePolicy.execution_deadline_seconds must be None or a "
+                    f"positive number of seconds; got {describe_value(value)}.",
+                )
             _require_positive_int(value, f"ResourcePolicy.{field.name}")
 
     def narrowed(self, **overrides: Any) -> ResourcePolicy:
@@ -434,7 +444,15 @@ def check_deadline(info: Any) -> None:
     deadline = get_context_value(getattr(info, "context", None), DST_RESOURCE_DEADLINE)
     if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         return
-    if time.monotonic() < deadline:
+    try:
+        expired = time.monotonic() >= deadline
+    except Exception:
+        # A numeric SUBCLASS whose comparisons raise is a hostile stash shape:
+        # the seam cannot certify the request inside its budget, so it fails
+        # closed on the same typed path a passed deadline takes rather than
+        # leaking the raw arithmetic error out of a collection resolver.
+        expired = True
+    if not expired:
         return
     configured = policy_from_info(info).execution_deadline_seconds
     # A stashed deadline whose policy carries none is only reachable by writing
@@ -451,6 +469,46 @@ def check_deadline(info: Any) -> None:
     )
 
 
+# TODO(spec-050 slice 1): Extend the one raw-list seam with validated client
+# coordinates; do not create a second pagination helper in ``list_field.py``.
+# On both bounding helpers, keep ``declared`` positional-or-keyword and add
+# ``offset`` / ``requested_limit`` only after the bare ``*`` beside ``trusted``.
+# ``_raw_list_bound`` itself remains coordinate-free.
+#
+# Pseudocode:
+#
+# - Let ``_raw_list_bound`` remain the sole deadline + effective-cap lookup.
+#   It must still call ``check_deadline(info)`` exactly once before returning
+#   ``effective_bound(policy.max_list_rows, declared, trusted=trusted)``.
+# - Each bounding function calls that helper before coordinate arithmetic or
+#   source advancement, then derives ``window = requested_limit if supplied
+#   else effective_cap``, ``start = offset``, and ``stop = start + window``.
+#   The list wrapper has already rejected invalid coordinates, so this seam
+#   performs arithmetic, not a second public-domain validation policy.
+# - Preserve the exact no-coordinate caller behavior. Querysets/sequences use
+#   ``result[start:stop]``. An unsliceable sync iterable uses
+#   ``list(islice(result, start, stop))``. For a zero window, return the empty
+#   slice when supported and ``[]`` otherwise without constructing ``islice``
+#   or advancing the source.
+# - For async-only input, acquire one iterator, discard exactly ``offset``
+#   values, collect at most ``window`` values, and never request the item after
+#   the accepted exclusive stop. Natural exhaustion sets ``exhausted=True``;
+#   reaching the stop, a zero window, or an iteration error is early exit.
+# - The SYNC side gets NO early-exit ``close()``. ``list(islice(...))`` leaves
+#   a retained generator suspended, and that is the declined-on-purpose
+#   contract: this helper also bounds every generated relation list, so closing
+#   a consumer's generator would change shipped behavior on callers this card
+#   promises not to touch. Pin the suspension in a test so a later symmetric
+#   card flips it deliberately.
+# - Extract acquisition/optional-``aclose``/diagnostic-note handling to one
+#   package-private async cleanup helper. ``bounded_rows_async`` passes its
+#   acquired iterator to it; list-field pre-bound rejections pass only the
+#   source so it acquires without ``__anext__``. A cleanup failure is primary
+#   only when no source/domain error exists, otherwise it is appended to that
+#   error's ``__notes__``. Never call ``aclose`` after natural exhaustion.
+#
+# TODO(spec-050 slice 5): Update both bounding-helper docstrings with the
+# returned/skip-vs-scan distinction when the coordinate parameters land.
 def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -> int:
     """Deadline check plus the effective raw-list row bound, spelled once for both colors.
 
@@ -494,13 +552,17 @@ def bounded_rows(
         return None
     try:
         return result[:limit]
-    except TypeError:
+    except (TypeError, KeyError):
         # A relation accessor can hand back a non-subscriptable iterable (a
         # consumer-assigned sequence proxy, a custom manager's cached rows).
         # Falling back to ``islice`` bounds it rather than letting it through:
         # the alternative to slicing an unsliceable value is NOT "return it
         # whole", which would be a bound that silently stops applying to
-        # exactly the shapes nobody anticipated.
+        # exactly the shapes nobody anticipated. ``KeyError`` joins
+        # ``TypeError`` because a MAPPING-shaped result - a plain ``dict``, or a
+        # dict subclass whose ``__getitem__`` guards its keys - answers a slice
+        # subscript with ``KeyError`` on interpreters where slices hash, and a
+        # bound seam must never let that raw ``KeyError`` escape a resolver.
         return list(islice(result, limit))
 
 
@@ -560,11 +622,18 @@ async def bounded_rows_async(
                 # ``add_note`` does on 3.11+ (same list, same traceback
                 # rendering) and is the only form that carries the diagnostic
                 # across the whole supported range.
-                notes = [*getattr(primary_error, "__notes__", ())]
-                notes.append(
-                    f"bounded_rows_async iterator cleanup failed: {close_error!r}",
-                )
-                primary_error.__notes__ = notes
+                try:
+                    notes = [*getattr(primary_error, "__notes__", ())]
+                    notes.append(
+                        f"bounded_rows_async iterator cleanup failed: {close_error!r}",
+                    )
+                    primary_error.__notes__ = notes
+                except Exception:
+                    # The note is a diagnostic attachment, never a failure of
+                    # its own: a hostile note surface on the source error (an
+                    # unreadable or unassignable ``__notes__``) must not mask
+                    # the source error the caller is already propagating.
+                    pass
     return rows
 
 

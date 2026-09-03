@@ -2,9 +2,13 @@
 
 from types import MappingProxyType, SimpleNamespace
 
+import pytest
+
 from django_strawberry_framework.utils.context import (
+    MISSING,
     clear_context_key,
     get_context_value,
+    restored_context_keys,
     stash_on_context,
 )
 
@@ -111,3 +115,98 @@ def test_locked_dict_subclass_stash_and_clear_are_noops():
     stash_on_context(ctx, "dst_context_test", 99)
     clear_context_key(ctx, "dst_context_test")
     assert get_context_value(ctx, "dst_context_test") == 42
+
+
+class SlotsMapping:
+    """A non-dict mapping-only context: ``setattr`` is impossible, items work."""
+
+    __slots__ = ("values",)
+
+    def __init__(self):
+        self.values = {}
+
+    def __getitem__(self, key):
+        return self.values[key]
+
+    def __setitem__(self, key, value):
+        self.values[key] = value
+
+    def __delitem__(self, key):
+        del self.values[key]
+
+
+@pytest.mark.parametrize(
+    "make",
+    [SimpleNamespace, dict, SlotsMapping],
+    ids=["object", "dict", "slots"],
+)
+def test_restored_context_keys_round_trips_absent_present_and_none(make):
+    """The restore puts ABSENT keys back to absent and re-stashes found values.
+
+    An explicit ``None`` snapshot is a VALUE: it is re-stashed, never cleared,
+    on every writable context shape the helpers dispatch on.
+    """
+    for stashed in ("outer", None):
+        context = make()
+        stash_on_context(context, "dst_context_test", stashed)
+        with restored_context_keys(context, "dst_context_test"):
+            stash_on_context(context, "dst_context_test", "inner")
+        if stashed is None:
+            assert get_context_value(context, "dst_context_test", "absent") is None
+        else:
+            assert get_context_value(context, "dst_context_test") == stashed
+
+    context = make()
+    with restored_context_keys(context, "dst_context_test"):
+        stash_on_context(context, "dst_context_test", "inner")
+    assert get_context_value(context, "dst_context_test", "absent") == "absent"
+
+
+def test_restored_context_keys_still_restores_when_the_body_raises():
+    """Restoration runs in a ``finally``: a raising body leaves the context as found."""
+    context = {}
+    stash_on_context(context, "kept", "outer")
+    with pytest.raises(RuntimeError, match="boom"):
+        with restored_context_keys(context, "kept", "never-was"):
+            stash_on_context(context, "kept", "inner")
+            stash_on_context(context, "never-was", "transient")
+            raise RuntimeError("boom")
+    assert get_context_value(context, "kept") == "outer"
+    assert get_context_value(context, "never-was", "absent") == "absent"
+
+
+def test_restored_context_keys_on_a_none_context_is_inert():
+    """No context means nothing to snapshot and nothing to restore."""
+    with restored_context_keys(None, "dst_context_test"):
+        stash_on_context(None, "dst_context_test", 42)
+        assert get_context_value(None, "dst_context_test", "d") == "d"
+    assert get_context_value(None, "dst_context_test", "d") == "d"
+
+
+def test_restored_context_keys_snapshots_an_unreadable_key_as_absent():
+    """A hostile read cannot be distinguished from absence: the restore clears."""
+
+    class ReadGuarded(SlotsMapping):
+        __slots__ = ("readable",)
+
+        def __init__(self):
+            super().__init__()
+            self.readable = False
+
+        def __getitem__(self, key):
+            if not self.readable:
+                raise RuntimeError("reads locked")
+            return self.values[key]
+
+    context = ReadGuarded()
+    context.values["dst_context_test"] = "outer"
+    with restored_context_keys(context, "dst_context_test"):
+        context.readable = True
+        stash_on_context(context, "dst_context_test", "inner")
+    assert get_context_value(context, "dst_context_test", "absent") == "absent"
+
+
+def test_the_public_missing_sentinel_is_the_round_trip_identity():
+    """``MISSING`` is importable and is the exact sentinel the read dispatches on."""
+    assert get_context_value({}, "dst_context_test", MISSING) is MISSING
+    assert MISSING is not None

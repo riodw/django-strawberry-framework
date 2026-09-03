@@ -7,9 +7,9 @@ provenance, and classify each supplied top-level field as a leaf, a related
 branch, or a logical operator. That classification was spelled inline at four
 correctness-sensitive call sites -- the filter normalizer
 (``filters/sets.py::FilterSet._normalize_input``), the order normalizer
-(``orders/inputs.py::normalize_input_value``), and the two permission walkers
-(``utils/permissions.py::active_permission_field_paths`` /
-``active_related_branches``). A drift between any two copies in the active-input
+(``orders/inputs.py::normalize_input_value``), and the permission walk
+(``utils/permissions.py::active_permission_targets`` and its
+``active_related_branches`` wrapper). A drift between any two copies in the active-input
 decision is a real bug class -- a filter applied without its permission gate, a
 related visibility hook skipped, work done on inactive input -- so the neutral
 mechanics are single-sited here.
@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 from ..exceptions import ConfigurationError, _safe_type_name
 
@@ -198,6 +198,126 @@ class ActiveField:
     related_obj: Any = None
 
 
+def set_traversal_depth_cap(set_cls: Any) -> int:
+    """Return the traversal-depth budget that governs ``set_cls``.
+
+    ONE budget for both traversals over the same input tree: a ``FilterSet``
+    declares ``_MAX_LOGIC_DEPTH`` (and consumers may raise it on a subclass),
+    while an ``OrderSet`` has no such knob and takes
+    ``DEFAULT_SET_INPUT_TRAVERSAL_DEPTH``. The resolution was written out at both
+    the logical-branch walk and the permission walk, which is how one budget came
+    to be enforced with two vocabularies.
+    """
+    declared = getattr(set_cls, "_MAX_LOGIC_DEPTH", None)
+    return declared if isinstance(declared, int) else DEFAULT_SET_INPUT_TRAVERSAL_DEPTH
+
+
+def raise_set_traversal_depth_exceeded(
+    set_cls: Any,
+    *,
+    branch: str,
+    input_noun: str,
+    subject: str = "",
+) -> NoReturn:
+    """Raise the shared depth-cap ``ConfigurationError`` for ``set_cls``.
+
+    The reason both walks cap at all is the same - a self-referential set
+    (``CardFilter.dependencies`` -> ``CardFilter``) would otherwise recurse
+    input-deep into a ``RecursionError`` instead of a typed error at the source -
+    so the sentence is shared and only the three words that name WHICH walk hit
+    the cap are per-caller.
+
+    The label is read defensively: ``__qualname__`` is an ordinary attribute a
+    metaclass can make hostile, and a walk that already decided to fail must not
+    fail differently while naming the class that failed. That guard existed on
+    only one of the two copies.
+    """
+    cap = set_traversal_depth_cap(set_cls)
+    try:
+        label = getattr(set_cls, "__qualname__", None)
+    except BaseException:
+        label = None
+    if not isinstance(label, str):
+        label = _safe_type_name(set_cls)
+    if subject:
+        label = f"{subject} {label}"
+    cap_detail = (
+        f"_MAX_LOGIC_DEPTH={cap}"
+        if getattr(set_cls, "_MAX_LOGIC_DEPTH", None) is not None
+        else f"the maximum traversal depth ({cap})"
+    )
+    raise ConfigurationError(
+        f"{label}: {branch} nesting exceeded {cap_detail}. Flatten the "
+        f"{input_noun} input or split into multiple queries.",
+    )
+
+
+def assert_set_traversal_depth(
+    set_cls: Any,
+    depth: int,
+    *,
+    branch: str,
+    input_noun: str,
+    subject: str = "",
+) -> None:
+    """Fail closed when ``depth`` passes ``set_cls``'s traversal budget."""
+    if depth > set_traversal_depth_cap(set_cls):
+        raise_set_traversal_depth_exceeded(
+            set_cls,
+            branch=branch,
+            input_noun=input_noun,
+            subject=subject,
+        )
+
+
+class RelatedDeclarationError(Exception):
+    """A set's related-declaration attribute could not be read, or is not a mapping.
+
+    An internal signal, never surfaced: :func:`related_declaration_mapping`
+    raises it and every caller translates it into that caller's own
+    ``ConfigurationError`` prose (the permission walker names the declaring
+    class and attribute; the input traversal names the input type). The
+    ``kind`` distinguishes the two rejections, and ``__cause__`` carries the
+    original failure so a translated error can chain it.
+    """
+
+    def __init__(self, kind: str, value: Any = None) -> None:
+        super().__init__(kind)
+        self.kind = kind
+        self.value = value
+
+
+def related_declaration_mapping(owner: Any, related_attr: str) -> Any:
+    """Read a set's related-declaration attribute and prove it is a mapping.
+
+    The shared front half of every related-branch traversal: read the attribute
+    without trusting a descriptor to behave, treat an absent or ``None``
+    declaration as "no related fields", and reject anything that is not a
+    ``Mapping`` before a caller starts indexing it. The permission walker and
+    the neutral input traversal both need exactly this and had it written out
+    twice, so a new rule about what a related declaration may BE would have had
+    to be added in both places.
+
+    What stays per-caller is what each does with the mapping - the permission
+    walker materializes it through the UNBOUND ``dict.items`` (a hostile
+    ``items`` override must not run inside an authorization walk), while the
+    traversal reads membership lazily and words a hostile ``__contains__`` /
+    ``__getitem__`` failure per operation. Those are different contracts, not a
+    missed merge.
+
+    Raises :class:`RelatedDeclarationError` for the caller to translate.
+    """
+    try:
+        related = getattr(owner, related_attr, None)
+    except BaseException as exc:
+        raise RelatedDeclarationError("unreadable") from exc
+    if related is None:
+        return {}
+    if not isinstance(related, Mapping):
+        raise RelatedDeclarationError("not_mapping", related)
+    return related
+
+
 def iter_active_fields(
     set_cls: type,
     input_value: Any,
@@ -247,16 +367,29 @@ def iter_active_fields(
     if items is None:
         return
     try:
-        related = getattr(set_cls, config.related_attr, {})
+        related = related_declaration_mapping(set_cls, config.related_attr)
+    except RelatedDeclarationError as exc:
+        if exc.kind == "not_mapping":
+            raise ConfigurationError(
+                "Could not traverse set input of type "
+                f"{_safe_type_name(input_value)}: related-field declarations are not a mapping.",
+            ) from exc.__cause__
+        raise _walk_error(
+            input_value,
+            "the related-field declarations could not be read",
+        ) from exc.__cause__
     except BaseException as exc:
-        raise _walk_error(input_value, "the related-field declarations could not be read") from exc
-    if related is None:
-        related = {}
-    if not isinstance(related, Mapping):
-        raise ConfigurationError(
-            "Could not traverse set input of type "
-            f"{_safe_type_name(input_value)}: related-field declarations are not a mapping.",
-        )
+        # Reading the attribute NAME off ``config`` dispatches consumer code too
+        # (``related_attr`` is an ordinary attribute read, and the traversal
+        # config is a public dataclass a test double may replace), and the
+        # shared helper only contains the CLASS-side read. This arm restores
+        # the containment the walker has always had around the whole
+        # declaration read: any other failure is the same walk failure, worded
+        # identically and chained to the exception that caused it.
+        raise _walk_error(
+            input_value,
+            "the related-field declarations could not be read",
+        ) from exc
     for python_attr, raw_value in items:
         if is_inactive_value(raw_value, unset_sentinel=unset_sentinel):
             continue

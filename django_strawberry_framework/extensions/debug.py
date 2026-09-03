@@ -89,6 +89,7 @@ Capture mechanism and its documented boundaries:
   reads ``[]``.
 """
 
+import math
 import threading
 import traceback
 from collections.abc import Mapping
@@ -116,7 +117,7 @@ __all__ = ["DjangoDebugExtension"]
 _SLOW_QUERY_SECONDS = 10
 
 # Ceiling for the nested ``GraphQLError.original_error`` walk -
-# ``utils/typing.py``'s ``_MAX_TYPE_WRAPPER_DEPTH`` ceiling re-spelled locally
+# ``utils/typing.py``'s ``MAX_TYPE_WRAPPER_DEPTH`` ceiling re-spelled locally
 # (deliberately NOT imported: the walk's failure policy differs - stop and
 # keep the best-effort terminal instead of raising - so it stays a local
 # helper until a fourth chain-peel motivates a shared extraction).
@@ -281,6 +282,12 @@ def _serialize_sql_row(
     """
     sql = str(entry["sql"])
     duration = float(entry["time"])
+    if not math.isfinite(duration):
+        raise ValueError(
+            f"query-log entry carries a non-finite duration {entry['time']!r}; the row is "
+            "not JSON-encodable, so it is refused and the payload degrades by dropping "
+            "only this row",
+        )
     return {
         "vendor": database_connection.vendor,
         "alias": database_connection.alias,
@@ -456,6 +463,33 @@ def _apply_payload_caps(
     return {"sql": admitted_sql, "exceptions": admitted_exceptions}
 
 
+def _serialized_sql_row_or_dropped(
+    database_connection: "BaseDatabaseWrapper",
+    entry: dict[str, Any],
+) -> "_DebugSQLRow | None":
+    """Serialize one query-log ``entry``, or return ``None`` after logging the drop.
+
+    The per-ROW half of the SQL degrade, and a named function rather than a
+    ``try`` inside ``_build_payload``'s entry loop for two reasons. The
+    containment MUST be per row - a guard wrapping the whole loop (or sitting
+    outside a generator expression feeding ``list.extend``, which is what it
+    used to be) abandons the generator on the first refusal and so drops every
+    remaining entry along with the offending one, turning "this row is not
+    JSON-encodable" into "the diagnostic stops here". And a refusal is one
+    hostile row in an otherwise healthy log, so the surviving rows must keep
+    their log order, which appending only the successes preserves.
+    """
+    try:
+        return _serialize_sql_row(database_connection, entry)
+    except Exception:
+        logger.exception(
+            "DjangoDebugExtension: one SQL diagnostic row could not be serialized; the "
+            "payload degrades by dropping that row alone and keeps every other row, in "
+            "log order. The operation result is unaffected.",
+        )
+        return None
+
+
 def _build_payload(snapshots: "list[_ConnectionSnapshot]", execution_result: Any) -> _DebugPayload:
     """Assemble the completed ``debug`` payload - the one place spelling its shape.
 
@@ -466,10 +500,14 @@ def _build_payload(snapshots: "list[_ConnectionSnapshot]", execution_result: Any
     are never put at risk by a diagnostic. The two degrades are deliberately not
     symmetric, because what survives a failure differs:
 
-    - **SQL collection degrades to the rows serialized so far**, across every
-      snapshot already drained and partway through the failing one:
-      ``list.extend`` appends each generated row as it is produced, so the rows
-      that preceded the failure remain in the list.
+    - **SQL collection degrades per ROW where it can**, through
+      ``_serialized_sql_row_or_dropped``. A row that cannot be serialized (the
+      non-finite duration ``_serialize_sql_row`` refuses, a backend log entry
+      with an unusable ``sql``/``time``) costs only itself: it is dropped, and
+      every other row - including the ones logged AFTER it - still reaches the
+      payload in log order. A failure DRAINING a connection's query log is not
+      per-row and cannot be resumed, so it degrades the coarser way, to the rows
+      serialized so far.
     - **Exception collection degrades to an EMPTY list.** ``_collect_exceptions``
       builds and returns its own list, so a failure inside it leaves nothing to
       salvage; there is no partial list to adopt.
@@ -482,12 +520,10 @@ def _build_payload(snapshots: "list[_ConnectionSnapshot]", execution_result: Any
     sql_rows: list[_DebugSQLRow] = []
     try:
         for snapshot in snapshots:
-            # ``extend`` consumes the generator row by row, so rows serialized
-            # before a failure survive the degrade below.
-            sql_rows.extend(
-                _serialize_sql_row(snapshot.database_connection, entry)
-                for entry in _query_log_entries_since(snapshot)
-            )
+            for entry in _query_log_entries_since(snapshot):
+                row = _serialized_sql_row_or_dropped(snapshot.database_connection, entry)
+                if row is not None:
+                    sql_rows.append(row)
     except Exception:
         logger.exception(
             "DjangoDebugExtension: SQL diagnostic collection failed; the debug payload "
@@ -540,7 +576,9 @@ class DjangoDebugExtension(SchemaExtension):
     List this class **after** any masking extension (``MaskErrors``):
     teardowns unwind LIFO, and masking strips ``original_error`` in its own
     teardown, so debug must tear down first to read the originals. Listed
-    before it, ``exceptions`` reads ``[]``.
+    before it, ``exceptions`` reads ``[]``. (This governs the refresh build
+    below - see ``on_execute`` for the streaming seam, where the payload is
+    necessarily assembled before any masking teardown runs.)
 
     Lifecycle: ``on_operation`` brackets every configured database connection
     with Django's own debug cursor (``force_debug_cursor``, saved-value
@@ -555,8 +593,23 @@ class DjangoDebugExtension(SchemaExtension):
     and ``get_results`` keeps returning ``{}`` even if the engine's
     early-result plus teardown-failure recovery path calls it a second
     time after teardown. ``get_results`` is a pure, idempotent read of that
-    stash: ``{"debug": <payload>}`` once teardown published it, ``{}``
+    stash: ``{"debug": <payload>}`` once a teardown published it, ``{}``
     otherwise.
+
+    The stash is written by TWO teardowns. ``on_execute``'s teardown runs the
+    moment graphql-core returned - execution data is complete there, and on
+    the engine's streaming path (``Schema.stream``, which the package's
+    WebSocket consumers call for every operation type from
+    strawberry-graphql 0.319.0 on) the engine reads the extension results
+    INSIDE the still-open operation context, BEFORE ``on_operation`` teardown
+    runs - so without an ``on_execute`` stash the streaming seam could never
+    carry ``extensions["debug"]`` at all. ``on_operation`` teardown then
+    REBUILDS the stash from the completed log; on the non-streaming paths the
+    engine reads the results after that rebuild, so the masking-extension
+    list-order contract above keeps governing what execute/execute_sync
+    publish, while streaming transports receive the pre-masking payload the
+    executing hook saw (the transport masks each frame's ``errors`` itself;
+    the diagnostic keeping originals is its documented purpose).
     """
 
     # The absent-payload sentinel: one immutable class-level default, read
@@ -564,6 +617,14 @@ class DjangoDebugExtension(SchemaExtension):
     # teardown assigns the completed dict. ``None`` is unambiguous because a
     # completed payload is always a dict, even when both lists are empty.
     _payload: "_DebugPayload | None" = None
+
+    # The bracketed snapshots, assigned pre-yield by ``on_operation`` and
+    # never set on the inert/refused path. ``None`` is what both the
+    # executing hook and ``on_operation``'s teardown read to decide whether
+    # this instance ever bracketed: the engine enters ``on_execute`` for every
+    # executed operation, including the inert ones, so the sentinel - not a
+    # second gate read - is what keeps the refused path from building anything.
+    _snapshots: "list[_ConnectionSnapshot] | None" = None
 
     def __init__(self, *, allow_unsafe_production: bool = False) -> None:
         """Record the deployment's acknowledgement, defaulting to the safe answer.
@@ -602,7 +663,13 @@ class DjangoDebugExtension(SchemaExtension):
         Only the exact boolean ``True`` opens the development disclosure path;
         malformed truthy values fail closed.
         """
-        return self.allow_unsafe_production or settings.DEBUG is True
+        # ``getattr`` with a default, not attribute access: a deployment (or a
+        # test) that DELETED ``settings.DEBUG`` must get the same inert
+        # refusal a malformed value gets, not a request that dies inside the
+        # gate with an ``AttributeError``. Only the exact boolean ``True``
+        # opens the disclosure path; anything absent or malformed fails
+        # closed without touching the operation.
+        return self.allow_unsafe_production or getattr(settings, "DEBUG", None) is True
 
     def on_operation(self) -> Any:  # type: ignore[override]
         """Bracket the operation with the debug cursor; assemble the payload at teardown.
@@ -646,20 +713,64 @@ class DjangoDebugExtension(SchemaExtension):
                         query_log_start=len(database_connection.queries_log),
                     ),
                 )
+            self._snapshots = snapshots
             try:
                 yield
             finally:
-                # Publish only when GraphQL execution assigned a graphql-core
-                # ``ExecutionResult``. Parse/validation early-returns leave
-                # ``result`` as ``None`` (sync) or a strawberry
-                # ``PreExecutionError`` (async ``_handle_execution_result``);
-                # stashing an empty payload for those shapes lets the engine's
-                # early-return + teardown-failure recovery path's second
-                # ``get_results`` call publish ``debug`` for an operation that
-                # never executed (the no-``debug``-key contract).
-                result = self.execution_context.result
-                if isinstance(result, GraphQLExecutionResult):
-                    self._payload = _build_payload(snapshots, result)
+                # The rebuild pass: the engine reads the extension results
+                # AFTER this unwind on the non-streaming paths, so this stash
+                # is what execute/execute_sync publish - including the
+                # masking-order behavior the class docstring pins. It must
+                # still refuse every non-graphql result shape: parse and
+                # validation early-returns leave ``result`` as ``None`` (sync)
+                # or a strawberry ``PreExecutionError`` (async
+                # ``_handle_execution_result``), and stashing for those would
+                # let the engine's early-return + teardown-failure recovery
+                # path's second ``get_results`` call publish ``debug`` for an
+                # operation that never executed (the no-``debug``-key
+                # contract).
+                self._stash_payload_if_executed()
+
+    def on_execute(self) -> Any:  # type: ignore[override]
+        """Stash the payload the moment graphql-core returns, before any operation teardown.
+
+        The engine's streaming path reads the extension results inside the
+        still-open operation context (``Schema._handle_execution_result``
+        runs there), so a stash built only at ``on_operation`` teardown never
+        reaches a streaming transport. The executing hook's teardown runs
+        immediately after graphql-core returned - execution data is complete,
+        and ``execution_context.result`` is the graphql-core
+        ``ExecutionResult`` the engine just assigned - so the payload built
+        here is the one the streaming seam publishes. The non-streaming paths
+        read the results after ``on_operation``'s rebuild overwrites this
+        stash, so their published payload is unchanged. Inert (fail-closed)
+        instances never bracketed: ``_snapshots`` is ``None`` and the hook
+        contributes nothing.
+        """
+        if self._snapshots is None:
+            yield
+            return
+        try:
+            yield
+        finally:
+            self._stash_payload_if_executed()
+
+    def _stash_payload_if_executed(self) -> None:
+        """Build and stash the payload when GraphQL execution assigned a result.
+
+        The one stash writer, shared by the two teardowns. Publish only when
+        ``execution_context.result`` is a graphql-core ``ExecutionResult``:
+        parse/validation early-returns leave ``result`` as ``None`` (sync) or
+        a strawberry ``PreExecutionError`` (async ``_handle_execution_result``);
+        stashing an empty payload for those shapes would let the engine's
+        early-return + teardown-failure recovery path's second ``get_results``
+        call publish ``debug`` for an operation that never executed (the
+        no-``debug``-key contract). The diagnostic's own failures degrade
+        inside ``_build_payload`` and never raise from here.
+        """
+        result = self.execution_context.result
+        if isinstance(result, GraphQLExecutionResult):
+            self._payload = _build_payload(self._snapshots or [], result)
 
     def get_results(self) -> dict[str, Any]:
         """Return ``{"debug": <payload>}`` once the stash exists, else ``{}``.

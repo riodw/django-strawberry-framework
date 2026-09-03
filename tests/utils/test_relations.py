@@ -13,35 +13,24 @@ from django_strawberry_framework.exceptions import (
     LookupValidationError,
     PathResolutionError,
 )
-from django_strawberry_framework.utils import (
-    RelationKind,
-    is_many_side_relation_kind,
-    relation_kind,
-)
 from django_strawberry_framework.utils import relations as relations_module
 from django_strawberry_framework.utils.relations import (
     ClassifiedPath,
+    RelationKind,
     RelationPathHop,
     _is_traversable_relation,
     _path_traverses_to_many_cached,
-    _relation_bool,
     _resolve_segment_field,
     classify_path,
     has_composite_pk,
     instance_accessor,
     is_forward_concrete_relation,
     is_forward_many_to_many,
+    is_many_side_relation_kind,
     path_traverses_to_many,
+    relation_bool,
+    relation_kind,
     validate_lookup_expr,
-)
-from django_strawberry_framework.utils.relations import (
-    RelationKind as _RelationKindSubmodule,
-)
-from django_strawberry_framework.utils.relations import (
-    is_many_side_relation_kind as _is_many_side_relation_kind_submodule,
-)
-from django_strawberry_framework.utils.relations import (
-    relation_kind as _relation_kind_submodule,
 )
 
 
@@ -173,13 +162,6 @@ def test_relation_kind_reverse_many_to_one_is_in_literal():
     import typing
 
     assert "reverse_many_to_one" in typing.get_args(RelationKind)
-
-
-def test_utils_init_reexports_match_submodule():
-    """``utils.relation_kind`` / ``utils.RelationKind`` re-export the submodule contract."""
-    assert relation_kind is _relation_kind_submodule
-    assert RelationKind is _RelationKindSubmodule
-    assert is_many_side_relation_kind is _is_many_side_relation_kind_submodule
 
 
 def test_is_many_side_relation_kind_matches_list_valued_shapes():
@@ -926,10 +908,10 @@ def test_has_composite_pk_cardinality():
 
 
 def test_relation_bool_none_value_falls_back_to_default():
-    """A None-valued attribute in _relation_bool adopts the provided default."""
+    """A None-valued attribute in relation_bool adopts the provided default."""
     field_with_none = SimpleNamespace(flag=None)
-    assert _relation_bool(field_with_none, "flag", default=True) is True
-    assert _relation_bool(field_with_none, "flag", default=False) is False
+    assert relation_bool(field_with_none, "flag", default=True) is True
+    assert relation_bool(field_with_none, "flag", default=False) is False
 
 
 def test_resolve_segment_field_unexpected_exception_converts_to_field_does_not_exist():
@@ -1194,3 +1176,54 @@ def test_is_forward_concrete_relation_contains_every_metadata_read():
 
     assert is_forward_concrete_relation(_HostileKind()) is False
     assert is_forward_concrete_relation(_HostileColumn()) is False
+
+
+def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache():
+    """``cache_clear`` invalidates the classifier cache beneath the answer cache.
+
+    The probe's answer is computed from ``_classify_path_cached``; a clear that
+    emptied only the outer answer cache would serve the stale frozen
+    classification after a metadata change under the same ``(model, path)``
+    key, even though the public handle had been called.
+    """
+    from django_strawberry_framework.utils.relations import _classify_path_cached
+
+    _classify_path_cached.cache_clear()
+    path_traverses_to_many.cache_clear()
+    try:
+
+        class _MutableOpts:
+            fields = {"flag": SimpleNamespace(name="flag", is_relation=False)}
+
+            def get_field(self, name):
+                try:
+                    return self.fields[name]
+                except KeyError:
+                    raise FieldDoesNotExist(name) from None
+
+        fake_model = SimpleNamespace(_meta=_MutableOpts())
+        assert path_traverses_to_many(fake_model, "flag") is False
+
+        _MutableOpts.fields = {
+            "flag": SimpleNamespace(
+                name="flag",
+                is_relation=True,
+                many_to_many=True,
+                one_to_many=False,
+                one_to_one=False,
+                auto_created=False,
+                concrete=True,
+                content_type_field_name=None,
+                object_id_field_name=None,
+                path_infos=(SimpleNamespace(m2m=True, to_opts=SimpleNamespace(model=Genre)),),
+            ),
+        }
+        path_traverses_to_many.cache_clear()
+
+        assert path_traverses_to_many(fake_model, "flag") is True
+        # The handle reaches beneath the answer cache: the classifier cache is
+        # empty too, so no warm key can serve a stale frozen classification.
+        assert _classify_path_cached.cache_info().currsize == 0
+    finally:
+        _classify_path_cached.cache_clear()
+        path_traverses_to_many.cache_clear()

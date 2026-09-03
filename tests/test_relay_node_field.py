@@ -23,6 +23,8 @@ from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db import models
 from strawberry import relay
+from strawberry.schema_directive import Location as DirectiveLocation
+from strawberry.schema_directive import schema_directive
 
 import django_strawberry_framework
 from django_strawberry_framework import (
@@ -38,6 +40,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.relay import (
     GlobalIDDecode,
     _coerce_pk_or_none,
+    _node_fields_declared,
     _stamp_node_type,
     decode_model_global_id,
 )
@@ -918,6 +921,67 @@ def test_node_field_target_guards(factory):
         match=rf"{factory.__name__} requires a Relay-Node-shaped DjangoType target",
     ):
         factory(PlainCategoryType)
+
+
+@pytest.mark.parametrize("factory", [DjangoNodeField, DjangoNodesField])
+@pytest.mark.parametrize("bare", ["@deprecated", b"@deprecated"])
+def test_node_field_rejects_bare_string_directives(factory, bare):
+    """A bare str / bytes ``directives`` is rejected at the construction line.
+
+    Both root Relay factories forwarded ``directives`` to ``strawberry.field()``
+    unvalidated, so a bare string was iterated character-wise into a field whose
+    "directives" are chars without ``__strawberry_directive__`` (raw
+    AttributeError at schema build) and a bytes built silently then crashed SDL
+    render. The containment is
+    ``utils/directives.py::validated_field_directives``.
+    """
+    with pytest.raises(
+        ConfigurationError,
+        match=rf"{factory.__name__} directives must be a sequence of directive instances",
+    ):
+        factory(directives=bare)
+
+
+@pytest.mark.parametrize("factory", [DjangoNodeField, DjangoNodesField])
+def test_node_field_rejects_hostile_directives_iterator(factory):
+    """A hostile iterator escaped raw pre-fix; a non-iterable detonated as TypeError.
+
+    The rejection also runs BEFORE the ``_node_fields_declared`` ledger append,
+    so a refused construction leaves no phantom entry behind the finalize-time
+    no-Node-types check.
+    """
+
+    class HostileDirectives:
+        def __iter__(self):
+            raise RuntimeError("hostile iterator detonated")
+
+    with pytest.raises(
+        ConfigurationError,
+        match=rf"{factory.__name__} directives could not be read",
+    ) as exc:
+        factory(directives=HostileDirectives())
+    assert isinstance(exc.value.__cause__, RuntimeError)
+
+    with pytest.raises(
+        ConfigurationError,
+        match=rf"{factory.__name__} directives could not be read",
+    ) as exc:
+        factory(directives=42)
+    assert isinstance(exc.value.__cause__, TypeError)
+
+    assert _node_fields_declared == []
+
+
+@pytest.mark.parametrize("factory", [DjangoNodeField, DjangoNodesField])
+def test_node_field_passes_real_directive_instances_through(factory):
+    """Positive control: a genuine directive instance still constructs and declares."""
+
+    @schema_directive(locations=[DirectiveLocation.FIELD_DEFINITION], name="probeTag")
+    class ProbeTag:
+        marker: str = "probe"
+
+    assert factory(directives=(ProbeTag(),)) is not None
+    assert _node_fields_declared == [factory.__name__]
 
 
 def test_node_field_without_node_types_raises_at_finalize():

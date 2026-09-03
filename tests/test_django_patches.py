@@ -31,6 +31,7 @@ swapped cursor before reaching ``tearDownClass``. The unit tests
 below isolate the bug class from that machinery.)
 """
 
+import importlib
 from unittest import mock
 
 import pytest
@@ -634,6 +635,71 @@ def test_apply_no_ops_when_django_dependency_opted_out(settings):
         assert _django_patches._patch_is_installed() is True
     finally:
         SimpleTestCase._remove_databases_failures = saved
+
+
+def test_reload_preserves_the_installed_patch_teardown():
+    """``importlib.reload()`` must not break the RUNNING patch's teardown.
+
+    ``importlib.reload()`` retains the module dictionary but re-executes the
+    module while ``SimpleTestCase`` still points at the PREVIOUS generation of
+    the patch - and that still-installed function resolves its method list
+    through :func:`_disallowed_connection_methods`, whose discriminator lives
+    in that same re-executed dictionary. A plain ``None`` reset of
+    ``_validated_remove_databases_failures_source`` therefore turned every
+    subsequent ``tearDownClass`` in the process into a ``RuntimeError``
+    ("ran without a validated upstream body") between the reload and the next
+    ``apply()`` - the module docstring's reload-safety promise held for the
+    NEXT ``apply()`` (``_captured_upstream_descriptor`` recovers the original
+    so validation succeeds) but not for the patch generation already running.
+    Without the reload-aware initialization, the teardown call below raises
+    ``RuntimeError`` instead of unwrapping to the sentinel.
+    """
+    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
+    try:
+        assert _django_patches._patch_is_installed() is True
+
+        importlib.reload(_django_patches)
+
+        # The reload re-executed the module: its module-level function object is
+        # a NEW generation, while the app-load generation remains installed.
+        assert (
+            SimpleTestCase.__dict__["_remove_databases_failures"].__func__
+            is not _django_patches._patched_remove_databases_failures
+        )
+        assert _django_patches._patch_is_installed() is False
+        # The reloaded module retained the previously validated upstream body,
+        # so the still-installed generation's read path stays valid.
+        assert (
+            _django_patches._validated_remove_databases_failures_source
+            in _django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES
+        )
+
+        class _NarrowReloaded(TransactionTestCase):
+            databases = frozenset()  # exclude every alias including default
+
+        connection = connections["default"]
+        original_cursor = connection.cursor
+        sentinel = mock.sentinel.reload_survivor
+        connection.cursor = _database_failure(sentinel)
+        try:
+            # The still-installed PREVIOUS-generation function must unwrap
+            # cleanly against the reloaded module dictionary.
+            _NarrowReloaded._remove_databases_failures()
+            assert connection.cursor is sentinel
+        finally:
+            connection.cursor = original_cursor
+
+        # And the next ``apply()`` revalidates (against the recovered original)
+        # and reinstalls a fresh generation of the CURRENT module object.
+        _django_patches.apply()
+        assert _django_patches._patch_is_installed() is True
+        assert (
+            SimpleTestCase.__dict__["_remove_databases_failures"].__func__
+            is _django_patches._patched_remove_databases_failures
+        )
+    finally:
+        SimpleTestCase._remove_databases_failures = saved
+        _django_patches.apply()
 
 
 def test_django_dependency_opt_out_silences_drifted_pin_abort(settings):

@@ -19,6 +19,26 @@ from django_strawberry_framework.exceptions import (
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.db import models
 
+__all__ = [
+    "MANY_SIDE_RELATION_KINDS",
+    "ClassifiedPath",
+    "RelationKind",
+    "RelationPathHop",
+    "classify_path",
+    "has_composite_pk",
+    "instance_accessor",
+    "is_forward_concrete_relation",
+    "is_forward_many_to_many",
+    "is_many_side_relation_kind",
+    "path_traverses_to_many",
+    "relation_attr",
+    "relation_bool",
+    "relation_kind",
+    "relation_name",
+    "safe_truthy",
+    "validate_lookup_expr",
+]
+
 RelationKind: TypeAlias = Literal[
     "many",
     "reverse_many_to_one",
@@ -34,19 +54,71 @@ MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 _MISSING = object()
 
 
-def _relation_attr(field: object, name: str, default: Any = _MISSING) -> Any:
-    """Read relation metadata without allowing consumer objects to escape raw errors."""
+def safe_truthy(value: object) -> bool:
+    """Ask a value for its truth, treating a raising truth test as false.
+
+    Containing the READ is only half a never-raises boundary: the read hands
+    back whatever it found, so every ``if`` / ``or`` / ``not`` applied to that
+    result is a second escape route one frame later. A double whose ``__bool__``
+    raises would otherwise break the contract after the read itself was safely
+    contained.
+    """
+    try:
+        return bool(value)
+    except BaseException:
+        return False
+
+
+def relation_attr(
+    field: object,
+    name: str,
+    default: Any = _MISSING,
+    *,
+    lenient: bool = False,
+) -> Any:
+    """Read relation metadata without allowing consumer objects to escape raw errors.
+
+    ``lenient`` selects the FAILURE POLICY, and it is the only axis on which the
+    package's two relation-reading surfaces differ. Strict (the default) turns an
+    unreadable attribute into a typed ``ConfigurationError``, because a schema
+    built on metadata that cannot be read is a configuration the consumer must
+    fix. Lenient returns ``default`` instead, for the optimizer's join taxonomy,
+    whose whole contract is that it never raises: it classifies a relation to
+    decide a FETCH STRATEGY, and an unclassifiable relation must degrade to the
+    unplanned path rather than fail the request.
+
+    The two policies stay genuinely different - they can and do answer
+    differently for the same malformed field - but they now share one read body,
+    so a change to HOW relation metadata is read is one edit rather than two
+    parallel families that drifted.
+    """
     try:
         return getattr(field, name, default)
     except BaseException as exc:
+        if lenient:
+            return default
         raise ConfigurationError(
             f"Could not read relation metadata {name!r} from {_safe_type_name(field)}.",
         ) from exc
 
 
-def _relation_bool(field: object, name: str, default: bool = False) -> bool:
-    """Read one relation flag, rejecting hostile or malformed metadata safely."""
-    value = _relation_attr(field, name, default)
+def relation_bool(
+    field: object,
+    name: str,
+    default: bool = False,
+    *,
+    lenient: bool = False,
+) -> bool:
+    """Read one relation flag under the strict or lenient policy.
+
+    Strict rejects a non-``bool`` outright (malformed metadata is a
+    configuration error, and a truthy non-bool must not silently pass for
+    ``True``). Lenient answers with :func:`safe_truthy`, guarding both the read
+    and the truth test, because the taxonomy has no way to surface an error.
+    """
+    value = relation_attr(field, name, default, lenient=lenient)
+    if lenient:
+        return safe_truthy(value)
     if value is None:
         value = default
     if type(value) is not bool:
@@ -57,9 +129,9 @@ def _relation_bool(field: object, name: str, default: bool = False) -> bool:
     return value
 
 
-def _relation_name(field: object, name: str) -> str | None:
+def relation_name(field: object, name: str) -> str | None:
     """Read an optional GenericRelation field-name slot without dispatching errors."""
-    value = _relation_attr(field, name, None)
+    value = relation_attr(field, name, None)
     if value is not None and type(value) is not str:
         raise ConfigurationError(
             f"Relation metadata {name!r} on {_safe_type_name(field)} must be a string or "
@@ -133,13 +205,13 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
         ``ForeignKey``-like -> ``"forward_single"``;
         MTI ``<parent>_ptr``-like -> ``"forward_single"``.
     """
-    many_to_many = _relation_bool(field, "many_to_many")
-    one_to_many = _relation_bool(field, "one_to_many")
-    one_to_one = _relation_bool(field, "one_to_one")
-    auto_created = _relation_bool(field, "auto_created")
-    concrete = _relation_bool(field, "concrete")
-    content_type_field_name = _relation_name(field, "content_type_field_name")
-    object_id_field_name = _relation_name(field, "object_id_field_name")
+    many_to_many = relation_bool(field, "many_to_many")
+    one_to_many = relation_bool(field, "one_to_many")
+    one_to_one = relation_bool(field, "one_to_one")
+    auto_created = relation_bool(field, "auto_created")
+    concrete = relation_bool(field, "concrete")
+    content_type_field_name = relation_name(field, "content_type_field_name")
+    object_id_field_name = relation_name(field, "object_id_field_name")
 
     if many_to_many:
         return "many"
@@ -241,7 +313,7 @@ def _is_traversable_relation(field: object) -> bool:
     returns ``True``.
     """
     try:
-        if not _relation_bool(field, "is_relation"):
+        if not relation_bool(field, "is_relation"):
             return False
         return getattr(field, "path_infos", _MISSING) is not _MISSING
     except BaseException:
@@ -282,7 +354,7 @@ def classify_path(model: type, field_path: str) -> ClassifiedPath:
         except FieldDoesNotExist:
             raise PathResolutionError(current, field_path, segment) from None
         try:
-            is_relation = _relation_bool(field, "is_relation")
+            is_relation = relation_bool(field, "is_relation")
         except ConfigurationError:
             raise PathResolutionError(current, field_path, segment) from None
         if is_relation:
@@ -296,7 +368,7 @@ def classify_path(model: type, field_path: str) -> ClassifiedPath:
                 target_model = last_path.to_opts.model
                 many_side = False
                 for path_info in path_infos:
-                    if _relation_bool(path_info, "m2m"):
+                    if relation_bool(path_info, "m2m"):
                         many_side = True
                         break
             except BaseException:
@@ -433,7 +505,7 @@ def _lenient_traverses_to_many(model: type, field_path: str) -> bool:
     for segment in segments:
         try:
             field = current._meta.get_field(segment)
-            if not _relation_bool(field, "is_relation"):
+            if not relation_bool(field, "is_relation"):
                 return False
             if is_many_side_relation_kind(relation_kind(field)):
                 return True
@@ -459,15 +531,27 @@ def _classify_path_cached(model: type, field_path: str) -> ClassifiedPath:
     return classify_path(model, field_path)
 
 
-@lru_cache(maxsize=2048)
-def _path_traverses_to_many_cached(model: type, field_path: str) -> bool:
-    """Cached implementation for hashable definition-time model/path pairs."""
+def _traverses_to_many(classify: Any, model: type, field_path: str) -> bool:
+    """Answer the to-many question over ``classify``, with the shared fallback ladder.
+
+    ONE body for both arms of :func:`path_traverses_to_many`: the hashable arm
+    passes the cached classifier, the unhashable arm passes the uncached one.
+    The ladder itself - strict answer, lenient walk on ``PathResolutionError``,
+    ``False`` on anything else - is the contract a 32-path matrix pins, and it
+    must not be able to differ between the two arms.
+    """
     try:
-        return _classify_path_cached(model, field_path).first_many_index is not None
+        return classify(model, field_path).first_many_index is not None
     except PathResolutionError:
         return _lenient_traverses_to_many(model, field_path)
     except BaseException:
         return False
+
+
+@lru_cache(maxsize=2048)
+def _path_traverses_to_many_cached(model: type, field_path: str) -> bool:
+    """Cached implementation for hashable definition-time model/path pairs."""
+    return _traverses_to_many(_classify_path_cached, model, field_path)
 
 
 def path_traverses_to_many(model: type, field_path: str) -> bool:
@@ -508,16 +592,23 @@ def path_traverses_to_many(model: type, field_path: str) -> bool:
         hash(model)
         hash(field_path)
     except BaseException:
-        try:
-            return classify_path(model, field_path).first_many_index is not None
-        except PathResolutionError:
-            return _lenient_traverses_to_many(model, field_path)
-        except BaseException:
-            return False
+        return _traverses_to_many(classify_path, model, field_path)
     return _path_traverses_to_many_cached(model, field_path)
 
 
-path_traverses_to_many.cache_clear = _path_traverses_to_many_cached.cache_clear
+def _path_traverses_to_many_cache_clear() -> None:
+    """Invalidate every cache ``path_traverses_to_many`` reads.
+
+    The probe layers a bounded classifier cache beneath its own answer cache;
+    a clear that emptied only the outer layer would leave a metadata change
+    under a warm ``(model, field_path)`` key answering from the stale frozen
+    classification even after the public handle was called.
+    """
+    _classify_path_cached.cache_clear()
+    _path_traverses_to_many_cached.cache_clear()
+
+
+path_traverses_to_many.cache_clear = _path_traverses_to_many_cache_clear
 path_traverses_to_many.cache_info = _path_traverses_to_many_cached.cache_info
 
 
@@ -541,9 +632,9 @@ def is_forward_many_to_many(field: object) -> bool:
     defaults defend against field shapes that omit a flag, matching
     ``relation_kind``'s read contract.
     """
-    many_to_many = _relation_bool(field, "many_to_many")
-    concrete = _relation_bool(field, "concrete")
-    auto_created = _relation_bool(field, "auto_created")
+    many_to_many = relation_bool(field, "many_to_many")
+    concrete = relation_bool(field, "concrete")
+    auto_created = relation_bool(field, "auto_created")
     return many_to_many and (concrete or not auto_created)
 
 
@@ -588,7 +679,7 @@ def is_forward_concrete_relation(field: object) -> bool:
     to ``False`` instead of dispatching its own exception into the caller.
     """
     try:
-        if not _relation_bool(field, "is_relation"):
+        if not relation_bool(field, "is_relation"):
             return False
         if relation_kind(field) != "forward_single":
             return False
@@ -626,7 +717,7 @@ def instance_accessor(field: object) -> str:
     the Phase-2 relation resolvers' ``getattr``, the spec-032 synthesized
     relation connections, and the optimizer's prefetch lookup paths.
     """
-    precomputed = _relation_attr(field, "accessor_name", None)
+    precomputed = relation_attr(field, "accessor_name", None)
     if precomputed is not None:
         if type(precomputed) is not str:
             raise ConfigurationError(
@@ -634,7 +725,7 @@ def instance_accessor(field: object) -> str:
                 f"got {_safe_type_name(precomputed)}.",
             )
         return precomputed
-    get_accessor_name = _relation_attr(field, "get_accessor_name", None)
+    get_accessor_name = relation_attr(field, "get_accessor_name", None)
     if get_accessor_name is not None:
         if not callable(get_accessor_name):
             raise ConfigurationError(
@@ -647,7 +738,7 @@ def instance_accessor(field: object) -> str:
                 f"Could not resolve relation accessor on {_safe_type_name(field)}.",
             ) from exc
     else:
-        accessor_name = _relation_attr(field, "name")
+        accessor_name = relation_attr(field, "name")
     if type(accessor_name) is not str:
         raise ConfigurationError(
             f"Resolved relation accessor on {_safe_type_name(field)} must be a string; "

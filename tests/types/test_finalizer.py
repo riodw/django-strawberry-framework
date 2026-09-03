@@ -390,6 +390,37 @@ def test_filterset_multi_owner_model_mismatch_raises_on_secondary_owner():
         finalize_django_types()
 
 
+def test_orderset_non_class_meta_model_is_typed_at_finalize():
+    """A non-class OrderSet ``Meta.model`` is a typed finalize failure, not a ``TypeError``.
+
+    The order side reads the RAW ``Meta.model`` (no metaclass validation, unlike
+    the filter side's django-filter-validated ``_meta.model``), so the Django
+    lazy-ref string idiom reaches the owner-binding model-compat guard. The
+    guard must raise the family model-mismatch ``ConfigurationError`` naming
+    the declared value instead of leaking ``issubclass()``'s raw ``TypeError``.
+    """
+    from django_strawberry_framework.orders import OrderSet
+
+    class GenreOrderSet(OrderSet):
+        class Meta:
+            model = "library.Genre"
+            fields = ("name",)
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+            orderset_class = GenreOrderSet
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"An orderset's Meta\.model must be its owner's model",
+    ) as excinfo:
+        finalize_django_types()
+    # The shared template names the declared VALUE through the guarded repr.
+    assert "'library.Genre'" in str(excinfo.value)
+
+
 def test_orderset_multi_owner_model_mismatch_raises_on_secondary_owner():
     """A secondary owner with an incompatible model is rejected during OrderSet binding."""
     from django_strawberry_framework.orders import OrderSet

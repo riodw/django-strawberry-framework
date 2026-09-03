@@ -34,6 +34,14 @@ from typing import Any
 
 from .inputs import SCALAR, FieldConversionBase
 
+__all__ = [
+    "MRO_CONTINUE",
+    "convert_with_mro",
+    "finish_field_conversion",
+    "make_kind_converter",
+    "make_scalar_converter",
+]
+
 
 class _MroContinue:
     """Sentinel: a precheck matched, but ``convert_with_mro`` should keep walking.
@@ -80,15 +88,17 @@ def convert_with_mro(
        bare-``forms.Field`` exact-type pattern, and filter normalize skipping
        convert-only kinds). ``None`` is a real result, not a continue signal.
 
-    2. **Scalar registry MRO walk.** Walks ``type(field).__mro__`` against
-       ``scalar_registry`` so the MOST-specific registered class wins regardless
-       of dict insertion order (``FloatField`` / ``DecimalField`` resolve to
-       their own entry, NOT the ``IntegerField`` they subclass; a supported
-       field's UNregistered subclass resolves to its parent's scalar -
-       ``EmailField`` under ``CharField``). The registry VALUE is returned
-       as-is: the two write converters store ``make_scalar_converter``
-       callables and invoke them via ``finish_field_conversion``; tests of
-       this skeleton may store any value (including a bare string).
+    2. **Scalar registry MRO walk.** Walks the field class's real ``__mro__``
+       (read through ``type``'s raw getset descriptor so a hostile metaclass
+       cannot intercept the read) against ``scalar_registry`` so the
+       MOST-specific registered class wins regardless of dict insertion order
+       (``FloatField`` / ``DecimalField`` resolve to their own entry, NOT the
+       ``IntegerField`` they subclass; a supported field's UNregistered
+       subclass resolves to its parent's scalar - ``EmailField`` under
+       ``CharField``). The registry VALUE is returned as-is: the two write
+       converters store ``make_scalar_converter`` callables and invoke them via
+       ``finish_field_conversion``; tests of this skeleton may store any value
+       (including a bare string).
 
     3. **Raising fallthrough.** A field matched by neither path is unsupported;
        ``fallthrough_error_factory(field)`` is raised (the package's
@@ -102,16 +112,25 @@ def convert_with_mro(
             result = handler(field)
             if result is not MRO_CONTINUE:
                 return result
-    # Read the actual MRO through ``type`` rather than through the field class's
-    # metaclass. A consumer-defined metaclass can override ``__getattribute__``
-    # and make ``type(field).__mro__`` raise while the class remains a valid
-    # field; conversion should still reach the typed unsupported-field path.
-    for klass in type.__getattribute__(type(field), "__mro__"):
-        # Match class keys by identity while scanning the small registry. A
-        # consumer metaclass may provide a hostile ``__hash__`` or equality
-        # implementation; ordinary dict membership would invoke it before the
-        # converter can reach its parent or typed fallthrough.
-        for registered, converter in scalar_registry.items():
+    # Read the actual MRO through ``type.__dict__``'s raw ``__mro__`` getset
+    # descriptor rather than through any attribute-lookup protocol on the field
+    # class's metaclass. A consumer-defined metaclass can override
+    # ``__getattribute__`` - or define ``__mro__`` itself (a data descriptor on
+    # the metaclass wins inside ``type.__getattribute__``'s own algorithm) - and
+    # make any ``type(field).__mro__`` spelling raise or lie while the class
+    # remains a valid field; conversion must still reach the typed
+    # unsupported-field path.
+    # Snapshot the registry once with the C-level dict copy: an exact-dict copy
+    # runs no key/user protocol (no ``items`` / ``keys`` / ``__iter__`` / key
+    # ``__hash__`` / ``__eq__`` dispatch) and is atomic under the GIL, so a
+    # consumer registration on another thread cannot surface as "dictionary
+    # changed size during iteration" mid-walk. The scan itself stays identity
+    # based: a consumer metaclass may provide a hostile ``__hash__`` or
+    # equality implementation, and ordinary dict membership would invoke it
+    # before the converter can reach its parent or typed fallthrough.
+    registry_entries = dict(scalar_registry)
+    for klass in type.__dict__["__mro__"].__get__(type(field)):
+        for registered, converter in registry_entries.items():
             if registered is klass:
                 return converter
     raise fallthrough_error_factory(field)

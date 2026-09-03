@@ -46,7 +46,7 @@ from typing import Any
 
 from django import forms
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_text
 from ..mutations.inputs import PARTIAL
 from ..mutations.permissions import DenyAll, DjangoModelPermission, run_permission_classes
 from ..mutations.sets import (
@@ -78,6 +78,7 @@ from ..registry import register_subsystem_clear
 from ..utils.inputs import make_shape_build_cache
 from .inputs import (
     FORM,
+    _form_basis_content_identity,
     build_form_input_class,
     build_form_inputs,
     form_input_type_name,
@@ -125,14 +126,22 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 
 
 # Per-finalize-pass form-input build cache keyed by the form shape identity
-# ``(form_class, operation_kind, frozenset(effective field names))`` - the form
-# twin of ``mutations/sets.py::_shape_build_cache``. Without it each ``build_input``
-# call would build a FRESH ``@strawberry.input`` class object, so two mutations
-# over the same form + effective set would hand the materialize ledger two DISTINCT
-# same-named classes and trip the collision raise instead of deduping. Caching
-# by shape identity makes identical shapes reuse one class object, so
-# ``materialize_form_input_class`` dedupes idempotently (the same dedupe contract the
-# model flavor's ``_shape_build_cache`` provides). The cache VALUE is the
+# ``(form_class, operation_kind, frozenset(effective field names),
+# ``forms/inputs.py::_form_basis_content_identity(form_class, form_fields))`` -
+# the form twin of ``mutations/sets.py::_shape_build_cache``. Without it each
+# ``build_input`` call would build a FRESH ``@strawberry.input`` class object, so
+# two mutations over the same form + effective set would hand the materialize
+# ledger two DISTINCT same-named classes and trip the collision raise instead of
+# deduping. Caching by shape identity makes identical shapes reuse one class
+# object, so ``materialize_form_input_class`` dedupes idempotently (the same
+# dedupe contract the model flavor's ``_shape_build_cache`` provides) - and the
+# 4th component is what makes "identical shapes" decidable for a CUSTOM
+# ``get_form_fields`` hook: the basis CONTENT (per-field converter type,
+# requiredness, relation target) is the quantity the hook contributes on top of
+# the form class, so two mutations sharing ONE hook (an intermediate base) or
+# producing identical bases dedupe, while a stateful hook returning different
+# content builds separately and stays loud at the materialize ledger. The cache
+# VALUE is the
 # ``(input_cls, field_specs)`` pair (spec-038): the reverse-map
 # ``field_specs`` MUST survive the dedupe so the bind can stash them on the mutation
 # (``_input_field_specs``) for the decode - caching only ``input_cls`` would
@@ -177,25 +186,38 @@ def _mutation_form_fields(
     mutation_cls: type,
     form_class: type[forms.BaseForm],
 ) -> dict[str, forms.Field]:
-    """Resolve a mutation's overridable form-field hook for one build pass."""
+    """Resolve a mutation's overridable form-field hook for one build pass.
+
+    The hook INVOCATION is the typed boundary both flavors' ``_validate_meta``
+    and ``build_input`` route through (this module's single call site): a hook
+    that cannot be invoked zero-arg - a plain function declaring ``self`` (the
+    forgotten ``@classmethod``), a partially-applied callable, a hostile
+    ``__call__`` - otherwise escapes the declaration/bind as the raw ``TypeError``
+    (or whatever the body raises) instead of the typed configuration error every
+    neighboring hook rejection raises. The wrap mirrors
+    ``forms/inputs.py::_form_field_basis``'s ``BaseException`` catch (a hostile
+    body's ``KeyboardInterrupt`` is reported, not propagated); a ``ConfigurationError``
+    from the hook body (the default hook's own typed rejects) re-raises unchanged
+    so the typed message is not double-wrapped.
+    """
     hook = getattr(mutation_cls, "get_form_fields", None)
     if not callable(hook):
         raise ConfigurationError(
             f"{mutation_cls.__name__}.get_form_fields must be a callable classmethod "
             "returning a mapping of form field names to forms.Field instances.",
         )
-    return normalize_form_field_basis(form_class, hook())
-
-
-def _form_input_hook_identity(mutation_cls: type | None) -> object | None:
-    """Return a cache discriminator only for custom field-discovery hooks."""
-    if mutation_cls is None:
-        return None
-    hook = mutation_cls.get_form_fields
-    hook_function = getattr(hook, "__func__", hook)
-    if hook_function is _default_mutation_get_form_fields:
-        return None
-    return mutation_cls
+    try:
+        form_fields = hook()
+    except ConfigurationError:
+        raise
+    except BaseException as exc:
+        detail = _safe_text(exc) or "no detail"
+        raise ConfigurationError(
+            f"{mutation_cls.__name__}.get_form_fields must be a callable classmethod "
+            "returning a mapping of form field names to forms.Field instances; calling "
+            f"it raised {type(exc).__name__}: {detail}.",
+        ) from exc
+    return normalize_form_field_basis(form_class, form_fields)
 
 
 def _cached_build_form_input(
@@ -205,15 +227,22 @@ def _cached_build_form_input(
     fields: Any,
     exclude: Any,
     guard_required: bool,
-    mutation_cls: type | None = None,
     form_fields: Any = None,
 ) -> tuple[type, list]:
     """Build the operation's form input once per shape; return ``(input_cls, field_specs)``.
 
     Mirrors ``mutations/sets.py::_materialize_input_for``'s cache-by-shape-identity:
     the first ``build_input`` for a given ``(form_class, operation_kind, effective
-    set)`` builds + caches the class; a later identical shape reuses it so the
-    materialize ledger dedupes idempotently. The create-required-narrowing guard
+    set, basis content identity)`` builds + caches the class; a later identical
+    shape reuses it so the materialize ledger dedupes idempotently. The 4th key
+    component (``forms/inputs.py::_form_basis_content_identity``) is what makes
+    "identical shape" decidable when a custom ``get_form_fields`` hook contributes
+    the basis: two mutations whose bases have the same CONTENT (the default hook,
+    one hook shared on an intermediate base, or two different hook functions)
+    dedupe onto one class object - the per-shape dedupe contract the module
+    comment pins - while a stateful hook returning different content per class
+    keys separately, builds separately, and stays LOUD at the materialize ledger
+    (never a silent share of a wrong shape). The create-required-narrowing guard
     (``guard_create_required_fields``) runs PER declaration, BEFORE the cache
     lookup, so a waiving mutation that materializes a narrowed shape first cannot
     suppress the guard for a later non-waiving mutation reusing the cached shape
@@ -280,7 +309,7 @@ def _cached_build_form_input(
         form_class,
         operation_kind,
         frozenset(effective),
-        _form_input_hook_identity(mutation_cls),
+        _form_basis_content_identity(form_class, form_fields),
     )
     return cached_build_input(
         _form_shape_build_cache,
@@ -450,7 +479,6 @@ def _build_and_stash_form_input(
             fields=meta.fields,
             exclude=meta.exclude,
             guard_required=not _form_kwargs_overridden(cls, base),
-            mutation_cls=cls,
             form_fields=form_fields,
         ),
         materialize=materialize_form_input_class,

@@ -101,6 +101,28 @@ _ALLOWED_MUTATION_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | fro
 )
 
 
+def _safe_frozenset_membership(value: Any, choices: frozenset[str]) -> bool:
+    """Return ``value in choices``, answering ``False`` when hashing ``value`` raises.
+
+    ``Meta.operation`` is consumer-supplied: a ``str`` subclass may define a
+    raising ``__hash__`` (or one that turns hostile after its first call), and
+    frozenset containment hashes its probe FIRST, so the raw ``RuntimeError``
+    would escape the very validation raise that exists to reject the value -
+    the hostile-Meta containment parity ``_validate_permission_classes``
+    already applies to its own consumer-supplied containers. A value that
+    cannot be hashed cannot be a validated operation anyway, so answering
+    ``False`` routes it to the ordinary typed reject, whose ``_safe_arg_repr``
+    render is itself hostile-proof.
+    """
+    try:
+        return value in choices
+    except BaseException:
+        # Deliberately ``BaseException`` (the package's hostile-dunder convention):
+        # a display-adjacent probe must never propagate ``SystemExit`` /
+        # ``KeyboardInterrupt`` past the typed reject.
+        return False
+
+
 def require_non_delete_operation(base_label: str, name: str, meta: type) -> str:
     """Return ``Meta.operation`` if it is create/update, else raise the shared reject.
 
@@ -111,7 +133,10 @@ def require_non_delete_operation(base_label: str, name: str, meta: type) -> str:
     model-less plain form does NOT call this (it rejects ANY ``operation`` key).
     """
     operation = getattr(meta, "operation", None)
-    if not isinstance(operation, str) or operation not in NON_DELETE_WRITE_OPERATIONS:
+    if not isinstance(operation, str) or not _safe_frozenset_membership(
+        operation,
+        NON_DELETE_WRITE_OPERATIONS,
+    ):
         raise non_delete_operation_error(base_label, name, operation)
     return operation
 
@@ -145,14 +170,13 @@ def normalize_meta_field_selection(
 ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
     """Return ``(fields, exclude)`` after the shared sequence-shape normalize.
 
-    Every write-flavor ``_validate_meta`` that stores the declared
-    ``Meta.fields`` / ``Meta.exclude`` on the snapshot (model + both form
-    bases) runs this pair so a new flavor cannot normalize one key and forget
-    the other. Existence / mutual-exclusion / empty-set checks stay at the
+    Every write-flavor ``_validate_meta`` runs this pair so a new flavor cannot
+    normalize one key and forget the other (the serializer flavor included -
+    ``rest_framework/sets.py`` materializes its selectors at class creation and
+    re-normalizes inside ``resolve_effective_serializer_fields`` at the bind).
+    Existence / mutual-exclusion / empty-set checks stay at the
     caller: the model flavor's delete-inapplicable rule and the form flavor's
-    ``resolve_effective_form_fields`` walk are different jobs. The serializer
-    flavor stores the RAW declarations and normalizes inside
-    ``resolve_effective_serializer_fields``, so it does not call this.
+    ``resolve_effective_form_fields`` walk are different jobs.
     """
     fields = normalize_field_name_sequence(
         getattr(meta, "fields", None),
@@ -521,7 +545,15 @@ def make_declaration_registry(label: str) -> DeclarationRegistry:
                 f"Cannot declare {label} {_safe_class_name(declaration_cls)} after finalization; "
                 "mutation declarations are import-time only (call registry.clear() first).",
             )
-        if declaration_cls not in store:
+        # Identity-scan dedup (NOT ``not in``): the ledger contract is idempotence
+        # by identity, and ``list.__contains__`` dispatches each stored entry's
+        # ``__eq__`` - which a consumer-supplied metaclass may override with a
+        # raising or lying body, letting a hostile ``RuntimeError`` escape class
+        # creation raw. An ``is`` scan is exactly the default semantics for every
+        # honest class (``type.__eq__`` IS identity) while never dispatching
+        # consumer-controlled dunders - the same containment parity the
+        # ``Meta.operation`` membership tests apply.
+        if not any(declaration_cls is stored for stored in store):
             store.append(declaration_cls)
 
     def clear() -> None:
@@ -550,6 +582,18 @@ def make_meta_validating_metaclass(
       base guard the set metaclasses rely on);
     - else runs ``new_class._validate_meta(meta)``, stashes ``_mutation_meta``,
       and calls ``register(new_class)``.
+
+    The produced metaclass also SEALS the class head (0.0.15 authorization
+    hardening): once a concrete subclass's validated snapshot is stashed, any
+    later ``cls._mutation_meta = ...`` write raises ``ConfigurationError``. A
+    ``has_permission`` hook receives the mutation class, so a plain attribute
+    statement inside the hook could otherwise replace the validated record
+    wholesale (an attacker-chosen namespace holding the empty allow-any posture)
+    and authorize every later request - the same persistent cross-request
+    bypass class the snapshot's own seal closes. The creation-time write in
+    ``__new__`` is the one honored write; subsequent rebinding (or deletion) is
+    refused. Unrelated class attributes (the bind's ``_primary_type`` /
+    ``_input_class`` / ``_payload_type_name`` outputs) are unaffected.
 
     ``DjangoMutationMetaclass`` and ``DjangoFormMutationMetaclass`` are the two
     consumers (model ledger vs plain-form ledger). ``SerializerMutation`` /
@@ -582,6 +626,32 @@ def make_meta_validating_metaclass(
             new_class._mutation_meta = new_class._validate_meta(meta)
             register(new_class)
             return new_class
+
+        def __setattr__(cls, name: str, value: Any) -> None:
+            """Keep the validated ``Meta`` snapshot write-once (0.0.15 auth hardening).
+
+            The metaclass stashes ``_mutation_meta`` exactly once at class
+            creation; any post-creation rebind of that head would swap the
+            mutation's per-request authorization source for a hook-chosen record
+            (the persistent bypass class ``_ValidatedMutationMeta``'s seal closes
+            at the slot level). First write at class creation is the only allowed
+            write; afterwards any attempt raises typed ``ConfigurationError``.
+            """
+            if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
+                raise ConfigurationError(
+                    f"{cls.__name__}._mutation_meta is sealed and cannot be rebound; the "
+                    "validated authorization snapshot is captured once at class creation.",
+                )
+            super().__setattr__(name, value)
+
+        def __delattr__(cls, name: str) -> None:
+            """Refuse deleting the validated ``Meta`` snapshot off a mutation class."""
+            if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
+                raise ConfigurationError(
+                    f"{cls.__name__}._mutation_meta is sealed and cannot be deleted; the "
+                    "validated authorization snapshot is captured once at class creation.",
+                )
+            super().__delattr__(name)
 
     MetaValidatingMetaclass.__name__ = name
     MetaValidatingMetaclass.__qualname__ = name
@@ -688,9 +758,22 @@ class _ValidatedMutationMeta:
     resolver read instead of re-walking the raw ``Meta``. Mirrors
     ``types/base.py::_ValidatedMeta`` in role: validation happens once at class
     creation, then every downstream reader trusts this snapshot.
+
+    The snapshot is SEALED once ``__init__`` finishes (0.0.15 authorization
+    hardening): the record is the write side's per-request authorization source
+    (``mutations/permissions.py::run_permission_classes`` reads
+    ``type(self)._mutation_meta.permission_classes``), and a ``has_permission``
+    hook runs INSIDE the walk with the mutation class in hand - a mutable slot
+    would let one request's hook rebind the validated set (e.g. to the empty
+    allow-any posture) for every later request: a persistent cross-request
+    authorization bypass. Any attribute write or delete on a sealed snapshot
+    raises ``ConfigurationError``; the validated configuration is immutable for
+    the life of the process (a consumer who needs different authorization declares
+    a new mutation class).
     """
 
     __slots__ = (
+        "_sealed",
         "exclude",
         "fields",
         "form_class",
@@ -716,7 +799,7 @@ class _ValidatedMutationMeta:
         partial_input_class: Any,
         fields: tuple[str, ...] | None,
         exclude: tuple[str, ...] | None,
-        permission_classes: list[Any],
+        permission_classes: tuple[Any, ...],
         form_class: Any = None,
         serializer_class: Any = None,
         optional_fields: tuple[str, ...] | None = None,
@@ -725,6 +808,7 @@ class _ValidatedMutationMeta:
         select_for_update: bool = False,
         nested_fields: Any = None,
     ) -> None:
+        self._sealed = False
         self.model = model
         self.operation = operation
         self.input_class = input_class
@@ -778,6 +862,23 @@ class _ValidatedMutationMeta:
         # generated input builds RECURSIVELY (an un-named nested field fails loud). ``None`` when
         # no nesting is opted in. The model + form flavors leave it ``None``.
         self.nested_fields = nested_fields
+        # Seal LAST: every validated slot is set; from here on the record is
+        self._sealed = True
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Reject any attribute write on a sealed validated snapshot."""
+        if getattr(self, "_sealed", False):
+            raise ConfigurationError(
+                f"The validated mutation Meta snapshot is sealed and {name!r} cannot be "
+                "reassigned; authorization configuration is captured once at class creation.",
+            )
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        raise ConfigurationError(
+            "The validated mutation Meta snapshot is sealed; attributes cannot be deleted. "
+            "Authorization configuration is captured once at class creation and is immutable.",
+        )
 
 
 def _validate_permission_classes(
@@ -786,7 +887,7 @@ def _validate_permission_classes(
     *,
     unset_default: tuple[Any, ...] = (DjangoModelPermission,),
     base_label: str = "DjangoMutation",
-) -> list[Any]:
+) -> tuple[Any, ...]:
     """Validate + normalize ``Meta.permission_classes`` at class creation.
 
     An invalid ``permission_classes`` entry is rejected at
@@ -794,7 +895,7 @@ def _validate_permission_classes(
     ``AttributeError`` inside ``DjangoMutation.check_permission`` (which does
     ``permission_class().has_permission(...)``). So:
 
-    - ``None`` (unset) -> ``list(unset_default)``: the model-backed flavors keep
+    - ``None`` (unset) -> ``tuple(unset_default)``: the model-backed flavors keep
       the ``[DjangoModelPermission]`` default, while the model-less plain
       ``DjangoFormMutation`` passes ``unset_default=(DenyAll,)`` so an unset
       ``permission_classes`` denies rather than crashing in the model-permission
@@ -809,12 +910,17 @@ def _validate_permission_classes(
       value, or a class without ``has_permission`` -> ``ConfigurationError``
       naming the offending entry.
 
-    Returns the normalized ``list`` the snapshot stores (so ``check_permission``
-    iterates a known list, never a raw consumer value). An explicit ``[]`` is
-    preserved as the documented allow-any opt-out for BOTH flavors.
+    Returns the normalized IMMUTABLE tuple the snapshot stores, so the live
+    authorization walk (``mutations/permissions.py::run_permission_classes``)
+    can never be lengthened or emptied mid-request by a ``has_permission`` hook
+    that mutates the class's list (a cleared live list short-circuits the walk
+    to "all allowed" - an authorization bypass - and the emptied list would
+    persist on the class, authorizing every later request). An explicit ``[]``
+    is preserved as the documented allow-any opt-out for BOTH flavors (stored
+    as the empty tuple).
     """
     if value is None:
-        return list(unset_default)
+        return tuple(unset_default)
     if isinstance(value, (str, bytes, type)):
         raise ConfigurationError(
             f"{base_label} {mutation_name}.Meta.permission_classes must be a sequence of "
@@ -839,7 +945,11 @@ def _validate_permission_classes(
                 "each entry must be a class with a "
                 "has_permission(info, mutation, operation, data, instance) method.",
             )
-    return classes
+    # The validated snapshot is stored IMMUTABLE: a mutable list reachable from
+    # the mutation class could be emptied or reordered by a ``has_permission``
+    # hook (which receives the mutation class), turning deny-closed into the
+    # allow-any posture for every later request. The walk reads this snapshot.
+    return tuple(classes)
 
 
 def validate_select_for_update(flavor: str, mutation_name: str, meta: Any) -> bool:
@@ -871,7 +981,7 @@ def model_backed_permission_and_lock(
     meta: type,
     *,
     flavor: str,
-) -> tuple[list[Any], bool]:
+) -> tuple[tuple[Any, ...], bool]:
     """Return ``(permission_classes, select_for_update)`` for a model-backed write flavor.
 
     Every model-backed ``_validate_meta`` (model / ModelForm) pairs the
@@ -1010,7 +1120,10 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         model = require_model_class(name, model, base_label="DjangoMutation")
 
         operation = getattr(meta, "operation", None)
-        if not isinstance(operation, str) or operation not in _VALID_OPERATIONS:
+        if not isinstance(operation, str) or not _safe_frozenset_membership(
+            operation,
+            _VALID_OPERATIONS,
+        ):
             raise ConfigurationError(
                 f"DjangoMutation {name}.Meta.operation must be one of "
                 f"{sorted(_VALID_OPERATIONS)}; got {_safe_arg_repr(operation)}.",
@@ -1154,8 +1267,22 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         Spec-038 rewired ``mutations/fields.py::_synthesized_mutation_signature``
         to consult this seam (deleting the transient ``_input_type_name`` twin), so
         this is now the single source for the model ``data:`` lazy-ref name.
+
+        A validated ``delete`` raises the typed ``ConfigurationError`` (never the
+        raw ``KeyError`` a direct index leaked): a delete is id-only and
+        materializes no input, and the framework never consults this seam for one
+        (``operation_takes_data`` gates the ``data:`` ref at the field factory), so
+        only a direct consumer call can reach the reject - where it must still fail
+        loud as the package's typed error, mirroring ``_materialize_input_for``'s
+        ``.get()`` delete short-circuit.
         """
-        operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
+        operation_kind = NON_DELETE_OPERATION_INPUT_KIND.get(meta.operation)
+        if operation_kind is None:
+            raise ConfigurationError(
+                f"DjangoMutation {cls.__name__} declares operation='delete', which is "
+                "id-only and materializes no input; input_type_name applies only to "
+                "create / update mutations.",
+            )
         return mutation_input_shape(
             meta.model,
             operation_kind,

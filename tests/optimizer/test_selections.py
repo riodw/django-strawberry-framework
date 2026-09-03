@@ -403,6 +403,39 @@ def test_included_field_selections_returns_input_list_when_already_flat():
     assert [s.name for s in inlined] == ["a", "c"]
 
 
+def test_included_field_selections_materializes_one_shot_iterables():
+    """One-shot iterables are materialized once at entry.
+
+    The fast-path probe loop and the rebuild loop both iterate the input
+    collection, so a generator used to be silently exhausted between them:
+    fields before the first fragment, and a fragment's whole body, vanished
+    from the plan without any error (found by the selections bug-hunt probe
+    battery). Strawberry's own converter always builds lists, but a consumer-
+    crafted SelectionState may present iterators; list / tuple inputs keep
+    the identity passthrough.
+    """
+    # Generator with a fragment: nothing dropped, fragment body inlined.
+    gen = iter([_field("keep"), _fragment(selections=[_field("from_frag")]), _field("after")])
+    assert [s.name for s in included_field_selections(gen)] == ["keep", "from_frag", "after"]
+
+    # A fragment whose body is a one-shot iterable: the body survives.
+    frag = _fragment(selections=iter([_field("body_a"), _field("body_b")]))
+    assert [s.name for s in included_field_selections([_field("keep"), frag])] == [
+        "keep",
+        "body_a",
+        "body_b",
+    ]
+
+    # A fragment-free generator flattens to a real list (never a spent iterator).
+    assert [s.name for s in included_field_selections(iter([_field("a")]))] == ["a"]
+
+    # list / tuple inputs keep the identity fast path.
+    flat = [_field("a")]
+    assert included_field_selections(flat) is flat
+    tup = (_field("b"),)
+    assert included_field_selections(tup) is tup
+
+
 def test_connection_count_required_matrix():
     """``connection_count_required`` fires on ``totalCount`` / ``pageInfo.hasNextPage`` only.
 

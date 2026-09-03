@@ -3570,11 +3570,12 @@ def test_divergent_key_windows_shared_payload_uses_none_key():
     import base64
 
     from django_strawberry_framework.optimizer.nested_planner import _divergent_key_windows
+    from django_strawberry_framework.utils.connections import ConnectionWindowBounds
 
     info = _fake_info()
 
     planned, malformed, fallbacks = _divergent_key_windows({None: {"first": 2}}, info)
-    assert planned == [(None, (0, 2, False), None)]
+    assert planned == [(None, ConnectionWindowBounds(offset=0, limit=2, reverse=False), None)]
     assert malformed == []
     assert fallbacks == []
 

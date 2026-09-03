@@ -31,9 +31,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from apps.products.models import Category, Item
+from apps.products.models import Category, Entry, Item, Property
 from django.db import models
-from django.db.models import FilteredRelation, Q
+from django.db.models import FilteredRelation, Prefetch, Q
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce, Trunc
 
@@ -42,22 +42,33 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.querysets import (
+    _BOUND_VALUE_NORMALIZERS,
+    _CASCADE_SEAL_POLICY,
+    _DEFAULT_SEAL_POLICY,
+    _INERT_VALUE_TYPES,
+    _PLAIN_CONTAINER_TYPES,
+    _PREFETCH_CHILD_POLICY,
     _RETAINED_TYPES,
+    _UNRECOMPOSED_CHILD_POLICY,
     SyncMisuseError,
     _bake_deferred_filter_or_defect,
     _base_table_defect,
     _coerced_manager_queryset,
     _concrete_or_none,
+    _defect_message,
     _deferred_value_defect,
     _expr_graph_defect,
     _expr_sequence_defect,
     _GraphWalk,
     _is_inert_value,
+    _is_plain_container,
     _join_defect,
     _normalized_visibility_result,
+    _prefetch_relation_target_or_none,
     _prepared_visibility_source,
     _query_container_defect,
     _query_genuineness_defect,
+    _reconstructed_value,
     _safe_class_name,
     _seal_or_defect,
     _sealed_prefetch_related_lookups,
@@ -1549,7 +1560,7 @@ def test_prefetch_non_str_lookup_fails_closed():
     class _StrSub(str):
         pass
 
-    _, defect = _sealed_prefetch_related_lookups((_StrSub("items"),), "X", None)
+    _, defect = _sealed_prefetch_related_lookups((_StrSub("items"),), "X", None, Category)
     assert defect == ("untrusted", "X prefetch lookup is a _StrSub")
 
 
@@ -1559,7 +1570,7 @@ def test_prefetch_non_str_path_fails_closed():
 
     pf = Prefetch("items")
     pf.__dict__["prefetch_through"] = object()
-    _, defect = _sealed_prefetch_related_lookups((pf,), "X", None)
+    _, defect = _sealed_prefetch_related_lookups((pf,), "X", None, Category)
     assert defect == ("untrusted", "X prefetch path is not an exact str")
 
 
@@ -1569,7 +1580,7 @@ def test_prefetch_non_str_to_attr_fails_closed():
 
     pf = Prefetch("items")
     pf.__dict__["to_attr"] = object()
-    _, defect = _sealed_prefetch_related_lookups((pf,), "X", None)
+    _, defect = _sealed_prefetch_related_lookups((pf,), "X", None, Category)
     assert defect == ("untrusted", "X prefetch to_attr is not an exact str or None")
 
 
@@ -1581,6 +1592,7 @@ def test_prefetch_unrouted_child_inherits_outer_alias():
         (Prefetch("items", queryset=Item.objects.all()),),
         "X",
         "default",
+        Category,
     )
     assert defect is None
     assert sealed[0].queryset._db == "default"
@@ -1594,6 +1606,7 @@ def test_prefetch_cross_alias_child_fails_closed():
         (Prefetch("items", queryset=Item.objects.using("other")),),
         "X",
         "default",
+        Category,
     )
     # The inner child's own ``(code: detail)`` -- here the ``alias`` defect -- is
     # carried into the message rather than collapsed into a generic string.
@@ -1605,9 +1618,9 @@ def test_sliced_prefetch_child_seals_successfully():
 
     Django >= 4.2 supports a sliced prefetch queryset (top-N per parent). Nothing
     refilters a prefetch child, so the outer ``sliced`` rejection does not apply one
-    edge down; the child seals through ``allow_sliced=True`` while still requiring
-    model rows, and the rebuilt child is a fresh plain ``QuerySet`` whose slice
-    marks are preserved.
+    edge down; the child seals under ``_PREFETCH_CHILD_POLICY`` (``reject_sliced``
+    off) while still requiring model rows, and the rebuilt child is a fresh plain
+    ``QuerySet`` whose slice marks are preserved.
     """
     from django.db.models import Prefetch
 
@@ -1615,6 +1628,7 @@ def test_sliced_prefetch_child_seals_successfully():
         (Prefetch("items", queryset=Item.objects.all()[:5]),),
         "X",
         None,
+        Category,
     )
     assert defect is None
     child = sealed[0].queryset
@@ -1637,7 +1651,12 @@ def test_prefetch_child_defect_detail_appears_in_message():
 
     inner = Item.objects.all()
     inner._query = _ForeignInnerQuery(Item)
-    _, defect = _sealed_prefetch_related_lookups((Prefetch("items", queryset=inner),), "X", None)
+    _, defect = _sealed_prefetch_related_lookups(
+        (Prefetch("items", queryset=inner),),
+        "X",
+        None,
+        Category,
+    )
     code, detail = defect
     assert code == "untrusted"
     assert (
@@ -2349,7 +2368,9 @@ def test_unrouted_parent_rejects_cross_routed_prefetch_child():
     onto a divergent database -- otherwise one resolution schedules the parent and
     its related rows across two connections.
     """
-    child = Category.objects.using("other").all()
+    # The child is over the relation's own target model (Item for 'items') so the
+    # ALIAS contract is what fires -- not the relation-target proof, which runs first.
+    child = Item.objects.using("other").all()
     str(child.query)
     parent = Category.objects.all()
     str(parent.query)
@@ -4019,6 +4040,18 @@ def test_query_container_none_dict_attr_is_clean():
     assert _query_container_defect(query) is None
 
 
+def test_query_container_none_exact_dict_attr_is_clean():
+    """A ``None`` ``_EXACT_DICT_QUERY_ATTRS`` attribute is skipped (the ``continue`` branch).
+
+    The sibling above covers the ``extra`` raw-SQL loop's ``continue``; this
+    pins the dict-container loop's, whose members are validated for exact type
+    when present.
+    """
+    query = Category.objects.all().query
+    query.__dict__["annotations"] = None
+    assert _query_container_defect(query) is None
+
+
 def test_query_container_non_string_dict_key_fails_closed():
     """A dict-container attribute with a non-string key fails closed."""
     query = Category.objects.all().query
@@ -4046,14 +4079,12 @@ def test_query_container_non_dict_extra_select_cache_fails_closed():
 def test_extra_select_cache_non_string_key_fails_closed():
     """A non-string ``_extra_select_cache`` alias fails closed inside the raw-SQL scan.
 
-    ``_extra_select_cache`` is the one raw-SQL dict absent from
-    ``_EXACT_DICT_QUERY_ATTRS``, so the payload scan is the FIRST place its keys are
-    typed -- and it must type them, because the alias is interpolated into the emitted
-    ``SELECT`` list and is ``repr``'d into the defect detail. The same probe driven
-    through ``extra`` cannot see this arm: ``extra`` IS in the exact-container list, so
-    the earlier loop rejects the non-string key first with byte-identical wording. Uses
-    ``_query_container_defect`` directly (like its ``_extra_select_cache`` neighbour
-    above) because no public queryset API populates that private compiler cache.
+    Neither raw-SQL dict is in ``_EXACT_DICT_QUERY_ATTRS``, so the payload scan is
+    the ONLY place their keys are typed -- and it must type them, because the alias
+    is interpolated into the emitted ``SELECT`` list and is ``repr``'d into the
+    defect detail. Uses ``_query_container_defect`` directly (like its
+    ``_extra_select_cache`` neighbour above) because no public queryset API
+    populates that private compiler cache.
     """
     query = Category.objects.all().query
     query.__dict__["_extra_select_cache"] = {object(): ("1", ())}
@@ -4455,3 +4486,424 @@ def test_reject_awaitable_sync_source_raises_for_awaitable():
     coro = sample()
     with pytest.raises(SyncMisuseError, match="consumer resolver returned an awaitable"):
         reject_awaitable_sync_source(coro, Category)
+
+
+# --------------------------------------------------------------------------
+# Prefetch child relation-target proof (Django ticket #37267 vector)
+#
+# Django's prefetch machinery accepts a Prefetch child whose model is unrelated
+# to the lookup's relation target whenever both models carry a same-named FK
+# (Item.category and Property.category both point at Category), and populates the
+# related cache with the foreign table's rows. Sealed, that means the `items`
+# relation serves rows no Item-side visibility hook ever saw. The seal proves the
+# child's model is the lookup path's relation target (or a subclass) before
+# admitting the entry.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_prefetch_child_over_unrelated_model_fails_closed():
+    """A Prefetch child over an unrelated same-FK-name model fails closed.
+
+    Pre-fix this sealed clean and the fetch populated ``category.items`` with
+    Property rows from ``products_property`` (Django ticket #37267) -- foreign-table
+    rows no Item visibility hook ever ran on.
+    """
+    from apps.products.services import seed_data
+
+    seed_data(2)
+    qs = Category.objects.prefetch_related(Prefetch("items", queryset=Property.objects.all()))
+    code, detail = _seal_or_defect(qs, Category, None)[1]
+    assert code == "untrusted"
+    assert "'items'" in detail
+    assert "Property" in detail and "Item" in detail
+
+
+@pytest.mark.django_db
+def test_prefetch_child_over_relation_target_seals_and_fetches_model_rows():
+    """A prefetch child over the lookup's own relation target still seals and fetches."""
+    from apps.products.services import seed_data
+
+    seed_data(2)
+    qs = Category.objects.prefetch_related(Prefetch("items", queryset=Item.objects.all()))
+    sealed, defect = _seal_or_defect(qs, Category, None)
+    assert defect is None, defect
+    rows = list(sealed)
+    assert rows
+    assert all(type(row) is Category for row in rows)
+    assert all(type(item) is Item for row in rows for item in row.items.all())
+
+
+def test_prefetch_child_over_target_subclass_seals():
+    """A proxy of the relation target is directionally compatible (Django #36432)."""
+
+    class _ItemProxy(Item):
+        class Meta:
+            proxy = True
+            app_label = "products"
+
+    qs = Category.objects.prefetch_related(Prefetch("items", queryset=_ItemProxy.objects.all()))
+    _, defect = _seal_or_defect(qs, Category, None)
+    assert defect is None, defect
+
+
+@pytest.mark.django_db
+def test_prefetch_child_wrong_model_nested_path_fails_closed():
+    """The relation-target proof walks MULTI-SEGMENT paths to the final relation."""
+
+    # "items__entries" terminates on Entry (Item.entries reverse FK), so a
+    # child over the WRONG table fails closed even though the FIRST segment
+    # (items -> Item) matches the child's would-be shape.
+    wrong = Category.objects.prefetch_related(
+        Prefetch("items__entries", queryset=Property.objects.all()),
+    )
+    code, detail = _seal_or_defect(wrong, Category, None)[1]
+    assert code == "untrusted"
+    assert "'items__entries'" in detail
+    assert "Property" in detail and "Entry" in detail
+
+
+@pytest.mark.django_db
+def test_prefetch_child_nested_path_correct_model_seals():
+    """items__entries resolves to Entry; an Entry child seals unchanged."""
+
+    qs = Category.objects.prefetch_related(
+        Prefetch("items__entries", queryset=Entry.objects.all()),
+    )
+    _, defect = _seal_or_defect(qs, Category, None)
+    assert defect is None, defect
+
+
+@pytest.mark.django_db
+def test_forward_fk_prefetch_child_model_mismatch_fails_closed():
+    """The forward-FK direction is guarded too: Item.category expects Category rows."""
+
+    qs = Item.objects.prefetch_related(Prefetch("category", queryset=Property.objects.all()))
+    code, detail = _seal_or_defect(qs, Item, None)[1]
+    assert code == "untrusted"
+    assert "Category" in detail
+
+
+def test_prefetch_relation_target_unresolvable_paths_fail_open():
+    """Unresolvable relation paths fail OPEN to Django, never raw-raise.
+
+    The proof only ever NARROWS shapes Django itself mishandles; a path it
+    cannot resolve here (unknown segment, plain column, unresolved lazy FK
+    string) returns ``None`` and the entry is left to Django's own fetch-time
+    traversal, exactly as before the guard existed.
+    """
+
+    class _BrokenFkHolder(models.Model):
+        """A model whose only relation is an unresolvable lazy FK string."""
+
+        name = models.TextField(default="")
+        rel = models.ForeignKey("missing_app.Missing", on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "products"
+            db_table = "probe_broken_fk_holder"
+
+    assert _prefetch_relation_target_or_none(Category, object()) is None
+    assert _prefetch_relation_target_or_none(Category, "bogus_rel") is None
+    assert _prefetch_relation_target_or_none(Category, "name") is None
+    # A resolved segment followed by an unknown one: the accessor scan runs on
+    # Item (which carries FORWARD relations) and still finds nothing.
+    assert _prefetch_relation_target_or_none(Category, "items__nope") is None
+    # A dangling string FK keeps ``related_model`` a STRING (no raise): the
+    # exact-type check fails, the helper returns None, Django keeps ownership.
+    assert _prefetch_relation_target_or_none(_BrokenFkHolder, "rel") is None
+
+
+@pytest.mark.django_db
+def test_prefetch_child_non_str_path_fails_closed():
+    """A non-str path on a queryset-CARRYING Prefetch still fails closed at the path check."""
+
+    pf = Prefetch("items", queryset=Item.objects.all())
+    pf.__dict__["prefetch_through"] = object()
+    qs = Category.objects.all()
+    qs._prefetch_related_lookups = (pf,)
+    code, detail = _seal_or_defect(qs, Category, None)[1]
+    assert code == "untrusted"
+    assert "path is not an exact str" in detail
+
+
+@pytest.mark.django_db
+def test_prefetch_child_unresolvable_relation_paths_fail_open():
+    """Unresolvable relation paths (unknown / column / lazy-string) stay with Django.
+
+    The relation-target proof only ever NARROWS shapes Django itself mishandles
+    (a wrong-model child); a path whose target cannot be resolved here keeps the
+    pre-guard behavior -- the child seal runs, the entry passes through, and any
+    failure surfaces from Django's own fetch-time traversal.
+    """
+
+    class _LazyRefHolder(models.Model):
+        name = models.TextField(default="")
+        rel = models.ForeignKey("missing_app.Missing", on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "products"
+            db_table = "probe_lazy_ref_holder"
+
+    # Unknown first segment: get_field raises, resolution returns None.
+    unknown = Category.objects.prefetch_related(
+        Prefetch("bogus_rel", queryset=Item.objects.all()),
+    )
+    _, defect = _seal_or_defect(unknown, Category, None)
+    assert defect is None, defect
+
+    # Plain-column segment: not a relation, resolution returns None.
+    column = Category.objects.prefetch_related(
+        Prefetch("name", queryset=Item.objects.all()),
+    )
+    _, defect = _seal_or_defect(column, Category, None)
+    assert defect is None, defect
+
+    # Unresolved lazy reference: ``related_model`` stays the raw string, so the
+    # path target is unprovable and the entry is left to Django unchanged.
+    lazy = _LazyRefHolder.objects.prefetch_related(
+        Prefetch("rel", queryset=Item.objects.all()),
+    )
+    sealed, defect = _seal_or_defect(lazy, _LazyRefHolder, None)
+    assert defect is None, defect
+    assert sealed is not None
+
+
+@pytest.mark.django_db
+def test_prefetch_child_default_accessor_wrong_model_fails_closed():
+    """The DEFAULT ``<model>_set`` spelling is proven too (no ``related_name`` needed).
+
+    ``Permission.content_type`` and ``LogEntry.content_type`` are both FKs to
+    ``ContentType`` and neither declares a ``related_name``, so both are reached
+    through the default ``permission_set`` / ``logentry_set`` ACCESSOR spellings
+    -- which ``_meta.get_field`` does not know (it registers the reverse field
+    under the bare child model name). A ``LogEntry`` child here sealed clean
+    before the accessor scan existed, and the fetch populated
+    ``ContentType.permission_set`` with admin ``LogEntry`` rows -- the same
+    #37267 leak, one spelling over.
+    """
+    from django.contrib.admin.models import LogEntry
+    from django.contrib.contenttypes.models import ContentType
+
+    qs = ContentType.objects.prefetch_related(
+        Prefetch("permission_set", queryset=LogEntry.objects.all()),
+    )
+    code, detail = _seal_or_defect(qs, ContentType, None)[1]
+    assert code == "untrusted"
+    assert "'permission_set'" in detail
+    assert "LogEntry" in detail and "Permission" in detail
+
+
+@pytest.mark.django_db
+def test_prefetch_child_default_accessor_correct_model_seals():
+    """The correct-model child over a default accessor still seals (no over-block)."""
+    from django.contrib.auth.models import Permission
+    from django.contrib.contenttypes.models import ContentType
+
+    qs = ContentType.objects.prefetch_related(
+        Prefetch("permission_set", queryset=Permission.objects.all()),
+    )
+    _, defect = _seal_or_defect(qs, ContentType, None)
+    assert defect is None, defect
+
+
+@pytest.mark.django_db
+def test_prefetch_relation_target_default_accessors_resolve():
+    """The reverse-accessor map resolves every spelling Django's prefetch accepts.
+
+    Covers the installed apps' default ``<model>_set`` relations (FK and M2M
+    reverse), a multi-segment path THROUGH an accessor, and the reverse
+    ``OneToOne`` accessor (the bare child model name, no ``_set``).
+    """
+    from django.contrib.admin.models import LogEntry
+    from django.contrib.auth.models import Group, Permission, User
+    from django.contrib.contenttypes.models import ContentType
+
+    # Relations declared WITHOUT a related_name, reached by the default
+    # ``<model>_set`` accessor (the spelling ``get_field`` alone cannot see).
+    assert _prefetch_relation_target_or_none(ContentType, "permission_set") is Permission
+    assert _prefetch_relation_target_or_none(ContentType, "logentry_set") is LogEntry
+    assert _prefetch_relation_target_or_none(User, "logentry_set") is LogEntry
+    assert _prefetch_relation_target_or_none(Group, "user_set") is User
+    assert _prefetch_relation_target_or_none(Permission, "user_set") is User
+    assert _prefetch_relation_target_or_none(Permission, "group_set") is Group
+    # An accessor can be an INTERMEDIATE segment like any relation name.
+    assert (
+        _prefetch_relation_target_or_none(ContentType, "permission_set__content_type")
+        is ContentType
+    )
+
+    class _AccessorParent(models.Model):
+        name = models.TextField(default="")
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class _AccessorO2oChild(models.Model):
+        parent = models.OneToOneField(_AccessorParent, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    # Reverse OneToOne accessors are the BARE child model name (no ``_set``).
+    assert (
+        _prefetch_relation_target_or_none(_AccessorParent, "_accessoro2ochild")
+        is _AccessorO2oChild
+    )
+
+    class _AccessorM2mChild(models.Model):
+        name = models.TextField(default="")
+        parents = models.ManyToManyField(_AccessorParent, blank=True)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    # A reverse M2M without a related_name uses the same ``<model>_set`` spelling.
+    assert (
+        _prefetch_relation_target_or_none(_AccessorParent, "_accessorm2mchild_set")
+        is _AccessorM2mChild
+    )
+
+
+@pytest.mark.django_db
+def test_prefetch_relation_target_resolves_every_installed_default_accessor():
+    """EVERY installed default-accessor relation resolves to its own target.
+
+    The proof must hold project-wide: any reverse relation reachable through a
+    ``<model>_set`` spelling (FK, M2M, or reverse OneToOne) whose target the
+    guard cannot resolve would fail OPEN exactly where the #37267 leak is
+    reachable, so the accessor map must cover them all.
+    """
+    from django.apps import apps
+
+    unresolved = []
+    for model in apps.get_models():
+        for field in model._meta.get_fields():
+            if not (field.is_relation and field.auto_created and not field.concrete):
+                continue
+            accessor = field.get_accessor_name()
+            if not accessor or not accessor.endswith("_set"):
+                continue
+            if _prefetch_relation_target_or_none(model, accessor) is not field.related_model:
+                unresolved.append((model.__name__, accessor, field.related_model.__name__))
+    assert unresolved == []
+
+
+@pytest.mark.django_db
+def test_prefetch_queryset_none_and_string_lookups_still_seal():
+    """queryset=None Prefetch and plain string lookups are untouched by the new guard."""
+
+    qs = Category.objects.prefetch_related(
+        Prefetch("items"),
+        "items",
+        Prefetch("items", queryset=Item.objects.all(), to_attr="top_items"),
+    )
+    _, defect = _seal_or_defect(qs, Category, None)
+    assert defect is None, defect
+
+
+@pytest.mark.django_db
+def test_seal_policy_presets_answer_slice_and_combinator_independently():
+    """Each preset rejects exactly the shapes its surface cannot recompose onto.
+
+    ``reject_sliced`` and ``require_model_rows`` are deliberately independent
+    fields: fusing them is what forced the cascade to re-implement the slice
+    rejection at both of its own entry points, and it is why a
+    ``require_model_rows=False`` surface used to get the slice licence it never
+    asked for. The four presets pin the four answers in one place - a read
+    surface rejects a slice and admits a combinator (nothing in a read pipeline
+    re-projects one), the two one-edge-down children admit a slice because
+    nothing recomposes onto them, and the cascade rejects both because it
+    narrows by ``.filter(...)`` and re-projects to a single column.
+    """
+    base = Category.objects.all()
+    sliced = base[:5]
+    combined = base.union(base)
+
+    assert _seal_or_defect(sliced, Category, None, _DEFAULT_SEAL_POLICY)[1] == (
+        "sliced",
+        "rows 0:5",
+    )
+    assert _seal_or_defect(sliced, Category, None, _UNRECOMPOSED_CHILD_POLICY)[1] is None
+    assert _seal_or_defect(sliced, Category, None, _PREFETCH_CHILD_POLICY)[1] is None
+    assert _seal_or_defect(sliced, Category, None, _CASCADE_SEAL_POLICY)[1] == (
+        "sliced",
+        "rows 0:5",
+    )
+    assert _seal_or_defect(combined, Category, None, _DEFAULT_SEAL_POLICY)[1] is None
+    assert _seal_or_defect(combined, Category, None, _CASCADE_SEAL_POLICY)[1] == (
+        "combined",
+        "union",
+    )
+    # ``require_model_rows`` still answers only the projection question.
+    assert _seal_or_defect(base.values("id"), Category, None, _DEFAULT_SEAL_POLICY)[1] == (
+        "projection",
+        "ValuesIterable",
+    )
+    assert _seal_or_defect(base.values("id"), Category, None, _CASCADE_SEAL_POLICY)[1] is None
+
+
+def test_unrendered_defect_code_says_so_instead_of_mislabelling():
+    """A code with no arm at a site names itself; it never borrows another code's prose.
+
+    Every message-building site renders only the subset of codes IT can reach,
+    so each ladder used to end in an unconditional branch for its own last code.
+    That shape cannot fail loudly: a code added to the seal without an arm here
+    would be reported to the schema author as an alias mismatch or a wrong-table
+    error - a false description of a real rejection. Dispatch is exhaustive
+    instead, and the fallback is legible on both halves: it names the code and
+    carries the detail, so the rejection still fails closed.
+    """
+    message = _defect_message({"type": "arm for type"}, ("type", "list"), "Subject")
+    assert message == "arm for type"
+
+    unrendered = _defect_message({"type": "arm for type"}, ("brand_new", "detail"), "Subject")
+    assert "'brand_new'" in unrendered
+    assert "detail" in unrendered
+    assert "no wording" in unrendered
+    # The point of the fallback: no other code's prose is borrowed.
+    assert "arm for type" not in unrendered
+
+
+def test_every_admitted_plain_container_has_a_rebuild_branch():
+    """The prove side and the rebuild side share one container inventory.
+
+    The two are halves of one round trip, and the dangerous direction is
+    prover-accepted / rebuilder-unhandled: such a value passes every proof,
+    reaches ``_reconstructed_value``, matches no branch, and fails the seal
+    CLOSED - a rejection with no hint that the two inventories disagree. This
+    walks the admitted set and requires the rebuild side to answer for each
+    member with a FRESH object of the same type, which is the actual contract
+    (the sealed query must share no mutable container with the candidate).
+    """
+    samples = {
+        list: [1, 2],
+        tuple: (1, 2),
+        set: {1, 2},
+        frozenset: frozenset({1, 2}),
+        dict: {"a": 1},
+    }
+    assert set(samples) == set(_PLAIN_CONTAINER_TYPES)
+    for container_type, sample in samples.items():
+        assert _is_plain_container(container_type)
+        rebuilt = _reconstructed_value(sample, {})
+        assert type(rebuilt) is container_type
+        assert rebuilt == sample
+        assert rebuilt is not sample
+
+
+def test_bound_value_normalizers_mirror_the_inert_inventory():
+    """Every inert type (except ``bool``) has a normalizer, and nothing extra does.
+
+    ``_BOUND_VALUE_NORMALIZERS`` is hand-ordered on purpose - ``datetime`` before
+    ``date`` because the first subclasses the second - so it cannot be derived
+    from the frozenset. What it can be is CHECKED against it. An inert type
+    admitted with no normalizer entry makes SUBCLASS instances of that type fail
+    the seal closed; exact instances short-circuit before the normalizer runs, so
+    nothing surfaces the gap until such a subclass appears. ``bool`` is excluded
+    deliberately (it cannot be subclassed).
+    """
+    assert set(_INERT_VALUE_TYPES) - {bool} == {base for base, _ in _BOUND_VALUE_NORMALIZERS}

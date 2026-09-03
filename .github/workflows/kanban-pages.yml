@@ -20,6 +20,7 @@ on:
       - "examples/fakeshop/apps/glossary/**"
       - "!examples/fakeshop/apps/glossary/migrations/**"
       - "!examples/fakeshop/apps/glossary/tests/**"
+      - "scripts/_kanban_lib.py"
       - "scripts/build_glossary_md.py"
       - "scripts/build_kanban_html.py"
       - "scripts/build_kanban_md.py"

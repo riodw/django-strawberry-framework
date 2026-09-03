@@ -2,21 +2,29 @@
 
 from __future__ import annotations
 
-import argparse
-import sys
-from pathlib import Path
 from typing import Any
 
 try:
-    from _kanban_lib import cli_exit
-    from build_kanban_html import configure_django, fetch_graphql_data
-    from build_kanban_md import finalize_markdown
+    from _kanban_lib import (
+        REPO_ROOT,
+        check_freshness,
+        cli_exit,
+        configure_django,
+        fetch_graphql_data,
+        finalize_markdown,
+        render_parser,
+    )
 except ModuleNotFoundError:  # imported as ``scripts.build_glossary_md`` (repo root on path)
-    from scripts._kanban_lib import cli_exit
-    from scripts.build_kanban_html import configure_django, fetch_graphql_data
-    from scripts.build_kanban_md import finalize_markdown
+    from scripts._kanban_lib import (
+        REPO_ROOT,
+        check_freshness,
+        cli_exit,
+        configure_django,
+        fetch_graphql_data,
+        finalize_markdown,
+        render_parser,
+    )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "GLOSSARY.md"
 
 STATIC_GLOSSARY_QUERY = """
@@ -75,25 +83,6 @@ query StaticGlossary {
   }
 }
 """
-
-
-def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
-    parser = argparse.ArgumentParser(
-        description="Render docs/GLOSSARY.md from the glossary GraphQL payload.",
-    )
-    parser.add_argument(
-        "--md",
-        type=Path,
-        default=DEFAULT_MD_PATH,
-        help="Markdown file to write. Defaults to docs/GLOSSARY.md.",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Exit 1 if docs/GLOSSARY.md is not already up to date (0 fresh, 2 on error).",
-    )
-    return parser.parse_args()
 
 
 def fetch_glossary_data() -> dict[str, Any]:
@@ -242,21 +231,17 @@ def render_markdown(glossary_data: dict[str, Any]) -> str:
 
 def main() -> int:
     """Build the glossary markdown export (or check its freshness)."""
-    args = parse_args()
+    args = render_parser(
+        "Render docs/GLOSSARY.md from the glossary GraphQL payload.",
+        flag="--md",
+        default=DEFAULT_MD_PATH,
+    ).parse_args()
     configure_django()
     glossary_data = fetch_glossary_data()
     markdown = render_markdown(glossary_data)
 
     if args.check:
-        current = args.md.read_text(encoding="utf-8") if args.md.exists() else ""
-        if current != markdown:
-            print(
-                f"{args.md} is not up to date; run scripts/build_glossary_md.py.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"{args.md} is up to date.")
-        return 0
+        return check_freshness(args.md, markdown, script="scripts/build_glossary_md.py")
 
     args.md.write_text(markdown, encoding="utf-8")
 

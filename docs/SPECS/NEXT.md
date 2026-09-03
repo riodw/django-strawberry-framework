@@ -42,7 +42,16 @@ Keep it tight. No headers, no bullet lists, no follow-up commentary. One paragra
 
 ## Step 3 — Normalize the active spec queue
 
-Now (and only now) read `KANBAN.md`. The file is large — use `rg -n "^## " KANBAN.md` first to scan section headers, then read the `## In progress` column in full. You do not need to read the `## To Do`, `## Blocked`, or `## Done` columns *in full* to author the spec — but you DO need a lightweight scan of the `## To Do` and `## Done` card IDs for the target's patch version (see the joint-cut note below); that scan is card-ID/version-level, not a body read.
+Now (and only now) read `KANBAN.md`. The file is large and most of it is not for this step. Read exactly these parts:
+
+- `rg -n "^## " KANBAN.md` to find the column boundaries.
+- `## Card ID format` and `## Relative size` (short; the ID grammar and size scale).
+- `## Progress to 1.0.0` (short; tells you which milestone line is active).
+- `## In progress` in full — every card in the column, every `####` subsection. This is the spec's raw material.
+- `## Card index` — one row per card (ID, title, column) with a link to the card. This is the card-ID/version-level scan of `## To Do - Alpha`, `## To Do - Beta`, and `## Done` needed for the joint-cut check below. Do NOT read those columns' bodies; a To Do card's body is read only if the WIP card's `Card references` name it as a dependency or a shared-seam neighbour, and then only that card.
+- Skip the `## Release readiness checklist`, `## Notes for Kanban maintenance`, and `## Decision:` footers unless the WIP card's body cites one.
+
+`KANBAN.html` carries surfaces the markdown deliberately omits (the shipped-state snapshot, the WIP/DONE spec map, per-card `Note` provenance); nothing in this flow needs them.
 
 Before selecting the next card, archive every existing live spec at the top level of `docs/`. The invariant after Step 6 is **exactly one WIP spec file at `docs/spec-*.md`**: the one this flow just authored. To keep that invariant, any `docs/spec-*.md` or companion `docs/spec-*-terms.csv` / `docs/spec-*-rationale.md` that exists at Step 3 is a prior in-flight spec and must be archived before the new spec is written — the spec to `docs/SPECS/`, its companions to `docs/SPECS/appx/`. Use the Step 8 archive procedure in **pre-write archive mode**:
 
@@ -53,7 +62,7 @@ Before selecting the next card, archive every existing live spec at the top leve
 
 Then normalize the kanban queue in the database, not by editing `KANBAN.md`. The queue has a single axis, `Card.status`:
 
-- `Card.status.key == "wip"` controls the `WIP-...` card ID and the WIP row in the `## WIP / DONE spec map`.
+- `Card.status.key == "wip"` controls the `WIP-...` card ID.
 - The `## In progress` board column is **derived** from that WIP card's target version: every non-Done card sharing the WIP card's `target_version` renders in the column (see `scripts/build_kanban_md.py::active_version`). No per-card planning flag is stored.
 
 The flow must leave **exactly one non-Done card with `status.key == "wip"`**. The other non-Done cards at the WIP card's version render alongside it in `## In progress` by derivation; only the lowest-numbered one is the WIP spec target.
@@ -120,7 +129,7 @@ if target.status_id != wip.pk:
 print(f"Selected {target.card_id} - {target.title}")
 ```
 
-Now determine **which other non-Done cards (WIP *and* To-Do) share the target card's patch version** — a lightweight scan of card IDs and their trailing `-X.Y.Z` across the `## In progress` and `## To Do` columns after the re-render (search the board for the patch version with `rg`; you don't need to read those cards' bodies). Checking only the WIP card is NOT enough: a card can be the sole WIP card yet still share its patch version with in-progress or unstarted To-Do cards. The ownership rule: if **any other non-Done card** shares the target's patch version, the `pyproject.toml` / `__version__` / `tests/base/test_init.py` bump is owned by the **joint cut** (the last card of that patch line to land), so the target's spec defers it; if the target is the **only non-Done card** at its patch version, its Slice 5 owns the bump. Finally, glance at the `## Done` column for a same-patch card that already **deferred its cut to your target** — that confirms your spec is the one that completes the joint cut and thus owns the bump. Record what you find so [Step 6](#step-6--write-the-spec) can pin the right Decision.
+Now determine **which other non-Done cards (WIP *and* To-Do) share the target card's patch version** — a lightweight scan of card IDs and their trailing `-X.Y.Z` across the `## In progress` and `## To Do` columns after the re-render (read the `## Card index` rows for the patch version, or `rg` the board for it; you don't need to read those cards' bodies). Checking only the WIP card is NOT enough: a card can be the sole WIP card yet still share its patch version with in-progress or unstarted To-Do cards. The ownership rule: if **any other non-Done card** shares the target's patch version, the `pyproject.toml` / `__version__` / `tests/base/test_init.py` bump is owned by the **joint cut** (the last card of that patch line to land), so the target's spec defers it; if the target is the **only non-Done card** at its patch version, its Slice 5 owns the bump. Finally, glance at the `## Done` column for a same-patch card that already **deferred its cut to your target** — that confirms your spec is the one that completes the joint cut and thus owns the bump. Record what you find so [Step 6](#step-6--write-the-spec) can pin the right Decision.
 
 ---
 
@@ -245,7 +254,7 @@ The "active" spec is the one you just authored in Step 6. Every other `spec-*.md
 
 > **`KANBAN.md` / `KANBAN.html` are GENERATED files — edit the database, not the rendered files.** `KANBAN.md` is rendered from the `apps.kanban` Django app's database (in the fakeshop example project) by `scripts/build_kanban_md.py`; `KANBAN.html` is rendered from the same DB by `scripts/build_kanban_html.py`. The committed files are exports, not sources. **Hand-edits to them decay** — they are silently overwritten the next time anyone re-renders the board. So the KANBAN parts of this sweep (actions 5 and 6 below) are made in the DB and then re-rendered, NOT by editing the generated files:
 >
-> - **Both the `## WIP / DONE spec map` table row AND a card's `Spec:` body line are rendered from the one `SpecDoc` model** (`apps/kanban/models.py::SpecDoc`: `card` one-to-one, unique `name`, and **`path`** — the repo-relative path, which is the writable column). **`SpecDoc.url` is a read-only `@property`** deriving `f"{SPEC_URL_PREFIX}/{self.path}"`, so passing or assigning `url=` raises; write `path`. Both exporters read `path` directly (`scripts/build_kanban_md.py::spec_paths_for_card`) rather than reverse-parsing a URL prefix, so the path you want in `KANBAN.md` is exactly what you store in `SpecDoc.path`. There is no separate "spec map" data — one `SpecDoc` per card drives both surfaces.
+> - **A card's `Spec:` body line (and the `KANBAN.html` WIP/DONE spec map row) is rendered from the one `SpecDoc` model** (`apps/kanban/models.py::SpecDoc`: `card` one-to-one, unique `name`, and **`path`** — the repo-relative path, which is the writable column). **`SpecDoc.url` is a read-only `@property`** deriving `f"{SPEC_URL_PREFIX}/{self.path}"`, so passing or assigning `url=` raises; write `path`. Both exporters read `path` directly (`scripts/build_kanban_md.py::spec_link`) rather than reverse-parsing a URL prefix, so the path you want in `KANBAN.md` is exactly what you store in `SpecDoc.path`. There is no separate "spec map" data — one `SpecDoc` per card drives both exports.
 > - **To repoint a moved spec's link** (action 5): update that card's `SpecDoc.path` to the new path, e.g. `docs/SPECS/spec-<old_NNN>-….md`.
 > - **To add/fix the active card's spec reference** (action 6): `update_or_create` a `SpecDoc(card=<active card>, name="spec-<NNN>-<topic>-<X_Y_Z>", path="docs/spec-<NNN>-<topic>-<X_Y_Z>.md")`. A card with no `SpecDoc` renders as `No dedicated spec`.
 > - **Make the DB edits via the example project's shell**, then re-render:
@@ -335,10 +344,10 @@ Concrete sequence:
    rg -n "spec-<old_NNN>-<old_topic>-<old_version>" docs/ README.md GOAL.md TODAY.md AGENTS.md KANBAN.md
    ```
 
-   For each hit, rewrite the reference definition or legacy inline-link path so the link still resolves after the move. Relative-path discipline: from `docs/GLOSSARY.md` the moved file is `SPECS/spec-…`; from repo-root `README.md` / `GOAL.md` / `TODAY.md` / `AGENTS.md` it is `docs/SPECS/spec-…`; from another spec under `docs/` it is `SPECS/spec-…`; from an archived spec under `docs/SPECS/` it is `spec-…`. Apply each rewrite in place — **except `KANBAN.md` / `KANBAN.html`**: they are generated exports (see the callout above), so their spec-map row and card `Spec:` line for a moved spec are repointed by updating that card's `SpecDoc.path` in the DB (set it to `docs/SPECS/spec-…`) and re-rendering with `uv run python scripts/build_kanban_md.py` and `uv run python scripts/build_kanban_html.py`. Do NOT hand-edit either generated file — the edit would not survive the next render.
+   For each hit, rewrite the reference definition or legacy inline-link path so the link still resolves after the move. Relative-path discipline: from `docs/GLOSSARY.md` the moved file is `SPECS/spec-…`; from repo-root `README.md` / `GOAL.md` / `TODAY.md` / `AGENTS.md` it is `docs/SPECS/spec-…`; from another spec under `docs/` it is `SPECS/spec-…`; from an archived spec under `docs/SPECS/` it is `spec-…`. Apply each rewrite in place — **except `KANBAN.md` / `KANBAN.html`**: they are generated exports (see the callout above), so the card `Spec:` line for a moved spec is repointed by updating that card's `SpecDoc.path` in the DB (set it to `docs/SPECS/spec-…`) and re-rendering with `uv run python scripts/build_kanban_md.py` and `uv run python scripts/build_kanban_html.py`. Do NOT hand-edit either generated file — the edit would not survive the next render.
 6. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored — a `SpecDoc` row whose `path` is `docs/spec-<NNN>-<topic>-<X_Y_Z>.md`. Because `KANBAN.md` / `KANBAN.html` are generated exports (see the callout above), this is a **DB edit + re-render**, not a file edit. Query the card's current `SpecDoc` (via `apps/kanban/models.py::SpecDoc`) and handle three cases:
 
-   - **No `SpecDoc` present** (the spec map renders `No dedicated spec`) — create one: `SpecDoc.objects.update_or_create(card=<active card>, defaults={"name": "spec-<NNN>-<topic>-<X_Y_Z>", "path": "docs/spec-<NNN>-<topic>-<X_Y_Z>.md"})`. The renderer surfaces it as both the spec-map row and a card-body `Spec:` line automatically.
+   - **No `SpecDoc` present** (the card renders with no `Spec:` line) — create one: `SpecDoc.objects.update_or_create(card=<active card>, defaults={"name": "spec-<NNN>-<topic>-<X_Y_Z>", "path": "docs/spec-<NNN>-<topic>-<X_Y_Z>.md"})`. The renderer surfaces it as the card-body `Spec:` line automatically.
    - **`SpecDoc` present but `path` points somewhere else** (e.g. a stale `docs/SPECS/spec-…` from a prior archive cycle, or a now-renamed slug) — update `SpecDoc.path` (and `name` if the slug changed) to the active path.
    - **`SpecDoc.path` already correct** — no action.
 

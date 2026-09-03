@@ -2,7 +2,7 @@
 
 Migration ``0005`` deduped and renumbered each source card's ``CardReference``
 rows. Card prose (``Card.planning_note`` / ``CardItem.text``) references those
-rows by ``order`` (see ``scripts/build_kanban_md.py::resolve_card_refs_for_card``),
+rows by ``order`` (see ``scripts/build_kanban_md.py::resolve_card_refs``),
 so the renumber shifted two cards' placeholders out of alignment -- the KANBAN.md
 renderer raised on the resulting unresolved ``{{card_ref:N}}`` placeholders.
 

@@ -8,7 +8,7 @@ remained on the live DB:
 
 * ``CardReference.raw_text`` is a third prose surface carrying the same
   placeholders (the exporter resolves it at
-  ``scripts/build_kanban_md.py::resolve_card_refs_for_card``) and was never realigned
+  ``scripts/build_kanban_md.py::resolve_card_refs``) and was never realigned
   for any card.
 * Seven further cards had references renumbered by ``0005`` (duplicate edges
   deleted and/or gap-compacted) and so carried shifted placeholders in their

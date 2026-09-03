@@ -4,15 +4,13 @@ import pytest
 
 from scripts._kanban_lib import (
     CARD_NESTED_LISTS,
+    assert_nothing_truncated,
     placeholder_defects,
     truncation_defects,
     unresolvable_placeholders,
-)
-from scripts.build_kanban_html import (
-    assert_nothing_truncated,
-    assert_placeholders_resolve,
     version_tuple,
 )
+from scripts.build_kanban_html import assert_placeholders_resolve
 
 
 def test_version_tuple_ignores_non_ascii_digit_like_characters() -> None:
@@ -138,7 +136,7 @@ def test_a_top_level_list_is_not_checked() -> None:
 def test_the_build_refuses_a_board_that_came_back_short(monkeypatch: pytest.MonkeyPatch) -> None:
     """A silent cap must stop the build; the freshness checks cannot see one."""
     monkeypatch.setattr(
-        "scripts.build_kanban_html.board_row_counts",
+        "scripts._kanban_lib.board_row_counts",
         lambda: _expected(52, items=101),
     )
     with pytest.raises(RuntimeError, match=r"came back short of the database"):

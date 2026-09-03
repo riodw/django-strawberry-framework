@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-08-31
+Last refreshed: 2026-09-02
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -27,58 +27,6 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 - **L** - large subsystem; ~a week; new subpackage, full spec, broad integration.
 - **XL** - very large subsystem at `DONE-027-0.0.8` scale.
 
-## Snapshot
-
-### Shipped foundation
-
-- Layer 1 shared infrastructure is in place: `conf.py`, `exceptions.py`, `registry.py`, `utils/relations.py`, `utils/strings.py`, `utils/typing.py`, `py.typed`.
-- The package builds directly on `strawberry-graphql` and does not depend on `strawberry-graphql-django`; that dependency boundary is intentional so this package controls its DRF-shaped API surface end-to-end.
-- `DjangoType` is usable today for model-backed Strawberry types:
-  - Meta validation for `model`, `fields`, `exclude`, `name`, `description`, `optimizer_hints`, and `interfaces`.
-  - Deferred Meta keys are rejected loudly: `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`.
-  - Scalar conversion, relation conversion, choice-enum generation, generated relation resolvers, and `get_queryset` sentinel detection are implemented.
-- `DjangoOptimizerExtension` is usable today:
-  - O1 through O6 are implemented: relation resolvers, root-gated planning, nested prefetch chains, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade.
-  - B1 through B8 are implemented: AST plan cache, FK-id elision, strictness mode, optimizer hints, context plan stashing, schema audit, precomputed field metadata, and queryset diffing.
-  - Recent cache-key review findings are implemented in source: fragment-spread directives are collected and multi-operation documents hash the selected operation AST.
-- 0.0.4 foundation slice has shipped (card `DONE-010-0.0.4`):
-  - `DjangoTypeDefinition` is the canonical per-type metadata object stashed at `cls.__django_strawberry_definition__`, with forward-reserved slots (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`) ready for Layer 3 to populate.
-  - `finalize_django_types()` resolves pending relations, attaches generated relation resolvers, and runs `strawberry.type(cls, ...)` for every collected type. Re-exported from `django_strawberry_framework` and `django_strawberry_framework.types`.
-  - Pending-relation registry (`PendingRelation`, `add_pending_relation`, `iter_pending_relations`, `discard_pending`, `is_finalized`, `mark_finalized`, extended `clear`) supports definition-order-independent FK / reverse FK / forward + reverse OneToOne / forward + reverse M2M / multi-cycle graphs.
-  - Manual relation override contract (`consumer_annotated_relation_fields` vs `consumer_assigned_relation_fields`): annotation-only overrides keep the generated relation resolver; `strawberry.field(resolver=...)` / `@strawberry.field` overrides suppress it.
-  - Fail-loud unresolved-target finalization error names source model, source field, and target model.
-  - OneToOne / M2M cardinality coverage now uses the real `library` example app; the old `tests.fixtures.apps.TestsCardinalityConfig` fixture app has been removed.
-- 0.0.5 shipped after this foundation slice and is recorded separately as `DONE-015-0.0.5`.
-- 0.0.6 shipped as the patch closing the foundation phase: `DONE-016-0.0.6` (`FieldMeta` consolidation), `DONE-017-0.0.6` (deferred scalar conversions), `DONE-018-0.0.6` (multiple `DjangoType`s per model with `Meta.primary`), and `DONE-019-0.0.6` (consumer override semantics for scalar fields).
-- Test suite structure has caught up with the package shape:
-  - `tests/optimizer/` covers `extension.py`, `walker.py`, `plans.py`, `hints.py`, `field_meta.py`, and `definition_order.py`.
-  - `tests/types/` covers `base.py`, `converters.py`, `resolvers.py`, `definition_order.py`, and `definition_order_schema.py`.
-  - `tests/test_registry.py` covers idempotency / phase-1 atomicity / phase-2/3 partial-mutation / pending-set cleanup / class-mutation residue.
-  - `tests/utils/` covers utility modules.
-  - The full suite runs through `uv run pytest`, including package tests, example-project tests, and live `/graphql/` HTTP tests, with 100% package coverage.
-
-### In progress
-
-- `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
-- `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.15` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
-- Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
-
-### Still not implemented
-
-- Layer 3 public subsystems are still planned only:
-  - `aggregates/`
-  - `fieldset.py`
-  - `permissions.py`
-  - `utils/queryset.py`
-- Layer 3 still needs the rest of the goal-level contract: declarative aggregation and permission rules configured through `Meta`, composing with the shipped filtering and ordering, and introspectable from one type definition.
-- Several DjangoType contract gaps remain:
-  - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
-- Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
-  - model-property / cached-property optimization hints
-- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`][backlog] item 38).
-- The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
-
 ## Progress to 1.0.0
 
 **67.1% complete** toward `1.0.0` - 49 of 73 cards done (65.0% size-weighted). Across all non-backlog cards (incl. post-`1.0.0`), 49 of 74 (66.2%, 63.9% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
@@ -89,62 +37,86 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/2 (0.0%) | 0.0% |
 
-## Board columns
+## Card index
 
-## WIP / DONE spec map
+Every card on the board, in board order. Links jump to the card.
 
-| Card | Spec file |
-| --- | --- |
-| `WIP-ALPHA-050-0.0.15` - `DjangoListField` argument surface: `offset` / `limit` and `orderBy` | [spec-050-list_field_arguments-0_0_15.md](docs/spec-050-list_field_arguments-0_0_15.md) |
-| `DONE-049-0.0.14` - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | [spec-049-dependency_ci_hardening-0_0_14.md](docs/SPECS/spec-049-dependency_ci_hardening-0_0_14.md) |
-| `DONE-048-0.0.14` - Secure output and error defaults: drop file path, fail-closed debug, prod error policy | [spec-048-secure_output_defaults-0_0_14.md](docs/SPECS/spec-048-secure_output_defaults-0_0_14.md) |
-| `DONE-047-0.0.14` - Execution resource policy: central budget object + value-cardinality walker | [spec-047-resource_policy-0_0_14.md](docs/SPECS/spec-047-resource_policy-0_0_14.md) |
-| `DONE-046-0.0.14` - Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | [spec-046-transport_security-0_0_14.md](docs/SPECS/spec-046-transport_security-0_0_14.md) |
-| `DONE-045-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts | [spec-045-visibility_boundary-0_0_14.md](docs/SPECS/spec-045-visibility_boundary-0_0_14.md) |
-| `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/SPECS/spec-044-debug_extension-0_0_14.md) |
-| `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
-| `DONE-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md) |
-| `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md) |
-| `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md) |
-| `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md) |
-| `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
-| `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md) |
-| `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md) |
-| `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md) |
-| `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md) |
-| `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
-| `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
-| `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
-| `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field) | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
-| `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md) |
-| `DONE-028-0.0.8` - Ordering subsystem | [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md) |
-| `DONE-027-0.0.8` - Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
-| `DONE-026-0.0.7` - Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
-| `DONE-025-0.0.7` - Warning-free scalar registration via `StrawberryConfig.scalar_map` | [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md) |
-| `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method` | [spec-024-django_trac_37064_hardening-0_0_7.md](docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md) |
-| `DONE-023-0.0.7` - Multi-database cooperation contract | [spec-023-multi_db-0_0_7.md](docs/SPECS/spec-023-multi_db-0_0_7.md) |
-| `DONE-022-0.0.7` - Schema export management command | [spec-022-export_schema-0_0_7.md](docs/SPECS/spec-022-export_schema-0_0_7.md) |
-| `DONE-021-0.0.7` - `apps.py` and Django app config | [spec-021-apps-0_0_7.md](docs/SPECS/spec-021-apps-0_0_7.md) |
-| `DONE-020-0.0.7` - `DjangoListField` (non-Relay list) | [spec-020-list_field-0_0_7.md](docs/SPECS/spec-020-list_field-0_0_7.md) |
-| `DONE-019-0.0.6` - Consumer override semantics (scalar fields) | [spec-019-consumer_overrides_scalar-0_0_6.md](docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md) |
-| `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary` | [spec-018-meta_primary-0_0_6.md](docs/SPECS/spec-018-meta_primary-0_0_6.md) |
-| `DONE-017-0.0.6` - Deferred scalar conversions | [spec-017-deferred_scalars-0_0_6.md](docs/SPECS/spec-017-deferred_scalars-0_0_6.md) |
-| `DONE-016-0.0.6` - `FieldMeta` single-source-of-truth consolidation and mirror retirement | [spec-016-fieldmeta_consolidation-0_0_6.md](docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md) |
-| `DONE-015-0.0.5` - 0.0.5 Relay interfaces and Node foundation | [spec-015-relay_interfaces-0_0_5.md](docs/SPECS/spec-015-relay_interfaces-0_0_5.md) |
-| `DONE-014-0.0.4` - Move test fixture out of example settings | [spec-014-testing_shift-0_0_4.md](docs/SPECS/spec-014-testing_shift-0_0_4.md) |
-| `DONE-013-0.0.4` - Real M2M coverage | [spec-013-real_m2m_coverage-0_0_4.md](docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md) |
-| `DONE-012-0.0.4` - 0.0.4 version and release alignment | [spec-012-version_release_alignment-0_0_4.md](docs/SPECS/spec-012-version_release_alignment-0_0_4.md) |
-| `DONE-011-0.0.4` - Stale placeholder cleanup | [spec-011-stale_placeholder_cleanup-0_0_4.md](docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md) |
-| `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence) | [spec-010-foundation-0_0_4.md](docs/SPECS/spec-010-foundation-0_0_4.md) |
-| `DONE-009-0.0.4` - Rich schema architecture | [spec-009-rich_schema_architecture-0_0_4.md](docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md) |
-| `DONE-008-0.0.4` - Definition-order independence design | [spec-008-definition_order_independence-0_0_4.md](docs/SPECS/spec-008-definition_order_independence-0_0_4.md) |
-| `DONE-007-0.0.4` - 0.0.4 onboarding docs and spec consolidation | [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md) |
-| `DONE-006-0.0.3` - Documentation/status positioning for shipped Layer 2 | [spec-006-public_surface-0_0_3.md](docs/SPECS/spec-006-public_surface-0_0_3.md) |
-| `DONE-005-0.0.3` - DjangoType contract and boundary | [spec-005-django_type_contract-0_0_3.md](docs/SPECS/spec-005-django_type_contract-0_0_3.md) |
-| `DONE-004-0.0.3` - Optimizer beyond slices B1-B8 | [spec-004-optimizer_beyond-0_0_3.md](docs/SPECS/spec-004-optimizer_beyond-0_0_3.md) |
-| `DONE-003-0.0.2` - Optimizer O4 nested prefetch chains | [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md) |
-| `DONE-002-0.0.2` - Optimizer O1-O6 foundation | [spec-002-optimizer-0_0_2.md](docs/SPECS/spec-002-optimizer-0_0_2.md) |
-| `DONE-001-0.0.1` - DjangoType core foundation | [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md) |
+| Card | Title | Column |
+| --- | --- | --- |
+| [`WIP-ALPHA-050-0.0.15`](#djangolistfield_argument_surface_offset_limit_and_orderby) | `DjangoListField` argument surface: `offset` / `limit` and `orderBy` | In progress |
+| [`TODO-ALPHA-051-0.0.15`](#upstream_parity_gap_closure) | Upstream parity-gap closure | In progress |
+| [`TODO-ALPHA-052-0.0.15`](#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package) | Extract DjangoDebugExtension into the standalone django-strawberry-debug package | In progress |
+| [`TODO-ALPHA-053-0.0.15`](#boundary_hardening_and_system_wide_dry_squeeze) | Boundary hardening and system-wide DRY squeeze | In progress |
+| [`TODO-ALPHA-054-0.0.16`](#pluggable_field_conversion_registry) | Pluggable field-conversion registry | To Do - Alpha (0.1.0) |
+| [`TODO-ALPHA-055-0.0.16`](#apollo_federation_as_the_standalone_django_strawberry_federation_package) | Apollo Federation as the standalone django-strawberry-federation package | To Do - Alpha (0.1.0) |
+| [`TODO-ALPHA-056-0.0.17`](#alpha_documentation_debt_discharge) | Alpha documentation-debt discharge | To Do - Alpha (0.1.0) |
+| [`TODO-ALPHA-057-0.1.0`](#beta_release_cleanup_verification_alpha_beta) | Beta release (cleanup, verification, alpha → beta) | To Do - Alpha (0.1.0) |
+| [`TODO-BETA-058-0.1.1`](#graph_substrate_shared_graph_policy_and_dependency_planning) | Graph substrate: shared graph policy and dependency planning | To Do - Beta (1.0.0) |
+| [`TODO-BETA-059-0.1.1`](#fieldset_declarative_field_level_behavior_metafields_class) | `FieldSet` declarative field-level behavior (`Meta.fields_class`) | To Do - Beta (1.0.0) |
+| [`TODO-BETA-060-0.1.2`](#metasearch_fields_support) | `Meta.search_fields` support | To Do - Beta (1.0.0) |
+| [`TODO-BETA-061-0.1.2`](#postgres_full_text_search_filter_primitives) | Postgres full-text search filter primitives | To Do - Beta (1.0.0) |
+| [`TODO-BETA-062-0.1.3`](#aggregation_subsystem) | Aggregation subsystem | To Do - Beta (1.0.0) |
+| [`TODO-BETA-063-0.1.3`](#mutation_idempotency_keys) | Mutation idempotency keys | To Do - Beta (1.0.0) |
+| [`TODO-BETA-064-0.1.4`](#opt_in_node_sentinel_redaction_tier_metaredaction_mode) | Opt-in node-sentinel redaction tier (`Meta.redaction_mode`) | To Do - Beta (1.0.0) |
+| [`TODO-BETA-065-0.1.4`](#stable_choice_enum_naming_override) | Stable choice enum naming override | To Do - Beta (1.0.0) |
+| [`TODO-BETA-066-0.1.5`](#fakeshop_graphql_schema_activation) | Fakeshop GraphQL schema activation | To Do - Beta (1.0.0) |
+| [`TODO-BETA-067-0.1.5`](#product_catalog_layer_3_http_graphql_tests) | Product-catalog Layer 3 HTTP GraphQL tests | To Do - Beta (1.0.0) |
+| [`TODO-BETA-068-0.1.6`](#structural_optimization_templates_and_nested_sidecar_batching) | Structural optimization templates and nested sidecar batching | To Do - Beta (1.0.0) |
+| [`TODO-BETA-069-0.1.6`](#optimizer_explain_mode) | Optimizer explain mode | To Do - Beta (1.0.0) |
+| [`TODO-BETA-070-0.1.7`](#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key) | Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`) | To Do - Beta (1.0.0) |
+| [`TODO-BETA-071-0.1.8`](#migration_and_adoption_guides) | Migration and adoption guides | To Do - Beta (1.0.0) |
+| [`TODO-BETA-072-0.1.8`](#adversarial_non_live_test_suite) | Adversarial non-live test suite | To Do - Beta (1.0.0) |
+| [`TODO-STABLE-073-1.0.0`](#stable_release_api_freeze_cleanup_verification_beta_stable) | Stable release (API freeze, cleanup, verification, beta → stable) | To Do - Beta (1.0.0) |
+| [`TODO-STABLE-074-1.1.0`](#dynamic_schemas_from_datatype_specs_synthetic_unmanaged_models) | Dynamic schemas from dataType specs (synthetic unmanaged models) | To Do - Beta (1.0.0) |
+| [`DONE-049-0.0.14`](#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci) | Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | Done |
+| [`DONE-048-0.0.14`](#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy) | Secure output and error defaults: drop file path, fail-closed debug, prod error policy | Done |
+| [`DONE-047-0.0.14`](#execution_resource_policy_central_budget_object_value_cardinality_walker) | Execution resource policy: central budget object + value-cardinality walker | Done |
+| [`DONE-046-0.0.14`](#transport_security_django_owned_http_bounded_body_utf_8_wire_ws_revalidation) | Transport security: Django-owned HTTP, bounded body, UTF-8 wire, WS revalidation | Done |
+| [`DONE-045-0.0.14`](#sealed_get_queryset_visibility_boundary_policy_artifacts) | Sealed get_queryset visibility-boundary policy artifacts | Done |
+| [`DONE-044-0.0.14`](#response_extensions_debug_middleware) | Response-extensions debug middleware | Done |
+| [`DONE-043-0.0.14`](#test_client_helper) | Test client helper | Done |
+| [`DONE-042-0.0.14`](#debug_toolbar_middleware) | Debug-toolbar middleware | Done |
+| [`DONE-041-0.0.14`](#channels_asgi_router_migration_aid) | Channels ASGI router (migration aid) | Done |
+| [`DONE-040-0.0.13`](#auth_mutations_login_logout_register) | Auth mutations (login / logout / register) | Done |
+| [`DONE-039-0.0.13`](#drf_serializer_mutations_serializermutation) | DRF serializer mutations (`SerializerMutation`) | Done |
+| [`DONE-038-0.0.12`](#form_based_mutations_django_forms_modelforms) | Form-based mutations (Django Forms / ModelForms) | Done |
+| [`DONE-037-0.0.11`](#upload_scalar_and_file_image_field_mapping) | Upload scalar and file / image field mapping | Done |
+| [`DONE-036-0.0.11`](#mutations_auto_generated_input_types) | Mutations + auto-generated Input types | Done |
+| [`DONE-035-0.0.10`](#optimizer_robustness_hardening_upstream_comparison_guards) | Optimizer robustness hardening (upstream-comparison guards) | Done |
+| [`DONE-034-0.0.10`](#permissions_subsystem) | Permissions subsystem | Done |
+| [`DONE-033-0.0.9`](#connection_aware_optimizer_planning) | Connection-aware optimizer planning | Done |
+| [`DONE-032-0.0.9`](#full_relay_story_node_connection_root_validation) | Full Relay story (Node + Connection + Root + validation) | Done |
+| [`DONE-031-0.0.9`](#django_model_based_globalid_encoding) | Django-model-based GlobalID encoding | Done |
+| [`DONE-030-0.0.9`](#djangoconnectionfield_relay_connection_field) | `DjangoConnectionField` (Relay connection field) | Done |
+| [`DONE-029-0.0.9`](#djangotype_consumer_dx_cleanup_pass) | `DjangoType` consumer-DX cleanup pass | Done |
+| [`DONE-028-0.0.8`](#ordering_subsystem) | Ordering subsystem | Done |
+| [`DONE-027-0.0.8`](#filtering_subsystem) | Filtering subsystem | Done |
+| [`DONE-026-0.0.7`](#scalar_conversion_end_to_end_coverage_in_the_fakeshop_example) | Scalar conversion end-to-end coverage in the fakeshop example | Done |
+| [`DONE-025-0.0.7`](#warning_free_scalar_registration_via_strawberryconfigscalar_map) | Warning-free scalar registration via `StrawberryConfig.scalar_map` | Done |
+| [`DONE-024-0.0.7`](#django_trac_37064_hardening_safe_wrap_connection_method) | Django Trac #37064 hardening + `safe_wrap_connection_method` | Done |
+| [`DONE-023-0.0.7`](#multi_database_cooperation_contract) | Multi-database cooperation contract | Done |
+| [`DONE-022-0.0.7`](#schema_export_management_command) | Schema export management command | Done |
+| [`DONE-021-0.0.7`](#appspy_and_django_app_config) | `apps.py` and Django app config | Done |
+| [`DONE-020-0.0.7`](#djangolistfield_non_relay_list) | `DjangoListField` (non-Relay list) | Done |
+| [`DONE-019-0.0.6`](#consumer_override_semantics_scalar_fields) | Consumer override semantics (scalar fields) | Done |
+| [`DONE-018-0.0.6`](#multiple_djangotypes_per_model_with_metaprimary) | Multiple DjangoTypes per model with `Meta.primary` | Done |
+| [`DONE-017-0.0.6`](#deferred_scalar_conversions) | Deferred scalar conversions | Done |
+| [`DONE-016-0.0.6`](#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement) | `FieldMeta` single-source-of-truth consolidation and mirror retirement | Done |
+| [`DONE-015-0.0.5`](#005_relay_interfaces_and_node_foundation) | 0.0.5 Relay interfaces and Node foundation | Done |
+| [`DONE-014-0.0.4`](#move_test_fixture_out_of_example_settings) | Move test fixture out of example settings | Done |
+| [`DONE-013-0.0.4`](#real_m2m_coverage) | Real M2M coverage | Done |
+| [`DONE-012-0.0.4`](#004_version_and_release_alignment) | 0.0.4 version and release alignment | Done |
+| [`DONE-011-0.0.4`](#stale_placeholder_cleanup) | Stale placeholder cleanup | Done |
+| [`DONE-010-0.0.4`](#004_foundation_slice_definition_order_independence) | 0.0.4 foundation slice (definition-order independence) | Done |
+| [`DONE-009-0.0.4`](#rich_schema_architecture) | Rich schema architecture | Done |
+| [`DONE-008-0.0.4`](#definition_order_independence_design) | Definition-order independence design | Done |
+| [`DONE-007-0.0.4`](#004_onboarding_docs_and_spec_consolidation) | 0.0.4 onboarding docs and spec consolidation | Done |
+| [`DONE-006-0.0.3`](#documentationstatus_positioning_for_shipped_layer_2) | Documentation/status positioning for shipped Layer 2 | Done |
+| [`DONE-005-0.0.3`](#djangotype_contract_and_boundary) | DjangoType contract and boundary | Done |
+| [`DONE-004-0.0.3`](#optimizer_beyond_slices_b1_b8) | Optimizer beyond slices B1-B8 | Done |
+| [`DONE-003-0.0.2`](#optimizer_o4_nested_prefetch_chains) | Optimizer O4 nested prefetch chains | Done |
+| [`DONE-002-0.0.2`](#optimizer_o1_o6_foundation) | Optimizer O1-O6 foundation | Done |
+| [`DONE-001-0.0.1`](#djangotype_core_foundation) | DjangoType core foundation | Done |
 
 ## In progress
 
@@ -162,13 +134,13 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 
 #### Planning note
 
-Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/limit pagination - both upstreams ship a client-facing offset surface) together with spec-028's orphaned orderBy deferral, taken as one card because both open the same list-field argument-factory seam and would otherwise open it twice. Maintainer decision 2026-08-29: build the minimal shape - bounded offset/limit on `DjangoListField` only, never on connections.
+Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/limit pagination - both upstreams ship a client-facing offset surface) together with spec-028's orphaned orderBy deferral, taken as one card because both open the same list-field argument-factory seam and would otherwise open it twice. Maintainer decision 2026-08-29: build the minimal shape - bounded offset/limit on [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) only, never on connections.
 
 #### Scope
 
 - Bounded `offset` / `limit` arguments on `DjangoListField` only. Connections are a permanent non-goal the spec must pin: grafting offset onto a connection reintroduces the skip-based instability keyset cursors exist to remove, and ⚛'s own `offset: Int`-on-every-connection is the shape being refused.
 - Caps and hygiene: the effective row count is the minimum of the client `limit`, the field's `max_rows`, and the request `ResourcePolicy.max_list_rows` (the shipped bound; `trusted_max_rows` semantics unchanged); `offset` is bounded by a policy ceiling rather than unbounded skip; negative, non-integer, or over-ceiling values raise a typed `GraphQLError`, never a silent clamp in the error direction. With neither argument supplied, behavior and SQL are byte-for-byte today's.
-- `orderBy` argument on `DjangoListField` through the shipped OrderSet argument machinery (the target type's `orderset_class`, the same binding connections use) - this is spec-028's deferred orderBy-argument integration, orphaned since `0.0.9` and adjudicated onto this card by the doc-debt card's archived-spec deferral sweep. `django_strawberry_framework/list_field.py`'s ordering-contract docstring already promises order "unless the query supplies an `orderBy` argument" - an argument the field could not accept until this card, so the docstring becomes true rather than aspirational.
+- `orderBy` argument on `DjangoListField` through the shipped [OrderSet](docs/GLOSSARY.md#orderset) argument machinery (the target type's `orderset_class`, the same binding connections use) - this is spec-028's deferred orderBy-argument integration, orphaned since `0.0.9` and adjudicated onto this card by the doc-debt card's archived-spec deferral sweep. `django_strawberry_framework/list_field.py`'s ordering-contract docstring already promises order "unless the query supplies an `orderBy` argument" - an argument the field could not accept until this card, so the docstring becomes true rather than aspirational.
 - Determinism interplay, a spec decision: an `offset` page without an active order (argument or `Meta.ordering`) is database-dependent and unstable across requests. Preferred answer: require an active order whenever `offset` is non-zero (typed error otherwise); the alternative - documenting the instability - must say why upstream's silent instability was kept.
 - SDL consequence stated up front: the three arguments surface on every `DjangoListField` (nullable, optional), which is a schema-visible addition for every consumer; the spec records it as such.
 - Migration mapping: ⚛'s connection `offset` and 🍓's `pagination=True` / `OffsetPaginationInput` / `OffsetPaginated[T]` / `offset_paginated()` all map onto this surface; the migration-guides card owes the note, including that nested/windowed offset pagination stays served by nested connections here.
@@ -198,11 +170,6 @@ Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/li
 - 🍓 `strawberry_django/pagination.py` ships `OffsetPaginationInput`, the `OffsetPaginated[T]` generic (`pageInfo` / `totalCount` / `results`), `offset_paginated()`, and window-function nested offset pagination.
 - spec-028 deferred the `orderBy` argument on `DjangoListField` at `0.0.9`; the deferral had no card until this one.
 
-#### Note
-
-- This card discharges the parity register's offset/limit cut blocker and satisfies the archived-deferral sweep's card-or-drop adjudication for spec-028's orderBy orphan: carded here.
-- Renumber consequence: this card was inserted at 050 while In Progress (it ships next), shifting the 22 cards then numbered 050-071 up by one to 051-072; the board DB's text columns were re-swept for full card ids in the same pass. Spec filename stems and tree-wide references remain owed to the standing three-grammar sweep.
-
 #### Card references
 
 - Related: Shares the `0.0.15` line; both are pre-beta parity work, this card lands first. -> `TODO-ALPHA-051-0.0.15` - Upstream parity-gap closure
@@ -225,8 +192,8 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 
 #### Scope
 
-- A `through=` class-creation guard: reject at type creation a `through=`-declared M2M whose through model carries required extra columns (non-null, no default, beyond the two FKs) wherever the relation is writable through generated inputs, with a `ConfigurationError` naming the through model and the offending columns — today `django_strawberry_framework/mutations/resolvers.py::_assign_m2m` is a plain `.set(pks)` and neither `django_strawberry_framework/mutations/inputs.py` nor `django_strawberry_framework/utils/relations.py` guards the declaration, so the failure happens at runtime inside Django's `.set()`, outside the `FieldError` envelope. Fail-loud is package doctrine; this guard is also what makes the `through_defaults` refusal homed on TODO-BETA-071-0.1.8 safe.
-- `GeneratedField` support: resolve type and nullability from the field's `output_field` in `django_strawberry_framework/types/converters.py::convert_field_output` (the upstream answer — 🍓 `strawberry_django/fields/types.py` #"GeneratedField" — and a direct fit for our converter table), and exclude the column from generated write inputs since it is database-computed. Today a Django 5.0+ `GeneratedField` reached through `Meta.fields = "__all__"` raises `ConfigurationError "Unsupported Django field type 'GeneratedField'"` at type creation, `Meta.exclude` is the only escape, and nothing documents it — a migrating consumer with any generated column cannot declare the type at all.
+- A `through=` class-creation guard: reject at type creation a `through=`-declared M2M whose through model carries required extra columns (non-null, no default, beyond the two FKs) wherever the relation is writable through generated inputs, with a [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) naming the through model and the offending columns — today `django_strawberry_framework/mutations/resolvers.py::_assign_m2m` is a plain `.set(pks)` and neither `django_strawberry_framework/mutations/inputs.py` nor `django_strawberry_framework/utils/relations.py` guards the declaration, so the failure happens at runtime inside Django's `.set()`, outside the `FieldError` envelope. Fail-loud is package doctrine; this guard is also what makes the `through_defaults` refusal homed on TODO-BETA-071-0.1.8 safe.
+- `GeneratedField` support: resolve type and nullability from the field's `output_field` in `django_strawberry_framework/types/converters.py::convert_field_output` (the upstream answer — 🍓 `strawberry_django/fields/types.py` #"GeneratedField" — and a direct fit for our converter table), and exclude the column from generated write inputs since it is database-computed. Today a Django 5.0+ `GeneratedField` reached through `Meta.fields = "__all__"` raises `ConfigurationError "Unsupported Django field type 'GeneratedField'"` at type creation, [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) is the only escape, and nothing documents it — a migrating consumer with any generated column cannot declare the type at all.
 - Model `help_text` as the SDL field description: thread the model column's `help_text` into the generated field's GraphQL description. Today no model-column path exists — the only `help_text` handling is on the DRF serializer-input side (`django_strawberry_framework/rest_framework/serializer_converter.py`) and `django_strawberry_framework/types/base.py` synthesizes bare annotations — so a ⚛️ migrant takes a silent whole-schema SDL regression on every documented model. The spec decides always-on (⚛️ threads `str(field.help_text)` unconditionally) versus opt-in (🍓 gates it behind `FIELD_DESCRIPTION_FROM_HELP_TEXT`); an explicit consumer-declared description wins over `help_text` either way.
 - `django-choices-field` enum reuse: when a `TextChoicesField` / `IntegerChoicesField` declares a `choices_enum`, reuse the consumer's own enum instead of silently minting a second one from the raw choices (🍓 parity: `strawberry_django/fields/types.py` #"TextChoicesField"). Soft-dependency detection only — no hard dependency on `django-choices-field`; the `(model, field)` enum-reuse cache contract is unchanged. Coordinate with TODO-BETA-065-0.1.4, which owns `convert_choices_to_enum()` naming and that cache on the far side of the beta cut.
 - `FieldError` key casing: unify the wire casing of `FieldError.field` across the three flavors — model-flavor validation errors emit raw snake_case (`django_strawberry_framework/utils/errors.py::validation_error_to_field_errors` is an identity pass-through), relation-decode errors emit the camelCased wire name (`::relation_field_error`), and the serializer flavor re-keys recursively (`django_strawberry_framework/rest_framework/resolvers.py::serializer_errors_to_field_errors`) — and pin the chosen casing with live tests including a multi-word snake_case field, which no test covers today (the divergence is invisible to the suite). ⚛️ context: `graphene_django/settings.py` #"CAMELCASE_ERRORS", default on, in the exact `ErrorType` our `FieldError` mirrors.
@@ -268,11 +235,6 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 
 - Nothing blocks this card. The sequencing runs the other way: TODO-ALPHA-053-0.0.15's four-DRY-axes file list covers `mutations/{sets,inputs,resolvers,permissions}.py`, `rest_framework/*`, `utils/*`, `connection.py` and `types/base.py` — every file this card touches except `types/converters.py` — so that card must be sequenced behind this one, exactly as it is already sequenced behind the debug extraction on the same line. That dependency edge and note are owed on that card, not this one.
 - This card lands first on the shared `0.0.15` line; the debug extraction and the DRY squeeze follow, and the DRY squeeze still lands last and owns the joint cut.
-
-#### Note
-
-- Renumber consequence, already enacted when this card was written: inserting this card at 050 shifted the 21 cards then numbered 050-070 up by one, to 051-071 (the list-field argument card later inserted at 050 shifted them again). Their spec filename stems, the `spec-NNN` and `TODO-*-NNN-*` references across the tree, the bare prose numerals, and the board DB's own text columns (`CardItem.text`, `CardReference.raw_text`, `Card.planning_note`, `BoardDoc.body`) all rot with them and need the three-grammar sweep.
-- This card's spec is not written. It takes `docs/SPECS/spec-051-parity_gaps-0_0_15.md`, a stem the 2026-08-29 renumber sweep freed by moving the DRY-squeeze spec to `spec-053-boundary_dry_squeeze-0_0_15.md`.
 
 #### Card references
 
@@ -323,7 +285,7 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 
 #### Why it matters
 
-- A dead-weight review of the package found extensions/debug.py (DjangoDebugExtension, card 044's feature) is the one genuinely extractable module: its import surface is stdlib + Django + graphql-core + Strawberry plus exactly one package symbol (the root logger), nothing in the package imports it back, and it works against ANY strawberry-graphql + Django schema - no DjangoType, registry, or optimizer required.
+- A dead-weight review of the package found extensions/debug.py ([DjangoDebugExtension](docs/GLOSSARY.md#djangodebugextension), card 044's feature) is the one genuinely extractable module: its import surface is stdlib + Django + graphql-core + Strawberry plus exactly one package symbol (the root logger), nothing in the package imports it back, and it works against ANY strawberry-graphql + Django schema - no [DjangoType](docs/GLOSSARY.md#djangotype), registry, or optimizer required.
 - Carrying it in-tree costs this distribution ~1,900 lines (472 impl + ~1,375 tests) for a feature with no in-package consumer, while a standalone package serves a real audience beyond the framework. The same evidence standard that rejected the optimizer split (bidirectional fusion) endorses this one (zero coupling).
 - Sequenced BEFORE the boundary+DRY card deliberately: extraction shrinks that card's surface - extensions/ becomes a soft-dependency leaf (the rest_framework/ shape) before the import-linter contracts are authored, and the extras block gains its first member for the DRY card's four to join.
 
@@ -373,12 +335,12 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 - Refuse an oversized numeric literal as a typed resource rejection carrying `RESOURCE_LIMIT_EXCEEDED` rather than as the malformed-input failure CPython's `sys.get_int_max_str_digits` raises during JSON parsing or literal coercion. The request is already refused; only the envelope is wrong. A configured bound means a pre-coercion scan of the raw variables JSON, which is the body cap's layer rather than the walker's (spec-047 Decision 13).
 - `optimizer/walker.py::_record_relation_access` must run before the FK-id-elision short-circuit in `optimizer/walker.py::_plan_select_relation` - it appends the FK `attname` the elided resolver reads (`types/resolvers.py::_build_fk_id_stub`), so reversing the order silently reintroduces the N+1 the elision exists to remove. The invariant is stated in the helper's docstring and in `spec-003-optimizer_nested_prefetch_chains-0_0_2.md`'s same-query-recursion contract, but no test or assertion pins the order. Add a guard: a call-site assertion or a walker test that fails when the two statements are swapped.
 - `optimizer/plans.py::_prefetch_lookup_paths` recurses through nested `Prefetch` queryset lookups with no depth cap, while its sibling `optimizer/plans.py::runtime_path_from_path` is explicitly bounded at `_MAX_PATH_DEPTH` with a documented cyclic-or-corrupt rationale. The walker cannot construct a cyclic `Prefetch` graph, so the asymmetry is theoretical - but the codebase elsewhere treats unbounded traversal as a defect class, so either bound it to match its sibling or record why the asymmetry is deliberate.
-- `exceptions.py::ConfigurationError`'s fourth docstring example - "Two `DjangoType` subclasses registering against the same model" - has been false since `0.0.6`: `registry.py::TypeRegistry.register` appends, and the docstring on `register` itself opens "Multiple types may register against the same model". What actually raises is narrower and split across two moments: duplicate-primary (`#"is already the primary type"`) and flipped-primary-on-re-register (`#"primary flag cannot be flipped on re-register"`) at registration, and ambiguity-by-omission at `types/finalizer.py::_audit_primary_ambiguity`, which is finalization-time. The line does not merely overstate - it tells a consumer the sanctioned multi-type pattern is an error. The same docstring's deferred-key example says "before the spec that owns it has shipped" where the runtime message deliberately says "feature" (the `83c25963` vocabulary correction); it is the last in-source survivor of the retired wording. Scope is one file and these two examples - not a license for a package-wide docstring sweep. A documentation defect in source, not a correctness defect: no behavior is wrong, no test asserts the docstring, and `fail_under = 100` is unaffected. Authorized by the spec-005 residual cycle and never made, because the round that owned it was never dispatched.
-- `types/base.py::_format_unknown_fields_error`'s docstring names `Meta.fields`, `Meta.exclude`, and `Meta.optimizer_hints` as its complete caller set; the measured reach is five direct call sites in three functions carrying six distinct `attr` labels over seven `Meta` keys. Pre-measured by AST walk, to carry verbatim rather than re-derive: `::_validate_optimizer_hints` x2 (`optimizer_hints`), `::_select_fields` x2 (`fields`, `exclude`), and one forwarding site in `::_selected_meta_targets` (`attr=attr`) supplied by `::_validate_nullability_override_targets` (`nullable_overrides/required_overrides` - one label, two keys), `::_validate_filesystem_path_targets` (`filesystem_path_fields`), and `::_validate_relation_shape_targets` (`relation_shapes`). Write the replacement from the enumeration, not from the counts - every defect in this item's own history was a numeral standing in for a population: "eight distinct `attr` values" counted `attr=` occurrences, and "five call sites, three of them via `_selected_meta_targets`" attached the three to the wrong noun (exactly one of the five is inside it). This is the one error shape spec-005 pins as public contract, which is why the under-statement matters. Same authorization and same never-dispatched status as the `ConfigurationError` docstring item.
+- `exceptions.py::ConfigurationError`'s fourth docstring example - "Two [`DjangoType`](docs/GLOSSARY.md#djangotype) subclasses registering against the same model" - has been false since `0.0.6`: `registry.py::TypeRegistry.register` appends, and the docstring on `register` itself opens "Multiple types may register against the same model". What actually raises is narrower and split across two moments: duplicate-primary (`#"is already the primary type"`) and flipped-primary-on-re-register (`#"primary flag cannot be flipped on re-register"`) at registration, and ambiguity-by-omission at `types/finalizer.py::_audit_primary_ambiguity`, which is finalization-time. The line does not merely overstate - it tells a consumer the sanctioned multi-type pattern is an error. The same docstring's deferred-key example says "before the spec that owns it has shipped" where the runtime message deliberately says "feature" (the `83c25963` vocabulary correction); it is the last in-source survivor of the retired wording. Scope is one file and these two examples - not a license for a package-wide docstring sweep. A documentation defect in source, not a correctness defect: no behavior is wrong, no test asserts the docstring, and `fail_under = 100` is unaffected. Authorized by the spec-005 residual cycle and never made, because the round that owned it was never dispatched.
+- `types/base.py::_format_unknown_fields_error`'s docstring names [`Meta.fields`](docs/GLOSSARY.md#metafields), [`Meta.exclude`](docs/GLOSSARY.md#metaexclude), and [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) as its complete caller set; the measured reach is five direct call sites in three functions carrying six distinct `attr` labels over seven `Meta` keys. Pre-measured by AST walk, to carry verbatim rather than re-derive: `::_validate_optimizer_hints` x2 (`optimizer_hints`), `::_select_fields` x2 (`fields`, `exclude`), and one forwarding site in `::_selected_meta_targets` (`attr=attr`) supplied by `::_validate_nullability_override_targets` (`nullable_overrides/required_overrides` - one label, two keys), `::_validate_filesystem_path_targets` (`filesystem_path_fields`), and `::_validate_relation_shape_targets` (`relation_shapes`). Write the replacement from the enumeration, not from the counts - every defect in this item's own history was a numeral standing in for a population: "eight distinct `attr` values" counted `attr=` occurrences, and "five call sites, three of them via `_selected_meta_targets`" attached the three to the wrong noun (exactly one of the five is inside it). This is the one error shape spec-005 pins as public contract, which is why the under-statement matters. Same authorization and same never-dispatched status as the [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) docstring item.
 - `tests/types/test_base.py:1278` carries a comment naming `convert_relation`, a symbol with zero occurrences in `django_strawberry_framework/` - relation annotations resolve through `types/converters.py::resolved_relation_annotation`. Fold into whichever WP batch legitimately opens `test_base.py`; it is the same shape as the `_optimizer_field_map` item above and takes the same boundary - the present-tense survivals in shipped specs (`spec-009`, `spec-010` and `spec-019` all still name `convert_relation`; `spec-008` did until its 2026-08-14 residual reconciliation removed the last one, and it now greps 0, so do not re-add it on a later sweep) are correct as history and are not in the sweep. The same file carries a second, unrelated stale reference worth fixing in the same opening: `:212`'s test docstring reads "must raise until the spec that owns it ships", the last occurrence anywhere in the tree of the deferred-key vocabulary commit `83c25963` retired in favour of "feature". The package-side half of that correction landed at `65fd201e`, which is what leaves this one exposed - `grep -rn 'spec that owns' django_strawberry_framework/` now returns nothing while this line survives.
 - The `[spec-011]` renumber artifact reaches six live-code sites this card's WP batches already open: `django_strawberry_framework/types/base.py` carries five occurrences and `django_strawberry_framework/types/resolvers.py` one, whose quoted substrings resolve to spec-015 Decisions 4, 7, and 9 (`docs/SPECS/spec-015-relay_interfaces-0_0_5.md`, the pre-renumber `spec-011`), plus `tests/types/test_base.py` and `tests/filters/test_sets.py`. Measured 2026-08-15 by the spec-011 residual cycle (`docs/builder/bld-011-final.md` deferred-work catalog). Same shape and same boundary as this card's `_optimizer_field_map` and `convert_relation` items: fold into whichever WP batch legitimately opens the file and retarget the citations to `spec-015` - widening into a documentation sweep is the error to avoid; the documentation half of the cluster is owned by `TODO-ALPHA-056-0.0.17`, whose own `[spec-011]` bullet claims it - this line named `057` and the two board bullets disagreed, corrected 2026-09-03 by the spec-038 residual cycle. **Re-derivation trap, measured 2026-08-17 by the spec-015 residual cycle:** the population is 8 OCCURRENCES across 4 files, but the natural command for it - `git grep -oh '\[spec-011\]' | wc -l` - reports **9**. The extra row is git's `Binary file examples/fakeshop/db.sqlite3 matches` line, and that file's own hits are kanban card text, out of scope for this bullet. Two independent passes hit the same 9 and had to resolve it; count occurrences per file (`types/base.py` 5, `types/resolvers.py` 1, `tests/types/test_base.py` 1, `tests/filters/test_sets.py` 1) rather than trusting the tree-wide total, and do not read 9 as evidence the cluster grew. **The trap's mechanism reproduces and its numbers are dated:** re-measured 2026-09-03 that command returns **42**, of which **41** are the literal token and 1 is git's `Binary file examples/fakeshop/db.sqlite3 matches` line - the +1 inflation is exactly as described, while `9` was a 2026-08-17 reading of a documentation-tree population that has since grown. Carry the mechanism and the per-file counts, never the tree-wide total. Note also that the bracketed spelling `[spec-011]` occurs **0** times in tracked `.py`: that command measures the documentation tree, and this bullet's source/test population is a different measurement reached by an unbracketed `spec-011`.
-- `django_strawberry_framework/types/definition.py::DjangoTypeDefinition`'s `fields_class` docstring reserves the slot for the pre-renumber `TODO-BETA-046-0.1.1`; post-renumber that id names the shipped transport card and the live FieldSet owner is `TODO-BETA-059-0.1.1`. Same shape and same boundary as this card's `_optimizer_field_map` / `convert_relation` / `[spec-011]` items: fold into whichever WP batch legitimately opens `types/definition.py` and retarget the citation - or let the FieldSet card's own wiring slice absorb it if that lands first. Measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog item 6), standing since that cycle's R1/R1b.
-- WP-D contract question, both halves answered together: BOTH dynamic-set factories are production-unconsumed - `orders/factories.py::get_orderset_class` / `_dynamic_orderset_cache` and the filter twin `get_filterset_class` have no package consumer; the only importers are `tests/`. Dead code or deliberately symmetric skeleton is a contract-level call, not a worker's, and the answer sequences two other edits: the GLOSSARY `OrderSet` entry's closing clause ("so no dynamic order factory is shipped" - imprecise since `fd0c7327`: a factory IS shipped, it simply has no production consumer) is a Slice 5 glossary-DB edit whose right wording depends on this answer, and `spec-027`'s auto-generation scrub (owned by the beta-release card's repo-wide deferral sweep) should state "no auto-generation ships" flatly if the factories go, or point at the kept skeleton if they stay. Measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog items 14-15).
+- `django_strawberry_framework/types/definition.py::DjangoTypeDefinition`'s `fields_class` docstring reserves the slot for the pre-renumber `TODO-BETA-046-0.1.1`; post-renumber that id names the shipped transport card and the live [FieldSet](docs/GLOSSARY.md#fieldset) owner is `TODO-BETA-059-0.1.1`. Same shape and same boundary as this card's `_optimizer_field_map` / `convert_relation` / `[spec-011]` items: fold into whichever WP batch legitimately opens `types/definition.py` and retarget the citation - or let the FieldSet card's own wiring slice absorb it if that lands first. Measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog item 6), standing since that cycle's R1/R1b.
+- WP-D contract question, both halves answered together: BOTH dynamic-set factories are production-unconsumed - `orders/factories.py::get_orderset_class` / `_dynamic_orderset_cache` and the filter twin `get_filterset_class` have no package consumer; the only importers are `tests/`. Dead code or deliberately symmetric skeleton is a contract-level call, not a worker's, and the answer sequences two other edits: the GLOSSARY [`OrderSet`](docs/GLOSSARY.md#orderset) entry's closing clause ("so no dynamic order factory is shipped" - imprecise since `fd0c7327`: a factory IS shipped, it simply has no production consumer) is a Slice 5 glossary-DB edit whose right wording depends on this answer, and `spec-027`'s auto-generation scrub (owned by the beta-release card's repo-wide deferral sweep) should state "no auto-generation ships" flatly if the factories go, or point at the kept skeleton if they stay. Measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog items 14-15).
 - `django_strawberry_framework/orders/inputs.py` carries the retired reserved-slot rationale a third and fourth time in one module: `::_build_input_fields #"reserved -- see"` and `::_build_input_fields._leaf_of #"is a future-extension"`. Neither is false today - the first defers to `convert_order_field_to_input_annotation`'s docstring and the second describes a converter affordance that genuinely is unused - but they are the same sentence's third and fourth instances in one file, which is this card's DRY subject. The first two instances were rewritten at `f02dfda7` (the spec-028 DISTINCT ON retirement) and now read "kept for shape-symmetry"; these two were outside that commit's scope and still carry the older wording, so the module now states the same idea two different ways. Fold into whichever WP batch opens `orders/inputs.py`. Measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog item 19), re-verified 2026-08-16.
 - Do NOT sweep the six remaining `docs/spec-NNN-...` spellings in `.py` files: all six are decided non-edits, and an undifferentiated sweep breaks a passing test and destroys a deliberate example. `scripts/check_spec_glossary.py`'s 4 are usage examples in a docstring whose own prose then discusses what an archived spec keeps, so the pre-archive form is the point; `examples/fakeshop/test_query/test_glossary_api.py`'s 2 (`spec_path=` and the `specPath: { exact: ... }` assertion) are fixture DATA matching a glossary DB row, not a path claim - rewriting them breaks the test (the DB row itself is stale because `import_spec_terms::_sync_spec_mentions` orphans `GlossarySpecMention` rows at the pre-archive path, which is this card's separate live defect). The edit half of this item is DISCHARGED: the six test-module docstrings that genuinely made a stale path claim - `tests/test_connection.py`, `tests/test_list_field.py`, `tests/test_relay_node_field.py`, `tests/test_relay_connection.py`, `tests/optimizer/test_multi_db.py`, `tests/testing/test_relay.py` - all now read `docs/SPECS/`, three re-relativized by the spec-032 residual cycle and three by its follow-on sweep (2026-08-27, verified: every rewritten target EXISTS at `docs/SPECS/` and is MISSING at `docs/`). Original population measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` catalog item 22, which recorded only the `test_connection.py` site); enumerated 2026-08-16 as 12 occurrences, 6 edits. The board-DB half of this same defect is likewise discharged: the 13 stale `docs/spec-NNN` paths in kanban card bodies were rewritten in the same 2026-08-27 sweep, leaving only the 4 legitimate in-flight paths (`057`, `058` x2, `060`), which name unwritten specs whose proper working location IS `docs/`.
 - `django_strawberry_framework/filters/sets.py::FilterSetMetaclass.__new__ #"meta_class.fields = meta_class.filter_fields"` mutates the **consumer's** `Meta` class in place to alias `filter_fields` onto `fields`, and its `hasattr(meta_class, "fields")` guard sees **inherited** attributes - so a consumer `Meta` that subclasses another `Meta` already carrying `fields` silently skips the alias, and a consumer whose `Meta` is shared across two FilterSets has the first one's aliasing observed by the second. Pre-existing, shipped and tested; recorded as a design question, not a defect claim - the fix direction (copy the Meta or resolve the alias into the new class's attrs rather than writing to the consumer's object) is a contract-level call that belongs with this card's boundary work. Measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog item 23).
@@ -388,16 +350,16 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 - Three rule-27 source-reference spellings left by the spec-016 consolidation, all in files this card's WP batches already open, none of them a behavior defect. (a) `django_strawberry_framework/optimizer/walker.py::_plan_prefetch_relation` cites `utils.relations.instance_accessor` in dotted form where rule 27 requires `django_strawberry_framework/utils/relations.py::instance_accessor`; the cycle that found it had that very file open and deliberately left it, because `instance_accessor` is not a spec-016 symbol and fixing it there would have been scope creep rather than thoroughness. (b) `django_strawberry_framework/optimizer/field_meta.py::_target_pk_name #"field shapes on the resolver path"` cites `_field_meta_for_resolver` as a bare symbol with no path at all, while the docstring of `::_from_field_shape` earlier in the same module already spells that same symbol correctly as `types/resolvers.py::_field_meta_for_resolver` - so one module states one convention two ways, which is this card's DRY subject rather than a separate citation nit. (c) `tests/test_registry.py::test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation` names `_record_pending_relation`, a helper deleted at `f83bb71b` five days after the card shipped; the canonical read is now `django_strawberry_framework/types/base.py::_build_annotations`. Same shape and same boundary as this card's `_optimizer_field_map` and `convert_relation` items: fold into whichever WP batch legitimately opens the file, and do not widen into a documentation sweep - the present-tense survivals in shipped specs and in `CHANGELOG.md` are correct as history. Measured 2026-08-17 by the spec-016 residual cycle (`docs/builder/bld-016-final.md` deferred-work catalog items 1, 5 and 6).
 - The bare-basename cross-folder citation shorthand is ACQUITTED as house style, but its ambiguous tail is not, and the population recorded for that tail is wrong in a way a sweep would inherit. Re-measured at HEAD `fa248bdf` on 2026-08-17 across package source, classifying every `basename.py::Symbol` citation by whether the citing file's own directory holds a file of that basename and whether the basename is unique package-wide: **97 same-folder occurrences** (unambiguous by proximity, never the question) and **61 cross-folder occurrences whose basename has exactly one home** (the genuinely acquitted class) both stay exactly as they are. **13 cross-folder occurrences cite a basename with more than one home and are un-acquitted:** `relay.py` x8, which has three homes (root, `types/`, `testing/`), cited from `extensions/resource_policy.py`, `filters/base.py` x2, `mutations/fields.py` x2, `mutations/resolvers.py`, `utils/querysets.py` and `utils/write_values.py`; and `resource_policy.py` x5, which has two (root and `extensions/`), cited from `types/base.py`, `types/resolvers.py` x2, `utils/connections.py` and `utils/context.py`. Every cited symbol has exactly one definition, so all 13 resolve by symbol today - this is a readability and drift defect, not a dangling reference - but it is precisely the ambiguity that made a bare `resolvers.py` citation a defect rather than a shorthand, which is why the tail does not survive the convention's acquittal. **The instrument defect is the part worth carrying:** the cycle that recorded this class reported 12 and enumerated only the double-backtick RST spelling, because that is what its census pattern matched; the two single-backtick occurrences in `filters/base.py` were invisible to it, and having landed 2026-07-13 and 2026-07-15 they were present the whole time - so they are exactly the two a sweeper working from the recorded figure would leave behind. Any pattern for this class must accept the single-backtick spelling as well as the double-backtick one. **Do not treat the total as stable:** the working tree at measurement carried a 14th occurrence in `mutations/resolvers.py` from another session's uncommitted edit, so re-derive against HEAD rather than trusting a number. Measured by the spec-016 residual cycle (`docs/builder/bld-016-final.md` deferred-work catalog item 7), whose recorded '~12 sites, each basename unique package-wide' is corrected here on both the count and the stated ground; that item's other correction stands - `filters/inputs.py`'s `connection_field.py::_get_trimmed_filterset_class` reference is not an instance of the convention at all, since no `connection_field.py` exists anywhere in the repository and the surrounding comment names strawberry-graphql-django's module, not this package's.
 - Two vocabulary residues left in `tests/types/test_definition_order.py` by commit `2bcd7f96`, which rewrote `django_strawberry_framework/types/base.py::_id_annotation_is_relay_node_id` two days after the `0.0.6` release: it no longer calls `typing.get_type_hints` at all, reading `cls.__annotations__["id"]` and dispatching on `isinstance(raw, str)` instead, because `get_type_hints` handles nested forward references differently on py3.10 and py3.11+ and left a branch reachable only on the newer interpreter. The observable contract did not change - the same 11 Relay verdicts - so all three affected tests pin current, correct behaviour and only the naming is retired: no correctness defect, no assertion edit owed, and `fail_under = 100` unaffected. Same shape and same boundary as this card's `_optimizer_field_map` and `convert_relation` items: fold into whichever WP batch legitimately opens the file, and do not widen into a documentation sweep - the present-tense survivals in shipped specs are correct as history. (a) **The retired fail-soft vocabulary, four occurrences across three tests.** Two are test NAMES derived from the retired "fail-soft sub-case 1 / 2" wording, `::test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_guard_only` and `::test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted`; one is an inline comment in the second of those, #"the fail-soft annotation walk accepts the"; and one is a docstring on a third test, `::test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises` #"raises via the fail-soft regex reject". **This population is not greppable by its own vocabulary** - only the comment and the docstring carry the literal string, so `grep -c 'fail.soft'` reports 2 against a real 4 and a sweep working from that figure stops two short. It is also how the count was first understated as three-across-two, corrected by the same cycle's integration pass before it was homed here. (b) **The `spec015_*` synthetic identifiers, four occurrences**, all test-local strings with no cross-file consumer: `app_label = "test_spec015_unsupported"`, `app_label = "test_spec015_grouped_choices"`, `app_label = "test_spec015_co_resident"`, and `stub_name = f"spec015_unresolved_relay_stub_{uuid.uuid4().hex}"`. The `015` is the pre-2026-07-30-renumber number of `DONE-019-0.0.6`. Renaming these is optional in a way (a) is not - the spec's `## Test strategy` and its Slice 1 unresolved-string entries record the spelling as the landed one rather than as a recipe to re-make, so leaving them is a defensible disposition; decide it rather than sweeping it. Both populations measured 2026-08-18 by the spec-019 residual cycle and re-derived at its final gate, identical at `HEAD` and in the working tree - only the line numbers differ, which is why no `path:NN` citation is given.
-- The `orderBy` / pk-tiebreaker precision bundle - **take it whole or not at all**. It lands here rather than on `TODO-ALPHA-057-0.1.0` only because one of its three files is a `.py` docstring, which this card's WP batches can open and a documentation sweep cannot; the archived-spec sites travel with it and must NOT be split off into that card's sweep. Two imprecisions ride one sentence, repeated across three files. (i) The `orderBy` recourse names an argument `DjangoListField` does not itself wire - the factory's whole signature is `target_type`, `resolver`, `description`, `deprecation_reason`, `directives`, `max_rows`, `trusted_max_rows` (re-derived 2026-08-18); order arguments are added to both primitives by the Layer-3 specs, which the spec's own next bullet records two lines down. (ii) The comparative '`DjangoConnectionField` appends a pk tiebreaker' is unqualified where the shipped append is **conditional**: `django_strawberry_framework/connection.py::_finalize_queryset` delegates to `django_strawberry_framework/optimizer/plans.py::deterministic_order`, which appends `model._meta.pk.attname` only when `ends_in_unique_column(effective, model)` is False, and the keyset branch above that call (`cursor_field is not None and not explicit`) returns `qs.order_by(*cursor_field)` without reaching the helper at all, appending nothing. **Population - 3 files, and inside the spec 5 sites, not 1**: `docs/SPECS/spec-020-list_field-0_0_7.md` at `## Non-goals` #"adds no order tiebreaker", at `## User-facing API` #"**No order guarantee.**", and at three consecutive `### Decision 8` bullets (the `DjangoListField` boundary bullet, the `DjangoConnectionField` sibling carrying the unqualified comparative, and the asymmetry-is-deliberate bullet); `django_strawberry_framework/list_field.py::DjangoListField`'s docstring #"Ordering contract:", one passage carrying both halves; and `docs/GLOSSARY.md`'s `DjangoListField` entry (anchor `#djangolistfield`) at #"**Ordering.**", one paragraph carrying both halves, reached by a `GlossaryTerm.body` ORM edit plus `scripts/build_glossary_md.py` - this card's Slice 5 already owns a glossary flip. **Neither sweep token enumerates the population**: `tiebreaker` occurs 5 times in the spec and `orderBy` 3, and the two sets are not the same 5 lines. Deferred by the spec-020 residual cycle 2026-08-18 (`docs/builder/build-020-list_field-0_0_7.md` `## Deferred-work homing` item 3), which declared itself no-source-and-no-test and so could not execute the whole-population fix, while `docs/builder/worker-1.md` `## Spec custody` independently forbade the spec half alone because every statement is true as a conditional. Related but distinct, and the same adjudicator should see both: `TODO-ALPHA-057-0.1.0`'s repo-wide deferral sweep carries `spec-028`'s orphaned `0.0.9` `DjangoListField` orderBy-argument-integration deferral, which has no card anywhere.
+- The `orderBy` / pk-tiebreaker precision bundle - **take it whole or not at all**. It lands here rather than on `TODO-ALPHA-057-0.1.0` only because one of its three files is a `.py` docstring, which this card's WP batches can open and a documentation sweep cannot; the archived-spec sites travel with it and must NOT be split off into that card's sweep. Two imprecisions ride one sentence, repeated across three files. (i) The `orderBy` recourse names an argument [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) does not itself wire - the factory's whole signature is `target_type`, `resolver`, `description`, `deprecation_reason`, `directives`, `max_rows`, `trusted_max_rows` (re-derived 2026-08-18); order arguments are added to both primitives by the Layer-3 specs, which the spec's own next bullet records two lines down. (ii) The comparative '[`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) appends a pk tiebreaker' is unqualified where the shipped append is **conditional**: `django_strawberry_framework/connection.py::_finalize_queryset` delegates to `django_strawberry_framework/optimizer/plans.py::deterministic_order`, which appends `model._meta.pk.attname` only when `ends_in_unique_column(effective, model)` is False, and the keyset branch above that call (`cursor_field is not None and not explicit`) returns `qs.order_by(*cursor_field)` without reaching the helper at all, appending nothing. **Population - 3 files, and inside the spec 5 sites, not 1**: `docs/SPECS/spec-020-list_field-0_0_7.md` at `## Non-goals` #"adds no order tiebreaker", at `## User-facing API` #"**No order guarantee.**", and at three consecutive `### Decision 8` bullets (the `DjangoListField` boundary bullet, the `DjangoConnectionField` sibling carrying the unqualified comparative, and the asymmetry-is-deliberate bullet); `django_strawberry_framework/list_field.py::DjangoListField`'s docstring #"Ordering contract:", one passage carrying both halves; and `docs/GLOSSARY.md`'s `DjangoListField` entry (anchor `#djangolistfield`) at #"**Ordering.**", one paragraph carrying both halves, reached by a `GlossaryTerm.body` ORM edit plus `scripts/build_glossary_md.py` - this card's Slice 5 already owns a glossary flip. **Neither sweep token enumerates the population**: `tiebreaker` occurs 5 times in the spec and `orderBy` 3, and the two sets are not the same 5 lines. Deferred by the spec-020 residual cycle 2026-08-18 (`docs/builder/build-020-list_field-0_0_7.md` `## Deferred-work homing` item 3), which declared itself no-source-and-no-test and so could not execute the whole-population fix, while `docs/builder/worker-1.md` `## Spec custody` independently forbade the spec half alone because every statement is true as a conditional. Related but distinct, and the same adjudicator should see both: `TODO-ALPHA-057-0.1.0`'s repo-wide deferral sweep carries `spec-028`'s orphaned `0.0.9` `DjangoListField` orderBy-argument-integration deferral, which has no card anywhere.
 - The retired `is_async_callable` characterisation survives on the two surfaces the spec-020 residual cycle could not reach, and they are the SAME two files as this card's `orderBy` / pk-tiebreaker bundle - fold the two items together. `django_strawberry_framework/utils/typing.py::_callable_inspection_target` peels `functools.partial` **and** `staticmethod` in a `while` loop, so the predicate is not a three-shape, one-hop one: it also sees a raw `staticmethod` descriptor and arbitrary nestings of the two (`partial(staticmethod_obj)` and `staticmethod(partial(callable_instance))`, both named in that helper's own docstring), pinned by `tests/test_list_field.py::test_djangolistfield_async_staticmethod_resolver_gets_get_queryset_applied`. The spec's six sites were rewritten by that cycle's Round 1. The two survivors: (i) `docs/GLOSSARY.md`'s `DjangoListField` entry (anchor `#djangolistfield`), its opening paragraph, #"and through a one-hop `functools.partial`" - closed at three shapes, omitting `staticmethod`, and the file's ONLY surviving `one-hop`; (ii) `django_strawberry_framework/list_field.py` #"``__call__``/``functools.partial``-aware superset of", the inline comment that cycle's root-cause note named as the vector which propagated the abbreviation into the spec three times, and which is narrower still - it closes at **two** shapes, not three. **Re-derived 2026-08-18, and the `.py` site is not greppable by either token**: `one-hop` occurrences are spec **0**, rationale **0**, `README.md` **0**, `docs/README.md` **0**, `docs/GLOSSARY.md` **1**, `list_field.py` **0**; `staticmethod` occurrences are spec **11**, rationale **8**, `docs/GLOSSARY.md` **0**, `list_field.py` **0** - so a `one-hop` sweep finds one of the two sites and reports itself complete. Low severity, understatement rather than falsehood - neither site states a wrong count, both name the correct authority, and `is_async_callable`'s own docstring is complete - but correcting the glossary alone would leave the generated consumer catalog disagreeing with the source comment a maintainer reads while editing the very branch it describes, and the spec now guards explicitly against the 'harmonization' that would re-narrow it. Surfaced by that cycle's integration pass as finding I1 and recorded at `docs/builder/build-020-list_field-0_0_7.md` `## Deferred-work homing` item 5; the integration artifact itself was deleted at closeout, so this bullet is the standing record.
-- `docs/GLOSSARY.md`'s `SyncMisuseError` entry (anchor `#syncmisuseerror`) carries a raising-surface list that omits `DjangoListField`, which belongs there **twice over**. That entry's first bullet enumerates the surfaces as the Relay Node defaults' `resolve_node` / `resolve_nodes`, the `DjangoConnectionField` sync pipeline, the optimizer's sync prefetch-child build, and the `FilterSet` related-visibility derive, framing all four as 'when `cls.get_queryset` returns a coroutine'. `DjangoListField`'s sync default resolver reaches that same raise through `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync`, called in `django_strawberry_framework/list_field.py` beside its `apply_type_visibility_async` twin; and `django_strawberry_framework/utils/querysets.py::reject_async_iterable_in_sync_context`, called from `django_strawberry_framework/list_field.py`, raises the SAME error for a **different** misuse - an async-only iterable met from synchronous execution - which the entry's `get_queryset`-coroutine framing does not describe at all. **The spec-020 residual cycle raised the cost of leaving it** (`docs/builder/build-020-list_field-0_0_7.md` `## Deferred-work homing` item 4): its Round 2 added an `**Async-iterable resolvers.**` paragraph to the `djangolistfield` entry, so that entry now carries **2** of the file's 10 inbound `#syncmisuseerror` links and the newer one sends a reader to an entry covering neither case they arrived from. Deferred there rather than fixed because widening the entry redefines another term's scope and its `Status:` line records `0.0.5` and so belongs to a different card - which is why it lands on this card's Slice 5 glossary flip, sharing one `GlossaryTerm.body` ORM edit and one `scripts/build_glossary_md.py` run with the two glossary halves in the items above. Never hand-edit the rendered file.
+- `docs/GLOSSARY.md`'s [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) entry (anchor `#syncmisuseerror`) carries a raising-surface list that omits `DjangoListField`, which belongs there **twice over**. That entry's first bullet enumerates the surfaces as the Relay Node defaults' `resolve_node` / `resolve_nodes`, the `DjangoConnectionField` sync pipeline, the optimizer's sync prefetch-child build, and the [`FilterSet`](docs/GLOSSARY.md#filterset) related-visibility derive, framing all four as 'when `cls.get_queryset` returns a coroutine'. `DjangoListField`'s sync default resolver reaches that same raise through `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync`, called in `django_strawberry_framework/list_field.py` beside its `apply_type_visibility_async` twin; and `django_strawberry_framework/utils/querysets.py::reject_async_iterable_in_sync_context`, called from `django_strawberry_framework/list_field.py`, raises the SAME error for a **different** misuse - an async-only iterable met from synchronous execution - which the entry's `get_queryset`-coroutine framing does not describe at all. **The spec-020 residual cycle raised the cost of leaving it** (`docs/builder/build-020-list_field-0_0_7.md` `## Deferred-work homing` item 4): its Round 2 added an `**Async-iterable resolvers.**` paragraph to the `djangolistfield` entry, so that entry now carries **2** of the file's 10 inbound `#syncmisuseerror` links and the newer one sends a reader to an entry covering neither case they arrived from. Deferred there rather than fixed because widening the entry redefines another term's scope and its `Status:` line records `0.0.5` and so belongs to a different card - which is why it lands on this card's Slice 5 glossary flip, sharing one `GlossaryTerm.body` ORM edit and one `scripts/build_glossary_md.py` run with the two glossary halves in the items above. Never hand-edit the rendered file.
 - One banned build-phase name survives in shipped package source: `django_strawberry_framework/types/base.py` #"hoist, spec-032 integration pass", the lead comment on `_RELAY_NODE_GATE_INHERIT_TAIL`. The standing rule is that a comment states the invariant and never how the change came to be, and a pass name resolves to nothing for a reader of the published package. **Population re-derived 2026-08-27, and it is exactly one.** A grep for the whole banned vocabulary (`integration pass|final gate|worker N|review round|slice N|residual cycle|reconciliation pass|consolidation pass|DRY pass`, case-insensitive) over `django_strawberry_framework/**/*.py` returns two lines, and the second is `filters/sets.py` #"TODO(spec-060 Slice 1)", a live staged-slice anchor that AGENTS.md L26 REQUIRES to name its doc and slice - do not sweep it, and do not let a wider regex fold it in. Tree-wide the only other `.py` hits are `scripts/bug_hunt.py`, `scripts/prove_failability.py`, `scripts/check_citations.py` and `tests/test_bug_hunt.py`, which are review-domain tools describing their own surfaces and are an explicit keep. Fix: preserve the technical claim (byte-identical at three compose sites) and the `spec-032` pointer, drop the pass name or re-point it at the owning Decision. Fold into whichever WP batch legitimately opens `types/base.py` - this card already opens that file for the `[spec-011]` renumber item and for `_format_unknown_fields_error`.
 - **`tests/test_registry.py`'s connection and relay `clear()`-tolerance tests are controls that cannot fail, and their docstrings describe a mechanism the package retired.** `::test_clear_tolerates_unimportable_connection_submodule` and `::test_clear_tolerates_unimportable_relay_module` poison `sys.modules` and assert `registry.clear()` does not raise - but nothing on that path performs an import, so neither test can fail. `TypeRegistry.clear()` runs no import: it drops its own state, then replays already-resolved callables through `registry.py::iter_subsystem_clears`. The two callbacks are `connection.py::clear_connection_type_cache` (body: `_connection_type_cache.clear()`) and `django_strawberry_framework/relay.py::_clear_node_fields_declared` (body: `_node_fields_declared.clear()`), each a single `.clear()` on a module-level container registered at its OWN module's import time. The one import-bearing helper, `registry.py::_clear_if_importable`, has exactly one caller - `TypeRegistry.unregister`, not `clear()` - and `registry.py` #"do not go through this helper" says so in the package's own words. Deleting the poison from either test leaves it passing identically. **The filter and order twins are the same shape but NOT the same case, and they are the repaired precedent to copy**: their poison IS reachable, because `utils/inputs.py::clear_generated_input_namespace` makes two `_safe_import` lookups at clear time, and their docstrings were rewritten to say exactly that (#"``clear()`` itself imports nothing"). Both stale docstrings still claim an "``except ImportError`` guard in ``clear()``" - there is none - and a "cycle-safe local import", and both carry an inline comment claiming the poison exercises that guard. **The fix is executable, not a respell**: give each test a reachable failure mode or retire it, which is why it could not land in a docs-only cycle. Two citation defects ride the same edit, and they take OPPOSITE dispositions: the connection twin's `spec-030-connection_field-0_0_9` P3b label has **zero** occurrences in that spec (the label was homed in `docs/SPECS/appx/spec-030-connection_field-0_0_9-rationale.md`, so retarget the companion), while the relay twin's `spec-032 Decision 8` pointer is CORRECT - that Decision does pin the node-field ledger and its `registry.clear()` co-clear - and must not be "fixed". Recorded by the spec-028 residual cycle as F9 (`docs/builder/DONE/build-028-orders-0_0_8.md`) and deferred there because respelling either asserts another card's contract; **re-derived 2026-08-27, and the re-derivation found the larger defect** - F9 graded it a stale docstring, and it is a test that cannot fail.
 - The `workstream A/B/C/D` vocabulary names a build-plan partition that is documented **nowhere**, while live optimizer and connection code cross-references it. `workstream [A-D]` and the plan's own name, "connection window rigor", both grep **0** across `docs/` outside per-cycle `bld-*` scratchpads that close with their cycle. **Re-derived 2026-08-27: 35 occurrences across live `.py`, identical at HEAD and in the working tree** - 15 in `django_strawberry_framework/` (`connection.py` 7, `optimizer/lateral_fetch.py` 3, `optimizer/plans.py` 2, `optimizer/nested_planner.py` 1, `optimizer/selections.py` 1, `optimizer/walker.py` 1) and 20 in tests and examples (`tests/test_relay_connection.py` 8, `examples/fakeshop/test_query/test_library_api.py` 6, `tests/optimizer/test_walker.py` 3, `tests/optimizer/test_plans.py` 2, `tests/optimizer/test_selections.py` 1). The spec-027 residual cycle held this item "pending cohort F, not dropped" at a measured 12 package sites (`docs/builder/DONE/build-027-filters-0_0_8.md`); the package figure is 15 and the tree figure is 35, so **quote neither older number**. **Take it whole or not at all** - a partial claim fix is the residual cycle's dominant defect, and the package/test split runs straight through paired sites: `connection.py` #"the workstream-B defensive tail" is cited BY `tests/test_relay_connection.py` #"The workstream-B defensive tail in ``_resolve_from_window``". **The repair is a re-point, not a deletion, and it differs by letter.** B and C are spec-033's: `docs/SPECS/spec-033-connection_optimizer-0_0_9.md` documents the retained partition marker row and the conditional `_dst_total_count` under their real names (Decisions 4 and 5 as of this writing); `spec-030-connection_field-0_0_9.md` documents neither, so do not send them there. Read the Decision numbers off spec-033 at the time of the fix rather than from this bullet - that spec is under reconciliation as of 2026-08-27 and its numbering may move. D is different: those sites already carry `strawberry-django #697`, an upstream ticket the standing rule keeps and which already carries the why, so the plan-partition parenthetical can simply go (`optimizer/walker.py` #"the strawberry-django #697 bug class"). Six of the eleven files are dirty under the concurrent spec-033 cycle at the time of writing; re-measure at the opening rather than trusting the per-file split above.
 - `tests/test_ci_governance.py`'s first docstring line still reads "Governance tests for the CI workflow definitions." while the module's own next paragraph says it holds **two** corpora - the least-privilege posture in `.github/workflows/` AND the first-party Python sources, whose `extensions=` construction shape is a per-request performance contract no assertion inside a single test module can hold repo-wide. The first line is the one `scripts/build_tree_md.py` renders, and `docs/TREE.md` carries it **twice**, once under each render root; both rendered sites carry the narrow claim (re-verified 2026-08-27). The `.py` edit is inside this card's fence, but the regenerate is **not optional** - CI runs `build_tree_md.py --check`, so a docstring edit without the render fails the build. Do both in one change at this card's Slice 5 doc-wrap, beside the GLOSSARY items, and never hand-edit the rendered tail. Recorded by the spec-029 residual cycle as Slice 2's Amendment 1 (`docs/builder/DONE/build-029-consumer_dx_cleanup-0_0_9.md`) and homed here for that regeneration cost. Scope note: this card's WP batches do not currently name `tests/test_ci_governance.py` or `docs/TREE.md`, so the file coverage is something this card's own planning must establish rather than something the board already asserts.
 - Two absent pins on the shared input-namespace teardown helpers, both re-derived absent 2026-08-27. `tests/utils/test_inputs.py` pins `utils/inputs.py::_safe_import` twice - `::test_safe_import_returns_none_for_unimportable_module` (a name absent from `sys.modules` and unimportable) and `::test_safe_import_returns_none_for_missing_attribute_on_importable_module` (an importable module, absent attribute). Still unpinned: **(a)** `_safe_import` returning `None` for a **cold submodule of a poisoned package**, which is a third state and not either existing one; **(b)** `utils/inputs.py::clear_generated_input_namespace` making **exactly two** `_safe_import` calls - `utils/inputs.py` #"factory_cls = _safe_import(factory_module" and #"set_root = _safe_import(set_module" - for which no call-count assertion exists anywhere in the file. Both add executable statements, which is why the spec-028 residual cycle (D2, `docs/builder/DONE/build-028-orders-0_0_8.md`) deferred them out of a zero-boundary cycle and homed them here. **Pairs with this card's `clear()`-tolerance item above, and (a) is the seam between them**: state (a) is precisely what `::test_clear_tolerates_unimportable_filter_submodules` and its order twin create when they poison the package and its `inputs` module, and it is pinned today only indirectly, through a test asserting that `clear()` does not raise. Land the two items in the same opening or the same hole is left open from the other side. Scope note: this card's WP batches do not currently name `utils/inputs.py` or `tests/utils/test_inputs.py`.
 - `docs/GLOSSARY.md`'s `Multi-database cooperation` entry states axis 3 flatly - "generated `Prefetch` child querysets do NOT inherit the root alias" - with no time qualifier, and the package has routed alias-late since well after `0.0.7`. The claim is true only at plan-construction: `optimizer/walker.py::_build_child_queryset` starts from `related_model._default_manager.all()` and threads no root alias. Three shipped sites decide the alias at fetch time instead, all re-verified present 2026-08-27 - `optimizer/single_parent_fetch.py` #"child_qs = spec.pristine_child_queryset.using(queryset.db)", `optimizer/nested_planner.py` #"correct alias-late predicate at fetch time", and `filters/sets.py` #"child_manager.using(parent_db).all()". **The spec side is already repaired and is the wording to copy**: `spec-023-multi_db-0_0_7.md`'s Decision 3 axis-3 bullet now reads "do NOT inherit the root queryset's `_db` **at plan-construction time**" and goes on to state that routing for a generated child is alias-late, decided against the parent rows actually in hand, naming two of the three sites. The GLOSSARY entry is the surviving unqualified restatement and it is the surface a consumer actually reads. Recorded by the spec-023 residual cycle as D2 (`docs/builder/DONE/build-023-multi_db-0_0_7.md`) and left open there because `GLOSSARY.md` is DB-generated: edit the `GlossaryTerm.body` in the fakeshop glossary app and re-render with `scripts/build_glossary_md.py`. Rides the same ORM edit and the same render as this card's `SyncMisuseError` glossary item. Never hand-edit the rendered file.
-- The package's `strawberry.Schema(...)` docstring examples disagree with each other about `config=strawberry_config()`, and the file that settles the argument is about to be deleted. **Re-derived 2026-08-27: exactly four multi-line construction examples exist in package docstrings, and one carries the registration** - `extensions/debug.py` (module docstring) **yes**; `extensions/resource_policy.py::DjangoResourcePolicyExtension` (class docstring) no; `optimizer/extension.py` (module docstring) no; `optimizer/extension.py` (the singleton-in-a-factory method docstring) no. Population boundary, because the greppable token over-collects: a package-wide grep for `(strawberry\.Schema|DjangoSchema)\(` returns 25 hits, of which 21 are inline prose in the ``strawberry.Schema(...)`` form, the `class DjangoSchema(strawberry.Schema):` definition, or an error-message string - only those four open a constructor block. `scalars.py`'s `strawberry_config` docstring names the pattern inline without building an example and is adjacent, not a member. **The precedent-setting file is the one that goes away**: the debug-extraction card's Slice 2 deletes `extensions/debug.py`, and that card lands ahead of this one on this card's own `0.0.15` line, so by the time this card opens the population is three non-compliant sites and no in-package precedent - which is the sequencing that puts it here rather than leaving it to drift. **Homed, not decided**: whether a topic-scoped illustration (an optimizer example, a resource-policy example) should carry an unrelated `config=` line is a doc-style call for the maintainer, not a defect a spec cycle may settle. Either answer is cheap; three examples answering it differently is not. Recorded by the spec-025 residual cycle at its reopening (`docs/builder/DONE/build-025-scalar_map_helper-0_0_7.md`), which also recorded the instrument trap that travels with it: **count on `config=strawberry_config`, never on `config=strawberry_config()`** - the empty parens miss `extra_scalar_map=` call sites. Scope note carried forward from that cycle: this card's WP batches name `extensions/resource_policy.py` but not `optimizer/extension.py`, so two of the three target files are not established by the board text.
+- The package's `strawberry.Schema(...)` docstring examples disagree with each other about `config=strawberry_config()`, and the file that settles the argument is about to be deleted. **Re-derived 2026-08-27: exactly four multi-line construction examples exist in package docstrings, and one carries the registration** - `extensions/debug.py` (module docstring) **yes**; `extensions/resource_policy.py::DjangoResourcePolicyExtension` (class docstring) no; `optimizer/extension.py` (module docstring) no; `optimizer/extension.py` (the singleton-in-a-factory method docstring) no. Population boundary, because the greppable token over-collects: a package-wide grep for `(strawberry\.Schema|DjangoSchema)\(` returns 25 hits, of which 21 are inline prose in the ``strawberry.Schema(...)`` form, the `class DjangoSchema(strawberry.Schema):` definition, or an error-message string - only those four open a constructor block. `scalars.py`'s `[strawberry_config](docs/GLOSSARY.md#strawberry_config)` docstring names the pattern inline without building an example and is adjacent, not a member. **The precedent-setting file is the one that goes away**: the debug-extraction card's Slice 2 deletes `extensions/debug.py`, and that card lands ahead of this one on this card's own `0.0.15` line, so by the time this card opens the population is three non-compliant sites and no in-package precedent - which is the sequencing that puts it here rather than leaving it to drift. **Homed, not decided**: whether a topic-scoped illustration (an optimizer example, a resource-policy example) should carry an unrelated `config=` line is a doc-style call for the maintainer, not a defect a spec cycle may settle. Either answer is cheap; three examples answering it differently is not. Recorded by the spec-025 residual cycle at its reopening (`docs/builder/DONE/build-025-scalar_map_helper-0_0_7.md`), which also recorded the instrument trap that travels with it: **count on `config=strawberry_config`, never on `config=strawberry_config()`** - the empty parens miss `extra_scalar_map=` call sites. Scope note carried forward from that cycle: this card's WP batches name `extensions/resource_policy.py` but not `optimizer/extension.py`, so two of the three target files are not established by the board text.
 - `django_strawberry_framework/optimizer/plans.py::window_partition_for_prefetch` has zero production callers behind six tests, and the decisive evidence is a failability result rather than an argument. Production derives the relation partition from the join descriptor instead: mutating `optimizer/join_taxonomy.py::_partition_expr` (read by the shim AND by production) and mutating `optimizer/nested_fetch.py::attach_windowed_prefetch`'s `partition_by=` (read only by production) fail the SAME two rows both times - the restored shared-child test's - and NEITHER fails any row of the shim's own six-row family. Two of the six also pin an `OptimizerError` no production path can emit, while `exceptions.py` documents that raise as a live error mode. The question is existence, not style - delete the shim with its tests, or route production through it - so it needs the maintainer, not a sweep. This card's WP-D already opens `plans.py` for the Decision-4/5/8 strictness accounting and already names `plans.py::apply_window_pagination` in its byte-mirror pair with `lateral_fetch.py::build_lateral_sql`. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
 - Relocate the `to_attr` grammar to `django_strawberry_framework/utils/connections.py`. `connection.py` imports `_extend_only_projection`, `_relation_connection_to_attr` and `_relation_connection_to_attr_for_key` from `optimizer/nested_planner.py` and uses the latter two at the resolver's per-key probe. `spec-033` Decision 11 created `utils/connections.py` as "a neutral, cycle-safe home" precisely so the plan side and the resolve side share one source, and the `to_attr` grammar is as much a cursor-parity contract as the bounds are. **Note the corrected grounds: the privacy of the imported names is NOT the argument.** A cross-module `_`-private import is established house convention here - 76 statements across 45 modules, measured tree-wide - and on that basis the sibling flag against `optimizer/extension.py` importing `_active_strategy` is CLOSED as not-a-defect and should not be re-raised. The argument is placement, and there is no behavior change. Pairs with this card's C12 underscore-alias deletion: both open the walker/planner seam. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
 - One shared `_COERCION_ERRORS` constant under `utils/`. The tuple `except (ValueError, TypeError, AttributeError, KeyError, IndexError)` occurs **16 times across 3 files** - `connection.py` 11, `auth/mutations.py` 4, `utils/sessions.py` 1. **Match on the SET of exception names, never on the literal:** an exact-shape regex first reported 15 across 2 because the third site is written in the exploded multi-line trailing-comma layout this repo enforces, which is the same wrapped-source blind spot that defeated five other counts in that cycle. `except` accepts a tuple name, so the consolidation is mechanical. **`utils/sessions.py` carries a six-member superset (it adds `ImportError`) and must not be folded in.** No existing WP batch owns `utils/` or `auth/`; this needs its own partition. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
@@ -450,12 +412,6 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 - Two safe-direction costs in the middleware-ordering audit, deliberately left unpinned by any test so a contract sentence is not frozen before it is written. First, a chain spelled `[boundary, csrf, boundary]` is refused at startup, because the audit keeps the *last* boundary index and the *first* CSRF index. Second, two adjacent boundary entries measure the body twice, because `process_view` calls `view._enforce_request_boundary`, not `::_enforce_request_boundary_once`. Decide which is contract; only then does a row pin it.
 - Whether the package owes a controlled response to a callback that forges the private boundary marker over a `view_class` carrying a *callable* of the probed name whose boundary then raises. Measured identically on Python 3.14/Django 6.0 and at the 3.10/5.2 floor: it passes the probe, is constructed, and a non-`HTTPException` leaves `process_view` uncaught. If taken, the change is `except Exception` around `view._enforce_request_boundary(request)` in `process_view`, and its cost is that the guard sits across the body cap's own errors and across a package mount's genuinely broken boundary - which is deliberately as loud with the middleware installed as without it. Three independent passes recommended against the code path. Until it is decided, no permanent test row may assert today's uncontrolled outcome as contract.
 
-#### Note
-
-- Do not consolidate the `SERVER_NAME` / `SERVER_PORT` repetition in `consumers.py::_host_validation_request`. It mirrors `django/core/handlers/asgi.py::ASGIRequest.__init__`'s own if/else item for item, and that mirror is what the projection's oracle row asserts against. Examined and rejected, twice.
-- Do not give the cross-tree test helpers (`_capped_view`, `_strawberry_patch_opted_out`, `_multipart_body` / `_multipart_bytes`) a shared home. No shared home exists between the package tier and the fakeshop live tier, creating one means adding an `__init__.py` to a test tree that deliberately has none, and the duplication is the cheaper trade. Ruled and re-ruled; do not re-raise per helper.
-- Examined and explicitly not a defect: `filters/sets.py`'s `models.DurationField -> DurationFilter` row. It reads as contradicting the consumer docs, which say `DurationField` is absent from `types/converters.py::SCALAR_MAP` and raises `ConfigurationError` at type creation. The row is a deliberate mirror of django-filter's own table and becomes reachable exactly when a consumer registers the `SCALAR_MAP` entry the corrected docs tell them to register. Do not re-flag it on a DRY sweep.
-
 #### Card references
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
@@ -486,13 +442,13 @@ Created 2026-08-29 from the DIV-033 discussion: turn the field-conversion escape
 
 #### Scope
 
-- Class-attribute scoping: SCALAR_MAP / FIELD_OUTPUT_TYPE_MAP resolution moves from module-global-only to a layered lookup resolved at Meta-class creation time - per-type Meta override, then DjangoType base-class attribute (inherited via Python MRO, the DRF ModelSerializer.serializer_field_mapping shape), then the framework default maps. The module-level dicts remain the bottom layer so every existing registration keeps working; two apps in one process stop colliding because each app's base class carries its own map.
+- Class-attribute scoping: SCALAR_MAP / FIELD_OUTPUT_TYPE_MAP resolution moves from module-global-only to a layered lookup resolved at Meta-class creation time - per-type Meta override, then [DjangoType](docs/GLOSSARY.md#djangotype) base-class attribute (inherited via Python MRO, the DRF ModelSerializer.serializer_field_mapping shape), then the framework default maps. The module-level dicts remain the bottom layer so every existing registration keeps working; two apps in one process stop colliding because each app's base class carries its own map.
 - Bundle-shaped entries: a registration value grows from a bare scalar to a bundle - scalar, optional read-output type, optional resolver-attach hook, optional filter-side scalar. The file family (FileField/ImageField -> DjangoFileType/DjangoImageType + resolvers._attach_file_resolvers) migrates onto it as the first in-tree registration, deleting its hard-coded special cases.
-- Callable converters for structured/container fields: an entry value may be a callable converter(field, type_name, *, recurse) returning the annotation, with recurse a bound re-entry into convert_scalar. The hard-coded ArrayField/HStoreField branches in convert_scalar are deleted and re-registered as the first two callable entries; outer nullability widening stays framework-owned so converters cannot get it wrong; ConfigurationError rejection of invalid shapes stays converter-raised.
+- Callable converters for structured/container fields: an entry value may be a callable converter(field, type_name, *, recurse) returning the annotation, with recurse a bound re-entry into convert_scalar. The hard-coded ArrayField/HStoreField branches in convert_scalar are deleted and re-registered as the first two callable entries; outer nullability widening stays framework-owned so converters cannot get it wrong; [ConfigurationError](docs/GLOSSARY.md#configurationerror) rejection of invalid shapes stays converter-raised.
 - One registry, both sides: the filter-input converter (filters/inputs.py via scalar_for_field) resolves through the same registry so a registered type appears consistently on read output and filter arguments.
 - The fail-closed contract is unchanged: an unregistered field class still raises ConfigurationError naming the registration hook; nothing silently degrades to str.
 - No schema-visible change for existing consumers: fakeshop SDL is byte-identical before and after the refactor, asserted by a test.
-- Pin the file-column read-side `Meta.exclude` path BEFORE the file family migrates onto a bundle entry. Graded Low and deliberately not planned by the `spec-037` residual cycle (2026-09-01; recorded in that cycle's per-cycle artifact `docs/builder/bld-037-slice-1-code_conformance.md` #"Not a finding, do not re-raise", retired at the cycle's close and recoverable with `git show f9ae3f93:docs/builder/bld-037-slice-1-code_conformance.md` - a commit-resolvable path, not a disk-resolvable one; the cycle's only surviving artifact is its plan, `docs/builder/DONE/build-037-upload_file_image_mapping-0_0_11.md`): `Meta.exclude` is name-keyed with no file branch in `django_strawberry_framework/types/base.py::_select_fields`, so excluding a `FileField` / `ImageField` column takes the same path as excluding any scalar, and the write side is already pinned - correct reasoning, and exactly what this card's refactor invalidates. This card's own scope deletes the hard-coded `FIELD_OUTPUT_TYPE_MAP` / `resolvers._attach_file_resolvers` special cases and resolves the file family through a bundle entry instead, so the exclusion path stops being shared with the scalar case and the grading that licensed the gap expires with it. One row - an excluded file column appears in neither the SDL nor the resolver set - landing before the migration is what makes this card's #"Fakeshop SDL byte-identity test" DoD item MEASURE the file family rather than assume it; landing after, it can only confirm whatever the refactor produced. No spec licenses the gap today, so `docs/SPECS/` is owed no edit.
+- Pin the file-column read-side [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) path BEFORE the file family migrates onto a bundle entry. Graded Low and deliberately not planned by the `spec-037` residual cycle (2026-09-01; recorded in that cycle's per-cycle artifact `docs/builder/bld-037-slice-1-code_conformance.md` #"Not a finding, do not re-raise", retired at the cycle's close and recoverable with `git show f9ae3f93:docs/builder/bld-037-slice-1-code_conformance.md` - a commit-resolvable path, not a disk-resolvable one; the cycle's only surviving artifact is its plan, `docs/builder/DONE/build-037-upload_file_image_mapping-0_0_11.md`): `Meta.exclude` is name-keyed with no file branch in `django_strawberry_framework/types/base.py::_select_fields`, so excluding a `FileField` / `ImageField` column takes the same path as excluding any scalar, and the write side is already pinned - correct reasoning, and exactly what this card's refactor invalidates. This card's own scope deletes the hard-coded `FIELD_OUTPUT_TYPE_MAP` / `resolvers._attach_file_resolvers` special cases and resolves the file family through a bundle entry instead, so the exclusion path stops being shared with the scalar case and the grading that licensed the gap expires with it. One row - an excluded file column appears in neither the SDL nor the resolver set - landing before the migration is what makes this card's #"Fakeshop SDL byte-identity test" DoD item MEASURE the file family rather than assume it; landing after, it can only confirm whatever the refactor produced. No spec licenses the gap today, so `docs/SPECS/` is owed no edit.
 
 #### Definition of done
 
@@ -574,10 +530,6 @@ Maintainer decision 2026-08-29 on the parity register's federation cut blocker: 
 
 - Slice 1's public-seam audit runs against the import-linter boundary contracts this card lands.
 
-#### Note
-
-- Renumber consequence: inserted at 054 (after the DRY-squeeze card whose boundary contracts Slice 1 depends on), shifting the 19 cards then numbered 054-072 up by one to 055-073; the board DB's text columns were re-swept for full card ids in the same pass.
-
 #### Card references
 
 - Dependency: Slice 1's public-seam audit runs against the import-linter boundary contracts this card lands. -> `TODO-ALPHA-053-0.0.15` - Boundary hardening and system-wide DRY squeeze
@@ -604,7 +556,7 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 
 #### Scope
 
-- `docs/GLOSSARY.md` has no `DjangoSchema` entry, so the schema constructor's two policy arguments are described only from the `ErrorPolicy` / `ResourcePolicy` side. The spec-006 residual cycle closed the roster half: `DjangoSchema` and `DjangoMutationExecutionContext` now carry Public-exports bullets whose glosses link the entries that describe them, so what remains open is only whether either name earns an entry and anchor of its own. Card 047's closeout removed the dangling `#djangoschema` links rather than authoring the entry, matching how the `ErrorPolicy` entries already name the class without linking it; deciding whether the entry should exist is still open. Two adjacent completeness gaps in the same section, both measured by that cycle and both editorial calls rather than contract violations. First, `## Public exports` carries group bullets for `extensions`, `testing` and `auth` but none for `views`, `routers` or `middleware.debug_toolbar` - each of which already has its own glossary entry and is deliberately NOT root-exported, because for those families the dotted import path is the opt-in boundary rather than a consolation for failing the re-export gate. Second, the `DjangoSchema` bullet is a fourth site for the construction-time fact its two linked entries and the class docstring already state; it collapses to one line if and only if the entry above is authored, so trimming it first would leave the name a gloss documenting nothing and two foreign anchors with no stated relevance - strictly worse than the duplication.
+- `docs/GLOSSARY.md` has no `DjangoSchema` entry, so the schema constructor's two policy arguments are described only from the [`ErrorPolicy`](docs/GLOSSARY.md#errorpolicy) / [`ResourcePolicy`](docs/GLOSSARY.md#resourcepolicy) side. The spec-006 residual cycle closed the roster half: `DjangoSchema` and `DjangoMutationExecutionContext` now carry Public-exports bullets whose glosses link the entries that describe them, so what remains open is only whether either name earns an entry and anchor of its own. Card 047's closeout removed the dangling `#djangoschema` links rather than authoring the entry, matching how the `ErrorPolicy` entries already name the class without linking it; deciding whether the entry should exist is still open. Two adjacent completeness gaps in the same section, both measured by that cycle and both editorial calls rather than contract violations. First, `## Public exports` carries group bullets for `extensions`, `testing` and `auth` but none for `views`, `routers` or `middleware.debug_toolbar` - each of which already has its own glossary entry and is deliberately NOT root-exported, because for those families the dotted import path is the opt-in boundary rather than a consolation for failing the re-export gate. Second, the `DjangoSchema` bullet is a fourth site for the construction-time fact its two linked entries and the class docstring already state; it collapses to one line if and only if the entry above is authored, so trimming it first would leave the name a gloss documenting nothing and two foreign anchors with no stated relevance - strictly worse than the duplication.
 - Decide whether a `-rationale.md` companion in `docs/SPECS/appx/` is owed by every shipped spec or only by one whose cycle produced it, and make the directory consistent either way. Re-measured 2026-08-26 after the spec-031 residual cycle authored `031`'s companion: `docs/SPECS/` holds 56 spec files, 20 carry no `-rationale.md`, and 2 carry no `-terms.csv` either (`spec-054-graph_substrate-0_1_1` and `spec-064-structural_templates-0_1_6`, both unshipped). Restricted to the population this decision actually governs - the 49 shipped specs - 36 have a companion and 13 do not (`spec-032` through `spec-043`, plus `spec-049`); the remaining 7 gaps are unshipped specs that have had no cycle, so they are not in the population. This supersedes the 2026-08-25 reading of 21-carry-none / 35-have / 14-do-not, which itself superseded the 2026-08-15 reading of 13-have / 36-do-not, and the two supersessions differ in kind. The 08-15 to 08-25 one changed the SHAPE and not only the numbers: the have-side stopped being two small cohorts and became one long run plus one, contiguous from `spec-001` to `spec-030` alongside `spec-044` through `spec-048`, because that first cohort has been extended card by card since. The 08-25 to 08-26 one changed only the BOUNDARY, and by exactly one - the run now reads `spec-001` to `spec-031` alongside `spec-044` through `spec-048` - and it moved for precisely the reason the prior reading had already named: the run is extended card by card, and `031` was the next card. So the gap is no longer 'everything predating the practice' but a bounded 13-spec island between two runs, whose leading edge each residual cycle pushes forward by one: closing `030` made `spec-031` the edge and made the island visible at all, and closing `031` has now made `spec-032` the edge. This bullet previously read that `spec-048-secure_output_defaults-0_0_14.md` was the one file missing a companion where 044 through 047 all had one; that framing was wrong twice over, and both errors are worth keeping visible so the rewrite is not re-reverted. The named file acquired its companion (29,962 bytes), and the four-of-five reading mistook a cohort boundary for a defect - it pointed at the single spec sitting on the edge of the new-practice block and made what is now a 13-file policy question look like a one-file tidy-up. What actually turns on the decision is scheduling, not consistency: answering "every shipped spec" commits the board to 13 residual cycles of the kind spec-001 through spec-008 have been receiving, so the answer belongs beside this card's rationale-template and spec/rationale-checker items rather than in a documentation sweep.
 - `README.md:62`'s `0.0.14` paragraph describes `main`'s router shape inside the released version's sentence. Chosen framing on record: lead with the marker, the shape `docs/README.md:128` and `TODAY.md:384` already use.
 - `BACKLOG.md:1616` and `:1661` describe the protocol router as serving HTTP + WebSocket in the present tense.
@@ -613,14 +565,14 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - Swept 2026-08-07: all 32 occurrences of the dead card id `TODO-BETA-053-0.1.5` across 10 files (TODAY.md, seven archived specs, `apps/products/schema.py`, `test_query/test_products_api.py`) were pointed at `TODO-BETA-062-0.1.5`, after confirming 062 was then the natural host - its scope (node / nodes, `totalCount`, the subscription surface) covered every referencing subject. **That target is itself stale, and the sweep's stated justification is now false of the card it names**: the 2026-08-29 board inserts moved the fakeshop-activation card to `TODO-BETA-066-0.1.5` and gave `TODO-BETA-062-0.1.3` to the Aggregation subsystem, so the node / nodes + `totalCount` + subscription-surface scope this bullet cites as the reason travelled to 066 while the numeral stayed. Do not flip the sentence - it records what the 2026-08-07 sweep wrote, and a flip falsifies a real record; the +1 is owed to the SITES, not to this bullet. Discharged so far by the spec-037 residual cycle's review round 1 (2026-09-02): the 2 `.py` files named above and the `spec-037` spec/companion pair, 7 occurrences. Re-measured after that discharge on 2026-09-02, the population owing a decision is **39 occurrences across 10 surfaces**: `docs/SPECS/` 34 in 8 files, TODAY.md 3, and `docs/builder/DONE/build-034-permissions-0_0_10.md` 2 - created by the 2026-08-07 sweep and grown by each later `0.0.14` spec. **Two further occurrences are this card's own and must not be swept**: they sit in these two scope rows, which quote the stale id inside sentences that declare it stale, and they reach `KANBAN.md` and `KANBAN.html` only as renders of the same two `CardItem` rows - so a census that sums the DB and both rendered surfaces triple-counts one fact and reports 6 where 2 exist. **A byte census of the DB reports more still, and the excess is not data**: `strings examples/fakeshop/db.sqlite3 | grep -c` returns **4** where the ORM returns **2**, because rewriting these rows left the superseded text in freelist pages that no query reaches - so a whole-tree byte sweep scores the board side at 8, of which 2 are dead pages and 4 are one fact rendered three times. Count board-side occurrences by ORM against `CardItem.text`, never by scanning the SQLite file. **The figure this row first carried, 48 across 13, was measured minutes before this same amendment cut the board-side share from 9 surface-occurrences to 6** - a row stating a live count of a population it is itself editing falsifies itself on write, so any restatement here must be dated and must exclude the board's own rows from the sweepable total.
 - `import_spec_terms::_sync_spec_mentions` orphans GlossarySpecMention rows instead of repointing them: it deletes only rows at the NEW spec_path, never the old one, so every spec archive leaves the pre-archive path rows behind forever. The accumulated orphans have been reaped (0 remain), but the cause is unfixed and the next archive recreates them.
 - `spec-003-optimizer_nested_prefetch_chains-0_0_2.md` was reconciled on 2026-08-07 and three of the four stale sites this card carried are closed: the pre-reconciliation `plan_optimizations` arity and the present-tense `_collect_scalar_only_fields` are rewritten, and the discharged when-O4-ships instruction is deleted along with the parent-spec sweep item it carried. The fourth is a live DIVERGENCE this card must settle rather than sweep: this card's prescription was to replace the spec's opening claim so it states that O4 is shipped and that its record is this spec's, and the reconciliation deliberately rejected that disposition - a spec states its contract and never narrates its own shipping status - with the reasoning and the rejected alternative recorded in `docs/SPECS/appx/spec-003-optimizer_nested_prefetch_chains-0_0_2-rationale.md` under its `## Problem statement` entry. Neither surface has been partial-fixed toward the other; settling which one moves is this card's closeout call. The prior instruction not to sweep up spec-006's two citations of `## Visibility status` is spent: the spec-006 residual cycle retired both bullets with the heading they named, so nothing in spec-006 references the section.
-- `docs/GLOSSARY.md` dates `DjangoOptimizerExtension` and `only()` projection to `0.0.2`, matching card `DONE-002-0.0.2`'s target version, while `CHANGELOG.md`'s `[0.0.2]` entry calls the extension early and depth-1 and its `[0.0.3]` entry dates the end-to-end optimizer surface - selection-tree planning, `select_related`, nested `Prefetch` chains, same-query recursion, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade - to `0.0.3`. Whether a shipped-version stamp names first-shipped or complete is an editorial call about the glossary's dating convention for a subsystem that shipped across two releases, and it is not unilaterally correctable: `GlossaryTerm.body`, the card's target version, the card id, and the spec filename ending `-0_0_2.md` must move together. This card owns the CHANGELOG promotion, so the decision belongs on it.
+- `docs/GLOSSARY.md` dates [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) and [`only()` projection](docs/GLOSSARY.md#only-projection) to `0.0.2`, matching card `DONE-002-0.0.2`'s target version, while `CHANGELOG.md`'s `[0.0.2]` entry calls the extension early and depth-1 and its `[0.0.3]` entry dates the end-to-end optimizer surface - selection-tree planning, `select_related`, nested `Prefetch` chains, same-query recursion, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade - to `0.0.3`. Whether a shipped-version stamp names first-shipped or complete is an editorial call about the glossary's dating convention for a subsystem that shipped across two releases, and it is not unilaterally correctable: `GlossaryTerm.body`, the card's target version, the card id, and the spec filename ending `-0_0_2.md` must move together. This card owns the CHANGELOG promotion, so the decision belongs on it.
 - `DONE-003-0.0.2`'s `Verified in upstream` note is imprecise about which upstream function rebases: `strawberry_django/optimizer.py::_get_hints_from_django_relation`'s rebasing block moves entries out of its local store with the `path__` prefix STRIPPED (and is inert - that store is constructed empty), while the prefix-adding rebase lives in the sibling `::_get_hints_from_django_field`. The two sub-claims the parity argument rests on (`level=level + 1` recursion and `Prefetch(path, queryset=field_qs)` emission) are exact. Fold a one-clause correction into this card's closeout alongside its other spec-003 record work; a standalone edit of a shipped Done card's historical note buys no reader anything on its own.
 - The spec rationale companion file is on its sixteenth hand-reproduced instance. Re-measured 2026-08-26 by re-running the three-section shape check over every companion rather than re-counting files: `docs/SPECS/appx/` holds 36 `-rationale.md` companions, and 16 of them carry all three of `## How to read this file`, `## Provenance of this record` and `## Entries keyed to the spec` - the companions to `spec-001-django_types-0_0_1` through `spec-016-fieldmeta_consolidation-0_0_6`, still one contiguous run - each rebuilding that shape by hand along with the deliberative-companion opener, `## Standing notes`, and the link-definition scaffold at `docs/SPECS/appx/` depth. Eight carry two of the three, twelve carry one, and none carries zero. This supersedes the 2026-08-14 reading of 8 of 13, whose all-three cohort ended at `spec-008-definition_order_independence-0_0_4`: that 13 was the rationale-companion population of the day (those eight plus the five `0.0.14` companions, not 13 files in the directory - `docs/SPECS/appx/` also holds a `-terms.csv` per spec), and it is 36 now because each residual cycle since has authored one. The wider population is not decay to nothing but decay in two steps, in spec order: `spec-001` through `spec-016` carry three; `spec-017-deferred_scalars-0_0_6` through `spec-022-export_schema-0_0_7` carry `## Provenance of this record` plus `## Entries keyed to the spec`; `spec-023-multi_db-0_0_7` through `spec-031-globalid_encoding-0_0_9` carry `## Provenance of this record` alone. A same-day reading of this measurement put `spec-016-fieldmeta_consolidation-0_0_6` outside the cohort as a lone break carrying no provenance; that was an instrument artifact and is recorded so it is not re-derived. Its heading reads `## Provenance of this record - a reconstruction, not a move`, and an exact heading match misses a heading carrying a suffix where a substring match finds it. Grade these three headings by prefix, never by equality: `spec-016` is the only companion of the 36 where the two instruments disagree, so a spot-check of any other file would have confirmed the wrong reading. `## Provenance of this record` now stands at 34 of 36 and is a convention in fact; the other two headings, at 20 and 22, are not. The five `0.0.14` companions still carry one or two of the three (`044` and `046` how-to-read only, `045` provenance only, `047` and `048` both of those), which is itself part of the decision: the shape is either a template or a convention only the early cycles followed. Decide whether it becomes a documented template; the natural home is beside the spec/rationale consistency checker this card already scopes. Fold in one sizing question the spec-007 residual cycle raised: that pair still measures 46,045 bytes of rationale against a 2,983-byte spec, a 15.4x ratio, but the comparison it was set against has moved. The next-highest of the thirteen pairs then was 4.3x (`spec-002-optimizer-0_0_2`); over the 36 pairs now it is 10.3x (`spec-012-version_release_alignment-0_0_4`, 28,943 bytes of rationale against a 2,814-byte spec), with `spec-014-testing_shift-0_0_4` at 8.8x and `spec-013-real_m2m_coverage-0_0_4` at 7.3x behind it. So spec-007 is no longer a lone outlier but the head of a small tiny-spec/large-rationale tail, every member of it `0_0_4`-era. Not a defect and not that cycle's to fix, but if the template lands it should say whether a companion that large owes an index or a split.
 - Decide whether `scripts/check_spec_glossary.py` should strip code spans in `REF_USE_PATTERN`. Today a glossary link whose only body carrier sits inside a code span still counts as a link; a checker that started stripping code spans would drop every such anchor and break the affected done cards' `import_spec_terms` chains. Run a repo-wide count of code-span-only carriers before changing anything - this is the same span-masking question as slugger defect (c) in this card's checker item, landing on the opposite answer (count them rather than drop them).
 - Worker memory does not survive a concurrent build, and the loss is silent. `docs/builder/worker-memory/` is shared, gitignored, and reseeded empty by every build's pre-flight (`worker-0.md` step 5; `BUILD.md` `### Worker memory`), while `START.md` documents several sessions running builds on one checkout. So the second session to start a build destroys the first's memory before that build's closeout reads it - and `worker-0.md` `## Closeout job` step 2 is the only pass that ever reads all four. Measured on the spec-003 cycle: at closeout all four files read `# Worker N memory - build 004`, and the spec-003 entries were unrecoverable. Fix by namespacing the files per build, or by making pre-flight archive rather than delete, or by moving the closeout read earlier; whichever, pre-flight must stop being able to delete a build's memory that its own closeout has not harvested.
 - `scripts/clean_up.py` has no concurrency guard and can destroy another session's live work. Its `('docs/builder', 'bld-*.md')` glob deletes every cycle's artifacts, not the caller's, and it also clears the shared `docs/builder/worker-memory/` and `docs/shadow/`. Running it at the close of the spec-003 cycle would have deleted two untracked spec-004 artifacts, one of them at `Status: planned` and written six minutes earlier - unrecoverable, since untracked files are not in git. It is the sanctioned way to end a cycle and the repo is documented as concurrently worked, so this will recur. Scope deletion to a caller-supplied cycle (`--card NNN`), or refuse when a targeted artifact is untracked or not `final-accepted`.
 - The builder corpus states rules correctly and they still get missed, because they sit far from the point of use. Two measurements from the spec-003 cycle, one gap and one placement problem. (a) GAP: `worker-1.md` `### Performing the rationale move` decides what stays in a spec by asking whether a SENTENCE is deliberation or instruction - but a load-bearing rule can be an ordering constraint with no sentence form. Three of the six rules rescued out of spec-003's deleted pseudo-code fences existed only as the sequence of two lines (`_record_relation_access` before the elision short-circuit; the `only_fields` guard before connector injection; `cacheable = False` before the child build), and a seventh was missed on the first pass and caught only by review. Every rationale extraction that cuts pseudo-code hits this; five cycles have. (b) PLACEMENT: `BUILD.md` `## Claims are proven mechanically` already says to count occurrences rather than matching lines, and six of the cycle's thirteen findings were still miscounts, twice by exactly that `grep -c` mechanism. More prose is not the fix - the rule is right and unread. Both are corpus edits bound by `BUILD.md` `## The corpus ratchet`, so each needs the bytes it retires named before it lands. (c) A third measurement, from the spec-006 residual cycle, of (b)'s shape and pointing at (b)'s fix. Six instances in one cycle of RIGHT SUBSTANCE, LOOSE CITATION - a checklist box whose claim holds while the evidence it cites does not re-derive: an evidence formula requiring `git diff <spec>` to be empty, which was unsatisfiable from the moment that cycle's own reconciliation pass rewrote the spec uncommitted; a quoted heading carrying an ASCII hyphen where the heading on disk carries an em dash, so the quoted string greps to 0; marker occurrence counts measured over four docs and dispatched over five; and `CardItem.order` values checked as though they were rendered ordinals, which fails against a correct render because the order sequence is sparse. Four more were confined to a scratchpad, including a model cited as `GlossaryDocument` where the row is `apps.kanban.models.BoardDoc` with `namespace='glossary'`. The sharpest instance sat inside a sentence claiming re-derivation - the measurement had been re-derived and the attribution clause riding on it had not - so the countermeasure is that a re-derivation claim must scope to every clause it stands over, and an auditor re-derives the citation rather than only the substance. Converges from the other direction with this card's note-section quantifier rule; two cycles reaching one rule independently is the argument for stating it once in `BUILD.md` rather than a third time on a card. (d) Two rules measured by the spec-008 residual cycle, same ratchet bucket. First, the recurring pointer defect: a reference resolves and its destination does not carry the claim it was cited for. The two separating tests are subject match and explicit forwarding by name - a pointer landing on a section about the right subject is not thereby a pointer to the claim, and the only pointer that survives a later edit of its destination is one the destination names. This card's spec-010 rule-27 item is a population of exactly that defect, which is the argument for stating it in `BUILD.md` rather than once per spec. Second, its mechanical cousin, and the sharper of the two because it explains why gates miss it: before trusting a mechanical check, state what the tool actually reads. A line-oriented tool applied to a quantity that is not a line was that cycle's most repeated error, and the general form is that the tool's input is not the thing under test - `grep` sees source literals while the runtime sees their concatenation, so `testing/relay.py::global_id_for`'s message is split across adjacent string literals and a source grep returns 0 for text that is present in the raised string; a link audit reads a heading list while the claim lives in the body; and `cardinalit` appears only in prose while the code spells it `FieldMeta.is_many_side`, which is how a reported "9 occurrences, 0 validators" travelled three un-re-derived hops against a real 42 lines in 12 files. Converges with (b) from the opposite direction: (b) says count occurrences rather than matching lines, and this says a count means nothing until the population counted is the one the claim is about. (e) A placement defect in `ARTIFACT.md`, same bucket. `ARTIFACT.md:3` and `:181` make the top-level header `Status:` line canonical and `:187` makes the body append-only, and the spec-008 cycle still ran five state transitions with that header reading `planned`, because each pass appended a `## Status` section and none rewrote the header. Both rules are stated and both are correct; nothing sits at the point of use telling a pass writing its block that the header is what dispatch reads. The dispatcher's half of the same defect is that Worker 0 ticked two checklist boxes off a subagent's return message rather than the artifact, which `worker-0.md` already forbids - so the countermeasure is a placement edit at the write site, not a third statement of the rule.
-- The spec-005 residual cycle closed early with its documentation-and-archive round never dispatched; that round's verification chain lands here, beside the definition-of-done box that already owns the doc cross-check. (a) Durable-doc audit, with three inputs already established and re-usable: `docs/README.md` has no `## Current surface` section and no reference to spec-005 anywhere, which is what makes the spec's two retired README obligations undischargeable rather than corrections owed; `docs/GLOSSARY.md`'s `Meta.interfaces` and `Meta.primary` entries are already correct, and the `Meta.primary` entry already carries the full four-case ambiguity table with both error strings, which is why the reconciled spec points there instead of restating it; and the three still-deferred keys are labeled by release (`0.1.1` / `0.1.2` / `0.1.3`), never by spec. Compare `iterdump()` semantics rather than file bytes and verify by two-consecutive-regenerate byte-stability - `docs/GLOSSARY.md` is routinely dirty from a concurrent cycle's regenerate. (b) Re-run the three-direction cross-reference sweep - references to spec-005, its own 8 link definitions, and the rationale companion's outbound links at `docs/SPECS/appx/` depth (`../../GLOSSARY.md` for a `docs/` target, `../spec-NNN-*.md` for a `docs/SPECS/` sibling). All 27 definitions resolved when last measured; nobody has re-measured since commit `bca1ccf1`. (c) Re-verify `SpecDoc.path` for card 5 and that `card.glossary_links.count()` equals the 7 rows of `docs/SPECS/appx/spec-005-django_type_contract-0_0_3-terms.csv` - a green `check_spec_glossary` does not prove the DB-side count, which is why it is a separate obligation, and the DB has been written by concurrent sessions since the last reading. (d) Run the writing form of `import_spec_terms`; only the read-only `--check` form was ever invoked.
+- The spec-005 residual cycle closed early with its documentation-and-archive round never dispatched; that round's verification chain lands here, beside the definition-of-done box that already owns the doc cross-check. (a) Durable-doc audit, with three inputs already established and re-usable: `docs/README.md` has no `## Current surface` section and no reference to spec-005 anywhere, which is what makes the spec's two retired README obligations undischargeable rather than corrections owed; `docs/GLOSSARY.md`'s [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) and [`Meta.primary`](docs/GLOSSARY.md#metaprimary) entries are already correct, and the `Meta.primary` entry already carries the full four-case ambiguity table with both error strings, which is why the reconciled spec points there instead of restating it; and the three still-deferred keys are labeled by release (`0.1.1` / `0.1.2` / `0.1.3`), never by spec. Compare `iterdump()` semantics rather than file bytes and verify by two-consecutive-regenerate byte-stability - `docs/GLOSSARY.md` is routinely dirty from a concurrent cycle's regenerate. (b) Re-run the three-direction cross-reference sweep - references to spec-005, its own 8 link definitions, and the rationale companion's outbound links at `docs/SPECS/appx/` depth (`../../GLOSSARY.md` for a `docs/` target, `../spec-NNN-*.md` for a `docs/SPECS/` sibling). All 27 definitions resolved when last measured; nobody has re-measured since commit `bca1ccf1`. (c) Re-verify `SpecDoc.path` for card 5 and that `card.glossary_links.count()` equals the 7 rows of `docs/SPECS/appx/spec-005-django_type_contract-0_0_3-terms.csv` - a green `check_spec_glossary` does not prove the DB-side count, which is why it is a separate obligation, and the DB has been written by concurrent sessions since the last reading. (d) Run the writing form of `import_spec_terms`; only the read-only `--check` form was ever invoked.
 - Add a source-symbol-citation check to the spec/rationale consistency checker this card already scopes: nothing in the repository verifies that a `path::Symbol` citation in a spec names a symbol that still exists. Measured instance: spec-005 cited `convert_relation` as the symbol a relation resolves through, and it is gone from the package entirely. It was found by a human-driven sweep and would have survived every automated gate that cycle ran - `check_spec_glossary` validates glossary anchors, not source symbols. The checker must distinguish a live spec's claim from a shipped spec's history: `spec-008`, `spec-009`, `spec-010` and `spec-019` all name `convert_relation` in the present tense and are correct as history, so a checker that flags them reproduces the documentation-sweep error this board has already ruled against twice.
 - `CHANGELOG.md`'s `0.0.8` entry states the release's documentation context only as design-doc pointers: `CHANGELOG.md #"The documentation surface was synchronized for the 0.0.8 cycle"` cites `spec-027-filters-0_0_8.md` and `spec-028-orders-0_0_8.md` through reference links, so a reader of the release record has to leave it to learn what shipped. Decide whether that entry states the shipped surface itself or stays a pointer. Two measurements taken 2026-08-14 frame the decision: the file is 437 lines / 100,289 bytes, and the `0.0.4` onboarding-docs card's board claim that "`CHANGELOG.md` is condensed and no longer relies on design-doc pointers for release context" was true when it was written and describes neither property now. That row is correct history on a Done card and is NOT to be edited, which is precisely why the live decision needs a home here. Raised and deferred by the spec-007 residual cycle: `AGENTS.md` rule 21 closes `CHANGELOG.md` to a build cycle, and this card owns the CHANGELOG promotion.
 - `CONTRIBUTING.md #"Spec filename pattern"` cites a `docs/builder/BUILD.md` heading that does not exist: `grep -c 'Spec filename pattern' docs/builder/BUILD.md` returns 0, and the real heading is `## Spec and build-plan filename pattern`. Correct the citation, and cross-check the rest of that paragraph's workflow claims against `BUILD.md` in the same pass rather than fixing four words alone - the paragraph also describes the spec working location and the archival opt-in, both of which `BUILD.md` now states itself. Found by the spec-007 residual cycle, which had no license to touch `CONTRIBUTING.md`; this card's documentation cross-check is the natural owner, and its definition-of-done box now names the file.
@@ -632,7 +584,7 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - Add an unused-link-definition check to the spec/rationale consistency checker this card already scopes (the defs / uses / undefined / orphan scaffold check): measured 2026-08-15 by the spec-011 residual cycle, 23 files carry 71 link definitions no body reference uses (largest: `KANBAN.md` 28, DB-generated; `spec-051` 6; `spec-050` and `spec-055` 5 each; `CHANGELOG.md` 5), including an unused `[backlog]` definition in eight archived specs (`spec-011`, `spec-012`, `spec-013`, `spec-016`, `spec-024`, `spec-026`, `spec-036`, `spec-055`). Invisible to both existing checkers - `scripts/check_trailing_commas.py` enforces only the header scaffold and `scripts/check_spec_glossary.py` only glossary terms. `docs/SPECS/appx/spec-011-stale_placeholder_cleanup-0_0_4-rationale.md` deliberately contributes two (`[backlog]`, `[kanban]`) so it is not the single exception in the 23-file pattern; the sweep retires all 71 at once. Re-measured 2026-08-16 by the spec-009 residual cycle under an explicitly stated rule (corpus: 267 git-tracked `.md` files; a definition is a line matching `^[ref]:`; a use is the full `[text][ref]`, collapsed `[ref][]`, or shortcut `[ref]` form): **70 definitions across 23 files**, where `spec-055` now carries 4 not 5 and `docs/SPECS/spec-028-orders-0_0_8.md`'s unused `[relay]` is in the set. **Do not simply overwrite 71 with 70 - the two readings are different instruments, not one drift.** R4's edit consuming `spec-055`'s `[kanban]` accounts for exactly one, but the 2026-08-15 reading also records `docs/SPECS/appx/spec-011-stale_placeholder_cleanup-0_0_4-rationale.md` as deliberately contributing two where the 2026-08-16 reading finds one, so the totals agree by coincidence of offsetting deltas rather than by agreement. **The sweep must pin the use-detection rule FIRST and re-derive once**, then retire the population in one pass; adopting either figure without restating its rule reproduces the corpus-definition defect this card's sibling bullet records. Neither reading is flagged by any checker: `scripts/check_trailing_commas.py --check` exits 0 on both `spec-055` and `spec-028`.
 - The boilerplate 'expand it into the full builder-format spec' preamble is **DISCHARGED board-wide**: re-derived 2026-08-19, **zero** files under `docs/SPECS/spec-*.md` carry it. This bullet previously stated the population as three - `spec-016`, `spec-024`, `spec-026` - and that figure was already stale when last read: measured at the parent commit of the spec-026 residual cycle, `spec-016` and `spec-024` were each **0** and only `spec-026` was **1**, so the true remaining figure was one, not three. Each of the three was retired by its own residual cycle MOVING the preamble into that spec's `docs/SPECS/appx/spec-NNN-...-rationale.md` companion, which is where the surviving occurrences legitimately live: a `grep -rl` across `docs/` now returns only those companions plus per-cycle `docs/builder/` artifacts quoting them, and **none of those is an edit**. Do not re-derive three, four, or five from an older reading of this bullet, and do not "fix" the companion copies - the move is the fix. What remains open on this card is unchanged and is the question this count was only ever a symptom of: whether a `-rationale.md` companion is owed by every shipped spec or only by one whose cycle produced it, which is this card's separate rationale-companion decision above.
 - `AGENTS.md` rule 31's version-parity concern is **DISSOLVED**: the release is single-sourced in `django_strawberry_framework/__init__.py` `__version__`, and hatchling derives the pyproject packaging metadata from it via `[tool.hatch.version]`, so `pyproject.toml` carries `dynamic = ["version"]` and no second literal exists. The item as written asked for a gate pinning `pyproject.toml` `[project].version` against `__version__`; that literal is gone, so nothing remains to pin and no gate is owed. `tests/base/test_init.py::test_version` is the single pin on the one surviving literal. Recorded 2026-08-26, when the mechanical two-source comparison was removed from `scripts/bug_hunt.py::_package_release` together with the tests that pinned its bypass. `uv.lock`'s `django-strawberry-framework` root entry is the one remaining independent copy and stays out of scope here.
-- ONE repo-wide sweep, in place of N one-clause fixes: does any archived spec's `0.0.X` deferral have a card? Sized by the spec-009 residual cycle at 56 archived specs, ~34 carrying a deferral-plus-version line, ~190-200 candidate lines (`docs/builder/bld-009-final.md` `### Deferred work catalog` items 5-11 carry the full grading). Folds in: `spec-034-permissions-0_0_10.md`'s four `TODO-BETA-046-0.1.1` citations - 3 live-claim sites (`:220`, `:224`, `:307`) to repoint at the FieldSet card, and 1 revision-log bullet (`:14`) that is a DECIDED NON-EDIT (true as history: `046` was the live id on 2026-06-14, before the 2026-07-30 renumber, so rewriting it would falsify a real record); `spec-028`'s two orphaned `0.0.9` deferrals - `DjangoListField` orderBy-argument integration (`:195`/`:1191`, no card anywhere: needs the spec-009-style card-or-drop parity adjudication before the `1.0.0` freeze) and the position-side-channel leak-closing design (`:734`, verify first: the shipped OrderSet per-field `check_<field>_permission` gates may already discharge it; if a real gap survives, the node-sentinel redaction card is the board's leak-posture home); `spec-027`'s "lands when `DjangoConnectionField` ships in `0.0.9`" auto-generation sentence (scrub to match `spec-028` Decision 12's standing-non-goal precedent; the wording depends on the dynamic-set-factories answer carried by the DRY-squeeze card's WP-D); the `DONE-028-0.0.8` card body still saying Layer 6 is "deferred to `0.0.9`" (DB edit plus regenerate); `spec-028`'s 7 `WIP-ALPHA-*` citations and the `WIP-ALPHA-*` prefixes in `connection.py` / `types/finalizer.py` / `types/relay.py`; and the 8 raw `Decision N line NN` refs in package source violating AGENTS.md rule 27 (the live-code halves coordinate with the DRY-squeeze card's WP batches, which already own this shape). Two cautions: honour the spec-034 3+1 split, and do not mistake `orders/factories.py`'s "standing deferred Non-goal" wording for an orphaned deferral - it names no version and no owner. Two method rules the sweep inherits from the cycle that sized it. **State corpus exclusions by BASENAME, not by path prefix - a path prefix silently fails on an archived copy.** That cycle's two token sweeps measured over different permanent corpora without either noticing: a path-prefix reading excluded 137 files under `docs/builder/bld-`, `docs/builder/build-`, `docs/review/` and `docs/dry/` for 620 files, while a basename reading (per-cycle build documents excluded wherever they live) gave 606; **the 14-file difference is a directory, not a file** - every one sits under `docs/builder/DONE/`, whose paths begin `docs/builder/DONE/build-` and so escape the `docs/builder/build-` prefix. The recorded figures 15/5 for `TODO-BETA-046-0.1.1` and 27/9 for `DjangoModelType` are each correct under the rule they were computed with and **must not move**. The part worth carrying: **two independent agreeing re-derivations did not catch the mismatch**, because each instrument inherited the corpus definition from the thing it was checking; only running one population under both readings did. Second, when this sweep opens `docs/SPECS/appx/spec-009-rich_schema_architecture-0_0_4-rationale.md`, its `## Standing notes` "three sites" bullet is **DELIBERATELY stale and owed a correction** - the measured count is four (`filters/sets.py` is the fourth applier) and the spec's own opener was already corrected to "four sites"; it was left because that cycle held the rationale append-only, and the staleness is stated in-file five lines above it. Correct it in the first pass that has the rationale open without that constraint.
+- ONE repo-wide sweep, in place of N one-clause fixes: does any archived spec's `0.0.X` deferral have a card? Sized by the spec-009 residual cycle at 56 archived specs, ~34 carrying a deferral-plus-version line, ~190-200 candidate lines (`docs/builder/bld-009-final.md` `### Deferred work catalog` items 5-11 carry the full grading). Folds in: `spec-034-permissions-0_0_10.md`'s four `TODO-BETA-046-0.1.1` citations - 3 live-claim sites (`:220`, `:224`, `:307`) to repoint at the [FieldSet](docs/GLOSSARY.md#fieldset) card, and 1 revision-log bullet (`:14`) that is a DECIDED NON-EDIT (true as history: `046` was the live id on 2026-06-14, before the 2026-07-30 renumber, so rewriting it would falsify a real record); `spec-028`'s two orphaned `0.0.9` deferrals - [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) orderBy-argument integration (`:195`/`:1191`, no card anywhere: needs the spec-009-style card-or-drop parity adjudication before the `1.0.0` freeze) and the position-side-channel leak-closing design (`:734`, verify first: the shipped [OrderSet](docs/GLOSSARY.md#orderset) per-field `check_<field>_permission` gates may already discharge it; if a real gap survives, the node-sentinel redaction card is the board's leak-posture home); `spec-027`'s "lands when [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) ships in `0.0.9`" auto-generation sentence (scrub to match `spec-028` Decision 12's standing-non-goal precedent; the wording depends on the dynamic-set-factories answer carried by the DRY-squeeze card's WP-D); the `DONE-028-0.0.8` card body still saying Layer 6 is "deferred to `0.0.9`" (DB edit plus regenerate); `spec-028`'s 7 `WIP-ALPHA-*` citations and the `WIP-ALPHA-*` prefixes in `connection.py` / `types/finalizer.py` / `types/relay.py`; and the 8 raw `Decision N line NN` refs in package source violating AGENTS.md rule 27 (the live-code halves coordinate with the DRY-squeeze card's WP batches, which already own this shape). Two cautions: honour the spec-034 3+1 split, and do not mistake `orders/factories.py`'s "standing deferred Non-goal" wording for an orphaned deferral - it names no version and no owner. Two method rules the sweep inherits from the cycle that sized it. **State corpus exclusions by BASENAME, not by path prefix - a path prefix silently fails on an archived copy.** That cycle's two token sweeps measured over different permanent corpora without either noticing: a path-prefix reading excluded 137 files under `docs/builder/bld-`, `docs/builder/build-`, `docs/review/` and `docs/dry/` for 620 files, while a basename reading (per-cycle build documents excluded wherever they live) gave 606; **the 14-file difference is a directory, not a file** - every one sits under `docs/builder/DONE/`, whose paths begin `docs/builder/DONE/build-` and so escape the `docs/builder/build-` prefix. The recorded figures 15/5 for `TODO-BETA-046-0.1.1` and 27/9 for `DjangoModelType` are each correct under the rule they were computed with and **must not move**. The part worth carrying: **two independent agreeing re-derivations did not catch the mismatch**, because each instrument inherited the corpus definition from the thing it was checking; only running one population under both readings did. Second, when this sweep opens `docs/SPECS/appx/spec-009-rich_schema_architecture-0_0_4-rationale.md`, its `## Standing notes` "three sites" bullet is **DELIBERATELY stale and owed a correction** - the measured count is four (`filters/sets.py` is the fourth applier) and the spec's own opener was already corrected to "four sites"; it was left because that cycle held the rationale append-only, and the staleness is stated in-file five lines above it. Correct it in the first pass that has the rationale open without that constraint.
 - Cross-spec rot into `docs/SPECS/spec-010-foundation-0_0_4.md` from the spec-009 scrubs, 2 live sites: `#"custom field classes"` still lists that phrase among what spec-009 describes, which is exactly the `DjangoModelField` claim the spec-009 residual cycle scrubbed as its D1 - spec-009 no longer describes it, so drop the phrase; and `#"is the right helper for the day"` still names `get_strawberry_annotations` as the helper for a future consumer-override contract, a borrow scrubbed as D3 whose opposite spec-009 now states (provenance is solved structurally by the `consumer_*_fields` frozensets on `django_strawberry_framework/types/definition.py::DjangoTypeDefinition`), so retire the sentence. Carried unrepaired for ten consecutive passes because every pass treated spec-010 as a concurrent cycle's read-only file. **The third site is CLOSED**: the `#"### Layer 3: Finalization trigger"` anchor was repaired by the spec-010 residual cycle (2026-08-15) and now correctly records the auto-trigger direction as not adopted - re-verified 2026-08-16, do not re-raise it. Measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog items 1-3).
 - Board-DB spec-path rot: the sweep is PART-DISCHARGED; only the maintainer-decision half is left. `CardItem` text cites specs as `docs/spec-NNN-...`; the fix is an ORM edit plus regenerate, and the disposition splits three ways. **(a) DISCHARGED 2026-08-19 - renumber residue, 4 occurrences across 3 cards** (cards 057, 058 which carries TWO, and 060). Each predicted its own spec under the pre-2026-07-30-renumber number, so an author following the instruction would have created a file violating `AGENTS.md` rule 26 (`NNN` = card number). Only the number was corrected; `docs/` was KEPT, because rule 26 makes it the correct directory for a not-yet-authored spec and a blanket `docs/` -> `docs/SPECS/` rewrite is WRONG here. **(b) DISCHARGED 2026-08-19 - 3 occurrences on cards 055 and 056**, where the spec already exists AND is archived: the number was right and the directory stale, so these were repointed to `docs/SPECS/`. **(c) OPEN, and the only part still needing a decision - 13 occurrences across 12 `CardItem` rows on 8 DONE cards (028 carrying three, 029 / 030 / 032 carrying two each, and 033 / 034 / 035 / 045 one each), probably NON-EDITS.** Each spec was authored at `docs/` per rule 26 and swept to `docs/SPECS/` by a LATER cycle, so the bullet is true as history and repointing it would claim the card added the file somewhere it did not; same grading as the spec-034 `#"Revision 2"` bullet this card's deferral sweep already protects. Whether a Done card's DoD should stay a historical record or become navigable is a maintainer contract call. **Re-derived 2026-08-25 by the spec-030 residual cycle, classifying every `docs/spec-` token in `CardItem.text` on path existence, and the 2026-08-19 re-derivation does not survive it:** (c) is 13 occurrences on 8 cards, not 10 on 5 - cards 034, 035 and 045 each carry exactly ONE (`definition_of_done` on 034 and 045, `files_touched` on 035), so the 2026-08-19 claim that they carry ZERO and were named in error is itself false, and the 12-on-8 figure it overturned was the closer of the two readings. The self-check that catches this without re-measuring anything is already inside this bullet: (a) 4 + (b) 3 + (c) 10 sums to 17, which cannot be reconciled with the same sentence's correct occurrence total of 20, and 20 - 4 - 3 recovers (c) = 13 exactly. **Keep both corrections visible so the rewrite is not re-reverted a third time.** (a) still holds at 4 occurrences on cards 057, 058 (two) and 060, every one correctly left at `docs/` per rule 26; (b) is confirmed discharged, with zero `docs/spec-` tokens left on cards 055 and 056. One counting-basis caution for whoever opens this: a per-spec reading of the rendered `KANBAN.md` and a per-card reading of `CardItem` rows agree here only because each card cites its OWN spec, and 13 occurrences sit on 12 rows because one `note` row on card 028 carries the path twice - so state which basis a future count used. Originally enumerated 2026-08-16 by the spec-009 residual cycle (`docs/builder/bld-009-final.md` catalog item 21, which recorded only card 055's DoD site). The source/test half of this same defect is carried by `TODO-ALPHA-053-0.0.15`.
 - Add a cited-substring uniqueness check to the spec/rationale consistency checker this card already scopes, alongside its source-symbol-citation and unused-link-definition siblings: `AGENTS.md` rule 27 requires a `#"substring"` citation to name a UNIQUE substring in its target file, and nothing verifies it. Two measured instances, both in `docs/SPECS/spec-015-relay_interfaces-0_0_5.md` and both predating the cycle that found them: `pyproject.toml #"version ="` matches 2 times and `django_strawberry_framework/types/finalizer.py #"_attach_relation_resolvers"` matches 3. Both point at the right place, which is why they were recorded rather than tightened - rewriting a working anchor to buy uniqueness is exactly how that cycle's one High-severity finding started: its reconciliation pass reworded four cited spec sentences and silently retired the anchors seven shipped source and test sites quote, via an inserted "the", a dropped "explicitly" and a dropped parenthetical. So the checker reports non-uniqueness and does not repair it, and any pass that does tighten an anchor must sweep the citing source in the same change. The checker owes the reflow case too - a citing comment that is line-wrapped splits its own quoted substring across a line break and goes invisible to the plain grep rule 27 depends on, which is a defect in the CITING file rather than the cited one, and whose measured instance is carried by `TODO-ALPHA-053-0.0.15`. Measured 2026-08-16 by the spec-015 residual cycle (`docs/builder/bld-015-final.md` deferred-work catalog item 6). A third measured instance, 2026-08-18 by the spec-022 residual cycle: `docs/SPECS/spec-022-export_schema-0_0_7.md` cites `docs/GLOSSARY.md` #"[Schema export management command](#schema-export-management-command)" at `:53`, `:572` and `:574`, and that exact string matches **5** times in the target - the Index-table row `:210`, the group roster `:253`, two `**See also:**` rows `:532` and `:1833`, and the `## Schema introspection management command` entry body `:1829` - so no shorter form buys uniqueness either. Making it unique means citing the whole index-table row, which is a form question across every spec that cites a `docs/GLOSSARY.md` index row rather than a spec-022 repair; that cycle fixed only the rendering half, wrapping each #"..." token in a code span so the quoted text stops rendering as a link to a nonexistent spec anchor. The published population was 3 and is 5. **A fourth measured instance, 2026-09-01 by the spec-035 residual cycle, and the first of the opposite kind - an anchor that is unique only by luck.** `tests/optimizer/test_walker.py::test_enable_only_defaults_enabled_without_info` cites `docs/SPECS/spec-035-optimizer_hardening-0_0_10.md #"defaults to enabled"`, four common words carrying no `G2` / `info` / `operation` token. It resolves **exactly once** today, which is all rule 27 requires, so there is nothing to repair and it must not be rewritten on this item's own reasoning above. It is recorded because it is the shape the checker should *warn* on rather than fail: an anchor whose substring stops being unique the moment the target grows one more sentence using that phrasing. A pass already editing that docstring for another reason should prefer ``#"`info.operation` defaults to enabled"``. Full derivation at `git show 8c05f7fc:docs/builder/bld-035-final.md` item D8.
@@ -645,15 +597,15 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - `CHANGELOG.md` records the `0.0.7` `export_schema` command as shipped but carries none of the four behaviors that landed after that cut, and no later release section adds them either: whitespace-only `--path` rejection (`7f04c5b2`), the `(OSError, ValueError)` widening plus `newline=""` byte-identity (`fd3825a2`), and both malformed-selector rejections (`61f6726c`). Measured 2026-08-18 over the whole file: `whitespace` 0, `relative module` 0, `module path is empty` 0, `byte-identit` 0, `newline=` 0, `ending=` 0. This is NOT staleness of the kind the glossary had - a changelog records what each release said, and the spec-022 rationale companion's Decision 5 entry records the standing call that the `0.0.7` text is a faithful quotation of already-shipped prose, which the spec-022 integration pass proved rather than accepted (the spec's 607-character `## Doc updates` prescription is present in `CHANGELOG.md` verbatim). So the open item is a maintainer decision about what the file is for: if it is meant to be complete rather than historically faithful, those four are the missing entries under whichever release carried them, and this card's `[0.1.0]` promotion is where they land. `docs/README.md` needs nothing - its one pointer bullet at `:113` makes no error-shape or byte-identity claim.
 - Specs cite verification evidence by interpreter-versioned `.venv/lib/python3.NN/site-packages/...` path, which rots on every interpreter bump. Measured 2026-08-18 across `*.md` and `*.py`, excluding per-cycle `docs/builder/` artifacts: **24 `python3.10` occurrences across 3 files** - `docs/SPECS/spec-025-scalar_map_helper-0_0_7.md` 19, `docs/SPECS/appx/spec-022-export_schema-0_0_7-rationale.md` 3, `docs/SPECS/spec-022-export_schema-0_0_7.md` 2 - against 73 `python3.14` occurrences, and the shared `.venv` is `python3.14`, so none of the 24 paths exists today although every symbol they name does. The spec-022 cycle graded its own 5 and deliberately left them: they are authoring-time provenance rather than contract, that spec's floor genuinely is Python 3.10, and rewriting them to the shared `.venv`'s interpreter would encode a number that moves on the next bump. That makes this a repo-wide convention decision - whether a spec may cite a `.venv` path at all, and what replaces it - rather than a per-spec repair, which is why it lands here and not on the specs. **The population is the correction:** the spec-022 deferred-work catalog published it as 5, because that figure counted only the two files the cycle itself owned; `spec-025` carries 19 more and was never in view.
 - Add a generated-target class to the spec/rationale consistency checker this card already scopes, alongside its source-symbol-citation, unused-link-definition and cited-substring-uniqueness siblings: a #"substring" citation whose target is a script-rendered document (`docs/TREE.md`, `KANBAN.md`, `docs/GLOSSARY.md`) goes dead every time that document regenerates, through no edit to the citing spec, so the rot is invisible to the spec's own review. Measured 2026-08-18 in `docs/SPECS/spec-022-export_schema-0_0_7.md` with a fence-aware per-line resolver that decodes `\"` before the substring test: 47 citations, of which `docs/TREE.md` 11 dead / 3 live and `KANBAN.md` 1 dead. Cross-spec, not spec-022-specific - every archived spec citing `docs/TREE.md` has it, which is why no single spec's reconciliation can close it. **Carry the rule and the parse rate, never a bare digit:** that cycle's own catalog published 47 tokens / 44 parsed / 11 resolve / 33 dead, and an independent resolver run at homing time parsed all 47 and scored 25 resolve / 22 dead, the two differing almost entirely in how each attributed a target on a line naming two candidate files. Two hand-rolled resolvers disagreeing by that margin is the argument for the checker, and a line naming two candidate targets is its first regression test.
-- The `DONE-026-0.0.7` card body carries two stale census sentences, both true when written and false at HEAD; the fix is a board-DB `CardItem` edit plus a `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` regenerate. Same shape and same boundary as this card's `DONE-017-0.0.6` and `DONE-018-0.0.6` stale-card-body bullets. (i) `CardItem` 762 (`note`, order 2) ends "the only `SET_NULL` ondelete in the example tree, and the only cross-model FK in the scalars app" and **both clauses are false**: `on_delete=models.SET_NULL` occurs **4** times across `examples/fakeshop/apps/*/models.py` (twice in `apps/kanban/models.py`, plus the `tag` FK on `examples/fakeshop/apps/scalars/models.py::ScalarSpecimen` and the `partner` FK on `examples/fakeshop/apps/scalars/models.py::NullableScalarSpecimen`), and the scalars app declares **two** cross-model FKs (`tag` -> `ScalarSpecimenTag`, `partner` -> `ScalarSpecimen`). Count occurrences with `grep -o | wc -l`, never `grep -c`, which counts lines. (ii) `CardItem` 763 (`note`, order 3) claims the pairing exercises "upstream code paths no other example app reaches" and names five - **four of the five were already reached by `apps/library` at this card's own ship commit `2701eb88`** (8 models, 7 sibling `DjangoType` classes, a 7-`CreateModel` initial migration), and the fifth, `SET_NULL` ondelete behavior, is false at HEAD by (i). The claim that survives measurement is narrower: the per-column nullable / non-null converter-branch mirror, which no other example app carries - the two models share 11 identical column names, all required on one side and all `null=True` on the other. **Take (i) and (ii) together** - one card body, one regenerate - and take the corrected wording from `docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md` (`## Card snapshot`, `### Decision 1`, `### Decision 3`), which already states it, rather than rewriting it: the argument is in `docs/SPECS/appx/spec-026-scalar_conversion_fakeshop-0_0_7-rationale.md` (`D2 and D3`, `D4`). Deferred by the spec-026 residual cycle 2026-08-19, which was fenced to spec files and `.py` files. **The live-source half of this same defect is already CLOSED** by that cycle - four prose passages in `examples/fakeshop/apps/scalars/models.py` and `examples/fakeshop/test_query/test_scalars_api.py` - so this bullet is the board half only and must not re-open the source.
+- The `DONE-026-0.0.7` card body carries two stale census sentences, both true when written and false at HEAD; the fix is a board-DB `CardItem` edit plus a `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` regenerate. Same shape and same boundary as this card's `DONE-017-0.0.6` and `DONE-018-0.0.6` stale-card-body bullets. (i) `CardItem` 762 (`note`, order 2) ends "the only `SET_NULL` ondelete in the example tree, and the only cross-model FK in the scalars app" and **both clauses are false**: `on_delete=models.SET_NULL` occurs **4** times across `examples/fakeshop/apps/*/models.py` (twice in `apps/kanban/models.py`, plus the `tag` FK on `examples/fakeshop/apps/scalars/models.py::ScalarSpecimen` and the `partner` FK on `examples/fakeshop/apps/scalars/models.py::NullableScalarSpecimen`), and the scalars app declares **two** cross-model FKs (`tag` -> `ScalarSpecimenTag`, `partner` -> `ScalarSpecimen`). Count occurrences with `grep -o | wc -l`, never `grep -c`, which counts lines. (ii) `CardItem` 763 (`note`, order 3) claims the pairing exercises "upstream code paths no other example app reaches" and names five - **four of the five were already reached by `apps/library` at this card's own ship commit `2701eb88`** (8 models, 7 sibling [`DjangoType`](docs/GLOSSARY.md#djangotype) classes, a 7-`CreateModel` initial migration), and the fifth, `SET_NULL` ondelete behavior, is false at HEAD by (i). The claim that survives measurement is narrower: the per-column nullable / non-null converter-branch mirror, which no other example app carries - the two models share 11 identical column names, all required on one side and all `null=True` on the other. **Take (i) and (ii) together** - one card body, one regenerate - and take the corrected wording from `docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md` (`## Card snapshot`, `### Decision 1`, `### Decision 3`), which already states it, rather than rewriting it: the argument is in `docs/SPECS/appx/spec-026-scalar_conversion_fakeshop-0_0_7-rationale.md` (`D2 and D3`, `D4`). Deferred by the spec-026 residual cycle 2026-08-19, which was fenced to spec files and `.py` files. **The live-source half of this same defect is already CLOSED** by that cycle - four prose passages in `examples/fakeshop/apps/scalars/models.py` and `examples/fakeshop/test_query/test_scalars_api.py` - so this bullet is the board half only and must not re-open the source.
 - `CHANGELOG.md`'s `[0.0.7]` entry for `DONE-026-0.0.7` carries three errors in one paragraph, and this card owns them because `AGENTS.md` rule 21 closes `CHANGELOG.md` to a build cycle and this card owns the CHANGELOG promotion. All three sit between `CHANGELOG.md #"## [0.0.7] - "` and the `## [0.0.6]` heading. (i) It says "Three tests in `tests/types/test_converters.py` ... are removed" and names the three `big_integer` / `positive_big_integer` ones; commit `a5c89c98` removed **six**, the missing three being `test_json_field_maps_to_json_scalar_in_schema`, `test_json_field_nullable_in_schema`, and `test_json_field_round_trips_dict_via_schema_execution`. (ii) The same paragraph says "(eight tests" where the ship module carried **nine**, and its enumeration lists eight; the omitted ninth is `test_scalar_specimen_introspects_json_scalar_in_both_shapes`. **One JSON-shaped omission produced both numbers** - the absorbed JSON introspection test (ii) drops is the same test whose three retired JSON counterparts (i) drops - so fix them together or the paragraph stays half right. (iii) It repeats the retired exclusivity shape as "surfaces no other example app touches" over four named paths, falsified exactly as the board copy is. The corrected figures are already normative in `docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md` (`## Test plan`, definition-of-done items 9 and 11), so this is a transcription from the spec and not a re-derivation. Deferred by the spec-026 residual cycle 2026-08-19, fenced to spec files and `.py` files.
-- `docs/GLOSSARY.md`'s three `030` entries never state that `totalCount` selection-gating is directive-resolved, so a consumer reading only the glossary cannot tell whether a `@skip`-ed `totalCount` still costs a query. Measured by the spec-030 residual cycle: a section-scoped sweep for `@skip` / `@include` / `directive` / `should_include` inside the `DjangoConnectionField`, `DjangoConnection` and `Meta.connection` entries returns 0 in all three, while the same vocabulary occurs 4 times in `docs/SPECS/spec-030-connection_field-0_0_9.md`. The gate is `django_strawberry_framework/optimizer/selections.py::should_include`, live-pinned by `examples/fakeshop/test_query/test_library_api.py::test_genre_connection_total_count_skip_include_no_count`. DB-backed regenerate; the spec itself needs no change, which is why that cycle left it open here.
+- `docs/GLOSSARY.md`'s three `030` entries never state that `totalCount` selection-gating is directive-resolved, so a consumer reading only the glossary cannot tell whether a `@skip`-ed `totalCount` still costs a query. Measured by the spec-030 residual cycle: a section-scoped sweep for `@skip` / `@include` / `directive` / `should_include` inside the `DjangoConnectionField`, [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) and [`Meta.connection`](docs/GLOSSARY.md#metaconnection) entries returns 0 in all three, while the same vocabulary occurs 4 times in `docs/SPECS/spec-030-connection_field-0_0_9.md`. The gate is `django_strawberry_framework/optimizer/selections.py::should_include`, live-pinned by `examples/fakeshop/test_query/test_library_api.py::test_genre_connection_total_count_skip_include_no_count`. DB-backed regenerate; the spec itself needs no change, which is why that cycle left it open here.
 - The already-sliced-`QuerySet` `GraphQLError` is documented in neither `CHANGELOG.md` nor `docs/GLOSSARY.md`: `grep -ciE 'pre-sliced|already-sliced|already sliced|pre sliced'` returns 0 in both. `django_strawberry_framework/connection.py::_guard_source_not_pre_sliced` converts a raw boundary `TypeError` into a clear error when a consumer `resolver=` hands the field an already-sliced queryset - a consumer-visible error contract on shipped surface. The spec-030 residual cycle contracted it in the spec at six sites, so only the two standing docs are outstanding, and it explains WHY the gap existed: the guard reached the package through a commit naming no card and no spec, so no card's documentation obligation ever covered it. Text edit for the changelog plus a DB-backed regenerate for the glossary.
 - Decide whether the `notes` column of a spec's `-terms.csv` is contract text that needs a gate or scratch that must stop asserting statuses. `scripts/check_spec_glossary.py::load_terms` validates only the `term,anchor` pair against real glossary headings and never reads `notes`, so that column can assert arbitrary statuses indefinitely with no instrument objecting - and the spec-030 residual cycle found the gap had already bitten, twice over: `030`'s column had drifted to 12 stale cells, several to the opposite of their own spec, and `csv.DictReader` - the parser BOTH readers use, `check_spec_glossary.py::load_terms` and the fakeshop `import_spec_terms` command - was silently truncating 8 of 50 `notes` cells at the first unquoted comma, so part of the column never reached the glossary DB at all. That cycle reconciled `030`'s cells under an explicit scope amendment and 0 of 50 now truncate, but the fix changed a file, not the database: those cells reach the DB only when the importer next runs without `--check`. Sits beside this card's existing `REF_USE_PATTERN` code-span decision - same script, separate decision.
 - Add an inline-link-TEXT check to the spec/rationale consistency checker this card already scopes, distinct from its on-disk-resolution check: a resolution-based sweep reports a clean file BY CONSTRUCTION whenever the reference-style definitions are correct and the visible link text is wrong. The spec-030 residual cycle hit the first such population - `docs/SPECS/spec-030-connection_field-0_0_9.md` named its own pre-archival path in prose at 7 occurrences over 5 lines while every `[ref-id]:` definition resolved, so the anchor checker every slice of that cycle used reported the file clean. The instrument that works reconstructs the visible path and classifies it by prefix. `030`'s own sites are closed, but the same archival sweep produced every archived spec, so the latent population spans all of `docs/SPECS/` - and it needs the same three-way classification as this card's board-DB spec-path bullet (rot / correct-in-advance under rule 26 / pre-canonical unnumbered name), never a blanket `docs/` to `docs/SPECS/` rewrite.
 - Decide where the shipped keyset-cursor feature is documented, as ONE decision rather than three: `Meta.cursor_field` is public, finalization-validated surface with no owning spec, no `docs/GLOSSARY.md` heading, and no `CHANGELOG.md` entry. Measured by the spec-030 residual cycle: no file under `docs/SPECS/` or `docs/` carries `keyset` or `cursor` in its name; 8 files under `docs/SPECS/` mention `cursor_field` and 6 of those use the `Meta.cursor_field` spelling, yet none has it as its subject - a recount must say WHICH spelling it used, because the two populations differ by `spec-010-foundation-0_0_4.md` and `spec-054-graph_substrate-0_1_1.md`; `grep -c '^## Meta.cursor_field' docs/GLOSSARY.md` is 0 while two entry bodies reference the key as though a reader could look it up, and every other `Meta` key has a heading; and `grep -ci keyset CHANGELOG.md` and `grep -c cursor_field CHANGELOG.md` are both 0. The surface is real - `cursor_field` sits in `ALLOWED_META_KEYS`, is two-stage validated (`django_strawberry_framework/types/base.py::_validate_cursor_field` at class creation plus `validate_cursor_field_columns` at finalization), has 31 occurrences in `django_strawberry_framework/keyset.py`, and raises at four `GraphQLError` sites in `django_strawberry_framework/connection.py` (`_keyset_order_state` three times, `_resolve_keyset_connection` once). `spec-030` Decision 9 correctly attributes the dispatch seam to `connection.py` and the codec to `keyset.py`, which routes those raise sites away from `030` and leaves them owned by nothing. A fourth site is stale in the same direction: `BACKLOG.md`'s `stable_cursor_field` entry still describes the feature in the future tense under its `What we'd do` heading, although it shipped as item 39 sub-feature 3 in commit `51421e54`. Answering 'it owes a spec' spawns a card; answering 'it does not' still owes the glossary heading, the changelog entry and the backlog retitle. Recorded on this card rather than as a new card of its own because inserting one between this card and the `1.0.0` cut shifts every board number from 053 upward by one, and because the spec-or-not question is undecided - creating the card would assert the answer.
 - `docs/SPECS/appx/spec-012-version_release_alignment-0_0_4-rationale.md` #"the two milestone rows now cite board cards" claims `docs/README.md`'s two milestone rows cite board cards `052` and `067` through reference-style links. Measured 2026-08-25: `docs/README.md` cites NO card number at all - neither its `0.1.0` row (#"beta release: feature parity") nor its `1.0.0` row (#"stable release: full") carries a card reference in any form. Both digits are wrong and so is the claim's subject, which is why this is the ONE site the 2026-08-25 card-renumber sweep left deliberately unshifted: moving `052` to `053` would have produced a differently-false sentence while implying the claim had been verified. The same sentence's history half (the literal ids `BETA-033-0.1.0` and `STABLE-042-1.0.0` it says were replaced) is correct as history and is not in scope.
-- A spec's `-terms.csv` `notes` column carries live card references and they rot silently, because no gate reads that column. Measured 2026-08-25: four cells were stale by one before the renumber sweep even started - `spec-055-fieldset-0_1_1-terms.csv` said `Meta.search_fields` is owned by card `054` (it is owned by the search card), and `spec-056-search_fields-0_1_2-terms.csv` attributed the joint `0.1.2` cut to card `055` in two separate cells and named `053+054` as the two `DEFERRED_META_KEYS` members that land first. All four were written when `FieldSet` was card `053` and search was card `054`; commit `e8a873f9` re-homed those companion FILES without touching their CONTENT. This is the concrete failure behind this card's `notes`-column gating question: the sweep had to repair them at +2 rather than +1, and only a hand review found them.
+- A spec's `-terms.csv` `notes` column carries live card references and they rot silently, because no gate reads that column. Measured 2026-08-25: four cells were stale by one before the renumber sweep even started - `spec-055-fieldset-0_1_1-terms.csv` said [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) is owned by card `054` (it is owned by the search card), and `spec-056-search_fields-0_1_2-terms.csv` attributed the joint `0.1.2` cut to card `055` in two separate cells and named `053+054` as the two `DEFERRED_META_KEYS` members that land first. All four were written when `FieldSet` was card `053` and search was card `054`; commit `e8a873f9` re-homed those companion FILES without touching their CONTENT. This is the concrete failure behind this card's `notes`-column gating question: the sweep had to repair them at +2 rather than +1, and only a hand review found them.
 - `docs/SPECS/spec-058-graph_substrate-0_1_1.md` #"### Decision 10 - joint cut at" had a heading its own in-file links could not reach: the heading punctuates as "joint cut at `0.1.1`: release state" (colon) while both links to it spelled the slug `...-at-011--release-state-...` (the double hyphen a spaced em dash produces). Measured 2026-08-25 while re-syncing heading/anchor pairs through the card renumber. REPAIRED 2026-08-29 in the spec-stem rename sweep by moving the LINK side to match the heading, because the sweep changed the heading numeral and would otherwise have left the pair broken in a second way; the sibling `spec-060-search_fields-0_1_2.md` Decision 10 pair was repaired the same way. The general fix is still owed: this card scopes the spec-consistency checker, and `spec-060`'s Decision 11 heading/link pair (5 links) is the same defect, still open.
 - Bare card numerals that were ALREADY stale before the insert-at-052 renumber, so the renumber's +1 does not repair them - each needs a read against its live referent (a +6 after the 2026-08-29 board inserts), not a shift. Measured 2026-08-25, eight sites in two surfaces the renumber deliberately left alone because a numeral wrong in BOTH numberings is a separate defect. (a) Board DB, `Card.planning_note` - a column no renumber has ever swept, on `TODO-BETA-060-0.1.2` (`card-054-owned completion bookkeeping`, `Spec-054: Decision 7`) and `TODO-BETA-061-0.1.2` (`card 054's Meta.search_fields surface`, `card 054's spec text`, `glossary promotion out of card 054's intermediate status`); every one names the SEARCH card, which was 054 only before the 2026-08-08 graph-substrate insert and is 060 today. (b) Board DB, `CardItem` text on `TODO-BETA-061-0.1.2` - scope items and one `definition_of_done` item reading `Card 054 deliberately ships only unprefixed OR-of-icontains search`, `Card 054 ships Meta.search_fields to main`, and `its card-054 intermediate status`, all three the same search-card referent. (c) Two spec-body label/target mismatches the renumber preserved verbatim rather than half-correcting: `docs/SPECS/spec-055-fieldset-0_1_1.md #"Meta.search_fields"` renders the link text `spec-055` over a target resolving to `spec-056-search_fields-0_1_2.md`, and `docs/SPECS/spec-056-search_fields-0_1_2.md` pairs `spec-054` with `TODO-BETA-058-0.1.1` for the same `FieldSet` referent - DISCHARGED 2026-08-29 by the spec-stem rename sweep, which set each link text from its ref-id target and repointed the pair onto `spec-059`/`spec-060`; parts (a) and (b) remain open - a spec stem and a card id one apart, so exactly one of the pair is wrong. Verify each referent before editing: a blanket +1 over this population would make (a) and (b) wrong in a new direction.
 - `tests/test_relay_connection.py` has no safe default for a bare `Decision N`, and the exposure is growing. Re-measured across the concurrent commit `24125be6`: **24 references / 16 bare**, up from 20 / 16 at `db7ecb1a`. The module docstring cites `spec-032` while the body carries live references belonging to `spec-030`, `spec-032`, `spec-033` and `spec-047`. **Every reference reads correct today, so there is no live defect** - it is deferred work on three grounds: the file offers a reader no single default to fall back on; the sweep just raised the density of mixed qualified/bare references in it; and the failure mode is silent, a wrong resolution that READS as correct - the same shape already found and closed once in `connection.py`, whose declared `Spec:` line points at `spec-030`'s topically-adjacent Decision 6. Remedy: qualify every bare reference with its `spec-0NN` prefix. **Not a spec edit.** Pairs with this card's existing item on the 8 raw `Decision N line NN` refs in package source and inherits the same coordination rule: if a `051` WP batch opens the file first, the work sequences there. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
@@ -665,9 +617,9 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - The numbered-item citation vocabulary (`Decision N`, `Finding N`, `Revision N`, `Spec-NNN`) is spelled four ways across first-party source and only the anchorless minority is a defect, so the population must be graded by ANCHOR before anything is swept. Re-measured 2026-08-27 over a stated corpus - the 431 git-tracked `.py` files under `django_strawberry_framework/`, `tests/`, `examples/` and `scripts/`, which is the only denominator that means anything here since a tree-wide `git grep -ohP '\bDecision \d+'` over all tracked files returns 7731 against 1265 in this corpus. Of those 1265 `Decision N` occurrences across 155 files, 882 are qualified by an adjacent `spec-NNN` and **383 are bare across 85 files**. Grading the 383 by whether the CONTAINING FILE establishes which spec it means - never by distance to the nearest spec mention - gives 62 in files naming exactly one spec (the accepted convention, leave them), 306 in files naming more than one, and 15 in files naming none. Two of that last group, both in `examples/fakeshop/apps/products/filters.py`, are anchored by a card id rather than a spec stem (`its Decision 11` under a `DONE-034-0.0.10` opener) and are a false positive of any spec-NNN-only instrument, so **the defect population is 13 occurrences across 4 files**: `django_strawberry_framework/permissions.py` carries 8 (`#"(Decision 10). The runner is also the shared sealed visibility boundary"`, `#"cascadable edges (Decision 5 step 1)"` and six more) and names no spec anywhere in the file; `tests/test_apps.py` carries 3 inside its AppConfig expectation table; `django_strawberry_framework/optimizer/hints.py` and `django_strawberry_framework/management/commands/inspect_django_type.py` carry 1 each. The same grading applied to the sibling families: `Finding N` is 19 occurrences across 4 files, 8 of them qualified as `spec-038-form_mutations-0_0_12 Finding N` and **11 bare** (`tests/forms/test_sets.py` 4, `tests/forms/test_resolvers.py` 3, `tests/mutations/test_resolvers.py` 3, `tests/rest_framework/test_sets.py` 1); `Revision N` is 13 occurrences across 4 files, 8 qualified and **5 bare, all in `examples/fakeshop/test_query/test_library_api.py`**, a file naming 15 distinct specs; and the lowercase-qualifier spelling `spec Decision N` is exactly 4 sites, but **the earlier characterization of them is wrong** - `django_strawberry_framework/list_field.py` and `tests/test_list_field.py` both declare `Spec: docs/SPECS/spec-020-list_field-0_0_7.md` in their module docstring, so their bare `spec` resolves, leaving only `django_strawberry_framework/filters/factories.py #"spec Decision 4"` (file names spec-027 and spec-030) and `tests/types/test_resolvers.py #"per spec Decision 5"` (file names five specs, no declaration) unanchored. The remedy for all 30 unanchored occurrences is one of two mechanisms already in the tree: prefix the reference with its `spec-NNN`, or add the `Spec: docs/SPECS/spec-NNN-...` module-docstring line that 9 first-party `.py` files already carry - the second is cheaper for `permissions.py`, which owns 8 of the 13. **`Spec-NNN` capital-S is a separate question and needs a MAINTAINER RULING, not a sweep**: all 52 `.py` occurrences are sentence-initial docstring openers (`"""Spec-027: choice-enum filter clause coerces via Strawberry enum."""`), zero are mid-sentence, so none is rot - the cost is purely that a plain `grep spec-0` census misses them. Option (a) declare sentence-initial capitalization legitimate, change nothing on disk, and oblige every future census to carry the case-insensitive spelling; option (b) forbid it and reword 52 `.py` openers plus 25 `docs/SPECS/appx/*-rationale.md` sites so the stem is always literal, after which a case-sensitive grep is complete. **The exclusion set, without which this bullet generates defects.** The `.md` figure is 123 and decomposes as 121 in `docs/*.md` plus 2 in `KANBAN.md`; of the 123, **96 sit in per-cycle build documents and are excluded by BASENAME wherever they live** (`build-*`, `bld-*`, `dry-*`), per this card's own established corpus rule, leaving 27 standing sites of which 25 are in `docs/SPECS/appx/*-rationale.md`. The 2 `KANBAN.md` sites are DB-generated `Spec-054: Decision 7` strings on `TODO-BETA-060-0.1.2` and are **already owned by this card's already-stale-bare-card-numerals item** - do not re-home them, and never hand-edit `KANBAN.md` or `KANBAN.html` for them. Card-id anchors are valid anchors. Archived specs naming a retired symbol in the present tense are correct as history. The 306 bare-in-a-multi-spec-file occurrences are NOT this bullet's fix list - one file of that population, `tests/test_relay_connection.py`, is already carried by this card's own item, and the two readings differ by instrument and date, not by drift: that item records 24 references / 16 bare, where a same-day count of `\bDecision \d+` alone gives 22 / 12, so **restate the rule before adopting either figure**. Two measurement rules the sweep inherits: count occurrences with `grep -oh | wc -l`, never `grep -c`, which counts lines and produced the per-file table that first looked like a 123-vs-121 contradiction; and `\b` is PCRE only - `git grep -E '\bDecision [0-9]+'` returns **0 tree-wide**, a control that did not run reading exactly like a clean sweep, so every command here must be `-P` and must be paired with a positive control.
 - Shipped specs `spec-034` through `spec-039` carry 75 `TODO-ALPHA/BETA-*` card ids and the population will not survive a blanket `TODO-` -> `DONE-` rewrite: only a minority of it is mechanical. Re-measured 2026-08-27 with `grep -ohE 'TODO-(ALPHA|BETA)[A-Za-z0-9._-]*' docs/SPECS/spec-03[4-9]*.md | sort | uniq -c` - 75 occurrences at 034=20, 035=0, 036=13, 037=19, 038=10, 039=13, so the count and the distribution hold, but the claim that every one names a card that is `DONE-` today does not, and neither does "mechanical". **The 3 that named the live fakeshop-activation card are DISCHARGED, and the count was wrong**: re-measured 2026-09-02 the `spec-037` pair carried **5**, not 3 - 2 in `docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md` and 3 in `docs/SPECS/appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md`, where the Slice-0 rationale extraction had moved them. All 5 now read `TODO-BETA-066-0.1.5` (spec-037 residual cycle review round 1, cohort A), renumbered and never lifecycle-flipped because card 066 is still To Do. Do not re-raise them. **4 are already owned** by this card's repo-wide archived-spec deferral sweep, whose `spec-034` clause splits the four `TODO-BETA-046-0.1.1` citations into three live-claim repoints plus one revision-log decided-non-edit; do not re-raise them, and carry the reason they are not a prefix flip - card 046 today is `DONE-046-0.0.14` (transport security) while the FieldSet referent is `TODO-BETA-059-0.1.1`, so `DONE-046-0.1.1` would be false in subject, number and version at once. **6 name an id that has never existed in any numbering**: `TODO-ALPHA-035-0.0.11` (card 035 shipped at `0.0.10`), every one a quotation of the `scalars.py` docstring's own error inside a sentence that declares it stale, so a flip manufactures `DONE-035-0.0.11`; the same quotation trap covers `TODO-ALPHA-033-0.0.10` twice and `TODO-ALPHA-027-0.0.10` plus its slash-compound sibling. The remaining 62 do name a card that is `DONE-` today, but they split three ways and only the third is mechanical: **(a)** sites whose enclosing sentence is history and true only in its own tense - 9 in `- **Revision N**` log bullets and 4 in card-wrap `#"to Done with the next"` slice instructions, where de-tensing is the fix and a prefix flip falsifies a real record; **(b)** verbatim quotations of text that has since changed, which a flip makes differently false - 4 sites quoting `docs/TREE.md`'s "planned by `TODO-ALPHA-0NN-...`" predicted-path rows, 4 quoting products-schema markers, 5 quoting card-body text the board has since rewritten into structured card-reference placeholders resolved at render time, and the 4 `#"Upload staged seam (TODO-ALPHA-037-0.0.11)"` rule-27 citations plus `#"Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here."`, all five of which are **dangling today** because `django_strawberry_framework/mutations/inputs.py` no longer carries that comment and `django_strawberry_framework/scalars.py`'s module docstring now reads `spec-037` with no card id at all; **(c)** the clean prefix-only remainder, dominated by `spec-038` / `spec-039`'s downstream pointers, where `spec-034` contributes exactly one (`#"The `0.0.10` patch line is shared with"`). Three claim-sites in class (b) are additionally **false on their own date** and need de-tensing rather than renumbering: `TODAY.md` carries zero `TODO-ALPHA-033` (`grep -c 'TODO-ALPHA-033' TODAY.md` returns 0) and `examples/fakeshop/apps/products/schema.py` already reads `DONE-034-0.0.10`, so the `#"Stale card-id reference in `TODAY.md`"` ledger entry, which Slice 0 moved into `docs/SPECS/appx/spec-034-permissions-0_0_10-rationale.md`, describes a defect that no longer exists. **Four grammars, and a sweep that knows one leaves three wrong**: full id (70), version-less id (5 - `TODO-ALPHA-037` twice, `-038`, `-039`, `-027`), the slash compound `TODO-ALPHA-027/034` in `spec-034`'s Revision 8 bullet where one regex match hides a second card number, and bare backticked three-digit numerals, **338** across the six files (034=9, 035=4, 036=16, 037=28, 038=111, 039=170) carrying no lifecycle prefix at all. Do not widen into the 338 - every one names a card below 052 that the insert-at-052 renumber never touched (and, being below 050, the 2026-08-29 board inserts leave alone as well), and a bare numeral asserts no lifecycle state - with one exception no existing item reaches: `docs/SPECS/appx/spec-034-permissions-0_0_10-rationale.md #"but the live kanban card is"` asserts the FieldSet owner is `046`, an active falsehood today (it is 059) and invisible to any `TODO-BETA-046-0.1.1` sweep. **Nothing moves with the text**: all 38 linked occurrences carry the id as visible link text over one generic `[kanban]: ../../KANBAN.md` definition, and zero of the 75 sit in a link definition, a heading, or an in-page anchor - so unlike a slug-anchored surface this rewrite cannot break a link, and unlike an in-flight spec it opens no `.py`, so no `TODO-ALPHA-053-0.0.15` WP batch is a prerequisite. **The residue is a half-finished sweep, and the files prove their own target spelling**: the same six already carry `DONE-034-0.0.10` 14 times, `DONE-036-0.0.11` 13, `DONE-035-0.0.10` 12, `DONE-033-0.0.9` 11, `DONE-037-0.0.11` 10, `DONE-038-0.0.12` 7, `DONE-039-0.0.13` 3 and `DONE-040-0.0.13` 1, and one sentence appears verbatim in three siblings spelled two ways - `spec-035` reads `DONE-` at `#"so `<NNN>` is"` and `spec-034`'s copy of that sentence now lives in `docs/SPECS/appx/spec-034-permissions-0_0_10-rationale.md` while `spec-036` still reads `TODO-ALPHA-036-0.0.11`. Fix: one documentation pass over the six files that classifies per site before editing - flip class (c), de-tense class (a), leave class (b) verbatim, and never lifecycle-flip the 3 `062` ids (the tree sweep renumbers them to `066`) or touch the 4 homed `046` ids. **One maintainer ruling is owed and should be taken once for the whole class**: whether a shipped spec's verbatim quotation of a source comment that has since been deleted keeps the quotation and accepts a rule-27 citation that no longer resolves, or is restated as a symbol path into the live text (`django_strawberry_framework/mutations/inputs.py` and `django_strawberry_framework/scalars.py` both now say `spec-037`), losing the record of what the seam looked like before it shipped. **The source-side half rides this same pass and cannot be split from it**: `examples/fakeshop/apps/products/schema.py` carries 18 rotted occurrences - `TODO-BETA-046-0.1.1` x7, `TODO-BETA-047-0.1.2` x5, `TODO-BETA-049-0.1.3` x6 - whose live referents are `TODO-BETA-059-0.1.1` / `TODO-BETA-060-0.1.2` / `TODO-BETA-062-0.1.3`, beside one `TODO-BETA-062-0.1.5` that was correct until the 2026-08-29 board inserts and is **DISCHARGED** - renumbered to `TODO-BETA-066-0.1.5` on 2026-09-02 by the spec-037 residual cycle's review round 1 (cohort B), together with the second `.py` site in `examples/fakeshop/test_query/test_products_api.py` that this measurement missed, and never a lifecycle flip. **The coupling below was satisfied, not broken**: that round renumbered the spec pair and both `.py` files in one pass under a disjoint two-cohort ownership partition, and it first proved no spec quotes the marker text - all four quotation patterns (`Still deferred to`, `fakeshop-activation card): the`, `those stay TODO-BETA`, `node(id:) / nodes(ids:) entry points`) return **zero** files under `docs/SPECS/`, so no leave-verbatim ruling rested on the `062` spelling. The 18 rotted `046` / `047` / `049` ids in that file were counted 18 before and 18 after and remain this card's, still coupled to the ruling below. The coupling is the reason it is not a separate item: four of the class-(b) leave-verbatim rulings above hold *because the source still reads the old id*, so renumbering the source without the specs falsifies them and renumbering the specs without the source strips their justification. Measured 2026-08-28 by the spec-034 residual cycle (`grep -o 'TODO-[A-Z]*-[0-9]*-[0-9.]*' examples/fakeshop/apps/products/schema.py | sort | uniq -c`). **This item's own instrument is now blind to the id it owns, and that is a defect in the census rather than in the tree.** `grep ... docs/SPECS/spec-03[4-9]*.md` expands to exactly six files, none of them under `docs/SPECS/appx/`, so the four rationale extractions that have since landed moved roughly a third of this item's population somewhere the census cannot see: re-run verbatim on 2026-09-02 the glob returns **43** occurrences, not the 75 recorded above, while the same instrument pointed at `docs/SPECS/appx/spec-03[4-9]*-rationale.md` returns a further **33** - so the total holds only when both are summed, and the recorded per-spec distribution (034=20, 035=0, 036=13, 037=19, 038=10, 039=13) is dead in every cell for a spec whose companion exists. Sharpest form, on the `062` id: with spec-037 discharged the glob returns **0** for it across all six files while the live population is **48**, of which **13** sit in `docs/SPECS/appx/` - a census reporting zero on a 48-occurrence population reads exactly like a finished sweep. **Two independent limits, and naming only the first leaves the census still blind**: the `appx/` omission accounts for 13 of the 48, but the `[4-9]` range accounts for a further **21** - `spec-030` 2, `spec-032` 5, `spec-033` 6, `spec-041` 3, `spec-042` 4, `spec-044` 1 - every one live forward-reference prose naming the fakeshop-activation card rather than historical record, so **34 of the 48 sit under `docs/SPECS/` and the glob reaches none of them**. The remaining 14: TODAY.md 3, `KANBAN.md` 3 and `KANBAN.html` 3 (both rendered from the 3 rows in this card), `docs/builder/DONE/build-034-permissions-0_0_10.md` 2, and `examples/fakeshop/db.sqlite3` 3. Measured independently twice on 2026-09-02, by the spec-037 round's dispatcher and by its reviewer, agreeing at 48 and at 34. Whoever discharges this population owns all 34 spec-surface sites in one pass, not the six-file glob's share of them. Any re-derivation of this item must glob the spec and the companion tree together, and must count occurrences rather than lines (`git grep -c` counts lines and under-reports this population by roughly half). The dangling-anchor sub-population is mis-sited the same way: the 4 `#"Upload staged seam (TODO-ALPHA-037-0.0.11)"` citations plus `#"Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here."` are recorded above as 5 spec-side sites, but measured 2026-09-02 the `spec-037` pair carries **4** occurrences of the two strings - 2 in the spec, 2 in the companion - and only **2** of the 4 are true rule-27 `path #"substring"` citations (`docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md` #"Upload staged seam (TODO-ALPHA-037-0.0.11)" and `docs/SPECS/appx/spec-037-upload_file_image_mapping-0_0_11-rationale.md` #"Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here." - addressed by content because the line numbers move: the second sat at 826 until this round's own companion edits shifted it to 841); the other two are a plain-prose quotation and a mention of the anchor as a subject, which the maintainer ruling below need not cover. Both source anchors are confirmed gone (`grep -c 'Upload staged seam' django_strawberry_framework/mutations/inputs.py` and `grep -c 'Future scalars' django_strawberry_framework/scalars.py` both **0**; both files now say `spec-037` with no card id), so the ruling is still owed - only its population is 2, not 5. **Re-measured 2026-09-03 by the spec-038 residual cycle, and the bullet's own command no longer returns its own number:** `grep -ohE 'TODO-(ALPHA|BETA)[A-Za-z0-9._-]*' docs/SPECS/spec-03[4-9]*.md | sort | uniq -c` now returns **34**, not 75, because the residual cycles moved every rationale companion out to `docs/SPECS/appx/` where that glob cannot reach it. The pair-wide population is **71**: spec-034 25 (10 spec + 15 companion), spec-035 0, spec-036 9 (3 + 6), spec-037 19 (7 + 12), spec-038 5 (1 + 4), spec-039 13 (13 + 0, it has no companion). **Re-run the command over BOTH `docs/SPECS/spec-03[4-9]*.md` and `docs/SPECS/appx/spec-03[4-9]*`, or the count silently halves.** One correction to the spec-036 detail carried elsewhere in this cycle's catalog: the pair names **three** shipped cards over **six** occurrences - `TODO-ALPHA-036-0.0.11` x4 (1 in the spec, 3 in the companion), `TODO-ALPHA-038-0.0.12` x1 and `TODO-ALPHA-039-0.0.13` x1 - and there is **no** `TODO-ALPHA-037` occurrence in either file. All three ids name `DONE-` cards today.
 - Thirteen prose citations into shipped specs address their target by line number, and **every one checked resolves to unrelated text at HEAD** - these are false pointers, not style nits. Re-measured 2026-08-27: `grep -rnE '\blines? [0-9]+' --include='*.py' . | grep -v '/.venv/'` returns 26 physical lines tree-wide, of which the spec-citation subset is **13 citations on 12 lines across 5 files** - `django_strawberry_framework/optimizer/walker.py::_record_relation_access` #"Decision 4 / edge case line 315"; `tests/optimizer/test_walker.py::test_mutation_scalar_only_connection_window_no_only`, `::test_subscription_operation_gated` and `::test_enable_only_defaults_enabled_without_info`; `tests/optimizer/test_extension.py::test_root_fragment_pagination_variable_shares_cache`, `::test_fragment_carried_nested_pagination_variable_collected`, `::test_pagination_var_collection_is_syntactic_superset` and `::_categories_list_schema`; `tests/mutations/test_sets.py::test_bind_dedupes_full_set_fields_with_bare_create` (two) and `::test_bind_dedupes_fields_with_complementary_exclude` (two); and `examples/fakeshop/config/settings.py` #"NOTE(spec-039)". **Two of those files and three of those citations are invisible to the obvious grep**, which is the part to carry: a flat `line [0-9]+` misses the four plural `lines NN` spellings, and no single-line pattern at all sees a citation wrapped across two comment lines - `settings.py` breaks after #"Decision 13 / spec line", `::_categories_list_schema` after #"so the plan is cacheable (spec line", and `::test_bind_dedupes_fields_with_complementary_exclude` after #"Decision 6 line 334 / Edge cases line", so any census must scan line pairs as well as lines. **The resolutions, which are the whole content of this item**: in `docs/SPECS/spec-035-optimizer_hardening-0_0_10.md` the `## Edge cases and constraints` section runs one bullet per line and all three citations are off by one or two - `line 315` lands on the G1 async-guard bullet where the claim is `#"every projection writer checks the gate, not just scalar appends"`, `line 317` lands on the Decision 5 consumer-`only()` bullet where the claim is `#"subscription operations are gated identically"`, and `line 320` lands on the connection-field-gated-by-construction bullet where the claim is `#"a missing `info` *or* `info.operation` defaults to enabled"`. In `docs/SPECS/spec-036-mutations-0_0_11.md`, `Decision 6 line 334` lands on the field-set-derivation bullet while the identity claim it asserts is `#"A generated input type's identity is its **complete shape**"`, and `Edge cases line 509` lands on the delete-snapshot bullet - that one is wrong in its **section** as well as its line, because the dedupe contract is not in `## Edge cases and constraints` at all but in Decision 6 at `#"the canonical full editable shape"`. In `docs/SPECS/spec-033-connection_optimizer-0_0_9.md` the reconciliation that rewrote Decisions 4 through 6 pushed all three targets roughly thirty lines: `Decision 7 line 346` and `line 347` now land inside Decision 9 (one of them on a blank line, the other on a rationale-companion pointer) and `spec line 350` lands on a blank line under the Decision 10 heading, where the real targets are Decision 7's `#"the collector tracks depth at the spread site"`, `#"The collection is a syntactic superset by design"` and `#"Cacheable plans and visibility-bearing targets are disjoint"`. In `docs/SPECS/spec-039-serializer_mutations-0_0_13.md` the `settings.py` citation is self-refuting on its face - it reads `Decision 13 / spec line 969` while Decision 13 begins far below 969, and 969 is a Decision 11 allowed-key bullet; the claim it wants is Decision 13's `#"only if a serializer needs the app registry"`. Fix: replace each line number with the spec's `spec-0NN Decision N` plus the cited substring above, and qualify the four bare `Decision 7` / `Decision 4` references with their `spec-0NN` prefix while the files are open - the same defect this card already carries for `tests/test_relay_connection.py`, here in three further files. **Do not sweep**, and the false-positive classes are the majority of the tree-wide 26: the 12 coverage-target comments in `tests/types/test_resolvers.py` and `tests/test_exceptions.py` cite live package source rather than a spec and belong to a live-code batch, not a documentation pass (they are separately rotting - `types/resolvers.py` has moved under at least three of them - but they are not this item); `tests/test_export_dry_review.py #"line 1"` is a string literal asserting on produced output; `scripts/check_trailing_commas.py #"against line 1"` is docstring prose describing behavior; and no live `TODO(spec-NNN Slice N)` anchor carries a line number, so none is at risk. **One maintainer ruling is owed**, on `tests/orders/test_sets.py #"per cookbook line 280"` and `tests/orders/test_factories.py #"cookbook lines 124-130"`: the referent is `django-graphene-filters`' `examples/cookbook/` prior art, which this card's `spec-010` rule-27 bullet already acquitted as outside rule 27's reach - but that acquittal is for a citation pinned at a named upstream version, and neither of these names a file or a version, so either complete them to an upstream path plus pinned version and keep the line numbers under the carve-out, or drop the line numbers and cite the upstream symbol. **Not blocked**: re-checked 2026-08-27, the spec-033 cycle committed at `a51213d7` and `git status --short` shows no dirty `.py`, so `tests/optimizer/test_walker.py` and `tests/optimizer/test_extension.py` are clean and all 13 sites can land in one pass; only `optimizer/walker.py` sits in package source, so if a `TODO-ALPHA-053-0.0.15` WP batch opens that one file first, that single citation sequences there and the other twelve do not wait on it. Supersedes the "8 raw `Decision N line NN` refs in package source" clause this card's repo-wide archived-spec deferral sweep folds in: re-derived, the population is 13, not 8, and only one of the 13 is in package source. **Re-derived 2026-09-01 by the spec-035 residual cycle (`git show 8c05f7fc:docs/builder/bld-035-final.md` deferred-work catalog D4/D5): the population is now 9, not 13, and this item's own instrument cannot see all 9.** The four spec-035-owned citations named above (`optimizer/walker.py::_record_relation_access` #"Decision 4 / edge case line 315" and the three `tests/optimizer/test_walker.py` sites) were replaced with `spec-035 Decision N` plus a `#"substring"` anchor by that cycle and are DISCHARGED - do not re-raise them, and note that its fifth fix, `tests/types/test_resolvers.py::test_fk_id_elision_falls_back_when_consumer_only_defers_fk` #"spec-035 edge case 316", was **invisible to this item's `\blines? [0-9]+` instrument** because the citation spelled the numeral without the word `line`; a census of this class must scan `edge case NNN` as well as `lines? NNN` (both spellings now return 0 for spec-035). The remaining spec-citation subset is **9 citations across 3 files** - `tests/mutations/test_sets.py` 4 (spec-036), `tests/optimizer/test_extension.py` 4 (spec-033), `examples/fakeshop/config/settings.py` 1 (spec-039) - with the resolutions above still correct for each. Two consequences for sequencing: the tree-wide count for `\blines? [0-9]+` over the 433-file corpus is now **24 physical occurrences**, not 26, decomposing as 8 of this item's 9 (the wrapped `settings.py` site stays invisible to any single-line pattern) plus 12 live-source self-citations plus the 2 cookbook sites plus the 2 acquitted false positives; and **the package-source dependency is gone** - `optimizer/walker.py` was the only one of the 13 in package source, so this item no longer sequences behind a `TODO-ALPHA-053-0.0.15` WP batch opening that file and all 9 remaining sites can land in one documentation pass. **The nine remaining sites, inlined so this item no longer depends on a builder artifact for its addresses** (`site | citation as flattened | owning spec`): `tests/mutations/test_sets.py:1034` | `spec-036 Decision 6 line 334` | spec-036; `tests/mutations/test_sets.py:1039` | `spec-036 Edge cases line 509` | spec-036; `tests/mutations/test_sets.py:1073` | `spec-036 Decision 6 line 334` | spec-036; `tests/mutations/test_sets.py:1073` | `Edge cases line 509` | spec-036; `tests/optimizer/test_extension.py:1718` | `Decision 7 line 346` | spec-033; `tests/optimizer/test_extension.py:1754` | `Decision 7 line 346` | spec-033; `tests/optimizer/test_extension.py:1817` | `Decision 7 line 347` | spec-033; `tests/optimizer/test_extension.py:2248` | `spec line 350` (names **no** spec, and wraps) | spec-033, by the file's header comment; `examples/fakeshop/config/settings.py:74` | `Decision 13 / spec line # 969` (wraps, with a `#` between `line` and the number) | spec-039. Note `tests/optimizer/test_extension.py` was inside the spec-035 cycle's writable cohort - those four are out of scope by **spec ownership**, not file ownership, and were deliberately left. Two instrument lessons ride with the list: a `line`-without-`s?` pattern is blind to the plural (`cookbook lines 124-130`), and a comment-continuation `#` between the token and the number defeats any `\s+`-only pattern.
-- `DONE-028-0.0.8` and `DONE-029-0.0.9` each carry card-body prose the package now contradicts, and both are board-DB rows, so the fix is a `CardItem` edit plus a `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` regenerate - never a hand-edit of the generated `KANBAN.md`. Same instrument and same grading as this card's `DONE-017-0.0.6` suppression and `DONE-026-0.0.7` census bullets. **(a) `DONE-028-0.0.8`, the `note` row opening #"Shipped the ordering subsystem in `0.0.8`"** says in the present tense that the apply pipeline runs `check_permissions` with active-input-only scope. No `check_permissions` exists under `django_strawberry_framework/orders/` at HEAD - it shipped there at `11d9fbe0` and was removed at `9e864f59` - and the live surface is `django_strawberry_framework/sets_mixins.py::ActiveInputPermissionMixin._run_permission_checks`, which `django_strawberry_framework/orders/sets.py::OrderSet` inherits rather than defines - cite the defining class, since a citation naming the subclass resolves to nothing. Take the replacement wording from the reconciled spec, which already states it three times, rather than rewriting: `docs/SPECS/spec-028-orders-0_0_8.md #"No instance-method `check_permissions` is shipped on `OrderSet`"`. **Do not sweep the name**: `django_strawberry_framework/filters/sets.py::FilterSet.check_permissions` is a live delegate, and a `CardItem` on `DONE-034-0.0.10` asks a live open question about the filter-side spelling; both stay. Re-measured 2026-08-27, every other symbol that row names resolves at HEAD (`order_input_type`, `clear_order_input_namespace`, `_helper_referenced_ordersets`, `_bind_ordersets`, `_owner_definition`, `LazyRelatedClassMixin`, `ClassBasedTypeNameMixin`, `apply_sync`, `apply_async`), so `check_permissions` is its only false one. The same row also carries **three `rev3` breadcrumbs** - a review-round name, which the no-process-provenance rule keeps out of shipped prose - at #"per H1 of `spec-028-orders-0_0_8` rev3", #"per B3 of rev3" and #"per H3 of rev3"; `grep -o rev3 KANBAN.md | wc -l` and the same over `KANBAN.html` both return 3, and a `CardItem` / `CardReference` / `planning_note` sweep returns exactly one row board-wide. Every other `rev3` in the tree sits in a `docs/SPECS/appx/*-rationale.md` revision-history section, which is where that vocabulary belongs; commit `471d4c6b` swept it from code comments and never reached the board. **Two sub-claims against this row do NOT survive re-derivation and must not be "fixed": the "exactly 14 live HTTP tests" figure and the five-name `orders.py` roster are correct as attributions of what the card grew.** The order block of `examples/fakeshop/test_query/test_library_api.py` holds 16 test functions today (measured 2026-08-27; `git diff HEAD --` on that path is empty, so the working tree equals HEAD despite an earlier dirty snapshot), and the file's own header comment #"The two out-of-card additions are" names both extras as `spec-030` work; `examples/fakeshop/apps/library/orders.py` declares 7 OrderSets, the two beyond the roster (`PeriodicalOrder`, `IssueOrder`) added by the keyset-cursor commit `51421e54`; and the four-direction NULLS parametrization the row describes as `DESC_NULLS_LAST` post-dates the ship (`20b2c960`, 2026-06-04, against `11d9fbe0`, 2026-06-01). **(b) `DONE-029-0.0.9`, the `scope` row opening #"Strawberry `extensions=[instance]` factory-callable migration"** instructs the reader to replace the deprecated instance form with `extensions=[DjangoOptimizerExtension]` (class) or `extensions=[lambda: DjangoOptimizerExtension()]` (factory callable). `spec-029` Decision 3 forbids **both** as cold-cache-per-request regressions and sanctions only a factory over a construction-site-scoped singleton, and `tests/test_ci_governance.py::test_no_active_source_uses_a_forbidden_optimizer_extensions_form` fails the build on either. That gate reads first-party `.py` only, so the board is the one surface still teaching the banned spelling while the shipped code disagrees with it: `examples/fakeshop/config/schema.py #"extensions=[lambda: _optimizer]"`, with `TODAY.md`, `GOAL.md` and `CHANGELOG.md` matching (287 `extensions=[` sites tree-wide, 184 lambda-form, measured 2026-08-27 excluding `.venv/`, `docs/builder/` and `docs/review/`). **Not violations, do not sweep:** a bare `DjangoDebugExtension` / `DjangoErrorPolicyExtension` / consumer extension class is correct by contract - only the optimizer carries a shared cache - and `tests/test_ci_governance.py`'s planted-corpus strings are the gate's own positive controls. The same card body cites a test module that has never existed, `examples/fakeshop/tests/test_commands.py`, in one `scope` row and one `definition_of_done` row; the command's real coverage is `examples/fakeshop/tests/test_inspect_django_type.py` and `tests/management/test_inspect_django_type.py`. `examples/fakeshop/apps/kanban/tests/test_commands.py` DOES exist and is the false positive a bare `test_commands.py` grep returns - this card's own `DONE-020-0.0.7` `apps.py` bullet cites it legitimately. Reword the migration row to the Decision 3 form, repoint the two citing rows at the two real modules, and in the same edit reword the `definition_of_done` row reading #"replaced with the factory-callable equivalent", since a bare "factory callable" names the construction Decision 3 rejects.
-- Two structural defects sit in the spec companion `-terms.csv` surface, one extending a population this card already owns and one a new defect class with no owner. **(a) is more stale `notes` cells** - the column governed by this card's #"Decide whether the `notes` column of a spec's `-terms.csv` is contract text" ruling item and measured for card-id rot by its #"A spec's `-terms.csv` `notes` column carries live card references" sibling; neither names this file. `docs/SPECS/appx/spec-025-scalar_map_helper-0_0_7-terms.csv` carries five stale cells and **only two are the card-id kind**: the `DjangoFileType` and `DjangoImageType` rows say the pair "will ship alongside `Upload` in `TODO-ALPHA-028-0.0.11`", where the owner is `DONE-037-0.0.11` (shipped) and card 28 is the ordering card; the other three are the `Upload scalar` row still calling it the next planned scalar, the `DjangoOptimizerExtension` row teaching `extensions=[DjangoOptimizerExtension()]` (the form `spec-029` Decision 3 retired, and the same defect this card's `DONE-029-0.0.9` card-body bullet fixes on the board), and the `Strictness mode` row, a discharged authoring instruction asking that the `strawberry_config` entry be ordered between `Specialized scalar conversions` and `Strictness mode` - where it now sits. The sibling `docs/SPECS/appx/spec-029-consumer_dx_cleanup-0_0_9-terms.csv` also carries retired contract vocabulary in the same column, but that half is owned by this card's retired-scalar-vocabulary bullet, which measures it at 3 rows / 4 phrase instances including a spelling no `scalar-only` grep can see; do not measure it twice. **A second, mechanical half of the same column, measured 2026-08-27**: `csv.DictReader`, the parser both readers use, drops everything after the first unquoted comma into its `None` restkey, and `5 of 44` cells in the `spec-029` CSV and `2 of 17` in the `spec-025` CSV truncate today (count rows where the `None` key is non-empty; `spec-030` is `0 of 50` and `spec-046` `0 of 37`, so this is per-file, not universal). The truncation is what reaches the board - the `GlossarySpecMention` row for `spec-029`'s `Meta.nullable_overrides` stores notes ending at "scalar-only" and loses the rest - so quote every cell containing a comma as part of the same edit. **(b) is a different defect class: a MISSING ROW, invisible to the gate by construction rather than by an ungated column.** `DONE-046-0.0.14` authored **8** `docs/GLOSSARY.md` entries at `0.0.14` and `docs/SPECS/appx/spec-046-transport_security-0_0_14-terms.csv` lists none of them. Measured 2026-08-27 by slugging every `##` heading in `docs/GLOSSARY.md` whose body cites `spec-046` and differencing against the CSV's `anchor` column: 10 entries cite it, 8 are absent - `djangographqlview`, `request-body-cap`, `utf-8-wire-contract`, `websocket-consumer-injection-seam`, `websocket-revalidation-window`, `connection-scoped-revocation`, `websocket-host-boundary`, `graphqlrequestbodyboundarymiddleware`. **Eight, not the six or seven a first pass reports**: the spec's own #"and the new terms this card authors" paragraph enumerates seven and omits the Decision 18 middleware entry, which cites `spec-046` like the rest. All 8 carry zero `GlossarySpecMention` rows and zero `CardGlossaryTerm` links, except `request-body-cap`, linked to `DONE-047-0.0.14` because that sibling's CSV cites it - so card 046 links none of the eight entries it created while a sibling links one of them. **The sibling proof that this is an omission, not a convention**: the same difference over the `0.0.14` cohort gives `spec-047` 4 citing entries and 0 absent, its own authored `Execution resource policy` included; `spec-046` is the only member of the cohort with a gap. `scripts/check_spec_glossary.py` cannot see it - `scripts/check_spec_glossary.py::load_terms` reads `term,anchor` only and validates each CSV row forward into `docs/GLOSSARY.md` and the spec body, never asking the reverse question - and it passes `spec-046` today at 37 terms. Two constraints bind the fix: `import_spec_terms::Command._load_rows` raises a `CommandError` on a duplicate `anchor` within one CSV while `check_spec_glossary.py::load_terms` tolerates many terms mapping to one anchor, so the CSV is the stricter reader and every added row needs a distinct anchor (none of the 8 collides with the 37 already there); and `spec-046` carries zero link definitions for all 8 anchors, so adding the rows without also adding reference-style uses and defs - or running `scripts/check_spec_glossary.py --auto-link` - turns that pass into a failure. Fix order: correct (a)'s cells and quote the comma-bearing ones, add (b)'s 8 rows plus their spec links, then re-run `manage.py import_spec_terms` without `--check` to push the corrected cells into `GlossarySpecMention.notes` and the card's `CardGlossaryTerm` links, and regenerate `docs/GLOSSARY.md` and the board. `import_spec_terms --check` compares only the ordered anchor list, so it passes over the truncated notes today and will keep passing after (a) lands - the notes half has no verification at all, which is exactly the ruling this card's `notes`-column item owes.
-- `CHANGELOG.md`'s `[0.0.9]` entry for the two nullability-override `Meta` keys is the last uncorrected copy of a sentence its two standing siblings already fixed, and one of its two retired phrases is now outright false. `CHANGELOG.md #"decouple a scalar field's GraphQL nullability"` and the same paragraph's #"scalar-only, and the override flips" both describe the overrides as scalar-scoped, while the shipped boundary is non-relation: `django_strawberry_framework/types/base.py::_validate_nullability_override_targets` rejects relation targets by name and `django_strawberry_framework/types/base.py::_build_annotations` threads the `force_nullable` tri-state into `convert_field_output`, which since `0.0.11` also covers the file/image output objects, so `required_overrides` can force a non-null `DjangoFileType!`. `docs/GLOSSARY.md #"**Non-relation scope.**"` already carries the corrected wording, and that paragraph is a near-word-for-word twin of the CHANGELOG paragraph, so the replacement text does not have to be invented. Re-measured 2026-08-27 by `grep -n -o "scalar field[a-z']*" CHANGELOG.md` plus `grep -n "scalar-only" CHANGELOG.md`: 4 plus 1 occurrences across 3 lines of one file, of which exactly the 2 in this paragraph are in scope. **Do not sweep the other 3**, all in the `[0.0.6]` section beginning `CHANGELOG.md #"Annotation-only scalar field overrides on"`: they name the `Scalar field override semantics` contract, which has its own shipped `docs/GLOSSARY.md` heading and is genuinely scalar-scoped, so they are live vocabulary rather than history to be tolerated. Two siblings diverge on re-derivation: `docs/SPECS/spec-034-permissions-0_0_10.md` no longer carries `scalar-only` anywhere and is DISCHARGED, while `docs/SPECS/appx/spec-029-consumer_dx_cleanup-0_0_9-terms.csv` is still live on 3 rows / 4 phrase instances - the `Meta.nullable_overrides` row twice, `Meta.required_overrides` once, plus a fourth spelling on the `Relation handling` row reading "Decision 10 scopes overrides to scalars", which no sweep keyed on `scalar-only` or on the two `Meta.` rows can see. That CSV's `notes` column is loaded into the board DB by `examples/fakeshop/apps/glossary/management/commands/import_spec_terms.py`, so the same text sits at three `GlossarySpecMention` rows and the fix is a file edit **plus** re-running that importer, not a file edit alone; this is the retired-vocabulary half of that column and is distinct both from the two existing items asking whether `notes` needs a gate and recording that it carries rotting card references, and from this card's terms-CSV structural bullet, which cedes the `spec-029` vocabulary rows here and keeps the `spec-025` stale cells, the missing `spec-046` rows and the comma-truncation defect. One deliberate keep: `docs/SPECS/appx/spec-029-consumer_dx_cleanup-0_0_9-rationale.md #"Claim this Decision may no longer make: that the overrides are scalar-only"` states the retirement on purpose and must survive verbatim.
+- `DONE-028-0.0.8` and `DONE-029-0.0.9` each carry card-body prose the package now contradicts, and both are board-DB rows, so the fix is a `CardItem` edit plus a `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` regenerate - never a hand-edit of the generated `KANBAN.md`. Same instrument and same grading as this card's `DONE-017-0.0.6` suppression and `DONE-026-0.0.7` census bullets. **(a) `DONE-028-0.0.8`, the `note` row opening #"Shipped the ordering subsystem in `0.0.8`"** says in the present tense that the apply pipeline runs `check_permissions` with active-input-only scope. No `check_permissions` exists under `django_strawberry_framework/orders/` at HEAD - it shipped there at `11d9fbe0` and was removed at `9e864f59` - and the live surface is `django_strawberry_framework/sets_mixins.py::ActiveInputPermissionMixin._run_permission_checks`, which `django_strawberry_framework/orders/sets.py::OrderSet` inherits rather than defines - cite the defining class, since a citation naming the subclass resolves to nothing. Take the replacement wording from the reconciled spec, which already states it three times, rather than rewriting: `docs/SPECS/spec-028-orders-0_0_8.md #"No instance-method `check_permissions` is shipped on `OrderSet`"`. **Do not sweep the name**: `django_strawberry_framework/filters/sets.py::FilterSet.check_permissions` is a live delegate, and a `CardItem` on `DONE-034-0.0.10` asks a live open question about the filter-side spelling; both stay. Re-measured 2026-08-27, every other symbol that row names resolves at HEAD ([`order_input_type`](docs/GLOSSARY.md#order_input_type), `clear_order_input_namespace`, `_helper_referenced_ordersets`, `_bind_ordersets`, `_owner_definition`, `LazyRelatedClassMixin`, `ClassBasedTypeNameMixin`, `apply_sync`, `apply_async`), so `check_permissions` is its only false one. The same row also carries **three `rev3` breadcrumbs** - a review-round name, which the no-process-provenance rule keeps out of shipped prose - at #"per H1 of `spec-028-orders-0_0_8` rev3", #"per B3 of rev3" and #"per H3 of rev3"; `grep -o rev3 KANBAN.md | wc -l` and the same over `KANBAN.html` both return 3, and a `CardItem` / `CardReference` / `planning_note` sweep returns exactly one row board-wide. Every other `rev3` in the tree sits in a `docs/SPECS/appx/*-rationale.md` revision-history section, which is where that vocabulary belongs; commit `471d4c6b` swept it from code comments and never reached the board. **Two sub-claims against this row do NOT survive re-derivation and must not be "fixed": the "exactly 14 live HTTP tests" figure and the five-name `orders.py` roster are correct as attributions of what the card grew.** The order block of `examples/fakeshop/test_query/test_library_api.py` holds 16 test functions today (measured 2026-08-27; `git diff HEAD --` on that path is empty, so the working tree equals HEAD despite an earlier dirty snapshot), and the file's own header comment #"The two out-of-card additions are" names both extras as `spec-030` work; `examples/fakeshop/apps/library/orders.py` declares 7 OrderSets, the two beyond the roster (`PeriodicalOrder`, `IssueOrder`) added by the keyset-cursor commit `51421e54`; and the four-direction NULLS parametrization the row describes as `DESC_NULLS_LAST` post-dates the ship (`20b2c960`, 2026-06-04, against `11d9fbe0`, 2026-06-01). **(b) `DONE-029-0.0.9`, the `scope` row opening #"Strawberry `extensions=[instance]` factory-callable migration"** instructs the reader to replace the deprecated instance form with `extensions=[DjangoOptimizerExtension]` (class) or `extensions=[lambda: DjangoOptimizerExtension()]` (factory callable). `spec-029` Decision 3 forbids **both** as cold-cache-per-request regressions and sanctions only a factory over a construction-site-scoped singleton, and `tests/test_ci_governance.py::test_no_active_source_uses_a_forbidden_optimizer_extensions_form` fails the build on either. That gate reads first-party `.py` only, so the board is the one surface still teaching the banned spelling while the shipped code disagrees with it: `examples/fakeshop/config/schema.py #"extensions=[lambda: _optimizer]"`, with `TODAY.md`, `GOAL.md` and `CHANGELOG.md` matching (287 `extensions=[` sites tree-wide, 184 lambda-form, measured 2026-08-27 excluding `.venv/`, `docs/builder/` and `docs/review/`). **Not violations, do not sweep:** a bare `DjangoDebugExtension` / [`DjangoErrorPolicyExtension`](docs/GLOSSARY.md#djangoerrorpolicyextension) / consumer extension class is correct by contract - only the optimizer carries a shared cache - and `tests/test_ci_governance.py`'s planted-corpus strings are the gate's own positive controls. The same card body cites a test module that has never existed, `examples/fakeshop/tests/test_commands.py`, in one `scope` row and one `definition_of_done` row; the command's real coverage is `examples/fakeshop/tests/test_inspect_django_type.py` and `tests/management/test_inspect_django_type.py`. `examples/fakeshop/apps/kanban/tests/test_commands.py` DOES exist and is the false positive a bare `test_commands.py` grep returns - this card's own `DONE-020-0.0.7` `apps.py` bullet cites it legitimately. Reword the migration row to the Decision 3 form, repoint the two citing rows at the two real modules, and in the same edit reword the `definition_of_done` row reading #"replaced with the factory-callable equivalent", since a bare "factory callable" names the construction Decision 3 rejects.
+- Two structural defects sit in the spec companion `-terms.csv` surface, one extending a population this card already owns and one a new defect class with no owner. **(a) is more stale `notes` cells** - the column governed by this card's #"Decide whether the `notes` column of a spec's `-terms.csv` is contract text" ruling item and measured for card-id rot by its #"A spec's `-terms.csv` `notes` column carries live card references" sibling; neither names this file. `docs/SPECS/appx/spec-025-scalar_map_helper-0_0_7-terms.csv` carries five stale cells and **only two are the card-id kind**: the [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) and [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) rows say the pair "will ship alongside `Upload` in `TODO-ALPHA-028-0.0.11`", where the owner is `DONE-037-0.0.11` (shipped) and card 28 is the ordering card; the other three are the `Upload scalar` row still calling it the next planned scalar, the `DjangoOptimizerExtension` row teaching `extensions=[DjangoOptimizerExtension()]` (the form `spec-029` Decision 3 retired, and the same defect this card's `DONE-029-0.0.9` card-body bullet fixes on the board), and the `Strictness mode` row, a discharged authoring instruction asking that the `strawberry_config` entry be ordered between `Specialized scalar conversions` and `Strictness mode` - where it now sits. The sibling `docs/SPECS/appx/spec-029-consumer_dx_cleanup-0_0_9-terms.csv` also carries retired contract vocabulary in the same column, but that half is owned by this card's retired-scalar-vocabulary bullet, which measures it at 3 rows / 4 phrase instances including a spelling no `scalar-only` grep can see; do not measure it twice. **A second, mechanical half of the same column, measured 2026-08-27**: `csv.DictReader`, the parser both readers use, drops everything after the first unquoted comma into its `None` restkey, and `5 of 44` cells in the `spec-029` CSV and `2 of 17` in the `spec-025` CSV truncate today (count rows where the `None` key is non-empty; `spec-030` is `0 of 50` and `spec-046` `0 of 37`, so this is per-file, not universal). The truncation is what reaches the board - the `GlossarySpecMention` row for `spec-029`'s [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) stores notes ending at "scalar-only" and loses the rest - so quote every cell containing a comma as part of the same edit. **(b) is a different defect class: a MISSING ROW, invisible to the gate by construction rather than by an ungated column.** `DONE-046-0.0.14` authored **8** `docs/GLOSSARY.md` entries at `0.0.14` and `docs/SPECS/appx/spec-046-transport_security-0_0_14-terms.csv` lists none of them. Measured 2026-08-27 by slugging every `##` heading in `docs/GLOSSARY.md` whose body cites `spec-046` and differencing against the CSV's `anchor` column: 10 entries cite it, 8 are absent - `djangographqlview`, `request-body-cap`, `utf-8-wire-contract`, `websocket-consumer-injection-seam`, `websocket-revalidation-window`, `connection-scoped-revocation`, `websocket-host-boundary`, `graphqlrequestbodyboundarymiddleware`. **Eight, not the six or seven a first pass reports**: the spec's own #"and the new terms this card authors" paragraph enumerates seven and omits the Decision 18 middleware entry, which cites `spec-046` like the rest. All 8 carry zero `GlossarySpecMention` rows and zero `CardGlossaryTerm` links, except `request-body-cap`, linked to `DONE-047-0.0.14` because that sibling's CSV cites it - so card 046 links none of the eight entries it created while a sibling links one of them. **The sibling proof that this is an omission, not a convention**: the same difference over the `0.0.14` cohort gives `spec-047` 4 citing entries and 0 absent, its own authored `Execution resource policy` included; `spec-046` is the only member of the cohort with a gap. `scripts/check_spec_glossary.py` cannot see it - `scripts/check_spec_glossary.py::load_terms` reads `term,anchor` only and validates each CSV row forward into `docs/GLOSSARY.md` and the spec body, never asking the reverse question - and it passes `spec-046` today at 37 terms. Two constraints bind the fix: `import_spec_terms::Command._load_rows` raises a `CommandError` on a duplicate `anchor` within one CSV while `check_spec_glossary.py::load_terms` tolerates many terms mapping to one anchor, so the CSV is the stricter reader and every added row needs a distinct anchor (none of the 8 collides with the 37 already there); and `spec-046` carries zero link definitions for all 8 anchors, so adding the rows without also adding reference-style uses and defs - or running `scripts/check_spec_glossary.py --auto-link` - turns that pass into a failure. Fix order: correct (a)'s cells and quote the comma-bearing ones, add (b)'s 8 rows plus their spec links, then re-run `manage.py import_spec_terms` without `--check` to push the corrected cells into `GlossarySpecMention.notes` and the card's `CardGlossaryTerm` links, and regenerate `docs/GLOSSARY.md` and the board. `import_spec_terms --check` compares only the ordered anchor list, so it passes over the truncated notes today and will keep passing after (a) lands - the notes half has no verification at all, which is exactly the ruling this card's `notes`-column item owes.
+- `CHANGELOG.md`'s `[0.0.9]` entry for the two nullability-override `Meta` keys is the last uncorrected copy of a sentence its two standing siblings already fixed, and one of its two retired phrases is now outright false. `CHANGELOG.md #"decouple a scalar field's GraphQL nullability"` and the same paragraph's #"scalar-only, and the override flips" both describe the overrides as scalar-scoped, while the shipped boundary is non-relation: `django_strawberry_framework/types/base.py::_validate_nullability_override_targets` rejects relation targets by name and `django_strawberry_framework/types/base.py::_build_annotations` threads the `force_nullable` tri-state into `convert_field_output`, which since `0.0.11` also covers the file/image output objects, so `required_overrides` can force a non-null `DjangoFileType!`. `docs/GLOSSARY.md #"**Non-relation scope.**"` already carries the corrected wording, and that paragraph is a near-word-for-word twin of the CHANGELOG paragraph, so the replacement text does not have to be invented. Re-measured 2026-08-27 by `grep -n -o "scalar field[a-z']*" CHANGELOG.md` plus `grep -n "scalar-only" CHANGELOG.md`: 4 plus 1 occurrences across 3 lines of one file, of which exactly the 2 in this paragraph are in scope. **Do not sweep the other 3**, all in the `[0.0.6]` section beginning `CHANGELOG.md #"Annotation-only scalar field overrides on"`: they name the `Scalar field override semantics` contract, which has its own shipped `docs/GLOSSARY.md` heading and is genuinely scalar-scoped, so they are live vocabulary rather than history to be tolerated. Two siblings diverge on re-derivation: `docs/SPECS/spec-034-permissions-0_0_10.md` no longer carries `scalar-only` anywhere and is DISCHARGED, while `docs/SPECS/appx/spec-029-consumer_dx_cleanup-0_0_9-terms.csv` is still live on 3 rows / 4 phrase instances - the `Meta.nullable_overrides` row twice, [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) once, plus a fourth spelling on the `Relation handling` row reading "Decision 10 scopes overrides to scalars", which no sweep keyed on `scalar-only` or on the two `Meta.` rows can see. That CSV's `notes` column is loaded into the board DB by `examples/fakeshop/apps/glossary/management/commands/import_spec_terms.py`, so the same text sits at three `GlossarySpecMention` rows and the fix is a file edit **plus** re-running that importer, not a file edit alone; this is the retired-vocabulary half of that column and is distinct both from the two existing items asking whether `notes` needs a gate and recording that it carries rotting card references, and from this card's terms-CSV structural bullet, which cedes the `spec-029` vocabulary rows here and keeps the `spec-025` stale cells, the missing `spec-046` rows and the comma-truncation defect. One deliberate keep: `docs/SPECS/appx/spec-029-consumer_dx_cleanup-0_0_9-rationale.md #"Claim this Decision may no longer make: that the overrides are scalar-only"` states the retirement on purpose and must survive verbatim.
 - Two calls this card cannot make for itself, one a ruling and one a correction the ruling request turned out to be masking. **The ruling.** `docs/SPECS/spec-025-scalar_map_helper-0_0_7.md` DoD item 15 requires the board to carry a Done body pinned verbatim in that spec's `## Doc updates` section - a 2,348-character blockquote - and closes #"so this spec pins the body, not the number", but `KANBAN.md` is rendered from `CardItem` rows by `scripts/build_kanban_md.py`, so there is no body to pin, only rows. Measured by ORM 2026-08-27 the card carries 2 items totalling 292 characters, and `grep -rc "Past-tense Done body" docs/SPECS/*.md` puts the same pattern in 6 archived specs (`spec-020`, `spec-021`, `spec-022`, `spec-025`, `spec-027`, `spec-028`) whose Done cards measure 4/1318, 3/729, 4/1247, 2/292, 4/1227 and 10/5854 items/characters - six shipped specs each carrying a DoD item that reads as unmet. Option one, strike the verbatim pin from all six and reduce item 15 to what a spec can own (the card is Done, its rows name the spec by structured filename): the six DoDs become honest, and nothing downstream moves because `docs/SPECS/NEXT.md` already instructs a spec author that `KANBAN.md` is generated and to edit the database. Option two, keep the blockquotes as a record of intended-at-ship wording and add one clause to each saying the board renders rows and the pin is historical: nothing is deleted, but six DoD items stay permanently unsatisfiable and every future reconciliation re-grades them. Neither option is a sweep's to assume. **The correction.** The competing-version-bump-policy question dissolves on re-derivation: `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md #"the version bump belongs to the **joint cut**"` and `docs/SPECS/spec-025-scalar_map_helper-0_0_7.md #"The version bump that closes the cut belongs to the last card to ship in it"` state one rule at two levels of detail, and `docs/GLOSSARY.md`'s `## Joint version cut` entry already unifies them - the bump is #"owned by the **last** card to land", "the joint cut - never by an individual card's slices". Re-measured 2026-08-27, 37 files cite that anchor, every spec from `spec-041` forward defers to it rather than restating the rule, `spec-050` Decision 12 and `spec-051` Decision 11 both cite it and both name which card lands last and why, and no site anywhere states the rejected form. What is genuinely broken is the rule's membership list, not its ownership clause: `pyproject.toml` now carries `dynamic = ["version"]` with `[tool.hatch.version]` reading `__version__`, so the quintet's first member does not exist, yet `docs/GLOSSARY.md #"the version quintet: "` still leads with `[project].version`. 14 forward-looking prose sites across 7 files still instruct a future worker to move it - the glossary entry, `CONTRIBUTING.md #"Bump the version in both places before tagging a release"`, `docs/SPECS/NEXT.md`, and the Slice-5 text of `spec-055` - the sibling Slice-5 sites in `spec-050`, `spec-051` and `spec-053` were corrected to the triplet at the 2026-08-29 spec claims audit, shrinking the measured 14-site population; the survivors span multiple spellings (`spec-055` writes "`pyproject.toml` `version`", invisible to a `[project].version` grep). The board half is a DB edit plus regenerate: two `CardItem` rows name `pyproject.toml` in a version-bump line, two more list it as touched by one, and the `Release readiness checklist` `BoardDoc` opens by asserting a `pyproject.toml`-to-`__init__.py` parity that no longer has two sides. `docs/GLOSSARY.md` is DB-generated, so its half is a glossary-DB edit plus regenerate. This is the prose population, not the gate question the existing `AGENTS.md` rule 31 item settles - that item scopes itself to whether a gate is owed and concludes none is. **Do not sweep** the archived `0.0.13` and `0.0.14` specs whose Slice-5 text describes a cut that already happened; those are correct in their own tense.
 - `docs/TREE.md` renders `__init__.py` in its three upstream reference trees and in none of its own four, and states nowhere that this is deliberate. Re-measured 2026-08-27, `grep -c "__init__" docs/TREE.md` returns 25 occurrences, all above the generator delimiter `docs/TREE.md #"## django_strawberry_framework (current on-disk layout)"` and 0 below it - every one is in the hand-captured `graphene_django` / `strawberry_django` / `django_graphene_filters` trees, which keep the file. The omission below the delimiter is real and load-bearing rather than cosmetic: `scripts/build_tree_md.py` defines `IGNORED_TREE_FILENAMES = frozenset({"__init__.py"})`, and `scripts/build_tree_md.py::folder_description` reads that same file's docstring as the containing **directory's** comment and fails the render outright when it is missing, so 51 `__init__.py` files across the three rendered roots (15 under `django_strawberry_framework/`, 17 under `tests/`, 19 under `examples/fakeshop/`) are not dropped but promoted one level up into the line that describes their package. A reader has no way to learn this from the document: the file's head already carries a `docs/TREE.md #"Filters applied:"` sentence enumerating what the upstream trees exclude, and that list does not mention `__init__.py`, so the contrast makes the framework-side omission read as an accident rather than a rule. Fix: one sentence saying that a package's `__init__.py` is rendered as its directory's description line rather than as a leaf, and that a directory without one fails the render. Two placements with different costs - the file head above the delimiter is hand-maintained and takes a plain edit, while both generated section preambles are written by `scripts/build_tree_md.py` (the `Source:` line and the target-layout paragraph), so putting the sentence there is a script change plus a regenerate. Nothing here is a hand edit of the generated tail. Pairs with this card's `docs/TREE.md` optimizer-entries item, which is the same docstring-plus-regenerate discipline on the rendered body.
 - Two durable citations point at nothing, and neither is reachable by any gate. First, the board-DB `Reference` doc titled `Decision: FilterSet subclassing unsupported` ends "Ref: spec-021 pre-merge review M-filters-3 / H-filters-3", where `spec-021` means the pre-renumber filters spec - proven by the git rename record, `docs/spec-021-filters-0_0_8.md` to `docs/SPECS/spec-027-filters-0_0_8.md` (with its `-terms.csv` renamed alongside), not inferred from the topic - while today's `spec-021` is the unrelated `apps.py` / `AppConfig` spec, so the reference currently resolves to a real file about the wrong subject, the worst failure mode available. The row is doubly dangling: `M-filters-3` and `H-filters-3` are defined in no document at all, their only other tree occurrence being a docstring on the subclassing-rejection test in `tests/filters/test_factories.py`. Fix is an ORM edit on that `BoardDoc` plus `scripts/build_kanban_md.py` and `scripts/build_kanban_html.py`; the choice is whether to repoint the stem at `spec-027-filters-0_0_8.md` or to drop the trailing `Ref:` line entirely, since the decision's own body already states the rationale and the id set it cites has no definition to reach. Second, and a maintainer ruling rather than a fix: whether `AGENTS.md` rule 27 governs `CHANGELOG.md` at all. Measured 2026-08-27 that file carries 0 raw `path:NN` references, 3 compliant `path::Symbol` citations, 14 dotted package import paths, and 33 bare `` `path.py` `` references with neither symbol nor `#"substring"` pinpoint. `scripts/check_citations.py` sets `MARKDOWN_SOURCES = ("KANBAN.md",)` and puts `docs/` out of scope, so nothing checks `CHANGELOG.md` in either direction. The dotted forms are the crux and cannot be swept mechanically, because the same spelling means two different things: `django_strawberry_framework.testing` in a release note is a consumer import path that rule 27's `path::Symbol` shape would corrupt, while a private helper named inside `optimizer/plans.py` is a source reference rule 27 does cover. Option one, `CHANGELOG.md` joins the gate's markdown corpus under the same real-rot-only rule `KANBAN.md` gets, with dotted package paths declared user-facing API and exempt: 3 citations start being verified, the 33 bare file references need a decision of their own, and the exemption has to be expressed in the script rather than in prose. Option two, `CHANGELOG.md` stays out of scope as a release record rather than a source-reference surface: nothing changes today, and the question stops being re-raised each cycle only if the exclusion is written down. **Do not treat the 14 dotted import paths as violations** under either option without the exemption being settled first.
@@ -675,13 +627,13 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - `docs/SPECS/spec-017-deferred_scalars-0_0_6.md`'s `## Non-goals` never excludes PostgreSQL range fields, leaving the one spec that owned the deferred-scalar boundary silent on the field class an incoming `graphene-django` schema is most likely to carry across it. Re-derived 2026-08-28 rather than taken from the finding's own wording: that section carries **nine** bullets of which **four** are postgres-scoped (no multi-dimensional `ArrayField`; no outer `choices` on `ArrayField` / `HStoreField`; no dedicated `HStore` scalar; no postgres driver in dev dependencies), not the seven the finding claims, and `grep -c RangeField docs/SPECS/spec-017-deferred_scalars-0_0_6.md` returns 0 - the spec's four `range` hits are all the `BigInt` 32-bit / int64 sense. The behavior is already true in code and only the record is missing: `django_strawberry_framework/types/converters.py` soft-imports `ArrayField` and `HStoreField` only, and every other `django.contrib.postgres.fields` class falls through `django_strawberry_framework/types/converters.py::scalar_for_field` to `ConfigurationError`. The owed bullet states the exclusion and names the recourse - a consumer-registered scalar for the range type, the same escape hatch every other deferred scalar uses - and grounds it in the contract rather than in effort: `graphene-django` maps every range field to `List(base)`, and a two-element list cannot round-trip a two-ended interval's per-end inclusivity. Spell the postgres class by its full dotted path in the bullet, because the package already ships an unrelated `django_strawberry_framework/filters/base.py::RangeField` (the `django_filters` form field behind `RangeFilter`) and a bare `RangeField` greps to the filter surface instead. Text edit in one archived spec; no code, no glossary, no board row.
 - No standing document says where dataloaders sit, so a migrant arriving from `graphene-django`'s N+1 chapter cannot tell whether they are supported here, discouraged, or replaced. Measured 2026-08-28: a case-insensitive `dataloader` grep returns 0 in `docs/GLOSSARY.md`, `README.md`, `docs/README.md`, `CHANGELOG.md`, `TODAY.md`, `BACKLOG.md`, `docs/TREE.md` and `KANBAN.md` - eight for eight - and the only occurrence anywhere in the tree is a one-clause follow-up aside in `docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md`. What is owed is two facts and not a recommendation: `strawberry.dataloader.DataLoader` ships with the engine and is available unchanged (nothing in this package wraps, patches or competes with it - import-checked in the project venv 2026-08-28), and this package's own answer to N+1 is the optimizer plus strictness, so a consumer reaches for a dataloader only where the optimizer has no plan to make. Two homes, one sentence each: a clause on the `docs/GLOSSARY.md` `## Strictness mode` entry, which already owns the N+1-detection vocabulary and is DB-generated - edit the fakeshop glossary app's `GlossaryTerm.body` and re-render with `scripts/build_glossary_md.py`, never hand-edit - and a line in `README.md`'s `## Is this for you?` section beside the existing `Strictness / N+1 detection` bullet, which is a plain text edit. Rides the same ORM edit and render as this card's other glossary items. The `0.1.8` migration guides get a one-line mention of the same fact, but that half is the migration-guides card's and explicitly not this one's.
 - `README.md` never tells a migrant that unregistered relation targets fail loudly, and that is the first thing many of them will hit: `graphene-django` silently drops the field and `strawberry-graphql-django` falls back to a `DjangoModelType { pk }`, while this package raises at `finalize_django_types()` with an error naming source model, source field and target model (`django_strawberry_framework/types/finalizer.py::_format_unresolved_targets_error`). Re-derived 2026-08-28, and the finding narrows in the process: the FACT is already documented twice - `docs/GLOSSARY.md`'s `## Definition-order independence` entry states the error and its most common cause, and `docs/README.md` #"The most common failure mode is forgetting to import a module" states the same beside its finalization instruction - so what is missing is not the behavior but its MIGRATION framing, which exists in no file. The note is one or two sentences in `README.md`'s `## Is this for you?` section, where the two `Coming from ...?` paragraphs already address exactly this reader and neither mentions it. It has to name what each upstream does instead, because "we raise here" is only actionable to someone who knows their old schema was quietly dropping the field. Deliberately minimal and deliberately early: the full guides are the migration-and-adoption-guides card at `0.1.8` and are NOT this card's scope, and the beta-claim carve-out sentence belongs to the beta release card. Plain text edit, one file.
-- `docs/GLOSSARY.md`'s `## Choice enum generation` entry understates a shipped capability: it opens "`CharField` / `TextField` with `choices=...` generates a Strawberry enum", while the code enums ANY field that declares choices. Verified 2026-08-28 in `django_strawberry_framework/types/converters.py::convert_scalar`, which resolves the column through `django_strawberry_framework/types/converters.py::scalar_for_field` and then substitutes `django_strawberry_framework/types/converters.py::convert_choices_to_enum` whenever `django_strawberry_framework/types/converters.py::_field_has_choices` is true - there is no field-class test anywhere on that path. The corrected sentence needs the two real exclusions, which are rejections rather than pass-throughs: outer `choices` on an `ArrayField` and on an `HStoreField` each raise `ConfigurationError` (ambiguous at the GraphQL boundary; declare `choices` on `base_field` for an element-level enum). Integer choices work - `_sanitize_member_name` casts to `str`, so an `IntegerChoices` value becomes `MEMBER_1`, pinned at `tests/types/test_converters.py::test_choice_member_name_sanitization` - which makes us STRICTER than `strawberry-graphql-django`, which skips them, and the current wording surrenders that parity claim in the one document the `0.1.0` parity audit reads. Record the evidence boundary while correcting it: no example model carries an integer-choices column, so the live `/graphql/` tier does not pin this and the support rests on the package test plus the audit's live probe. DB-generated - edit the fakeshop glossary app's `GlossaryTerm.body` and re-render with `scripts/build_glossary_md.py`, never hand-edit; rides the same ORM edit and render as this card's other glossary items.
+- `docs/GLOSSARY.md`'s `## Choice enum generation` entry understates a shipped capability: it opens "`CharField` / `TextField` with `choices=...` generates a Strawberry enum", while the code enums ANY field that declares choices. Verified 2026-08-28 in `django_strawberry_framework/types/converters.py::convert_scalar`, which resolves the column through `django_strawberry_framework/types/converters.py::scalar_for_field` and then substitutes `django_strawberry_framework/types/converters.py::convert_choices_to_enum` whenever `django_strawberry_framework/types/converters.py::_field_has_choices` is true - there is no field-class test anywhere on that path. The corrected sentence needs the two real exclusions, which are rejections rather than pass-throughs: outer `choices` on an `ArrayField` and on an `HStoreField` each raise [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) (ambiguous at the GraphQL boundary; declare `choices` on `base_field` for an element-level enum). Integer choices work - `_sanitize_member_name` casts to `str`, so an `IntegerChoices` value becomes `MEMBER_1`, pinned at `tests/types/test_converters.py::test_choice_member_name_sanitization` - which makes us STRICTER than `strawberry-graphql-django`, which skips them, and the current wording surrenders that parity claim in the one document the `0.1.0` parity audit reads. Record the evidence boundary while correcting it: no example model carries an integer-choices column, so the live `/graphql/` tier does not pin this and the support rests on the package test plus the audit's live probe. DB-generated - edit the fakeshop glossary app's `GlossaryTerm.body` and re-render with `scripts/build_glossary_md.py`, never hand-edit; rides the same ORM edit and render as this card's other glossary items.
 - `docs/SPECS/appx/spec-001-django_types-0_0_1-rationale.md`'s `## Choice field enum generation` section rejects the label-based alternative on a false premise: its opening sentence says `graphene-django` and `strawberry-graphql-django` sanitize labels, and both in fact sanitize VALUES, exactly as we do. Verified directly against the reference checkout 2026-08-28 - `graphene_django/converter.py::get_choices` iterates `(value, help_text)` pairs and builds each member name with `convert_choice_name(value)`, using the label only as the member description. Only the premise is wrong and the argument that survives it must stay intact: labels are display strings consumers translate or restyle, coupling the schema to them is fragile, and the `MEMBER_<digit>` prefix is the known and accepted cost. So the fix rewrites the attribution, not the verdict - the alternative was weighed on its own merits, and the value path is PARITY with both upstreams rather than a divergence from them. It is load-bearing in exactly that direction: anyone reading this rationale during the `0.1.0` parity audit currently reads a divergence where none exists, and would file one. Text edit in one archived rationale companion; the spec's own `## Choice field enum generation` section is correct and needs no change.
 - `KANBAN.md`'s `### Still not implemented` list names `permissions.py` among the Layer 3 subsystems that are "still planned only", and it shipped at `0.0.10` (`DONE-034-0.0.10`, `docs/SPECS/spec-034-permissions-0_0_10.md`): `django_strawberry_framework/permissions.py` is on disk, root-exported and glossary-documented. Two corrections to the finding's own routing before it is actioned. FIRST, this is not a `CardItem`. Located 2026-08-28 by an ORM sweep over every text column in the kanban app, the sentence lives in `BoardDoc` pk 4 (`namespace="kanban"`, `key="snapshot"`, kind `Reference`, title `Snapshot`), so the edit is `BoardDoc.body` plus a `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` regenerate - a `CardItem`-scoped sweep returns nothing here and reads as already-fixed. SECOND, only ONE of that bullet's four entries is wrong: `aggregates/` and `fieldset.py` are genuinely absent, and `utils/queryset.py` is a deliberate near-miss a sweep must not "fix" - it is `BACKLOG.md`'s item-36 "promote embedded helpers to `utils/queryset.py` only when a second subsystem needs them", a planned singular module, NOT a typo for the shipped `django_strawberry_framework/utils/querysets.py`. Deleting the one line leaves the other three correct.
-- `Meta.nested_fields` and `NestedSerializerConfig` are shipped, root-exported, live-tested surface with zero presence in any standing document. Measured 2026-08-28: a combined `nested_fields` / `NestedSerializerConfig` grep returns 0 in `docs/GLOSSARY.md`, `README.md`, `docs/README.md`, `CHANGELOG.md`, `TODAY.md`, `BACKLOG.md`, `docs/TREE.md` and `KANBAN.md` - eight for eight, so this is ABSENT rather than merely not-lookupable, which is the distinction this card's `Meta.cursor_field` bullet had to make and the reason that one is a decision and this one is not. The surface is real: `django_strawberry_framework/rest_framework/inputs.py::NestedSerializerConfig` is the explicit per-field opt-in for nested serializer inputs (`Meta.nested_fields = {"shelves": NestedSerializerConfig()}`), it is exported from the package root through the lazy attribute map in `django_strawberry_framework/__init__.py`, a nested field NOT named in the map still fails loud, and the whole path is pinned over `/graphql/` by `examples/fakeshop/test_query/test_library_api.py::test_create_branch_with_nested_shelves_over_http` beside its hidden-target and validation-path siblings. What is owed is a `## Meta.nested_fields` glossary heading - every other `Meta` key has one - covering the opt-in, the fail-loud default for an un-named nested field, and the contract that the consumer's own serializer `create()` performs the nested write (the framework never auto-saves the relation). DB-generated: add the `GlossaryTerm` row and re-render with `scripts/build_glossary_md.py`, never hand-edit. The changelog half is owed too and is not a judgement call - the feature shipped at `0.0.13` under `docs/SPECS/spec-039-serializer_mutations-0_0_13.md`, and that release's `## [0.0.13]` entry describes `SerializerMutation` without mentioning nested inputs at all.
+- `Meta.nested_fields` and `NestedSerializerConfig` are shipped, root-exported, live-tested surface with zero presence in any standing document. Measured 2026-08-28: a combined `nested_fields` / `NestedSerializerConfig` grep returns 0 in `docs/GLOSSARY.md`, `README.md`, `docs/README.md`, `CHANGELOG.md`, `TODAY.md`, `BACKLOG.md`, `docs/TREE.md` and `KANBAN.md` - eight for eight, so this is ABSENT rather than merely not-lookupable, which is the distinction this card's `Meta.cursor_field` bullet had to make and the reason that one is a decision and this one is not. The surface is real: `django_strawberry_framework/rest_framework/inputs.py::NestedSerializerConfig` is the explicit per-field opt-in for nested serializer inputs (`Meta.nested_fields = {"shelves": NestedSerializerConfig()}`), it is exported from the package root through the lazy attribute map in `django_strawberry_framework/__init__.py`, a nested field NOT named in the map still fails loud, and the whole path is pinned over `/graphql/` by `examples/fakeshop/test_query/test_library_api.py::test_create_branch_with_nested_shelves_over_http` beside its hidden-target and validation-path siblings. What is owed is a `## Meta.nested_fields` glossary heading - every other `Meta` key has one - covering the opt-in, the fail-loud default for an un-named nested field, and the contract that the consumer's own serializer `create()` performs the nested write (the framework never auto-saves the relation). DB-generated: add the `GlossaryTerm` row and re-render with `scripts/build_glossary_md.py`, never hand-edit. The changelog half is owed too and is not a judgement call - the feature shipped at `0.0.13` under `docs/SPECS/spec-039-serializer_mutations-0_0_13.md`, and that release's `## [0.0.13]` entry describes [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) without mentioning nested inputs at all.
 - Two standing records disagree about top-level batch create / update / delete, and they differ in both the surface named and the disposition. `docs/SPECS/spec-036-mutations-0_0_11.md` #"Nested writes / bulk mutations" defers the shape as "not on the alpha roadmap", and its parenthetical attributes batch create to strawberry-django's `ParsedObject` / `ParsedObjectList` connect-create-disconnect family - that is, to NESTED writes. The surface actually at issue is a different and top-level one: `strawberry_django/mutations/fields.py::DjangoCreateMutation.resolver` accepts a `list[Input]` argument on the mutation field itself, verified against the reference checkout 2026-08-28. Its verdict is a permanent refusal, not a deferral, so the spec currently reads as though the surface is merely waiting for a later release. The refusal: a list argument multiplies the per-row attestation and locking contract while the pinned `node` / `result` + `errors` payload has no shape in which to report per-row outcomes, so partial success would be unreportable. The answer is serial top-level mutation fields, which the GraphQL spec already executes in order and which `django_strawberry_framework/schema.py::DjangoSchema` gives an independent transaction each, plus the carded mutation idempotency keys for safe retry. What is owed: split the two surfaces in that out-of-scope entry and state the top-level one as refused.
 - `docs/SPECS/spec-034-permissions-0_0_10.md` routes a capability to a `BACKLOG.md` home that was never created, so the package's answer to object-level permission backends is recorded nowhere. That spec's out-of-scope entry #"Object-level permission backends (guardian-style) and per-field permission" says post-`1.0.0` differentiation would go through `BACKLOG.md`; measured 2026-08-28, a case-insensitive `guardian` grep over `BACKLOG.md` returns 0, so the pointer resolves to nothing. The missing record is a composition note rather than a refusal of the need: binding a specific third-party permission backend into framework queryset construction would couple the package to that backend's table layout, and the composition point is already public - a consumer calls `get_objects_for_user(info.context.request.user, "app.view_thing", queryset)` from the type's own `get_queryset`, which composes with filters, orders, connections, node refetch and the cascade because every one of them runs through the same hardened visibility boundary. Decide the home first, then write it once: either create the `BACKLOG.md` row that spec promises, or restate the spec entry so it stops pointing at a row that does not exist.
-- `docs/SPECS/spec-038-form_mutations-0_0_12.md` #"### Reference-package parity checkpoint" carries no verdict on `graphene_django/forms/types.py::DjangoFormInputObjectType`, the one graphene-django forms surface that otherwise-thorough table omits. Measured 2026-08-28: `DjangoFormInputObjectType` greps to 0 in that spec, so the omission is silent rather than deferred, and a reader auditing forms parity against it finds a gap with no disposition. The verdict that belongs in the table is a refusal, and the card's own design already supplies the reasoning: a standalone form-derived input object exists upstream so a hand-written Relay mutation can borrow a form's shape as a nested `data:` argument, which is a workaround for not having a form mutation flavor rather than a capability of one. Here `Meta.form_class` on `DjangoModelFormMutation` / `DjangoFormMutation` generates inputs bound to the mutation that validates them. Add the row so the absence reads as decided rather than missed.
+- `docs/SPECS/spec-038-form_mutations-0_0_12.md` #"### Reference-package parity checkpoint" carries no verdict on `graphene_django/forms/types.py::DjangoFormInputObjectType`, the one graphene-django forms surface that otherwise-thorough table omits. Measured 2026-08-28: `DjangoFormInputObjectType` greps to 0 in that spec, so the omission is silent rather than deferred, and a reader auditing forms parity against it finds a gap with no disposition. The verdict that belongs in the table is a refusal, and the card's own design already supplies the reasoning: a standalone form-derived input object exists upstream so a hand-written Relay mutation can borrow a form's shape as a nested `data:` argument, which is a workaround for not having a form mutation flavor rather than a capability of one. Here `Meta.form_class` on [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) / [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) generates inputs bound to the mutation that validates them. Add the row so the absence reads as decided rather than missed.
 - The node-identity refusal is recorded for graphene-django's spelling and not for strawberry-graphql-django's, so half of it is invisible to a migrant searching the other name. Measured 2026-08-28: `lookup_field` resolves across `docs/SPECS/spec-039-serializer_mutations-0_0_13.md` at five sites including its out-of-scope entry, while a combined `key_attr` / `DEFAULT_PK_FIELD_NAME` grep over `docs/`, `BACKLOG.md`, `KANBAN.md` and `README.md` returns 0. Those are strawberry-graphql-django's spelling of the same idea - `strawberry_django/settings.py` `DEFAULT_PK_FIELD_NAME` plus `key_attr` on the relay node - and one argument rejects both: resolving a global ID against a configurable non-pk column makes node identity a function of settings, so the same opaque ID then means different rows in two deployments of the same schema. The answer is the pk, with a consumer-authored resolver where a natural key must be addressable. Add the second spelling beside the recorded one; a verdict that names only one upstream's word for a surface both ship is a half-recorded verdict.
 - BACKLOG.md's 'Moved out of this file' section states items 36/37/38 'move to `AGENTS.md` / `CONTRIBUTING.md`' (public-surface promotion discipline; shared queryset introspection helpers - note the shipped module is `utils/querysets.py`, plural, not the `utils/queryset.py` the note names; layered manual relation override test policy). Verified 2026-08-29: none of the three rules is present in either target file - the transfer never landed. Land the three rules (or record where each actually belongs) and correct the BACKLOG note.
 - Twelve live-source `(line NNN)` self-citations and the two `cookbook line(s)` sites have no owning card, because this card's line-number-citation item explicitly routes them to "a live-code batch, not a documentation pass" and no batch names them. Measured 2026-09-01 by the spec-035 residual cycle over the 433-file `.py` corpus with a per-file `re.sub(r"\s+", " ", text)` flatten (the only instrument that survives both a wrap and a `#` comment-continuation): `grep -rnoE '\(lines? [0-9]+' --include='*.py'` returns **9 in `tests/types/test_resolvers.py`** (`:1797, :1802, :1808, :1817, :1828, :1908, :1915, :1920, :1931`) and **3 in `tests/test_exceptions.py`** (`:459, :464, :481`), plus `tests/orders/test_sets.py:169` #"per cookbook line 280" and `tests/orders/test_factories.py:250` #"cookbook lines 124-130" whose upstream-prior-art ruling this card already carries. These cite a live package source file's own line numbers, which `AGENTS.md` rule 27 wants as `path::Symbol` or `#"substring"`, and they are actively rotting: `types/resolvers.py` has moved under at least three of them. **Routing rule, not a sweep:** each site folds into whichever `TODO-ALPHA-053-0.0.15` WP batch legitimately opens its file, and only the residue no batch opens belongs to this card - the same boundary this card's spec-016 rule-27 item already draws. Precedent for the fix shape: the spec-035 residual cycle closed one citation of exactly this class in `tests/types/test_resolvers.py` (`git show 8c05f7fc:docs/builder/bld-035-final.md` D12) because that cycle already owned the file, replacing the line number with a `path::Symbol #"substring"` pair and proving the anchor resolves exactly once - do that, never a bare `path:NN` to `path::Symbol` mechanical rewrite, since three of these targets have moved and the symbol must be re-read against the live body first.
@@ -690,8 +642,8 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - **Nothing in the repository greps for a staged `TODO(spec-<NNN>)` anchor**, so an anchor outlives the spec that staged it with no instrument objecting. Re-derived 2026-09-01: `grep -rl 'TODO(spec-'` over `scripts/`, `.pre-commit-config.yaml` and `.github/workflows/` returns **nothing**, and the obligation exists only as a per-cycle worker action in `docs/builder/BUILD.md`'s integration pass. That absence is the mechanism by which two `spec-036` anchors survived four release lines undischarged. The check belongs beside this card's source-symbol-citation and unused-link-definition siblings and has a sharp predicate: **no `TODO(spec-<NNN>)` may name a spec whose card is `Done`**. Tree-wide population at 2026-09-01 is 24 anchors - 22 `spec-050` (in flight, legitimate), 1 `spec-060` (unshipped, legitimate), and 1 `spec-035`, which **shipped at `0.0.10`** and is the live instance this card's gate would have caught (that one occurrence is already homed on TODO-ALPHA-053-0.0.15's stale-anchor item).
 - **Decide whether the 184 review-finding tags across 34 grammars inside `docs/SPECS/spec-036-mutations-0_0_11.md`'s contract prose stay or go.** The tags (`AR-H#`, `Major-#`, `CR-#`, `Nit-#`, ... - a narrower 7-grammar regex sees only 143 of them, so grade the population by the full 34) name findings from that spec's five review rounds. The spec-036 residual cycle held them back deliberately and recorded why: a tag is a durable provenance handle a reader can trace, the sibling shipped specs carry the same shape so stripping only `036` breaks corpus consistency rather than restoring it, and stripping 184 parentheticals across 34 grammars rewrites contract prose - it is not a cut-and-paste and is not safely mechanical. Decide once, for the corpus rather than for one spec. Measured 2026-09-01. **Decide this before the stranded-ordinal sweep this card carries, because it sets that sweep's remedy rather than merely overlapping it:** four live source citations name spec-036 labels (`L3-1` x2, `M3-1`, `FV-1`) that the spec carries **0** times, so if the corpus KEEPS provenance tags the fix is to retarget those citations onto real ones, and if it drops them the fix is to restate each site by content. Deciding the sweep first would have to be redone. Added 2026-09-03 by the spec-038 residual cycle.
 - `CHANGELOG.md`'s `[0.0.12]` entry still calls the shared mutation error envelope **byte-identical**, which is the single most misleading surviving copy of a claim the spec-036 residual cycle retired everywhere else: `FieldError` grew from 2 members to 4 (`codes` and `path` landed with `spec-039` / `DONE-039-0.0.13`), so the type is ADDITIVE, not frozen. A released changelog entry asserting the retired freeze is worse than a stale spec sentence because it is the record a migrating consumer reads first. The `.py` docstring half of the same claim was corrected in `django_strawberry_framework/mutations/inputs.py::FieldError` on 2026-09-01; this card owns the `CHANGELOG.md` half under AGENTS.md rule 21.
-- `docs/GLOSSARY.md`'s `FieldError` envelope entry describes the 2-member shape and never mentions `FieldError.codes` or `FieldError.path`, the two additive client-ergonomics members shipped at `0.0.13`. They are the whole point of the envelope for a client that wants to branch without parsing localized human text or the dotted `field` string, so their absence from the glossary is an ABSENT-surface gap rather than a wording nit. Edit via the DB and re-render, never by hand. Measured 2026-09-01 by the spec-036 residual cycle.
-- `docs/SPECS/spec-036-mutations-0_0_11-terms.csv` omits two shipped glossary headings the spec's own contract prose relies on, `DjangoMutationField` and `DjangoModelPermission`. `scripts/check_spec_glossary.py` validates only the `term,anchor` pairs a csv DOES carry and never asks whether a heading the spec depends on is missing from it, so the gap is invisible to the gate by construction - the same fail-open shape as this card's `notes`-column items. Measured 2026-09-01 by the spec-036 residual cycle.
+- `docs/GLOSSARY.md`'s [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) entry describes the 2-member shape and never mentions `FieldError.codes` or `FieldError.path`, the two additive client-ergonomics members shipped at `0.0.13`. They are the whole point of the envelope for a client that wants to branch without parsing localized human text or the dotted `field` string, so their absence from the glossary is an ABSENT-surface gap rather than a wording nit. Edit via the DB and re-render, never by hand. Measured 2026-09-01 by the spec-036 residual cycle.
+- `docs/SPECS/spec-036-mutations-0_0_11-terms.csv` omits two shipped glossary headings the spec's own contract prose relies on, [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) and `DjangoModelPermission`. `scripts/check_spec_glossary.py` validates only the `term,anchor` pairs a csv DOES carry and never asks whether a heading the spec depends on is missing from it, so the gap is invisible to the gate by construction - the same fail-open shape as this card's `notes`-column items. Measured 2026-09-01 by the spec-036 residual cycle.
 - **Retire the stranded ordinal citations in `tests/` and `examples/`: 13 sites in 7 files, five spec vocabularies plus three that name no spec at all.** Measured 2026-09-03 by the spec-038 residual cycle, whose per-token derivation is in `docs/builder/DONE/build-038-form_mutations-0_0_12.md` `## Final test-run gate (folded in from the retired final report)`; the sibling population inside `TODO-ALPHA-053-0.0.15`'s WP files is homed on that card, and the split is this card's existing rule for the spec-016 spellings - a site in a file no WP batch opens belongs to this card's repo-wide sweep. Sites: **spec-030** `P1-B` x3 in `examples/fakeshop/test_query/test_library_api.py`, `P3a` x1 in `tests/test_connection.py` #"(``spec-030-connection_field-0_0_9`` P3a)", `P3b` x1 in `tests/test_registry.py` (spec-030 carries 0 of all three; its rationale companion carries 5 / 4 / 3, which is where the labels went). **spec-032** `the P1 bug` and `the P2 bug` x2 in `tests/test_relay_node_field.py` (0 in the spec, 47 in the companion). **spec-036** `FV-1` x1 in `tests/mutations/test_resolvers.py`. **spec-039** `SR-3` x1 in `tests/rest_framework/test_converter.py`. **spec-016** `Decision 4` x1 in `test_library_api.py` #"Pins the end-to-end contract (spec-016 Decision 4," - and `docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md` carries the string `Decision` **0** times, so either the ordinal names nothing or the target is another spec and this is the renumber-artifact treatment instead. **Three name no spec anywhere in their file and need the authoring cycle to decode, which no reader can recover:** `tests/test_lateral_pg_parity.py` #"P2-4: two callers of ONE extension", `examples/fakeshop/apps/library/tests/test_generic_connection_sharded.py` #"Pins the P1 fix:", and `test_library_api.py` #"the P0 served it 1". **Coordination: `test_library_api.py` alone carries three catalog rows** (the spec-030 x3, the spec-016 x1 and one undecodable), so open it once. **The population must move per spec, never per file:** spec-030's seven sites split 5 here / 2 on `053`, and retiring one half leaves that vocabulary divergently rather than uniformly wrong - the same half-fix argument this card's `[spec-011]` item already records. **Do not trust a single census glob:** five instruments were pointed at this class and the graded population moved 11 -> 41 -> 16 -> 38 -> 37 -> 36, each blind where the last was not (`\bP[123]\b` cannot see a suffixed label; `\bP[0-9]+([.\-][0-9A-Za-z]+)?\b` cannot see `P3a` or a non-`P` vocabulary; a per-line resolver cannot see a citation wrapped across two comment lines; and all of them over-report). The durable fix for the class is this card's `check_citations.py` ordinal extension, not a sixth manual sweep.
 
 #### Definition of done
@@ -717,20 +669,6 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 #### Open question
 
 - Whether `scripts/archive_spec.py` should exist, and whether it warrants its own card rather than riding this one. NEXT.md Step 8 is ~120 lines of hand-run steps that has already produced two standing-doc defects and 14 orphan-row pairs. Three directions of cross-reference rewriting, a group-relocation obligation invisible to every checker, and a DB sync inseparable from the physical move are all mechanizable.
-
-#### Note
-
-- Documentation-debt card, no package behavior: nothing in `django_strawberry_framework/` changes shape here beyond comment and docstring citations. Split off the beta release card on 2026-08-25, when that card's `Scope` had reached 48 bullets / 74,148 characters against a `Definition of done` that gated none of them.
-- Process questions carried out of the retired builder artifacts. These are BUILD-flow questions, not release work, and several may be moot once that flow is replaced - re-home or drop them rather than treating them as this card's scope. (1) Whether the weakly-pinned failability rule is applied literally: twelve boundaries from one round fail the 0-or-1-row test, of which the reviewer judged four to deserve a second row on merit and six adequate on merit, so a literal reading re-loops all twelve; and the rule says "never a recorded exception" while a review artifact recorded one, so the rule needs either a narrow carve-out or that entry becomes revision-needed. (2) Whether the WebSocket-revocation design owes a hot-path number: it holds one connection-local lock through the outbound send, which meets the hot-path definition and which the spec itself calls a hot path; either declare it and re-loop for a before/after number (`_instrument_revalidation`'s `probe.reads` is already the instrument) or waive it explicitly. (3) `AGENTS.md:15` mandates repo-wide `ruff format` / `ruff check --fix` while all four worker role files tell workers to scope them to their own files, because this tree carries concurrent uncommitted work that a repo-wide write-mode run reformats; the role files defer to `AGENTS.md` on conflict, so the scoping instruction is inert until reconciled. Six-plus passes have raised it. (4) Whether a `bld-custodian-*` artifact name is admissible under the build-artifact naming rule. (5) Whether "a downstream doc more accurate than the spec means the contract moved" becomes a first-class integration sweep step: the tell fired four times in one card and located two of nine corrections before an auditor did. (6) Whether `AGENTS.md` rule 27's raw-`path:NN` exemption should name `docs/builder/build-*.md` alongside the per-cycle scratchpads it already lists. The rule exempts artifacts "that close with their cycle" and a committed build plan does not close, but 9 of the 11 plans in `docs/builder/` carry the shape anyway - measured 2026-08-14 by `grep -Ec '[A-Za-z0-9_/.-]+[.](py|md|toml|cfg|yaml|yml):[0-9]+'` over `docs/builder/build-*.md`, with only `build-045-visibility_boundary-0_0_14.md` and `build-048-secure_output_defaults-0_0_17.md` at zero. Either the exemption widens or nine committed files are in violation; both readings are defensible and neither is a sweep's to assume. (7) Whether a durable figure must name the commit it was measured at, and whether it was measured against committed or working-tree state. Escalated by the spec-007 residual cycle's second review round and never acted on. (8) That cycle's own answer to (7), offered as the candidate rule: **a quantifier is a measurement, so only the command that produced it may write it - and for a historical quantifier that command names a commit, not the working tree.** It is proposed against a measured population - eleven passes of one cycle produced ten instances of a single defect class, an unmeasured quantifier in durable prose, and the class mutated each time a catching discipline closed its previous form: bare numbers first, then "only"-shaped universals once numbers were being re-derived, then historical absolutes once present-tense universals were being grepped. A present-tense grep cannot test a past-tense claim, which is how that cycle's one High-severity finding arrived. The class has already been found independently on the neighbouring boundary-hardening card, whose `types/base.py::_format_unknown_fields_error` item records that "every defect in this item's own history was a numeral standing in for a population" - two cycles reaching the same rule by different routes is the argument for stating it once in `BUILD.md` rather than a third time in a card. Corpus-ratchet bound like every entry here, and the ratchet is the live objection: this note is already the longest on the board, so a rule that lands as more prose in the same place is the thing it warns against.
-- Two spec omissions in the WebSocket revalidation decision, each a one-clause addition whenever a pass legitimately opens it. Neither makes anything in the spec false. (1) Why the last-validated timestamp lives on the ASGI `scope` rather than beside the lock and the flag on the consumer instance is stated nowhere: `consumers.py:209-214`'s comment on `_REVALIDATED_AT_SCOPE_KEY` explains only the key's collision-safe namespacing, and neither the spec nor the rationale gives a reason. It belongs to whoever decided it. (2) How the outbound gate reaches the consumer's lock is nowhere stated; the two hops are `websocket.ws_consumer` (the adapter seam) and `handler.view` (admission), and `ws_consumer` appears in the spec zero times.
-- Deliberate no-ops, recorded so a future sweep neither reads them as live claims nor "fixes" them. The closed `docs/review/`, `docs/dry/` and `docs/bug_hunt/` scratchpads still assert the retired "UTF-16 succeeds" contract - they are closed per-cycle records, leave them. The revalidation DRY bullet prices the delegates by `await` count in a way that is true on the natural reading but not literally. The implementation-plan row reading "the adapter-level outbound-frame gate, *its* connection-local lock and *its* one close code" states no ownership location, so it is not false but wants one word if a later pass touches the table. The rationale's Decision 19 historical block still contains "only a factory" on purpose, as the prior spec wording. Two spec phrases describing shipped `0.0.14` behaviour ("This is the only new refusal", "previously a Channels-routed deployment never reached that adapter at") were ruled no-change and are not history-narration defects. One more deliberate no-op, from the spec-007 residual cycle. The "three-minute path" phrasing that survives in this board and in the `KANBAN.html` payload is a render of the `0.0.4` onboarding-docs card's own `CardItem`, and it is accurate history: `docs/README.md` carried a `## Three-minute path` heading, added and deleted the same day by that card's own commits `83c25963` and `3a4d40b7`. Editing the board row would falsify a correct record of what the card did. Recorded because the phrase reads like drift to every sweep that meets it - the reconciled `spec-007-onboarding_docs_spec_consolidation-0_0_4.md` and its rationale companion both name only sections that exist, which leaves the board row as the sole surviving mention. One more, from the spec-013 residual cycle: `docs/builder/DONE/build-007-onboarding_docs_spec_consolidation-0_0_4.md`'s byte ranking names "spec-013 (1,669 bytes)" where the reconciled stub now measures 5,739 bytes - a closed cycle's dated measurement, correct at its commit; leave it. One more, from the spec-015 residual cycle (2026-08-16): the `## Slice checklist` boxes in `docs/SPECS/spec-015-relay_interfaces-0_0_5.md` are all `- [ ]` and **must stay that way**. The spec is archived and shipped for `DONE-015-0.0.5`; its `Status:` line is the source of truth for shipped state and the checklist is preserved as the historical build sequence, so unticked boxes on a shipped spec are the correct rendering rather than an unfinished cycle. That cycle deliberately did not tick them. The same reading applies to every archived spec carrying a slice checklist - do not sweep them.
-- Three further deliberate no-ops, recorded so a sweep does not "fix" them. `docs/README.md`'s counted-body section was examined for a clause about body-reading project middleware and ruled no-change: the decision does not require it, `views.py::_run_after_csrf_check` already carries it in bold for a code reader, and the counted half of that section states its own honest boundary, so the code docstring is the authoritative statement. Separately, the revalidation DRY note prices the WebSocket delegates by `await` count in a way that is true on the natural reading but not literally - each handler body has two `await` expressions and the adapter's `send_json` has two `await`s and two `super()` references. Third: `docs/GLOSSARY.md`'s `## OrderSet` entry carries no position-side-channel note while its `## RelatedOrder` sibling carries #"Position-side-channel note:", and the asymmetry is correct. `docs/SPECS/spec-028-orders-0_0_8.md` Decision 8 step 4 once claimed both entries called the leak out; the reconciliation measured that claim false in exactly one of its two subjects and corrected the spec down to name `RelatedOrder` alone, on the ground that the `RelatedOrder` declaration is what creates the exposure so the warning sits where a consumer writes one. The leak the Decision describes is relation-shaped throughout - ordering visible parent rows by a hidden related column, defended by the parent-side `check_<branch>_permission` gate fired through active-branch double-dispatch - so a parallel note on `OrderSet` would assert a contract the spec deliberately declines to assert. Recorded because the gap reads like an omission to every sweep that meets it, and because that same cycle's own pre-check reported that NEITHER entry carried the note, which would have deleted a true sentence: a two-subject claim needs two measurements. Do not author the missing note. The only live question left is whether the `OrderSet` entry should gain a one-clause pointer saying a security note lives on its `RelatedOrder` sibling, which is an editorial preference and a `docs/GLOSSARY.md` DB edit plus regenerate if taken.
-- Three measured methodology rules carried out of the spec-005 residual cycle's per-cycle scratchpads, which close with their cycle and leave the rules homeless. Corpus-ratchet edits, same bucket as the process questions above, so each needs the bytes it retires named before it lands. (1) `git log -S<identifier>` searches for changes in how often a name is written, not for changes in the value it names - a key added to or removed from a `frozenset` literal moves no occurrence count, so `-S` sees such a commit only when something else in the same commit also moves the count. The evidence must travel with the rule, since the whole claim is that the hazard is invisible when it bites: `-S'ALLOWED_META_KEYS'` returns 14 commits but recovers only 9 of 13 definitions and 15 of 17 keys - `cursor_field` and `filesystem_path_fields` never appear in any blob it returns. To establish what values a constant has ever held, replay the definition over every revision of the file. (2) `git show <commit>:<path>` on a pre-rename revision exits 128 writing only to stderr, so a replay loop that reads stdout drops the oldest revisions and reports a clean number; resolve each blob at the path the file had at that commit. Carry the corrected demonstration, not the cycle's first one: the stdout-only replay of `ALLOWED_META_KEYS` loses two revisions and its summary numbers do not move at all, which is a sharper picture of a silent failure than a number that visibly changes. (3) Drive move-verification off `git diff -U0` line by line, never off spans chosen by the worker who made the edits - a span-sampled check cannot detect a sentence nobody made into a span, and one cycle's "17 hand-chosen spans, 17/17 pass" missed a cut sentence the diff-driven walk found immediately. Its companion: a cut-not-copy shingle count is tokenizer-dependent and means nothing unquoted - the same two files measured 0, 3, or 4 non-scaffold overlaps at n=8 depending only on whether a comma and a `#` are tokens. The prescription that warning implies, so it is not stated as a separate row: a phrase-shaped duplicate check tokenizes on word characters (`[A-Za-z0-9_]+`), case-folds, and windows over the token stream at n=8. Three facts the sentence above does not carry - the tokenizer itself; the failure DIRECTION, since a whitespace tokenizer leaves punctuation and Markdown emphasis attached to tokens and shifts window positions without changing any word, so it fails OPEN and once reported 0 overlap where 3 restated passages existed; and the non-finding guard, that an 8-word-shingle count of 180 non-scaffold against a 247 control for an unrelated pair means the corpus is LESS coupled than the control, so a raw shingle number must never be reported as a finding without its control beside it.
-- Two one-clause additions to `docs/SPECS/appx/spec-005-django_type_contract-0_0_3-rationale.md` whenever a pass legitimately opens it, plus one decision that should be taken deliberately rather than as tidy-up. (1) `## How to read this file` should state that two claims in the file are the only surviving copies of claims the spec may no longer make - the `@strawberry.type`-rewrites-`cls.__annotations__` override diagnosis, condensed in the consumer-override entry, and the "must update this contract spec accordingly" instruction, quoted verbatim at `:247` - and that no future sync pass may align either to the corrected spec, because deleting either deletes the record the companion exists to carry. The two members had to be found by two different methods (a condensation appears in no verbatim scan), which is why the class is worth stating rather than leaving to a reader's grep. (2) The open decision: layer 1 carries exactly four present-tense sentences about spec content the reconciliation has since falsified - the population was established rather than sampled - and all four are disclosed by a single `## How to read this file` clause rather than edited. Whether they stay is a decision about whether the rationale's first layer is a record or a description. The precedent cuts both ways on purpose: `## Standing note` was edited, because it is an analytical coda whose factual premise measured false, while the four record sentences were deliberately left.
-- Examined and deliberately NOT repaired by the spec-009 residual cycle, recorded so a later pass does not re-open them as new. `docs/SPECS/spec-028-orders-0_0_8.md`'s `## Doc updates` blockquotes of a card body and of a `CHANGELOG.md` bullet the shipped changelog never carried are left verbatim: editing a quote so it no longer matches its target is a worse defect than the staleness. That spec's `## Risks and open questions` `Ordering`-enum fallback offering `ASC_DISTINCT` / `DESC_DISTINCT` is a NON-FINDING, not a defect - the section's own preamble declares every item carries a fallback if implementation reveals the preferred answer is wrong, so a demand-contingent revisit of a rejection is the section's declared shape and asserts nothing false about shipped code; **it was graded identically four times, please do not open it a fifth**. That spec's `### Decision 3` heading still reading "Five-layer port plus a deferred Layer 6" is KEPT: the heading slug carries 6 in-file uses that a retitle would dangle, and the word names no version and no owner, so heading-vs-body agreement here is a preference not a defect. In `docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md`, the registry-state sentence satisfied across two objects (registry-global `is_finalized` vs per-type `DjangoTypeDefinition.finalized`) is NOT false - a future tightening should say which object holds which half - and three absolutes were examined and not raised: "Phase 2 is the only window" (true under its resolver scope), the three-applier enumeration (correct as scoped), and "across every cardinality". Finally, five items closed IN that cycle must not be re-deferred: the async `SyncMisuseError` coverage gap (promoted to a permanent test, not deferred), spec-028 Decision 12's DISTINCT ON / Layer 6 deferral (fixed - discharged by the row-preserving `Min`/`Max` ordering, not postponed), card 055's two stale `DjangoModelField` / BACKLOG-38 references (fixed in the DB), the two clauses those fixes falsified (fixed), and `scripts/check_trailing_commas.py` on `tests/test_connection.py` (re-measured at final state and RESOLVED).
-- Card numerals rot in three distinct grammars and a sweep that knows only one leaves the other two silently wrong. Measured 2026-08-25 across the insert-at-052 renumber: (a) full card ids (`TODO-BETA-058-0.1.1`) - 136 occurrences; (b) spec filename stems, slugged and bare (`spec-055-fieldset-0_1_1`, `spec-055`) - 81 occurrences; together 34 files. (c) BARE three-digit numerals in prose (`card 055`, `card-055/056/058/065/069`, `055 / 056 / 058 / 065 / 069`) - 173 occurrences across 11 files, the LARGEST population and the only one invisible to any grep for `spec-` or `TODO-`. Thirteen of (c)'s sites were themselves invisible to the first numeral pattern because a `-` prefix looks like a card-id tail; nine sit in heading-anchor pairs (three headings and the six links into them), where heading and links must move together or the anchor breaks. Two forms must NOT be shifted: a sentence describing a PAST renumber is true only in the numbering of its own time (de-number it), and a heading that carries its own seat number re-breaks on every future insert (de-number that too). A rename map derived from the files ON DISK is systematically incomplete: a card with no spec written yet still names the file it will get, and that name carries the card number. Three such planned names sat in board-DB card text (`spec-057-pg_full_text_search-0_1_2`, `spec-058-aggregates-0_1_3`, `spec-060-node_sentinel-0_1_4`, all shown here post-shift), correct before the renumber and wrong after it, and no disk-file map could see them - they surfaced only from an independent postcondition that resolved every spec-filename reference in the tree against `docs/SPECS/`. Two blind spots in the sweep itself, both fail-open: the numeral pattern's trailing lookahead `(?![-.\w])` rejects a match followed by `.` as well as by `-`, so every SENTENCE-FINAL card number (`- **Adversarial graph suite** - card 068.`) survived every pass - 15 file sites across five files, found only by re-scanning for the shape the pattern could not see. And the board-DB pass and the file pass ran DIFFERENT rule sets: the DB pass carried card-id and spec-stem rules but no bare-numeral rule at all, and read only `CardItem.text` and `BoardDoc.body`, leaving 10 bare numerals in card text and 5 `CardReference.raw_text` rows (the graph-substrate amendment note, one per consumer card) citing the substrate spec by its pre-renumber stem. Enumerate the text-bearing COLUMNS before sweeping the DB, and run one rule set over both surfaces.
-- **Builder-corpus rule, from the spec-033 residual cycle's own process record:** `BUILD.md`'s dispatch loop keys off a `Status:` line that a worker writes BEFORE it finishes appending its report, so the line is not a completion signal. It cost that cycle a full review round - a pass-2 re-review was dispatched off `Status: built` while the builder was still writing, so the reviewer graded a 424-line artifact that had already reached 897 lines, and raised a confident `Medium` that was false against the finished file. **The durable fix is a dispatch rule, not a worker fault: wait for the agent's own completion signal, never for the file to change.** `docs/builder/ARTIFACT.md` `## Status field ownership` defines who SETS the line but not when it may be READ, and that gap is where the defect lives. Governed by the corpus ratchet. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
-- Sole card on the `0.0.17` line: owns the `0.0.17` cut - version quintet, GLOSSARY status flip, and CHANGELOG entry.
 
 #### Card references
 
@@ -772,7 +710,7 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 - [ ] A fresh `## [0.1.0] - YYYY-MM-DD` entry authored atop `CHANGELOG.md`'s patch entries (the repo keeps no `[Unreleased]` block) with a one-paragraph release summary plus the cumulative Added / Changed / Fixed / Removed sections covering `0.0.6` through the last shipped alpha patch.
 - [ ] `README.md`, `docs/README.md`, `CONTRIBUTING.md`, `docs/GLOSSARY.md`, and `docs/TREE.md` cross-checked against the actual shipped surface; "shipped" / "planned" status markers updated.
 - [ ] Audit pass against the parity findings: every ⚛️ and 🍓 card from the two upstream audits is either `DONE` or explicitly deferred with a recorded reason.
-- [ ] The beta parity claim carries a carve-out sentence for per-field read permissions: `0.1.0` ships no per-field read permission at all, where strawberry-graphql-django ships `IsAuthenticated` / `HasPerm` / `HasRetvalPerm` / `HasSourcePerm` with SQL pre-filtering and schema directives. The raise-only `check_<field>_permission` gates arrive with the `FieldSet` card at `0.1.1` (spec-059), and the full declarative capability is the post-`1.0.0` `declarative_row_and_field_permissions` row in `BACKLOG.md`. The absence is a missing capability, not the refused `fail_silently` extension shape.
+- [ ] The beta parity claim carries a carve-out sentence for per-field read permissions: `0.1.0` ships no per-field read permission at all, where strawberry-graphql-django ships `IsAuthenticated` / `HasPerm` / `HasRetvalPerm` / `HasSourcePerm` with SQL pre-filtering and schema directives. The raise-only `check_<field>_permission` gates arrive with the [`FieldSet`](docs/GLOSSARY.md#fieldset) card at `0.1.1` (spec-059), and the full declarative capability is the post-`1.0.0` `declarative_row_and_field_permissions` row in `BACKLOG.md`. The absence is a missing capability, not the refused `fail_silently` extension shape.
 - [ ] The beta parity claim carries a carve-out sentence for model `@property` auto-binding: strawberry-graphql-django auto-types `@model_property` / `@model_cached_property` and plain `property` / `cached_property` from their return annotation, and `0.1.0` binds none of them. The `FieldSet` card delivers resolver-computed fields with `Meta.depends_on` at `0.1.1` but requires a paired `resolve_<field>`, so a migrant's `@property` fields do not auto-bind at `0.1.0` or `0.1.1` either; the owners are the post-`1.0.0` `computed_fields_binding` and `computed_field_optimizer_hints` rows in `BACKLOG.md`.
 - [ ] The beta parity claim carries a carve-out sentence for the migration path itself: unregistered relation targets fail loudly at type finalization -- deliberate and argued in spec-009 as error-only, where graphene-django silently drops the field and strawberry-graphql-django falls back to a pk-only type -- and it is the first break many migrants hit, but the guides that would explain it are the Migration and adoption guides card at `0.1.8`. The `0.1.0` claim must state plainly that the migration path is documented later rather than reading as though the guides ship with the beta.
 - [ ] Tag the release in git and publish to PyPI.
@@ -798,11 +736,6 @@ Documentation-consistency debt accumulated across the alpha line, split off the 
 
 - Upstream argument rejections are masked by the secure-output defaults. The fix is for the package to raise Strawberry's relay/pagination argument rejections as `GraphQLError` carrying an audited `extensions.code`, which brings them under the untouched branch of the structural masking rule without loosening it. Not licensed by spec-048; needs a card or an explicit deferral reason in this card's parity audit.
 - The debug extension's caps are not configurable, deliberately: `AGENTS.md` says add a settings key only when the feature that needs it lands, and a deployment wanting a different ceiling is a deployment running the extension in production. Revisit only if a real consumer need appears.
-
-#### Note
-
-- release / verification card — gates the alpha → beta cut; not an upstream-parity feature.
-- release / verification card, no new subsystem: full `(Python, Django, Strawberry)` matrix pass, 100% coverage, version bump to `0.1.0`, CHANGELOG promotion, doc status cross-check, parity audit, tag + publish.
 
 #### Card references
 
@@ -835,7 +768,7 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 
 #### Planning note
 
-The first of two graph foundation cards — the framework-internal graph-planning vocabulary (`GraphPathPlan`, `PredicatePlan`, `EdgeScope`, `FieldDependencyPlan`, `RowIdentityProof`) plus the operation-scoped dependency memo, extracted into one shared `django_strawberry_framework/graph/` package boundary **before** `FieldSet` (TODO-BETA-059-0.1.1), search (TODO-BETA-060-0.1.2), and `AggregateSet` (TODO-BETA-062-0.1.3) freeze three private versions of the same machinery. Driven by a production audit of a five-root, graph-shaped schedule calendar; the general case is any multi-root dashboard whose roots traverse overlapping relation paths under per-viewer visibility. The consumer surface stays Meta-declared (`Meta.edge_scopes`; sidecar `Set` classes) — never stacked decorators, never a parallel imperative registration API; the plan objects themselves are internal vocabulary, not shipped API. The second foundation card (structural optimization templates + nested sidecar batching) is deliberately not this card.
+The first of two graph foundation cards — the framework-internal graph-planning vocabulary (`GraphPathPlan`, `PredicatePlan`, `EdgeScope`, `FieldDependencyPlan`, `RowIdentityProof`) plus the operation-scoped dependency memo, extracted into one shared `django_strawberry_framework/graph/` package boundary **before** [`FieldSet`](docs/GLOSSARY.md#fieldset) (TODO-BETA-059-0.1.1), search (TODO-BETA-060-0.1.2), and [`AggregateSet`](docs/GLOSSARY.md#aggregateset) (TODO-BETA-062-0.1.3) freeze three private versions of the same machinery. Driven by a production audit of a five-root, graph-shaped schedule calendar; the general case is any multi-root dashboard whose roots traverse overlapping relation paths under per-viewer visibility. The consumer surface stays Meta-declared (`Meta.edge_scopes`; sidecar `Set` classes) — never stacked decorators, never a parallel imperative registration API; the plan objects themselves are internal vocabulary, not shipped API. The second foundation card (structural optimization templates + nested sidecar batching) is deliberately not this card.
 
 #### Dependencies
 
@@ -846,7 +779,7 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 - Slice 1 — `graph/` package + operation dependency memo: `graph/memo.py` (`operation_scope()` bracket, `get_or_compute(info, key, factory)`, `graph.scope_key` pre-baking viewer identity and `queryset.db`), installed by both `DjangoOptimizerExtension.on_execute` and a new optimizer-independent `extensions/graph.py::GraphSubstrateExtension`; execution-scoped, immutable-values-only, async single-flight, exception-safe.
 - Slice 2 — `graph/paths.py`: frozen `GraphPathPlan` over the shipped relation classifier, the longest-resolvable-prefix path/lookup splitter, `GraphPathPlanSet` grouping keyed on the complete relation chain plus a terminal-is-relation flag, exact owning-`DjangoTypeDefinition` identity with injected type references, and per-hop target-visibility metadata; `graph/proofs.py`: the `RowIdentityProof` lattice.
 - Slice 3 — `PredicatePlan` compiler: first relocate the row-preserving primitives to `utils/predicates.py` (a pure ORM leaf; `optimizer/predicates.py` stays as a re-export shim), then `any_of` / `all_of` / `not_` / `direct(Q)` (to-one paths only) / `related(path, Q)` / `same_related_row(path, conditions)` compiling as a strictly sequential fold through `correlated_inner_root` + `attach_exists` with one combined outer `.filter()`, no framework-introduced `DISTINCT`, and a `RowIdentityProof` on every compiled shape.
-- Slice 4 — `graph/edges.py` `EdgeScope` (request-bound factories returning predicates, compiled narrow-only onto the child queryset at `_build_child_queryset` after target visibility) + `graph/dependencies.py` `FieldDependencyPlan(columns=...)` + `Meta.edge_scopes` as a net-new `ALLOWED_META_KEYS` entry + live fakeshop activation (`Loan.confidential`, the `LoanType` visibility hook with `Meta.primary`, the `BookType` hook rewrite, `edge_scopes` on `BookType.loans`, live HTTP tests with one-vs-one-hundred-parents query-count equality).
+- Slice 4 — `graph/edges.py` `EdgeScope` (request-bound factories returning predicates, compiled narrow-only onto the child queryset at `_build_child_queryset` after target visibility) + `graph/dependencies.py` `FieldDependencyPlan(columns=...)` + `Meta.edge_scopes` as a net-new `ALLOWED_META_KEYS` entry + live fakeshop activation (`Loan.confidential`, the `LoanType` visibility hook with [`Meta.primary`](docs/GLOSSARY.md#metaprimary), the `BookType` hook rewrite, `edge_scopes` on `BookType.loans`, live HTTP tests with one-vs-one-hundred-parents query-count equality).
 - Slice 5 — docs + card wrap: TREE / GLOSSARY / tracked-path constants regeneration, glossary entries for the five plan objects and the memo, record the amendment obligations on the five consumer cards, flip this card.
 - Layering: `optimizer/`, `filters/`, and `types/` import `graph/`; `graph/` imports neither `optimizer/` nor the type registry — type references are injected by callers as opaque `DjangoTypeDefinition` handles.
 
@@ -878,11 +811,7 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 
 #### Open question
 
-- How does the cascade cross a to-many edge - hide the parent, or narrow the list? `spec-034` shipped `apply_cascade_permissions` over forward single-column FK / O2O edges only and left M2M and reverse relations out of scope, obligating a follow-up that was never carded. **This card is where the question is decided** rather than a card of its own: Slice 4's `graph/edges.py` `EdgeScope` already compiles child-visibility predicates narrow-only at `_build_child_queryset` after target visibility, and this card's own premise - that a to-many hop inside an outer `Q` multiplies rows - is the same hazard in a different dress. The two answers are not interchangeable and one must be chosen explicitly: **narrow the list** (the parent survives, its related list shows only visible targets) matches `EdgeScope`'s narrow-only compilation but leaks the parent's existence; **hide the parent** (a parent with any invisible target drops out) matches `spec-034` Decision 6's row-exclusion posture, which was chosen precisely to avoid an existence leak, but is not expressible as a narrow-only child predicate. Surfaced 2026-08-28 by the spec-034 residual cycle discharging that spec's Slice 5 obligation; the full deliberation is in `docs/SPECS/appx/spec-034-permissions-0_0_10-rationale.md` under `## Risks and open questions`.
-
-#### Note
-
-- `docs/SPECS/spec-058-graph_substrate-0_1_1.md` is the card's spec of record (written; five slices planned).
+- How does the cascade cross a to-many edge - hide the parent, or narrow the list? `spec-034` shipped [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) over forward single-column FK / O2O edges only and left M2M and reverse relations out of scope, obligating a follow-up that was never carded. **This card is where the question is decided** rather than a card of its own: Slice 4's `graph/edges.py` `EdgeScope` already compiles child-visibility predicates narrow-only at `_build_child_queryset` after target visibility, and this card's own premise - that a to-many hop inside an outer `Q` multiplies rows - is the same hazard in a different dress. The two answers are not interchangeable and one must be chosen explicitly: **narrow the list** (the parent survives, its related list shows only visible targets) matches `EdgeScope`'s narrow-only compilation but leaks the parent's existence; **hide the parent** (a parent with any invisible target drops out) matches `spec-034` Decision 6's row-exclusion posture, which was chosen precisely to avoid an existence leak, but is not expressible as a narrow-only child predicate. Surfaced 2026-08-28 by the spec-034 residual cycle discharging that spec's Slice 5 obligation; the full deliberation is in `docs/SPECS/appx/spec-034-permissions-0_0_10-rationale.md` under `## Risks and open questions`.
 
 #### Card references
 
@@ -918,12 +847,12 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Scope
 
-- Cookbook anchor: the `fields.py` example in `GOAL.md` and the `recipes/fields.py` in the django-graphene-filters cookbook are the canonical shapes. Tiered date visibility (staff → full datetime, perm-holder → day precision, authenticated → month precision, anonymous → year precision) plus redaction-vs-denial (`resolve_is_private` returns `False` for non-staff = redaction; `check_updated_date_permission` raises for anonymous = denial) plus computed-field annotations (`display_name: str | None = strawberry.field(...)` with `resolve_display_name`) are the three patterns the FieldSet contract must support cleanly.
+- Cookbook anchor: the `fields.py` example in `GOAL.md` and the `recipes/fields.py` in the django-graphene-filters cookbook are the canonical shapes. Tiered date visibility (staff → full datetime, perm-holder → day precision, authenticated → month precision, anonymous → year precision) plus redaction-vs-denial (`resolve_is_private` returns `False` for non-staff = redaction; `check_updated_date_permission` raises for anonymous = denial) plus computed-field annotations (`display_name: str | None = strawberry.field(...)` with `resolve_display_name`) are the three patterns the [FieldSet](docs/GLOSSARY.md#fieldset) contract must support cleanly.
 - Class shape: `class FooFieldSet(FieldSet)` with `class Meta: model = Foo`. The body holds three flavors of declarations: `resolve_<field>(self, root, info)` (custom resolver, overrides the auto-generated one for `<field>`), `check_<field>_permission(self, info)` (denial gate; raises `GraphQLError` or returns silently — runs before `resolve_<field>` for this request), and class-level annotated attributes (computed fields the model does not have; paired with a `resolve_<field>` method).
-- Wiring: `DjangoType.Meta.fields_class = FooFieldSet` binds the fieldset at finalizer phase 2.5 (the same seam `filterset_class` / `orderset_class` use). At type-creation time the framework wires each `resolve_<field>` / `check_<field>_permission` into the owning `DjangoType`'s resolver chain so consumers do not have to subclass the type or hand-attach decorators.
-- Composes with `DjangoType.Meta.fields`: declaring `Meta.fields = ("id", "name", ...)` on the owning type stays the source of truth for which model fields surface; `FieldSet` only customizes resolution / permission for fields already in `Meta.fields` AND declares any computed fields via class-level annotations.
-- Optimizer cooperation: a `resolve_<field>` that touches ORM data (e.g. tiered date redaction reads `root.created_date`) must NOT defeat the optimizer's `only_fields` projection. The fieldset declares which model columns its resolvers depend on via `Meta.depends_on = {"resolve_created_date": ("created_date",), ...}` (or auto-introspection if reliably available); the optimizer adds those columns to the `only()` projection so the resolver does not trigger a deferred-field fetch.
-- Composability with `apply_cascade_permissions` (`DONE-034-0.0.10`): a `check_<field>_permission` gate that raises does NOT short-circuit cascade visibility; the cascade narrows the queryset first, then field-level gates run on whatever survives. A field denial does not leak existence — null fields and denials look identical to the client.
+- Wiring: `DjangoType.Meta.fields_class = FooFieldSet` binds the fieldset at finalizer phase 2.5 (the same seam `filterset_class` / `orderset_class` use). At type-creation time the framework wires each `resolve_<field>` / `check_<field>_permission` into the owning [`DjangoType`](docs/GLOSSARY.md#djangotype)'s resolver chain so consumers do not have to subclass the type or hand-attach decorators.
+- Composes with `DjangoType.Meta.fields`: declaring `Meta.fields = ("id", "name", ...)` on the owning type stays the source of truth for which model fields surface; `FieldSet` only customizes resolution / permission for fields already in [`Meta.fields`](docs/GLOSSARY.md#metafields) AND declares any computed fields via class-level annotations.
+- Optimizer cooperation: a `resolve_<field>` that touches ORM data (e.g. tiered date redaction reads `root.created_date`) must NOT defeat the optimizer's `only_fields` projection. The fieldset declares which model columns its resolvers depend on via `Meta.depends_on = {"resolve_created_date": ("created_date",), ...}` (or auto-introspection if reliably available); the optimizer adds those columns to the [`only()` projection](docs/GLOSSARY.md#only-projection) so the resolver does not trigger a deferred-field fetch.
+- Composability with [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) (`DONE-034-0.0.10`): a `check_<field>_permission` gate that raises does NOT short-circuit cascade visibility; the cascade narrows the queryset first, then field-level gates run on whatever survives. A field denial does not leak existence — null fields and denials look identical to the client.
 - **Consume-the-substrate amendment** (TODO-BETA-058-0.1.1): normalize `Meta.depends_on` into `FieldDependencyPlan` rather than a private map shape — the concrete column tuple stays as shorthand, and the expanded dependency kinds (relation traversals, annotations, contextual prefetches, batch assemblers, selection-sensitive activation, strictness metadata) ship here as the vocabulary's first consumer. The two-halves rule holds: relation traversals extend `select_related` / `prefetch_related` **and** column reads extend the `only()` projection. Strictness observes undeclared computed relation access where the selection makes it detectable. Without this, `FieldSet` optimizes a simple computed display name but cannot safely optimize a computed field over related rows.
 
 #### Definition of done
@@ -932,9 +861,9 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 - [ ] Implement `django_strawberry_framework/fieldset/` (package, mirroring the `filters/` shape) with `base.py` (FieldSet class + metaclass), `factories.py` (resolver-binding factory), and a per-fieldset finalizer hook in `types/finalizer.py` phase 2.5.
 - [ ] `FieldSet` accepts `class Meta: model = Foo` only; field declarations are method-based (`resolve_<field>`, `check_<field>_permission`) plus class-level computed-field annotations. No `Meta.fields` on the FieldSet itself — the owning `DjangoType.Meta.fields` is the single source of truth for the model-field surface.
 - [ ] Optimizer `Meta.depends_on` contract: when a `resolve_<field>` reads model columns the owning type's `Meta.fields` does not surface, the FieldSet declares them via `Meta.depends_on`; the optimizer adds those columns to the `only_fields` projection.
-- [ ] Promote `Meta.fields_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the resolver-binding pipeline applies end-to-end; this card owns the promotion (spec-059 Decision 8), and the table-driven binder generalization is owned by the aggregation card (`TODO-BETA-062-0.1.3`).
+- [ ] Promote [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the resolver-binding pipeline applies end-to-end; this card owns the promotion (spec-059 Decision 8), and the table-driven binder generalization is owned by the aggregation card (`TODO-BETA-062-0.1.3`).
 - [ ] Tests under `tests/fieldset/` mirror the source one-to-one. Live HTTP coverage under `examples/fakeshop/test_query/` exercises tiered visibility (staff vs perm-holder vs authenticated vs anonymous), redaction (non-staff sees `is_private = False`), denial (anonymous raises on `updated_date`), and a computed field (`display_name` resolves only for authenticated users).
-- [ ] Composability tests: `FieldSet` + `FilterSet` (a field with a `check_<field>_permission` gate is still filterable by an authorized user); `FieldSet` + `OrderSet` (same for ordering); `FieldSet` + `apply_cascade_permissions` (cascade narrows first, then field gates run — no existence leak).
+- [ ] Composability tests: `FieldSet` + [`FilterSet`](docs/GLOSSARY.md#filterset) (a field with a `check_<field>_permission` gate is still filterable by an authorized user); `FieldSet` + [`OrderSet`](docs/GLOSSARY.md#orderset) (same for ordering); `FieldSet` + `apply_cascade_permissions` (cascade narrows first, then field gates run — no existence leak).
 
 #### Foundation-slice seam
 
@@ -958,15 +887,11 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Dependencies
 
-- `DjangoConnectionField` (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface.
+- [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface.
 
 #### Open question
 
 - Promotion-owner conflict RESOLVED at the 2026-08-29 board review, per the pinned preferred answer in `docs/SPECS/spec-059-fieldset-0_1_1.md` `## Risks and open questions` (Decision 8): this card owns the `Meta.fields_class` promotion, and the later table-driven dispatch generalization is owned by the aggregation card (the Layer-3 Meta key promotion card that briefly owned it was retired into the aggregation card at the same review). The `#### Definition of done` was reworded to match, and the spec text was reworded to name the aggregation card in the 2026-08-29 renumber sweep, so no residue remains. Originally measured by the spec-009 residual cycle (`docs/builder/bld-009-final.md` deferred-work catalog item 20).
-
-#### Note
-
-- the smallest Layer-3 subsystem: `fieldset.py` + `docs/SPECS/spec-059-fieldset-0_1_1.md` + tests; defines field-selection semantics the connection field consumes. Meta-driven.
 
 #### Card references
 
@@ -993,9 +918,9 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Planning note
 
-Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked. To-many relation paths compile row-preserving: a correlated EXISTS branch through the shared predicate compiler (optimizer/predicates.py, pre-card groundwork), never a search-driven .distinct() — the root query keeps no membership join and totalCount stays a flat COUNT(*). Second adversarial review (2026-07-22) hardened the contracts: one strict finalize-time plan builder (the utils/relations.py classifier + lookup validator is the only path acceptance oracle; no get_model_field second oracle); the runtime entry point is a queryset compiler (apply_search_sync/_async), not a Q builder; relational search is visibility-aware (every to-many hop composes the hop target type's visibility queryset into the EXISTS body, so a hidden related row never qualifies a visible root — the step is sync/async twinned, not colorless); search honors the declaring type's FilterSet check_<field>_permission gates (a viewer may search a path exactly when they could filter by it — the fakeshop Category name gate is the live proof); a documented SEARCH_MAX_LENGTH=256 input cap with a typed error; duplicate/padded declarations rejected; Slice 4 adds the library to-many live surface (GenreType search_fields=("name", "books__title") over allLibraryGenresConnection) because all four staged products declarations are forward-only; Slice 5 moves the GLOSSARY entry to "implemented on main; release pending the joint 0.1.2 cut" instead of leaving it falsely planned.
+Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked. To-many relation paths compile row-preserving: a correlated EXISTS branch through the shared predicate compiler (optimizer/predicates.py, pre-card groundwork), never a search-driven .distinct() — the root query keeps no membership join and totalCount stays a flat COUNT(*). Second adversarial review (2026-07-22) hardened the contracts: one strict finalize-time plan builder (the utils/relations.py classifier + lookup validator is the only path acceptance oracle; no get_model_field second oracle); the runtime entry point is a queryset compiler (apply_search_sync/_async), not a Q builder; relational search is visibility-aware (every to-many hop composes the hop target type's visibility queryset into the EXISTS body, so a hidden related row never qualifies a visible root — the step is sync/async twinned, not colorless); search honors the declaring type's [FilterSet](docs/GLOSSARY.md#filterset) check_<field>_permission gates (a viewer may search a path exactly when they could filter by it — the fakeshop Category name gate is the live proof); a documented SEARCH_MAX_LENGTH=256 input cap with a typed error; duplicate/padded declarations rejected; Slice 4 adds the library to-many live surface (GenreType search_fields=("name", "books__title") over allLibraryGenresConnection) because all four staged products declarations are forward-only; Slice 5 moves the GLOSSARY entry to "implemented on main; release pending the joint 0.1.2 cut" instead of leaving it falsely planned.
 
-Second Part 1 adversarial review (2026-07-22) formalized the groundwork as this spec's pre-card Slice 0 (docs/row-preserving-predicates-part1-plan.md Rev 4) with card-054-owned completion bookkeeping (GLOSSARY/TREE/KANBAN fold-in + OptimizerError raise-site docs), adopted the compositional multiset contract (framework predicates are pure selections: never multiply rows, never collapse consumer duplicates; global distinct removed), refined Decision 12 (direct relational branches carry per-branch hop visibility themselves, AND'd only into their own OR arm - never delegated to cascade) and Decision 13 (active search fires every APPLICABLE FilterSet gate; Meta.search_fields is the grant for ungated paths; alias/prefix/HIDE_FLAT_FILTERS gate semantics pinned).
+Second Part 1 adversarial review (2026-07-22) formalized the groundwork as this spec's pre-card Slice 0 (docs/row-preserving-predicates-part1-plan.md Rev 4) with card-054-owned completion bookkeeping (GLOSSARY/TREE/KANBAN fold-in + OptimizerError raise-site docs), adopted the compositional multiset contract (framework predicates are pure selections: never multiply rows, never collapse consumer duplicates; global distinct removed), refined Decision 12 (direct relational branches carry per-branch hop visibility themselves, AND'd only into their own OR arm - never delegated to cascade) and Decision 13 (active search fires every APPLICABLE FilterSet gate; [Meta.search_fields](docs/GLOSSARY.md#metasearch_fields) is the grant for ungated paths; alias/prefix/HIDE_FLAT_FILTERS gate semantics pinned).
 
 Cross-spec Medtrics-reproduction review (2026-07-22): part1-plan is Rev 5 and this spec gained Decision 14. Enacted: (a) the multiset contract is anchored to GOAL.md (predicates are selections over consumer-shaped querysets, never a normalization boundary; the DRF endpoint response is never the multiset oracle); (b) reverse-FK-after-to-one (forward FK -> reverse FK -> forward FK) is a named classifier/adapter category, separate from M2M; (c) one shared Medtrics reproduction fixture (Loan.book -> Book.loans -> Loan.patron -> Patron.email, four named loans, ordered-sequence oracle incl. the duplicated pre-rewrite sequence) consumed at three levels: Part 1 adapter test, this card's live LoanType search integration test (acceptance-only DjangoConnectionField(LoanType), search_fields = (note, book__loans__patron__email), exact ordered IDs + totalCount + page boundaries), and package SQL-shape tests (correlated EXISTS, not JOIN+DISTINCT or a scalar aggregate); (d) Decision 14: search scope is type-definition-wide and immutable (no request/resolver/connection mutation of the tuple; different surfaces use distinct DjangoTypes; no field-level override without a demonstrated use case); (e) row-boundary phrase oracle (red/dwarf vs red dwarf) making StringAgg observably wrong, live + SQL-shape; (f) borrowing/migration docs state both intentional DRF SearchFilter divergences together (phrase semantics, static scope). The Medtrics StringAgg patch is explicitly NOT prior art to adopt.
 
@@ -1007,7 +932,7 @@ Implementation-gate review enacted (2026-07-22): five blockers folded into the s
 (3) P1-3 async permission gates via run_in_one_sync_boundary (Decision 6), live async ORM-reading-gate regression;
 (4) P1-4 named path-driven permission-plan helper in utils/permissions.py built post-_bind_filtersets, permission-plan test matrix, assign-after-both retry safety;
 (5) P1-5 active_search canonical home moved to utils/connections.py with filters/search.py re-export, lazy-subpackage import pin extended.
-Plus Decision 14 multi-type migration mechanics (Meta.primary, separate FilterSets, GlobalID strategy) and a DoD gate bullet. Part 1 plan unchanged (review: ready in principle).
+Plus Decision 14 multi-type migration mechanics ([Meta.primary](docs/GLOSSARY.md#metaprimary), separate FilterSets, GlobalID strategy) and a DoD gate bullet. Part 1 plan unchanged (review: ready in principle).
 
 Follow-up multiplicity review enacted (2026-07-22): five findings folded in. Part 1 plan bumped to Rev 7 — prior-art statement corrected (admin lookup_spawns_duplicates DOES detect reverse FK via PathInfo.m2m; old "misses reverse FK" reading was false), PathInfo named Slice A SQL-multiplicity authority beside relation_kind() semantic topology (many_side = any(path_info.m2m), target from path_infos[-1].to_opts; frozen plan keeps package-owned values only), admin helper banned from production (test differential oracle only, valid paths, never sole oracle), reverse-FK category rationale recast detection->compilation, exact acceptance floor Python 3.10 + Django==5.2.0 in sequencing steps 4/9. Spec-058: Decision 7 gains the finding-4 rationale (fixture exists because detection is insufficient; runtime consumes frozen plan, never calls admin helper, never a search_requires_distinct boolean); Test plan + DoD gain the exact-floor live reproduction requirement. Architecture unchanged per review verdict.
 
@@ -1065,10 +990,6 @@ Coverage-gap audit (2026-07-31): a cross-check of the spec against the to-many s
 - `DONE-027-0.0.8` (Filtering subsystem) — the argument factory is shared.
 - `DONE-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields.
 
-#### Note
-
-- a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion.
-
 #### Card references
 
 - Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-027-0.0.8` - Filtering subsystem
@@ -1095,7 +1016,7 @@ Coverage-gap audit (2026-07-31): a cross-check of the spec against the to-many s
 
 #### Planning note
 
-Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-060-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery.
+Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-060-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery.
 
 Coverage-gap audit (2026-07-31): this card also owns the JOINT 0.1.2 release cut for card 054's `Meta.search_fields` surface -- the version quintet, the CHANGELOG entry (explicit maintainer grant required), README / docs README shipped-surface wording, GOAL/TODAY release status, and the glossary promotion out of card 054's intermediate status. That ownership previously lived only in card 054's spec text, so it was invisible from this card; it is now a scope + definition-of-done bullet. Same audit: this card's spec bullet named the pre-convention `docs/spec-pg_full_text_search.md`; it now names the AGENTS.md spec-<NNN>-<topic>-<version> path.
 
@@ -1111,7 +1032,7 @@ Coverage-gap audit (2026-07-31): this card also owns the JOINT 0.1.2 release cut
 - `SearchQueryFilter`: `SearchVector` + `SearchQuery` full-text match with configurable search config, vector weights, and `search_type` (plain / phrase / raw / websearch).
 - `SearchRankFilter`: `SearchRank` weighting with `weights` / `cover_density` / `normalization` options.
 - `TrigramFilter`: `pg_trgm` `TrigramSimilarity` / `TrigramWordSimilarity` with a `kind` selector and a similarity threshold.
-- Postgres-only: degrade with a clear `ConfigurationError` (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
+- Postgres-only: degrade with a clear [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
 - Prefix-shortcut operators are owned by this card. Card 054 deliberately ships only unprefixed OR-of-`icontains` search and rejects declarations beginning with `^`, `=`, `@`, or `$`. This card decides which shortcuts enter the ported surface and must pin a clear fail-closed non-Postgres contract for `@`; none of the four is considered shipped by card 054.
 - Joint `0.1.2` release cut is owned by this card. Card 054 ships `Meta.search_fields` to `main` but deliberately touches no release-state artifact, so this card carries them for BOTH cards: the `0.1.2` version quintet, the CHANGELOG entry (which needs the maintainer's explicit grant per AGENTS.md), README / docs README shipped-surface wording, GOAL/TODAY release status, and the promotion of the `Meta.search_fields` glossary entry from "implemented on main; release pending the joint 0.1.2 cut" to shipped.
 
@@ -1146,10 +1067,6 @@ Coverage-gap audit (2026-07-31): this card also owns the JOINT 0.1.2 release cut
 - `TODO-BETA-060-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface.
 - `DONE-027-0.0.8` (Filtering subsystem) -- the filter-argument-factory machinery is shared.
 
-#### Note
-
-- Postgres-only filter family (`SearchQuery` / `SearchRank` / `Trigram`) layered on `django.contrib.postgres.search`; cookbook port of `django_graphene_filters` `filters.py` + `input_types.py`. Spec + tests + Postgres-gated HTTP coverage.
-
 #### Card references
 
 - Dependency: `TODO-BETA-060-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface. -> `TODO-BETA-060-0.1.2` - `Meta.search_fields` support
@@ -1171,7 +1088,7 @@ Coverage-gap audit (2026-07-31): this card also owns the JOINT 0.1.2 release cut
 
 #### Planning note
 
-Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarative per-type aggregation via `Meta.aggregate_class`. Mirrors the shipped Filtering and Ordering architecture (six-layer lazy-resolution pipeline; finalizer phase-2.5 binding; per-module input-class namespace) but emits `strawberry.type` output types (not input) and adds a sync/async `compute` / `acompute` split. The cookbook shape: `AggregateSet` subclasses declare `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], ...}`, per-stat `check_<field>_<statname>_permission` gates, custom-stat `compute_<field>_<statname>` methods registered via `Meta.custom_stats = {...}`, `RelatedAggregate` for cross-relation traversal, and a `get_child_queryset` cascade hook for related aggregates.
+Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarative per-type aggregation via `Meta.aggregate_class`. Mirrors the shipped Filtering and [Ordering](docs/GLOSSARY.md#ordering) architecture (six-layer lazy-resolution pipeline; finalizer phase-2.5 binding; per-module input-class namespace) but emits `strawberry.type` output types (not input) and adds a sync/async `compute` / `acompute` split. The cookbook shape: [`AggregateSet`](docs/GLOSSARY.md#aggregateset) subclasses declare `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], ...}`, per-stat `check_<field>_<statname>_permission` gates, custom-stat `compute_<field>_<statname>` methods registered via `Meta.custom_stats = {...}`, [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) for cross-relation traversal, and a [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) cascade hook for related aggregates.
 
 #### Dependencies
 
@@ -1182,13 +1099,13 @@ Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarati
 - `Sum`, `Count`, `Avg`, `Min`, `Max`, `GroupBy`
 - `AggregateSet`
 - GraphQL argument/result factories
-- `Meta.aggregate_class` promotion
-- Cookbook anchor: django-graphene-filters' `recipes/aggregates.py` declares `class ObjectTypeAggregate(AggregateSet)` with `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], "description": ["count", "min", "max"]}` and `Meta.custom_stats = {"centroid": graphene.String}` paired with a `compute_value_centroid(self, queryset)` method (`recipes/aggregates.py:73-90`). The Strawberry port carries this shape verbatim with `OrderSet` → `AggregateSet` substitution and the `compute` / `acompute` sync/async split.
-- Built-in stat surface: `count`, `min`, `max`, `mode`, `uniques`, plus the Django aggregate primitives `Sum`, `Count`, `Avg`, `Min`, `Max`, `GroupBy`. The cookbook ships every one as a per-field option on `Meta.fields`; this card pins the same surface.
-- `RelatedAggregate("TargetAggregate", field_name="...")` for relation-traversed aggregates (e.g. `celestial_bodies = RelatedAggregate("CelestialBodyAggregate", field_name="galaxy")` on a `GalaxyAggregate`). Accepts a class reference, an absolute import path, or an unqualified name for circular references — the same lazy-resolution contract `RelatedFilter` and `RelatedOrder` ship.
+- [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) promotion
+- Cookbook anchor: django-graphene-filters' `recipes/aggregates.py` declares `class ObjectTypeAggregate(AggregateSet)` with `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], "description": ["count", "min", "max"]}` and `Meta.custom_stats = {"centroid": graphene.String}` paired with a `compute_value_centroid(self, queryset)` method (`recipes/aggregates.py:73-90`). The Strawberry port carries this shape verbatim with [`OrderSet`](docs/GLOSSARY.md#orderset) → `AggregateSet` substitution and the `compute` / `acompute` sync/async split.
+- Built-in stat surface: `count`, `min`, `max`, `mode`, `uniques`, plus the Django aggregate primitives `Sum`, `Count`, `Avg`, `Min`, `Max`, `GroupBy`. The cookbook ships every one as a per-field option on [`Meta.fields`](docs/GLOSSARY.md#metafields); this card pins the same surface.
+- `RelatedAggregate("TargetAggregate", field_name="...")` for relation-traversed aggregates (e.g. `celestial_bodies = RelatedAggregate("CelestialBodyAggregate", field_name="galaxy")` on a `GalaxyAggregate`). Accepts a class reference, an absolute import path, or an unqualified name for circular references — the same lazy-resolution contract [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) and [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) ship.
 - `Meta.custom_stats = {"<statname>": <return_type>}` declares consumer-defined stats; the framework expects a paired `compute_<field>_<statname>(self, queryset)` method that returns a value matching the declared type. Cookbook example: `Meta.custom_stats = {"centroid": graphene.String}` paired with `compute_value_centroid(self, queryset)` returning the computed centroid string (`recipes/aggregates.py:73-90`).
-- Per-stat permission: `check_<field>_<statname>_permission(self, request)` gates a specific (field, stat) pair (cookbook example: `check_name_uniques_permission` raises for non-staff so non-staff cannot see the unique-name distribution while still seeing `count` / `min` / `max`). Mirrors the per-field permission gate in `FilterSet` / `OrderSet` but keyed on the (field, stat) tuple, not just the field.
-- `get_child_queryset(self, rel_name, rel_agg)` cascade hook on `AggregateSet` lets a parent aggregate enforce a cascade rule on its children (cookbook example: a shared `_private_aware_child_qs` that filters out `is_private=True` rows when traversing through a `RelatedAggregate`). Composes with `apply_cascade_permissions` (`DONE-034-0.0.10`).
+- Per-stat permission: `check_<field>_<statname>_permission(self, request)` gates a specific (field, stat) pair (cookbook example: `check_name_uniques_permission` raises for non-staff so non-staff cannot see the unique-name distribution while still seeing `count` / `min` / `max`). Mirrors the per-field permission gate in [`FilterSet`](docs/GLOSSARY.md#filterset) / `OrderSet` but keyed on the (field, stat) tuple, not just the field.
+- `get_child_queryset(self, rel_name, rel_agg)` cascade hook on `AggregateSet` lets a parent aggregate enforce a cascade rule on its children (cookbook example: a shared `_private_aware_child_qs` that filters out `is_private=True` rows when traversing through a `RelatedAggregate`). Composes with [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) (`DONE-034-0.0.10`).
 - Sync / async `compute(self, info, queryset) -> <Output>` and `async def acompute(self, info, queryset) -> <Output>` — same dual-shape contract `FilterSet.apply_sync` / `apply_async` ships. Selection-set-aware: only the aggregate output fields the GraphQL query actually selects are computed; the optimizer plan-cache infrastructure drives the selected-fields detection so a 20-stat aggregate output type does not eagerly compute all 20 when the consumer asked for 3.
 - Output-type emission: each `AggregateSet` emits a `@strawberry.type`-decorated output class named `<AggregateSet>OutputType` (e.g. `ObjectTypeAggregateOutputType`) materialized in a per-module `aggregates.outputs` namespace — disjoint from `filters.inputs` / `orders.inputs`, mirroring the per-module namespace pattern.
 - Config knobs (parity watch-item, carried over from the django-graphene-filters parity review): DGF's aggregate subsystem ships tunable safety limits and an async opt-in as settings — `AGGREGATE_MAX_VALUES`, `AGGREGATE_MAX_UNIQUES`, and `ASYNC_AGGREGATES` (`django_graphene_filters/conf.py`). This card captures the `compute` / `acompute` split and the stat surface but not these config knobs; the spec must confirm they are in scope when `spec-aggregates` is authored, or consciously drop them.
@@ -1218,14 +1135,8 @@ Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarati
 - Concurrency / scatter-gather seam (design guidance carried over from the django-graphene-filters parity review; net-new value, **not** a DGF-parity item). The package has zero query concurrency today, partly deliberate — `relay.py::DjangoNodesField` chooses sequential awaits over `asyncio.gather`, citing Django async-ORM connection safety. Parallelism only pays for genuinely independent queries on separate connections, never naive fan-out over one shared connection/cursor. Hard constraints any gather seam must respect: (1) each thread worker opens a thread-local connection it must close (`close_old_connections`), so the sync pool is small and bounded (≈2–3), NOT `max_workers=NUM_CORES` — except the independent-DB shard case, where core-scaling is correct; (2) the `chunk_size = ceil(count / NUM_CORES)` PK-range partition is a win ONLY when the reduction runs in Python (mode / uniques / percentile / `Counter`), never for a SQL-native aggregate (`Count`/`Sum`/`Min`/`Max`/`Avg`), which adds round-trips and loses index efficiency; (3) the example project runs on SQLite (serializes), so any speedup must be benchmarked on Postgres/MySQL — the 100%-coverage suite cannot prove it under the default runner.
 - Where it pays to invest — the `AggregateSet` gather seam (this card). Independent stats that cannot fold into one `.aggregate()` (mode / uniques / percentile / the `Counter`-based custom `compute_*` stats above) are each their own scan, and the PK-range partition applies to their Python reduction; DB-native stats MUST stay single-query (let SQL do it). `acompute` already implies the async seam — build the gather seam (a sync bounded-pool plus the async `acompute` path) into this card from the start rather than retrofitting it. Design it once here: it is reused by the BACKLOG `matrix_dimensions_and_measures` (item 32 — per-measure fan-out + chunked-partition reduction over the heaviest 10M-row / percentile / pivot surface; design its executor with a parallel reduce from the start) and `sharding_aware_optimizer` (item 41 — multi-shard compose over independent DBs / connections: zero GIL contention, no shared-connection hazard, per-shard count/sum/min/max compose; the one place `max_workers=NUM_CORES` is literally correct) cards.
 - Async-path constraint. Every async path today wraps its sync body in `sync_to_async(..., thread_sensitive=True)` — `FilterSet.apply_async`, `OrderSet.apply_async`, `aapply_cascade_permissions`, `resolve_mutation_async` — which serializes them onto one asgiref worker. That is a deliberate connection / consumer-hook safety choice, not a bug, but it is the constraint the async `acompute` gather must design around: the gather must run genuinely independent units on their own connections and never re-enter the shared sensitive thread.
-- Adjacent optimizer seams investigated (non-aggregation, recorded here so they are not lost — both marginal / deferred): (a) root-connection `totalCount ∥ page slice` — when `Meta.connection` opts into `totalCount`, the count runs serially after the slice via `count()` / `acount()` on the same filtered queryset (`connection.py::_attach_count_sync` / `_attach_count_async`); the two are independent and package-owned, but it is the smallest standalone win and marginal unless the count rivals the page cost, on a parallelizing backend only. (b) parallel independent top-level `prefetch_related` — plain to-many list / M2M siblings still issue N serial `WHERE parent_id IN (...)` scans inside Django's `prefetch_related_objects`; `OptimizationPlan.apply` returns a lazy queryset and Strawberry/Django owns materialization, so parallelizing means the package takes over materialization in the resolvers it controls (per the root-cause rule — NOT monkeypatching `prefetch_related_objects`). High risk; defer behind a Postgres benchmark.
+- Adjacent optimizer seams investigated (non-aggregation, recorded here so they are not lost — both marginal / deferred): (a) root-connection `totalCount ∥ page slice` — when [`Meta.connection`](docs/GLOSSARY.md#metaconnection) opts into `totalCount`, the count runs serially after the slice via `count()` / `acount()` on the same filtered queryset (`connection.py::_attach_count_sync` / `_attach_count_async`); the two are independent and package-owned, but it is the smallest standalone win and marginal unless the count rivals the page cost, on a parallelizing backend only. (b) parallel independent top-level `prefetch_related` — plain to-many list / M2M siblings still issue N serial `WHERE parent_id IN (...)` scans inside Django's `prefetch_related_objects`; `OptimizationPlan.apply` returns a lazy queryset and Strawberry/Django owns materialization, so parallelizing means the package takes over materialization in the resolvers it controls (per the root-cause rule — NOT monkeypatching `prefetch_related_objects`). High risk; defer behind a Postgres benchmark.
 - Ruled out, on the record: the single root list query (`list_field.py`, nothing to split); `resolve_nodes` (`relay.py`, already one `pk__in` per type — optimal within one DB, don't parallelize the single-DB case); `FilterSet` / `OrderSet` `apply_*` (queryset builders, no fan-out); the `0.0.11` mutations (single-row, single-transaction); `finalize_django_types()` (CPU/GIL-bound and contractually single-threaded); and DB-native aggregates. Do not retrofit concurrency onto shipped code without a Postgres benchmark.
-
-#### Note
-
-- full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/SPECS/spec-058-aggregates-0_1_3.md` + tests.
-- Absorbs the retired Layer-3 Meta key promotion card (2026-08-29 board review): `Meta.aggregate_class` is the last `DEFERRED_META_KEYS` member left to promote and its promotion is already this card's DoD - `filterset_class` / `orderset_class` are already in `ALLOWED_META_KEYS`, `fields_class` promotion is owned by the `FieldSet` card, and `search_fields` promotion by the `Meta.search_fields` card. The board-wide rule the retired card carried holds unchanged: do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
-- No version quintet or CHANGELOG entry - the `0.1.3` release state is owned by the mutation-idempotency card's joint cut, which lands last on the line.
 
 #### Card references
 
@@ -1272,7 +1183,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 #### Foundation-slice seam
 
-- `DONE-036-0.0.11` owns the base `DjangoMutation` class, generated input types, and shared `errors: list[FieldError]` envelope; this card layers safety semantics onto that lifecycle instead of inventing a separate mutation primitive.
+- `DONE-036-0.0.11` owns the base [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) class, generated input types, and shared `errors: list[FieldError]` envelope; this card layers safety semantics onto that lifecycle instead of inventing a separate mutation primitive.
 - DRF serializer and Form-based mutation cards inherit the same atomic/idempotency implementation through the shared mutation base once their adapters land.
 
 #### Files likely touched
@@ -1294,11 +1205,6 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 - Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11.
 
-#### Note
-
-- Revised score after the durable concurrency design: Realistic 9/10, Impact 8/10, Difficulty 6/10; the database record, migration, state machine, and crash/concurrency matrix make this a medium slice.
-- Owns the joint `0.1.3` cut: the version quintet and the CHANGELOG entry (under the maintainer's explicit grant) land here for both `0.1.3` cards; this card lands last on the line. Re-versioned `0.1.7` -> `0.1.3` at the 2026-08-29 board review: high priority, no unshipped dependency, and it fills the slot the retired Layer-3 Meta key promotion card vacated.
-
 #### Card references
 
 - Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
@@ -1319,7 +1225,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 #### Planning note
 
-Strawberry port of django-graphene-filters' node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-059-0.1.1`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
+Strawberry port of django-graphene-filters' node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a [`FieldSet`](docs/GLOSSARY.md#fieldset) Non-goal (`TODO-BETA-059-0.1.1`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
 
 #### Dependencies
 
@@ -1328,11 +1234,11 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 
 #### Scope
 
-- Opt-in switch: introduce `Meta.redaction_mode` on `DjangoType` with `"exclude"` (default — the shipped row-narrowing behavior, unchanged) and `"sentinel"` (this tier). The two are mutually exclusive per type; the spec decides whether they may be mixed across a relation chain. The `"exclude"` default leaves every existing schema byte-for-byte unaffected.
+- Opt-in switch: introduce `Meta.redaction_mode` on [`DjangoType`](docs/GLOSSARY.md#djangotype) with `"exclude"` (default — the shipped row-narrowing behavior, unchanged) and `"sentinel"` (this tier). The two are mutually exclusive per type; the spec decides whether they may be mixed across a relation chain. The `"exclude"` default leaves every existing schema byte-for-byte unaffected.
 - Sentinel chain: in `"sentinel"` mode, a parent row that references a hidden non-null target yields a `pk=0` sentinel object (a `_make_sentinel` analog) instead of excluding the parent row, so the non-null FK still resolves — matching upstream's existence-preserving semantics.
 - SDL surface: expose `isRedacted: Boolean` on types in `"sentinel"` mode, resolving `True` for sentinel instances and `False` otherwise (the upstream `resolve_is_redacted` contract).
 - Node resolution: override the Relay `get_node` seam (shipped in `DONE-032-0.0.9`) so resolving a hidden id yields the sentinel in `"sentinel"` mode rather than `None`.
-- Reconcile with the cascade: in `"sentinel"` mode the masked relation targets must surface as sentinels rather than being narrowed out by `apply_cascade_permissions` (`DONE-034-0.0.10`). The spec resolves the tension — likely: the cascade narrows top-level rows as it does today, and sentinels appear only for non-null relation targets of rows that already survived the cascade. This is the core design decision.
+- Reconcile with the cascade: in `"sentinel"` mode the masked relation targets must surface as sentinels rather than being narrowed out by [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) (`DONE-034-0.0.10`). The spec resolves the tension — likely: the cascade narrows top-level rows as it does today, and sentinels appear only for non-null relation targets of rows that already survived the cascade. This is the core design decision.
 - Existence-leak posture: state the trade-off explicitly — sentinel masking re-introduces the existence signal that row-exclusion (spec-034 Decision 6) was chosen to avoid. The opt-in default keeps the safe behavior; choosing `"sentinel"` is a conscious consumer acceptance of the leak in exchange for django-graphene-filters parity.
 
 #### Definition of done
@@ -1361,10 +1267,6 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 
 - `DONE-034-0.0.10` (Permissions subsystem) — extends the `apply_cascade_permissions` / `get_queryset` cascade; this tier reconciles sentinels with cascade narrowing.
 - `DONE-032-0.0.9` (Full Relay story) — overrides the shipped `get_node` node-resolution seam.
-
-#### Note
-
-- No version quintet or CHANGELOG entry - the `0.1.4` release state is owned by the choice-enum naming card's joint cut, which lands last on the line.
 
 #### Card references
 
@@ -1411,20 +1313,11 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 
 #### Verified in upstream
 
-- Parity target - graphene-django's global choice-enum renaming, two settings in `graphene_django/settings.py`: `DJANGO_CHOICE_FIELD_ENUM_CUSTOM_NAME` takes an import-path string, resolved with `import_string` inside `converter.py`'s `generate_enum_name` and called with the model field, so one callable renames every generated enum process-wide; `DJANGO_CHOICE_FIELD_ENUM_V2_NAMING` is a second global flag selecting an alternate naming template (`ItemStatus` in place of the default `ShopItemStatusChoices`), and exists only to give the first shape a softer alternative. This card supersedes both rather than porting them: a process-wide callable makes the schema's type names a function of settings rather than of the declarations that produced them, so `Meta.choice_enum_names` puts the name beside the declaration it names and leaves every field that does not set it on the generated default.
+- Parity target - graphene-django's global choice-enum renaming, two settings in `graphene_django/settings.py`: `DJANGO_CHOICE_FIELD_ENUM_CUSTOM_NAME` takes an import-path string, resolved with `import_string` inside `converter.py`'s `generate_enum_name` and called with the model field, so one callable renames every generated enum process-wide; `DJANGO_CHOICE_FIELD_ENUM_V2_NAMING` is a second global flag selecting an alternate naming template (`ItemStatus` in place of the default `ShopItemStatusChoices`), and exists only to give the first shape a softer alternative. This card supersedes both rather than porting them: a process-wide callable makes the schema's type names a function of settings rather than of the declarations that produced them, so [`Meta.choice_enum_names`](docs/GLOSSARY.md#metachoice_enum_names) puts the name beside the declaration it names and leaves every field that does not set it on the generated default.
 
 #### Open question
 
 - Decide whether this belongs in the consumer-overrides spec or a small choice-enum follow-up spec.
-
-#### Note
-
-- bounded override surface (`Meta.choice_enum_names`) preserving `(model, field)` enum reuse; touches `base.py` / `converters.py` / `registry.py` + tests.
-- Choice fields generate Strawberry enums and cache them by `(model, field_name)`.
-- The first `DjangoType` to read a choice column wins the generated enum's GraphQL name.
-- This is deterministic for a fixed import order but still makes schema naming dependent on which type imports first.
-- Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
-- Owns the joint `0.1.4` cut: the version quintet and the CHANGELOG entry (under the maintainer's explicit grant) land here for both `0.1.4` cards; this card lands last on the line.
 
 #### Card references
 
@@ -1440,7 +1333,7 @@ Strawberry port of django-graphene-filters' node-level sentinel redaction — th
 
 #### Planning note
 
-The product-catalog root schema is already live: four `DjangoConnectionField` roots with their filtersets, ordersets, and mutations are wired and served (the Relay decisions in `DONE-032-0.0.9` shipped). The remaining unclaimed activation is the Relay `node` / `nodes` root entry points plus the connection `totalCount` opt-in; per-subsystem activation (fieldsets, search, aggregates) is owned by the Slice 4 of the respective Layer-3 subsystem cards, not here.
+The product-catalog root schema is already live: four [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) roots with their filtersets, ordersets, and mutations are wired and served (the Relay decisions in `DONE-032-0.0.9` shipped). The remaining unclaimed activation is the Relay `node` / `nodes` root entry points plus the connection `totalCount` opt-in; per-subsystem activation (fieldsets, search, aggregates) is owned by the Slice 4 of the respective Layer-3 subsystem cards, not here.
 
 #### Dependencies
 
@@ -1458,13 +1351,6 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 - [ ] Add in-process `schema.execute_sync` coverage under `examples/fakeshop/apps/products/tests/` for the `node` / `nodes` entry points and `totalCount`.
 - [ ] Add live `/graphql/` coverage under `examples/fakeshop/test_query/` exercising a `node` refetch by GlobalID, a `nodes` batch refetch, and a `totalCount` query.
 - [ ] The per-event error-policy masking rows run at the live tier against that surface, replacing the consumer-tier substitution in `tests/test_routers.py` that spec-048 carried forward: two events on both WebSocket protocols, each frame carrying the policy message and its own correlation id, plus the `error_policy={"enabled": False}` control row.
-
-#### Note
-
-- narrow example-wiring card: the product-catalog root schema is already activated (four connection roots + filtersets/ordersets/mutations); this card adds only the `node` / `nodes` entry points and the `totalCount` opt-in, with in-process + live HTTP tests.
-- `examples/fakeshop/apps/products/schema.py` already serves the four `DjangoConnectionField` roots (`allCategories` / `allItems` / `allProperties` / `allEntries`) with filtersets, ordersets, permissions, and mutations; it does not yet add the `node` / `nodes` entry points or a `totalCount` opt-in — this card adds those.
-- The `node` / `nodes` entry points build on the shipped Relay story and `totalCount` is a package-owned connection opt-in; neither needs a further Layer-3 subsystem to land here.
-- No version quintet or CHANGELOG entry - the `0.1.5` release state is owned by the product-catalog test card's joint cut, which lands last on the line.
 
 #### Card references
 
@@ -1507,14 +1393,6 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 
 - Does the redundant `view_<model>` branch in the four fakeshop permission hooks stay? Each hook's `elif user and user.has_perm("products.view_<model>")` arm evaluates to the same expression as the fall-through it precedes, so it cannot change the result and costs a permission-table read per request per type. It is **spec-conformant** - `spec-034` Slice 4 and Decision 6's consumer-recipe divergence both demand it - so collapsing it is a contract change, not a cleanup. Paths: **(a)** keep it and record in the spec *why* a redundant branch is deliberate, **(b)** collapse each hook and add a spec sentence saying the grant is deliberately not a branch, or **(c)** give the branch different behaviour, which reverses Decision 6's recorded divergence and belongs to `TODO-BETA-064-0.1.4` rather than here. **A collapse is now safe to attempt**: the spec-034 residual cycle's R3 landed parametrized staff rows in `examples/fakeshop/test_query/test_products_api.py` that assert the `view_<model>` actor explicitly for all four models, so a mistake in the collapse fails loudly. Recorded 2026-08-28 (R1c finding M1, escalated as contract-level).
 
-#### Note
-
-- activating the product-catalog fakeshop GraphQL schema
-- connection/query fields and other Layer 3 public surfaces
-- Future product-catalog HTTP tests should use the same placement and schema-reload pattern.
-- In-process `schema.execute_sync` tests still go under `examples/fakeshop/apps/products/tests/`.
-- Owns the joint `0.1.5` cut: the version quintet and the CHANGELOG entry (under the maintainer's explicit grant) land here for both `0.1.5` cards; this card lands last on the line.
-
 #### Card references
 
 - Dependency: Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires. -> `TODO-BETA-066-0.1.5` - Fakeshop GraphQL schema activation
@@ -1548,7 +1426,7 @@ The second of two graph foundation cards, sibling to the graph substrate (TODO-B
 
 - Slice 1 — template/bound core: `optimizer/templates.py` with frozen `StructuralOptimizationTemplate` (relative paths, field dependency graph, visibility binding slots, nested argument slots, row-identity proof recipe) and `BoundOptimizationPlan` (absolute paths, database alias, visibility querysets, concrete `Prefetch` objects, normalized argument values); the normalized root-subtree fingerprint builder; the binding pipeline producing today's `OptimizationPlan`; package tests proving bind-equivalence with directly-walked plans. Behavior-neutral by design.
 - Slice 2 — cache rekey, response-path rebasing, operation plan map: `DjangoOptimizerExtension._build_cache_key` moves to the subtree fingerprint (exact owning type identity, root field/return type, normalized subtree selection, only the directive/pagination slots referenced inside the subtree, strategy config); templates store relative paths and binding rebases them under the actual alias; `_publish_plan_to_context` publishes the plan map keyed by root execution identity while the legacy `DST_OPTIMIZER_PLAN` last-wins key is retained for the explain card to retire.
-- Slice 3 — nested sidecar batching: `optimizer/sidecar.py` with the eight-step normalization (edge-scoped child base -> FilterSet once -> OrderSet once -> deterministic order -> row-identity proof -> partition by parent join key -> window/lateral page -> attach per response-key `to_attr`); `_divergent_key_windows` plans argument-bearing response keys instead of abandoning them; `connection.py::_build_relation_connection_resolver` consumes the batched result attribute; the request-bound sidecar plan cache; per-alias batching.
+- Slice 3 — nested sidecar batching: `optimizer/sidecar.py` with the eight-step normalization (edge-scoped child base -> [FilterSet](docs/GLOSSARY.md#filterset) once -> [OrderSet](docs/GLOSSARY.md#orderset) once -> deterministic order -> row-identity proof -> partition by parent join key -> window/lateral page -> attach per response-key `to_attr`); `_divergent_key_windows` plans argument-bearing response keys instead of abandoning them; `connection.py::_build_relation_connection_resolver` consumes the batched result attribute; the request-bound sidecar plan cache; per-alias batching.
 - Slice 4 — row-identity enforcement + live activation: `unwindowable_child_queryset_reason` composes with the `RowIdentityProof` grades; strict targets raise a targeted unproven-row-identity error, non-strict targets fall back visibly, no automatic `DISTINCT`; the live fakeshop matrix (R1 five-root cache isolation, R7 ordered nested batching, R8 gate arms, R10 plan-map completeness, the R3 filtered arm promoted from characterized to asserted-equal query counts).
 - Slice 5 — docs + card wrap: TREE / GLOSSARY / `test_query` README updates, audit the explain-card amendment is honored, flip this card. Version quintet, `CHANGELOG.md`, and release prose untouched — owned by the explain card's `0.1.6` joint cut.
 - Changed seams: `optimizer/extension.py` (`_build_cache_key`, `_publish_plan_to_context`), `optimizer/walker.py` (`_plan_prefetch_relation` — visibility becomes a binding slot, not `cacheable = False`), `optimizer/nested_planner.py` (`_divergent_key_windows`), `optimizer/nested_fetch.py` (`unwindowable_child_queryset_reason`), `connection.py` (`_build_relation_connection_resolver`). New modules consume `graph/` and are not imported by it.
@@ -1579,13 +1457,6 @@ The second of two graph foundation cards, sibling to the graph substrate (TODO-B
 #### Dependencies
 
 - Gated on the substrate landing first: `EdgeScope` supplies the visibility-scoped child base the sidecar pipeline normalizes, `RowIdentityProof` is the vocabulary the window gate enforces, `FieldDependencyPlan` feeds the template's dependency graph, and the operation memo is the request-local tier the binding reuses.
-
-#### Note
-
-- `docs/SPECS/spec-068-structural_templates-0_1_6.md` is the card's spec of record (written; five slices planned).
-- **Spec-of-record obligation carried in from the spec-033 residual cycle: the nested-connection fetch-strategy seam has no owning spec, and that is a root cause, not a loose end.** No file under `docs/SPECS/` takes the seam as its subject, so nine later commits reshaped `spec-033`'s shipped contracts with nothing forcing its record to follow - `57cbd32a`, `9580e84e`, `51421e54`, `6912ca92`, `991d5120`, `deeb53b4`, `de2601e9`, `841e56d6`, `567cc6d0` - and every attribution in that cycle had to be by COMMIT rather than by card. Three of that card's contracts silently inverted post-ship as a result. `CHANGELOG.md`'s `0.0.14` "Pluggable nested-connection fetch-strategy seam" bullet is currently the seam's ONLY standing-doc record anywhere. `docs/SPECS/spec-068-structural_templates-0_1_6.md` must therefore claim the ALREADY-SHIPPED seam - the three backends, the runtime single-parent fast path, the strategy-refusal arm - and not only the new machinery this card adds, or the same silent inversion recurs against a second spec. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
-- **Slice 4 additionally owns the strictness diagnostic for refused windows.** `django_strawberry_framework/types/resolvers.py::_check_n1` answers "the fast-path `to_attr` is present on `root`", not "the window was actually consumed": it re-derives from the attribute an answer `connection.py::_build_relation_connection_resolver` computed one branch earlier and discarded, so **three refusal arms read as "served" and `"raise"` stays silent on a real per-parent query.** Demonstrated with a 3-row temp test, not argued. No data-correctness impact - only the diagnostic goes quiet. **It is a contract change, not a bug fix:** `spec-033` Decision 8 states the condition as "the fast-path `to_attr` is absent on `root`", so the shipped code is correct against its spec and the shipped probe is the one Decision 8 prescribes. Recommended direction is to thread the resolver's already-computed boolean rather than re-derive it. Lands naturally with this card's row-identity gate, which introduces the targeted refusal error this diagnostic should ride. Measured 2026-08-27 by the spec-033 residual reconciliation cycle (`docs/builder/DONE/build-033-connection_optimizer-0_0_9.md`, whose folded-in deferred-work catalog carries the full measurement).
-- Claims the spec-033 Decision-6 deferral 'Windowed planning for sidecar-filtered nested connections' (docs/SPECS/spec-033-connection_optimizer-0_0_9.md, Deferred list: 'no card yet, surfaced for the maintainer at wrap time') - Slice 3's `_divergent_key_windows` planning of argument-bearing response keys is that design surface; spec-068 must record the claim so the archived spec's deferral has a named home.
 
 #### Card references
 
@@ -1620,7 +1491,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 - Add an opt-in Strawberry response extension for optimizer explain output, exposed through the GraphQL response `extensions` map under a stable package-owned key.
 - Serialize the existing `info.context.dst_optimizer_plan` data into a JSON-safe payload instead of re-planning the query.
-- Include the ORM planning facts developers need to debug performance: `select_related`, `prefetch_related` / `Prefetch` chains, `only()` projection, optimizer hints, FK-id elisions, and strictness decisions where available.
+- Include the ORM planning facts developers need to debug performance: `select_related`, `prefetch_related` / `Prefetch` chains, [`only()` projection](docs/GLOSSARY.md#only-projection), optimizer hints, FK-id elisions, and strictness decisions where available.
 - Provide a request-level activation surface such as a header or context flag; keep explain output off by default.
 - Guarantee explain mode is observational only: enabling it must not change SQL planning, resolver behavior, GraphQL data shape, or query results.
 - **Consume-the-substrate amendment** (TODO-BETA-058-0.1.1, TODO-BETA-068-0.1.6): render the operation plan map instead of the single last-wins `info.context.dst_optimizer_plan`, and retire that legacy context key once this card lands (the sibling card publishes the map alongside it precisely so this card owns the cutover). Each entry exposes root field / type / model, structural template fingerprint and cache hit or miss, request binding identity without secret values, select / prefetch / computed dependencies, direct and correlated predicate branches, contextual edge scopes, nested strategy and sidecar plan, row-identity proof, fallback reasons, estimated query families, strictness keys, database alias, and whether total count and page share a statement. Shared operation dependencies appear once with redacted keys and hit / miss counts; the map stays complete and deterministic under any async completion order.
@@ -1635,7 +1506,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 #### Foundation-slice seam
 
-- `DjangoOptimizerExtension` already stores the computed plan on `info.context.dst_optimizer_plan`; this card promotes that internal diagnostic seam into a documented consumer-facing debug payload.
+- [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) already stores the computed plan on `info.context.dst_optimizer_plan`; this card promotes that internal diagnostic seam into a documented consumer-facing debug payload.
 - Pairs naturally with the backlog's query-time optimizer disable idea, but does not depend on it.
 
 #### Files likely touched
@@ -1650,10 +1521,6 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 - This is GraphiQL-grade visibility for the Django ORM half of GraphQL requests. Consumers can answer `what did the optimizer do for this query?` without reading SQL logs or reverse-engineering the planner.
 - Neither graphene-django nor strawberry-graphql-django ships this. It reinforces the package's optimizer-first mission at a low implementation cost.
-
-#### Note
-
-- Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
 #### Card references
 
@@ -1717,11 +1584,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 #### Dependencies
 
 - `DONE-027-0.0.8` (Filtering subsystem) — owns `_LOGIC_KEYS` and the filter-tree input-type generation whose wire names this card makes configurable.
-- `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames.
-
-#### Note
-
-- Sole card on the `0.1.7` line: owns the `0.1.7` cut - version quintet and CHANGELOG entry (under the maintainer's explicit grant).
+- `DONE-030-0.0.9` ([`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield)) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames.
 
 #### Card references
 
@@ -1742,11 +1605,11 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Scope
 
-- Add a `graphene-django` migration guide covering `DjangoObjectType` to `DjangoType`, enum/field conversion differences, query optimizations, and Relay caveats.
+- Add a `graphene-django` migration guide covering `DjangoObjectType` to [`DjangoType`](docs/GLOSSARY.md#djangotype), enum/field conversion differences, query optimizations, and Relay caveats.
 - Add a `strawberry-graphql-django` migration guide covering decorator-to-`Meta` translation, optimizer differences, `get_queryset`, and optimizer hints.
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
 - Decide whether the cookbook migration recipe should name `DjangoSchema` rather than plain `strawberry.Schema`. The cookbook port is query-only, so plain `Schema` is correct as written, but a reader who later adds a generated mutation hits the write pipeline refusing to run under it. Changing the recipe changes spec-044 migration story, which is why it was left.
-- Document the choice-enum member-name collision as a hard build break in the `graphene-django` guide: upstream dedups two choice values that sanitize to the same enum member by appending a positional suffix derived from how many names it has already converted, so the client-visible member name is a function of `choices` declaration order; `django_strawberry_framework/types/converters.py::build_enum_from_choices` instead raises `ConfigurationError` naming both colliding values. A model that builds under `graphene-django` fails to build here, at type-creation time and before any query runs, so the guide must name the fix: rename one side or split the field.
+- Document the choice-enum member-name collision as a hard build break in the `graphene-django` guide: upstream dedups two choice values that sanitize to the same enum member by appending a positional suffix derived from how many names it has already converted, so the client-visible member name is a function of `choices` declaration order; `django_strawberry_framework/types/converters.py::build_enum_from_choices` instead raises [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) naming both colliding values. A model that builds under `graphene-django` fails to build here, at type-creation time and before any query runs, so the guide must name the fix: rename one side or split the field.
 - Document the choices-to-enum default in both guides: `graphene-django` converts choice columns to enums by default but ships the global `DJANGO_CHOICE_FIELD_ENUM_CONVERT` switch plus a per-type `convert_choices_to_enum` opt-out, and `strawberry-graphql-django` leaves choice columns as raw scalars by default behind `GENERATE_ENUMS_FROM_CHOICES`; here `django_strawberry_framework/types/converters.py::convert_choices_to_enum` always generates the enum and there is no global or per-type opt-out at all. For a `strawberry-graphql-django` migrant that is a whole-schema difference on every choice column; for a `graphene-django` migrant it hits every column the opt-out had covered. The only opt-out here is a consumer-authored annotation on that column, so the guide states the default once up front rather than field by field.
 - Document the accepted request content types beside the UTF-8 wire-contract note: `graphene-django`'s view also parses `application/graphql` bodies and `application/x-www-form-urlencoded` / `multipart/form-data` form posts, and honours a `?pretty` query parameter on the response; this package accepts `application/json` only, plus `multipart/form-data` when the view is constructed with `multipart_uploads_enabled`. Anything else is a 400 'Unsupported content type' from the engine before the document is parsed, so a migrant reusing a `graphene-django` curl recipe or client sees the request rejected rather than executed, and response formatting is the client's job here.
 - Document mutation atomicity in the `graphene-django` guide: upstream's `ATOMIC_MUTATIONS` is opt-in and off by default, settable globally or per database through the `DATABASES` entry, whereas `django_strawberry_framework/schema.py::DjangoMutationExecutionContext` holds every generated top-level mutation's transaction open through response completion unconditionally, with no setting that turns it off. Ours is the stronger guarantee, but the setting name and the opt-in to always-on flip are stated nowhere, so the migrant searching for `ATOMIC_MUTATIONS` needs one sentence saying it no longer exists and why.
@@ -1754,10 +1617,10 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 - Add a one-line dataloader note to both guides: `strawberry.dataloader` ships with the engine and is available unchanged, so a migrant's existing dataloaders keep working, but this package's own answer to N+1 is the query optimizer plus strictness rather than a dataloader layer. One line only here; the fuller GLOSSARY / README statement belongs to the alpha documentation-debt card.
 - Document the unregistered relation target as the loudest migration break, because it is the first thing many migrants hit: `graphene-django` silently drops a relation whose target model has no registered type (its `dynamic_type` returns `None`) and `strawberry-graphql-django` falls back to a `pk`-only `DjangoModelType`, while `django_strawberry_framework/types/finalizer.py::_format_unresolved_targets_error` raises `ConfigurationError` at finalization listing every unresolved target. The guide must say the failure is deliberate, not a bug, and name the two fixes - declare a `DjangoType` for the target model, or exclude the field.
 - Name `DurationField` as a graphene-django migration break: `graphene_django/converter.py::convert_field_to_float` registers `models.DurationField` alongside `models.FloatField`, so a migrant's duration column shipped as a `Float` of seconds, and here it raises `ConfigurationError` at type creation until the consumer registers a scalar through `django_strawberry_framework/types/converters.py` #"SCALAR_MAP". That is the deferred-scalar posture and it is deliberate - a bare `Float` loses the unit, and a consumer who needs a duration on the wire is better served choosing the representation than inheriting seconds-as-float by default - so the guide's job is to name `Float` as what they are replacing, which makes the fix mechanical. Verified against both reference trees 2026-08-28: this is single-upstream, `strawberry-graphql-django` has no `DurationField` handling at all. Do NOT extend the note to `BinaryField`: `graphene_django` has no `BinaryField` registration and no `Base64` reference anywhere in the package (`graphene.Base64` exists in graphene core, but nothing wires it to the field), so `BinaryField` raising here is not a divergence from either upstream.
-- Give both guides an upstream-settings disposition table, because a migrant's first move is to search for the key they used to set and silence reads as a bug rather than a decision. Four config surfaces have no equivalent here and each owes one line saying so and why. (a) `strawberry-graphql-django`'s `TYPE_DESCRIPTION_FROM_MODEL_DOCSTRING` (`strawberry_django/settings.py`, default `False`) publishes the model docstring as the GraphQL type description; here it is `Meta.description`, defaulting to the `DjangoType`'s own docstring, and the setting is not reproduced because Django synthesizes a `Model(field, field, ...)` docstring for every model that does not define one - so upstream's setting publishes a generated field list for exactly the models nobody documented. (b) `graphene-django`'s four GraphiQL knobs `SUBSCRIPTION_PATH`, `GRAPHIQL_HEADER_EDITOR_ENABLED`, `GRAPHIQL_SHOULD_PERSIST_HEADERS` and `GRAPHIQL_INPUT_VALUE_DEPRECATION` (`graphene_django/settings.py`) configure a development IDE the package does not own; here the engine's IDE is selected per mount with the inherited `graphql_ide=` keyword on `django_strawberry_framework/views.py::DjangoGraphQLView`, and `SUBSCRIPTION_PATH` is structurally moot because the WebSocket route is the router's `websocket_url_pattern`, not a hint rendered into HTML. (c) `graphene-django`'s `MAX_VALIDATION_ERRORS` caps how many validation errors a rejected document reports; here `django_strawberry_framework/resource_policy.py::ResourcePolicy` bounds the document BEFORE validation runs rather than truncating the report afterwards. (d) `strawberry_django/extensions/django_validation_cache.py::DjangoValidationCache` caches validation verdicts in a Django cache backend; there is no equivalent and it is refused rather than merely absent - a poisoned entry in a shared cross-process store is a schema-wide correctness failure rather than a slow request, and upstream documents its own default key function as unsafe for memcached. The in-process plan cache covers the performance need; document-level parse/validation reuse is the post-`1.0.0` `operation_document_and_plan_cache` row in `BACKLOG.md`, deliberately a bounded per-process LRU. All four verified against the reference trees 2026-08-28.
+- Give both guides an upstream-settings disposition table, because a migrant's first move is to search for the key they used to set and silence reads as a bug rather than a decision. Four config surfaces have no equivalent here and each owes one line saying so and why. (a) `strawberry-graphql-django`'s `TYPE_DESCRIPTION_FROM_MODEL_DOCSTRING` (`strawberry_django/settings.py`, default `False`) publishes the model docstring as the GraphQL type description; here it is [`Meta.description`](docs/GLOSSARY.md#metadescription), defaulting to the `DjangoType`'s own docstring, and the setting is not reproduced because Django synthesizes a `Model(field, field, ...)` docstring for every model that does not define one - so upstream's setting publishes a generated field list for exactly the models nobody documented. (b) `graphene-django`'s four GraphiQL knobs `SUBSCRIPTION_PATH`, `GRAPHIQL_HEADER_EDITOR_ENABLED`, `GRAPHIQL_SHOULD_PERSIST_HEADERS` and `GRAPHIQL_INPUT_VALUE_DEPRECATION` (`graphene_django/settings.py`) configure a development IDE the package does not own; here the engine's IDE is selected per mount with the inherited `graphql_ide=` keyword on `django_strawberry_framework/views.py::DjangoGraphQLView`, and `SUBSCRIPTION_PATH` is structurally moot because the WebSocket route is the router's `websocket_url_pattern`, not a hint rendered into HTML. (c) `graphene-django`'s `MAX_VALIDATION_ERRORS` caps how many validation errors a rejected document reports; here `django_strawberry_framework/resource_policy.py::ResourcePolicy` bounds the document BEFORE validation runs rather than truncating the report afterwards. (d) `strawberry_django/extensions/django_validation_cache.py::DjangoValidationCache` caches validation verdicts in a Django cache backend; there is no equivalent and it is refused rather than merely absent - a poisoned entry in a shared cross-process store is a schema-wide correctness failure rather than a slow request, and upstream documents its own default key function as unsafe for memcached. The in-process plan cache covers the performance need; document-level parse/validation reuse is the post-`1.0.0` `operation_document_and_plan_cache` row in `BACKLOG.md`, deliberately a bounded per-process LRU. All four verified against the reference trees 2026-08-28.
 - Document the two `strawberry-graphql-django` mutation write surfaces that do not exist here, in that guide's write chapter. FIRST, filter-selected bulk update / delete: upstream's `strawberry_django/mutations/fields.py::DjangoUpdateMutation.instance_level_update` writes a predicate-selected row set, gated by `ALLOW_MUTATIONS_WITHOUT_FILTERS` (`strawberry_django/settings.py`, default `False`). Here the generated write pipeline's guarantee is locate-one then lock then authorize then attest, and a predicate-selected row set carries none of the four - which is why upstream needed a settings-level safety valve to make the shape survivable at all. The migration is one row per operation, located through the target type's `get_queryset`; a genuine bulk write becomes a consumer-authored mutation owning its own authorization story. SECOND, `through_defaults`: upstream's `strawberry_django/mutations/resolvers.py::update_m2m` writes intermediate-table columns through a relation input, which here would make a relation argument silently responsible for rows in a third table and contradicts the replace-only M2M contract. The migration is a consumer-authored mutation over the through model itself, an ordinary model with an ordinary write surface. Both verified against the reference checkout 2026-08-28.
 - Document the per-field permission ladder as the largest single `strawberry-graphql-django` translation - it is that library's most-used surface and nothing here replaces it field-for-field. Upstream ships `strawberry_django/permissions.py::DjangoPermissionExtension` with `IsAuthenticated`, `HasPerm`, `HasSourcePerm` and `HasRetvalPerm` applied per field as Strawberry extensions. Here the read side is `get_queryset` for row visibility plus `django_strawberry_framework/permissions.py::apply_cascade_permissions` for its transitive closure, and the write side is `Meta.permission_classes`. The guide must say WHY the shape is not reproduced, not only that it is absent: upstream's `fail_silently` degradation chain resolves a denial to `None`, `[]`, an empty queryset or `OperationInfo` depending on the return type, so an authorization outcome depends on schema shape and a denial becomes indistinguishable from an empty result - the opposite of this package's fail-loud posture. Scope boundary for whoever writes this: the decorator SHAPE is refused permanently, but the read-side CAPABILITY is only deferred, and the beta parity claim's carve-out for it already lives on the beta release card. This guide item states the translation; it must not restate the carve-out.
-- Document the mutation error-payload shape change in the `strawberry-graphql-django` guide, because it breaks client documents rather than server code. Upstream returns errors as a member of the payload union (`OperationInfo` in `strawberry_django/mutations/fields.py`), so every mutation's success type is conditional on the client selecting the right branch, and a client that omits the error branch silently receives an empty selection instead of a failure. Here the payload shape is fixed and errors arrive in the `FieldError` envelope, always in the same place. The migration is mechanical but touches every mutation document a migrant ships: drop the `... on OperationInfo` inline fragment and select the `errors` field instead. The argument for the fixed shape is in `docs/SPECS/spec-036-mutations-0_0_11.md`.
+- Document the mutation error-payload shape change in the `strawberry-graphql-django` guide, because it breaks client documents rather than server code. Upstream returns errors as a member of the payload union (`OperationInfo` in `strawberry_django/mutations/fields.py`), so every mutation's success type is conditional on the client selecting the right branch, and a client that omits the error branch silently receives an empty selection instead of a failure. Here the payload shape is fixed and errors arrive in the [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope), always in the same place. The migration is mechanical but touches every mutation document a migrant ships: drop the `... on OperationInfo` inline fragment and select the `errors` field instead. The argument for the fixed shape is in `docs/SPECS/spec-036-mutations-0_0_11.md`.
 - Document the batched-request response shape in the `graphene-django` guide: upstream's `graphene_django/views.py::GraphQLView.get_response` wraps each batched operation in a synthetic per-entry `id` / `status` envelope and collapses the HTTP status to the maximum across entries, so one failing operation changes the status seen for every sibling. Here batching is the engine's own, enabled per schema through Strawberry's `batching_config` and OFF by default, and an enabled batch returns a plain JSON array under one status with no synthetic envelope. The guide must name both halves - the response shape change AND that batching has to be turned on at all - because a migrant whose client batches gets a flat 400 "Batching is not enabled" on the first request rather than a shape difference to notice later.
 
 #### Definition of done
@@ -1771,13 +1634,6 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 - future migration docs under `docs/`
 - `docs/README.md`
 - `docs/GLOSSARY.md`
-
-#### Note
-
-- docs-only but substantial: two full migration guides (graphene-django → and strawberry-graphql-django →) plus DRF / django-filter mapping notes, with README / GLOSSARY links. No code.
-- The package is intentionally shaped for teams coming from `django-filter`, DRF, `graphene-django`, and `strawberry-graphql-django`.
-- The feature docs explain the positioning, but there are no dedicated migration guides yet.
-- No version quintet or CHANGELOG entry - the `0.1.8` release state is owned by the adversarial-suite card's joint cut, which lands last on the line.
 
 #### Card references
 
@@ -1826,18 +1682,7 @@ Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-
 
 #### Why it matters
 
-- `fail_under = 100` proves every LINE executes, not that the code is CORRECT under abuse. The failures that matter — deeply nested logic trees, malformed / wrong-`type_name` GlobalIDs, cyclic `RelatedFilter` graphs, conflicting multi-owner reuse, UNSET/None permutations, oversized `Meta.fields = "__all__"` expansions, unicode / null-byte / oversized values — are exactly the ones a happy-path live query never exercises.
-
-#### Note
-
-- An in-process `tests/` (NON-`/graphql/`) hardening pass whose goal is to BREAK the framework, not to earn line coverage. Live-reachable coverage already lives in `examples/fakeshop/test_query/` per its README rule; the root `tests/` tree is reserved for cases a live query cannot reach — fill it with hostile / pathological inputs rather than coverage duplicates.
-- Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`).
-- There is no deliberate "try to break it" suite; adversarial inputs are covered only incidentally.
-- Property-based / fuzz-style tests (e.g. Hypothesis) for the filter input normalizer, GlobalID decode/validate, and `Meta.fields = "__all__"` expansion.
-- Pathological structure: logic-tree nesting past `_MAX_LOGIC_DEPTH`, cyclic / self-referential `RelatedFilter` graphs, conflicting multi-owner reuse, proxy / MTI model mixing.
-- Scale / resource: very large `"__all__"` field sets and many-relation BFS; assert every failure surfaces as `ConfigurationError` / `GraphQLError` (never a bare traceback) and finalize stays bounded.
-- Extend the same philosophy to the future order / aggregate / fieldset subsystems as they land.
-- Owns the joint `0.1.8` cut: the version quintet and the CHANGELOG entry (under the maintainer's explicit grant) land here for both `0.1.8` cards; this card lands last on the line.
+- `fail_under = 100` proves every LINE executes, not that the code is CORRECT under abuse. The failures that matter — deeply nested logic trees, malformed / wrong-`type_name` GlobalIDs, cyclic [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) graphs, conflicting multi-owner reuse, UNSET/None permutations, oversized `Meta.fields = "__all__"` expansions, unicode / null-byte / oversized values — are exactly the ones a happy-path live query never exercises.
 
 #### Card references
 
@@ -1891,12 +1736,8 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Why it matters
 
-- `1.0.0` is the API freeze. After this card lands, every public symbol — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `DjangoConnectionField`, `DjangoListField`, mutation classes, filter / order / aggregate / fieldset surfaces, and the Meta key vocabulary — is bound by strict SemVer. Breaking changes from this point forward require a major bump.
+- `1.0.0` is the API freeze. After this card lands, every public symbol — [`DjangoType`](docs/GLOSSARY.md#djangotype), [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension), [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint), [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types), [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield), [`DjangoListField`](docs/GLOSSARY.md#djangolistfield), mutation classes, filter / order / aggregate / fieldset surfaces, and the Meta key vocabulary — is bound by strict SemVer. Breaking changes from this point forward require a major bump.
 - The release card is where we audit, finalize, and commit to that contract. Without a dedicated card, "1.0 is stable" becomes a soft promise spread across N patches; making it a single card means the audit happens before the version tag goes out.
-
-#### Note
-
-- the heaviest release card: API freeze + `__all__` audit, a security review of every input surface (mutations / filters / GlobalID decoding), full async + sync matrix, version bump to `1.0.0`, CHANGELOG, backlog refresh, tag + publish + announcement.
 
 #### Card references
 
@@ -1922,9 +1763,9 @@ Created 2026-08-29 from the DIV-033 discussion. Post-1.0 greenfield: neither gra
 
 #### Scope
 
-- A dataType-spec compiler: a declarative description of fields and relations (the 'set of dataTypes') is compiled at setup time into synthetic unmanaged Django model classes (type(name, (models.Model,), attrs) with Meta.managed = False and db_table pointed at an existing or external table), which then feed the unchanged DjangoType pipeline - converters, choice enums, FilterSets, ordering, optimizer, visibility, connections - so a dynamic schema gets every framework guarantee a hand-written model gets.
+- A dataType-spec compiler: a declarative description of fields and relations (the 'set of dataTypes') is compiled at setup time into synthetic unmanaged Django model classes (type(name, (models.Model,), attrs) with Meta.managed = False and db_table pointed at an existing or external table), which then feed the unchanged [DjangoType](docs/GLOSSARY.md#djangotype) pipeline - converters, choice enums, FilterSets, ordering, optimizer, visibility, connections - so a dynamic schema gets every framework guarantee a hand-written model gets.
 - Spec field entries resolve through the pluggable field-conversion registry, so consumer-registered and callable converters work identically for synthetic and hand-written models.
-- Compiler discipline: a keyed cache so repeated compilation of the same spec returns the same model class (dynamic model creation registers in Django's app registry; per-request re-creation leaks), a stable dedicated app_label for synthetic models, and a defined error surface (ConfigurationError) for invalid specs.
+- Compiler discipline: a keyed cache so repeated compilation of the same spec returns the same model class (dynamic model creation registers in Django's app registry; per-request re-creation leaks), a stable dedicated app_label for synthetic models, and a defined error surface ([ConfigurationError](docs/GLOSSARY.md#configurationerror)) for invalid specs.
 - Non-goal: schema mutation at request time. Specs are read at setup/import time; a changed spec is a process restart, exactly like an edited models.py.
 
 #### Definition of done
@@ -1953,7 +1794,7 @@ Created 2026-08-29 from the DIV-033 discussion. Post-1.0 greenfield: neither gra
 
 ## Done
 
-Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
+Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence.
 
 <a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
 ### [DONE-049-0.0.14 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)
@@ -1963,17 +1804,6 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Relative size: M
 - Labels: `internal`
 - Spec: [spec-049-dependency_ci_hardening-0_0_14.md](docs/SPECS/spec-049-dependency_ci_hardening-0_0_14.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Hard dependency](docs/GLOSSARY.md#hard-dependency) | shipped |
-| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
-| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
-| [Per-operation extension isolation](docs/GLOSSARY.md#per-operation-extension-isolation) | shipped (`0.0.14`) |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
 
 #### Planning note
 
@@ -1994,8 +1824,8 @@ Security-audit remediation program, card 4 of 4. S6 is independently time-sensit
 
 #### Definition of done
 
-- [ ] Locks refreshed to the patched Django releases; audit + auto-update automation added; CI runs least-privilege with immutable action/image pins and job timeouts.
-- [ ] Governance files only (no package-source/SDL change, no coverage exposure); CI green.
+- [x] Locks refreshed to the patched Django releases; audit + auto-update automation added; CI runs least-privilege with immutable action/image pins and job timeouts.
+- [x] Governance files only (no package-source/SDL change, no coverage exposure); CI green.
 
 #### Architectural posture
 
@@ -2038,64 +1868,6 @@ Security-audit remediation program, card 4 of 4. S6 is independently time-sensit
 - Labels: `internal`
 - Spec: [spec-048-secure_output_defaults-0_0_14.md](docs/SPECS/spec-048-secure_output_defaults-0_0_14.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`Meta.filesystem_path_fields`](docs/GLOSSARY.md#metafilesystem_path_fields) | shipped (`0.0.14`) |
-| [`DjangoFilePathType`](docs/GLOSSARY.md#djangofilepathtype) | shipped (`0.0.14`) |
-| [`DjangoImagePathType`](docs/GLOSSARY.md#djangoimagepathtype) | shipped (`0.0.14`) |
-| [`ErrorPolicy`](docs/GLOSSARY.md#errorpolicy) | shipped (`0.0.14`) |
-| [`DjangoErrorPolicyExtension`](docs/GLOSSARY.md#djangoerrorpolicyextension) | shipped (`0.0.14`) |
-| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
-| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
-| [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
-| [`DjangoDebugExtension`](docs/GLOSSARY.md#djangodebugextension) | shipped (`0.0.14`) |
-| [Developer-only debug posture](docs/GLOSSARY.md#developer-only-debug-posture) | shipped (`0.0.14`) |
-| [Debug payload availability](docs/GLOSSARY.md#debug-payload-availability) | shipped (`0.0.14`) |
-| [Debug SQL row](docs/GLOSSARY.md#debug-sql-row) | shipped (`0.0.14`) |
-| [Debug exception row](docs/GLOSSARY.md#debug-exception-row) | shipped (`0.0.14`) |
-| [Django debug-cursor capture](docs/GLOSSARY.md#django-debug-cursor-capture) | shipped (`0.0.14`) |
-| [Reference-counted cursor coordinator](docs/GLOSSARY.md#reference-counted-cursor-coordinator) | shipped (`0.0.14`) |
-| [Bounded query-log rollover](docs/GLOSSARY.md#bounded-query-log-rollover) | shipped (`0.0.14`) |
-| [Async SQL-capture boundary](docs/GLOSSARY.md#async-sql-capture-boundary) | shipped (`0.0.14`) |
-| [Masking-extension ordering](docs/GLOSSARY.md#masking-extension-ordering) | shipped (`0.0.14`) |
-| [Response-extension merge semantics](docs/GLOSSARY.md#response-extension-merge-semantics) | shipped (`0.0.14`) |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [Graphene debug migration](docs/GLOSSARY.md#graphene-debug-migration) | shipped (`0.0.14`) |
-| [Strawberry extension lifecycle](docs/GLOSSARY.md#strawberry-extension-lifecycle) | shipped (`0.0.14`) |
-| [Per-operation extension isolation](docs/GLOSSARY.md#per-operation-extension-isolation) | shipped (`0.0.14`) |
-| [Execution resource policy](docs/GLOSSARY.md#execution-resource-policy) | shipped (`0.0.14`) |
-| [`ResourcePolicy`](docs/GLOSSARY.md#resourcepolicy) | shipped (`0.0.14`) |
-| [`DjangoResourcePolicyExtension`](docs/GLOSSARY.md#djangoresourcepolicyextension) | shipped (`0.0.14`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [Probe URLconf](docs/GLOSSARY.md#probe-urlconf) | shipped (repository test pattern) |
-| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
-| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
-
 #### Planning note
 
 Security-audit remediation program, card 3 of 4.
@@ -2118,12 +1890,12 @@ Security-audit remediation program, card 3 of 4.
 #### Architectural posture
 
 - Remove path from the public generated type's safe default (default output limited to name/size/url). A filesystem path requires an explicit server-owned field or a loud Meta opt-in; do not mask path failures while still exposing successful absolute paths. Justified pre-1.0 compatibility break + migration note.
-- DjangoDebugExtension fails closed when settings.DEBUG is false unless an explicit constructor acknowledgement (DjangoDebugExtension(allow_unsafe_production=True)); add the __init__ it currently lacks and preserve fresh-per-operation instances. Cap the number and serialized byte size of SQL and exception rows.
+- [DjangoDebugExtension](docs/GLOSSARY.md#djangodebugextension) fails closed when settings.DEBUG is false unless an explicit constructor acknowledgement (DjangoDebugExtension(allow_unsafe_production=True)); add the __init__ it currently lacks and preserve fresh-per-operation instances. Cap the number and serialized byte size of SQL and exception rows.
 - DjangoSchema gets a first-class production error policy: under DEBUG=False, unexpected exceptions log server-side with a correlation identifier and return a stable, non-sensitive message; deliberate client-facing framework errors (validation envelopes, audited GraphQLError codes) retain their contract; consumer code may explicitly opt out.
 
 #### Why it matters
 
-- S5 (High): DjangoFileType.path returns FieldFile.path and its description says 'the absolute filesystem path'; DjangoImageType inherits it. Every generated file/image output offers clients a server-internal path (usernames, release dirs, container mounts, tenant layout) whenever the storage backend supports one.
+- S5 (High): DjangoFileType.path returns FieldFile.path and its description says 'the absolute filesystem path'; [DjangoImageType](docs/GLOSSARY.md#djangoimagetype) inherits it. Every generated file/image output offers clients a server-internal path (usernames, release dirs, container mounts, tenant layout) whenever the storage backend supports one.
 - S8 (Medium): DjangoDebugExtension returns interpolated SQL values, exception messages/types, and traceback paths, and operates independently of settings.DEBUG -- a single production schema-list entry silently activates the disclosure. It has no __init__ today.
 - S10 (Medium): DjangoSchema centralizes mutation integrity but offers no production error policy; unhandled resolver/hook exceptions return their literal message to clients unless the consumer adds MaskErrors or overrides process_errors.
 
@@ -2155,45 +1927,6 @@ Security-audit remediation program, card 3 of 4.
 - Labels: `internal`
 - Spec: [spec-047-resource_policy-0_0_14.md](docs/SPECS/spec-047-resource_policy-0_0_14.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Execution resource policy](docs/GLOSSARY.md#execution-resource-policy) | shipped (`0.0.14`) |
-| [`ResourcePolicy`](docs/GLOSSARY.md#resourcepolicy) | shipped (`0.0.14`) |
-| [`DjangoResourcePolicyExtension`](docs/GLOSSARY.md#djangoresourcepolicyextension) | shipped (`0.0.14`) |
-| [Value-budget walker](docs/GLOSSARY.md#value-budget-walker) | shipped (`0.0.14`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [Request-body cap](docs/GLOSSARY.md#request-body-cap) | shipped (`0.0.14`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [Strawberry extension lifecycle](docs/GLOSSARY.md#strawberry-extension-lifecycle) | shipped (`0.0.14`) |
-| [Per-operation extension isolation](docs/GLOSSARY.md#per-operation-extension-isolation) | shipped (`0.0.14`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [Probe URLconf](docs/GLOSSARY.md#probe-urlconf) | shipped (repository test pattern) |
-| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
-| [`max_value_depth`](docs/GLOSSARY.md#max_value_depth) | shipped (`0.0.14`) |
-
 #### Planning note
 
 Security-audit remediation program, card 2 of 4.
@@ -2205,14 +1938,14 @@ Security-audit remediation program, card 2 of 4.
 #### Scope
 
 - New immutable resource-policy object + schema-construction normalization + context threading.
-- Value-budget walker over coerced inputs (iterative, cycle-safe, py3.10).
-- types/base.py DEFAULT_RELATION_SHAPE 'both' -> 'connection'; DjangoListField bound.
+- [Value-budget walker](docs/GLOSSARY.md#value-budget-walker) over coerced inputs (iterative, cycle-safe, py3.10).
+- types/base.py DEFAULT_RELATION_SHAPE 'both' -> 'connection'; [DjangoListField](docs/GLOSSARY.md#djangolistfield) bound.
 
 #### Definition of done
 
-- [ ] Immutable resource policy consumed by schema/fields/optimizer/transports; per-field narrowing only.
-- [ ] Value-budget walker rejects before ORM access; DEFAULT_RELATION_SHAPE default is 'connection'; raw lists bounded.
-- [ ] Full suite green at 100% coverage; hygiene clean; docs fold-in.
+- [x] Immutable resource policy consumed by schema/fields/optimizer/transports; per-field narrowing only.
+- [x] Value-budget walker rejects before ORM access; DEFAULT_RELATION_SHAPE default is 'connection'; raw lists bounded.
+- [x] Full suite green at 100% coverage; hygiene clean; docs fold-in.
 
 #### Architectural posture
 
@@ -2223,7 +1956,7 @@ Security-audit remediation program, card 2 of 4.
 #### Why it matters
 
 - S3 (High): neither the package nor the example installs a token / query-depth / complexity / selection-count limiter, and there is no page-size / raw-list-row / aggregate-row budget. DjangoListField evaluates an unbounded queryset, and DEFAULT_RELATION_SHAPE='both' exposes a raw many-side list alongside the bounded connection, so a client bypasses the connection cap via the list sibling.
-- S4 (High): document limits do not constrain variable-supplied values. A tiny query can carry an unlimited ids list (DjangoNodesField preserves duplicates positionally), unlimited in-lookup values, an and/or filter tree of unbounded width/node count, unlimited M2M ids, wide nested serializer lists, and uploads with no aggregate byte / file-count / per-file cap.
+- S4 (High): document limits do not constrain variable-supplied values. A tiny query can carry an unlimited ids list ([DjangoNodesField](docs/GLOSSARY.md#djangonodesfield) preserves duplicates positionally), unlimited in-lookup values, an and/or filter tree of unbounded width/node count, unlimited M2M ids, wide nested serializer lists, and uploads with no aggregate byte / file-count / per-file cap.
 
 #### Dependencies
 
@@ -2253,48 +1986,6 @@ Security-audit remediation program, card 2 of 4.
 - Labels: `internal`
 - Spec: [spec-046-transport_security-0_0_14.md](docs/SPECS/spec-046-transport_security-0_0_14.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
-| [Hard dependency](docs/GLOSSARY.md#hard-dependency) | shipped |
-| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
-| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
-| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
-| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | shipped (`0.0.14`) |
-| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [Probe URLconf](docs/GLOSSARY.md#probe-urlconf) | shipped (repository test pattern) |
-| [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
-| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [Developer-only debug posture](docs/GLOSSARY.md#developer-only-debug-posture) | shipped (`0.0.14`) |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [`DjangoDebugExtension`](docs/GLOSSARY.md#djangodebugextension) | shipped (`0.0.14`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [Cookbook parity](docs/GLOSSARY.md#cookbook-parity) | planned through `1.0.0` |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
-| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
-
 #### Planning note
 
 Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_router). Explicit 0.0.14 alpha breaking change.
@@ -2314,7 +2005,7 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - [x] Wire JSON is UTF-8-only; UTF-16/32 success tests inverted to 400.
 - [x] WebSocket actor revalidation at both the admission and the outbound-frame checkpoint, with connection-scoped revocation, via the injection seam.
 - [x] Migration note + transport deployment docs authored; spec-041 amended.
-- [ ] Full suite green at 100% coverage (maintainer/CI gate); ruff + trailing-comma clean; manage.py check + makemigrations --check clean.
+- [x] Full suite green at 100% coverage (maintainer/CI gate); ruff + trailing-comma clean; manage.py check + makemigrations --check clean.
 
 #### Architectural posture
 
@@ -2359,20 +2050,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Labels: `docs`, `internal`, `permissions`, `security`
 - Spec: [spec-045-visibility_boundary-0_0_14.md](docs/SPECS/spec-045-visibility_boundary-0_0_14.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Sealed execution queryset](docs/GLOSSARY.md#sealed-execution-queryset) | shipped (`0.0.14`) |
-| [Visibility boundary](docs/GLOSSARY.md#visibility-boundary) | shipped (`0.0.14`) |
-| [Prove-then-clone AST trust](docs/GLOSSARY.md#prove-then-clone-ast-trust) | shipped (`0.0.14`) |
-| [Callable shadow defect](docs/GLOSSARY.md#callable-shadow-defect) | shipped (`0.0.14`) |
-| [Prefetch alias threading](docs/GLOSSARY.md#prefetch-alias-threading) | shipped (`0.0.14`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-
 #### Scope
 
 - Documentation-only slice over the already-landed sealed get_queryset visibility boundary (commit 60998b17). Authors the governing numbered security decisions, this card's spec, and the five new glossary terms; closes the deferred [P2] policy-artifact residual in `spec-045-visibility_boundary-0_0_14`.
@@ -2400,12 +2077,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 
 - **Threat model: a mistaken hook, not an in-process adversary.** The boundary defends against a `get_queryset` hook that returns wrong query state - a dropped predicate, a foreign or shadowed object, a wrong table, a sliced or projected shape, an injected cache, a re-routed alias, or AST the sealed query would share with the candidate. A consumer who deliberately crafts an object to reach a Django or adapter dispatch site is OUT of scope: they already execute code in the process, so no in-interpreter walk is a trust boundary against them (the same stance the framework takes on process-wide monkeypatching). Canonical reconstruction is the terminating mechanism - the sealed query is a framework-owned rebuild with every bound value normalized to an exact inert copy, not the candidate graph proven safe - so the boundary is CLOSED to further dispatch-path expansion. Decision 8 of `spec-045-visibility_boundary-0_0_14`.
 
-#### Note
-
-- Documents: commit 60998b17 - sealed get_queryset visibility boundary.
-- Closes: the [P2] residual "The standing guarantee and historical note declare the unsafe boundary complete", recorded in `spec-045-visibility_boundary-0_0_14` (the deferred policy-artifact residual only; the correctness findings were closed by the adversarial review rounds).
-- Post-ship: Decision 8 added after the 0.0.14 cut. It records canonical reconstruction (superseding the prove-then-retain limitation Decision 2 shipped with), closes the two bound-parameter residuals (`Lookup.rhs`, `Value.value`) rather than carrying them to a further card, and ends the crafted-object review loop. A newly found dispatch path reachable only by a deliberately crafted object is no longer a defect of this boundary; an ordinary-consumer path that loses the predicate, a Django release adding a slot legitimate queries populate, or a demonstrated row leak still is.
-
 <a id="response_extensions_debug_middleware"></a>
 ### [DONE-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
 
@@ -2416,53 +2087,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Labels: `debugging`, `graphql-api`, `middleware`
 - Spec: [spec-044-debug_extension-0_0_14.md](docs/SPECS/spec-044-debug_extension-0_0_14.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
-| [`DjangoDebugExtension`](docs/GLOSSARY.md#djangodebugextension) | shipped (`0.0.14`) |
-| [Strawberry extension lifecycle](docs/GLOSSARY.md#strawberry-extension-lifecycle) | shipped (`0.0.14`) |
-| [Per-operation extension isolation](docs/GLOSSARY.md#per-operation-extension-isolation) | shipped (`0.0.14`) |
-| [Debug payload availability](docs/GLOSSARY.md#debug-payload-availability) | shipped (`0.0.14`) |
-| [Response-extension merge semantics](docs/GLOSSARY.md#response-extension-merge-semantics) | shipped (`0.0.14`) |
-| [Django debug-cursor capture](docs/GLOSSARY.md#django-debug-cursor-capture) | shipped (`0.0.14`) |
-| [Reference-counted cursor coordinator](docs/GLOSSARY.md#reference-counted-cursor-coordinator) | shipped (`0.0.14`) |
-| [Bounded query-log rollover](docs/GLOSSARY.md#bounded-query-log-rollover) | shipped (`0.0.14`) |
-| [Async SQL-capture boundary](docs/GLOSSARY.md#async-sql-capture-boundary) | shipped (`0.0.14`) |
-| [Debug SQL row](docs/GLOSSARY.md#debug-sql-row) | shipped (`0.0.14`) |
-| [Debug exception row](docs/GLOSSARY.md#debug-exception-row) | shipped (`0.0.14`) |
-| [Masking-extension ordering](docs/GLOSSARY.md#masking-extension-ordering) | shipped (`0.0.14`) |
-| [Developer-only debug posture](docs/GLOSSARY.md#developer-only-debug-posture) | shipped (`0.0.14`) |
-| [Graphene debug migration](docs/GLOSSARY.md#graphene-debug-migration) | shipped (`0.0.14`) |
-| [Cookbook parity](docs/GLOSSARY.md#cookbook-parity) | planned through `1.0.0` |
-| [Probe URLconf](docs/GLOSSARY.md#probe-urlconf) | shipped (repository test pattern) |
-| [Hard dependency](docs/GLOSSARY.md#hard-dependency) | shipped |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | shipped (`0.0.14`) |
-| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
-| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
-| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
-| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
-| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
-| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Django Trac #37064 hardening](docs/GLOSSARY.md#django-trac-37064-hardening) | shipped (`0.0.7`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-
 #### Package files
 
 - [`django_strawberry_framework/extensions/debug.py`](django_strawberry_framework/extensions/debug.py)
@@ -2470,28 +2094,17 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 
 #### Definition of done
 
-- [ ] Implement `django_strawberry_framework/extensions/debug.py` as a Strawberry `SchemaExtension` that captures SQL and exceptions for the in-flight operation and attaches them to the response `extensions` map (key: `debug`).
-- [ ] Pin the **exposure mechanism** (response-`extensions` map vs. schema-level `_debug` field) and the **fidelity choice** (cursor-wrap port vs. `connection.queries`) in the spec; default both to the simpler choice (response-`extensions` map + `connection.queries`) unless the spec authoring round chooses otherwise.
-- [ ] Output shape mirrors graphene's `DjangoDebugSQL` / `DjangoDebugException` field names where the chosen fidelity supports them; document any shape narrowing (e.g., omitted Postgres-specific fields) explicitly.
-- [ ] Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
-- [ ] Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
-- [ ] Documented as the response-side counterpart to `DONE-042-0.0.14`.
+- [x] Implement `django_strawberry_framework/extensions/debug.py` as a Strawberry `SchemaExtension` that captures SQL and exceptions for the in-flight operation and attaches them to the response `extensions` map (key: `debug`).
+- [x] Pin the **exposure mechanism** (response-`extensions` map vs. schema-level `_debug` field) and the **fidelity choice** (cursor-wrap port vs. `connection.queries`) in the spec; default both to the simpler choice (response-`extensions` map + `connection.queries`) unless the spec authoring round chooses otherwise.
+- [x] Output shape mirrors graphene's `DjangoDebugSQL` / `DjangoDebugException` field names where the chosen fidelity supports them; document any shape narrowing (e.g., omitted Postgres-specific fields) explicitly.
+- [x] Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
+- [x] Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
+- [x] Documented as the response-side counterpart to `DONE-042-0.0.14`.
 
 #### Files likely touched
 
 - `django_strawberry_framework/extensions/` (new)
 - `tests/extensions/` (new)
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/__init__.py` — exports `DjangoDebugMiddleware`, `DjangoDebug`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py` — `DjangoDebugContext` (lifecycle around cursor wrapping, exception capture, accumulated debug object), `DjangoDebugMiddleware` (Graphene `resolve` middleware — see Architectural posture; wraps each field resolution and returns the accumulated debug object when the field's return type matches `DjangoDebug`).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py` — `class DjangoDebug(ObjectType)` with `sql: List(DjangoDebugSQL)` and `exceptions: List(DjangoDebugException)`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/types.py` — `DjangoDebugSQL` shape: `vendor`, `alias`, `sql`, `duration`, `raw_sql`, `params`, `start_time`, `stop_time`, `is_slow`, `is_select`, plus Postgres-specific `trans_id`, `trans_status`, `iso_level`, `encoding`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/types.py` — `DjangoDebugException` shape: `exc_type`, `message`, `stack`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py` — thread-local cursor wrapping (`wrap_cursor`, `unwrap_cursor`, `NormalCursorWrapper`, `ExceptionCursorWrapper`, `ThreadLocalState`).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/formating.py` — `wrap_exception` (serializes `exc_type`, `message`, `stack`).
-- graphene-django ships an in-response `DjangoDebug` SQL/exception subsystem; strawberry-graphql-django ships none.
 
 #### Architectural posture
 
@@ -2512,11 +2125,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `DONE-042-0.0.14`); this card is graphene-django parity only.
 - developer experience.
 
-#### Note
-
-- distinct from `DONE-042-0.0.14` (Django debug toolbar).
-- a Strawberry `SchemaExtension` that captures SQL + exceptions into `extensions['debug']`; one design choice between porting graphene's cursor-wrap and reading `connection.queries`. Single extension module + tests.
-
 #### Card references
 
 - Related: Documented as the response-side counterpart to `DONE-042-0.0.14`. -> `DONE-042-0.0.14` - Debug-toolbar middleware
@@ -2531,33 +2139,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Labels: `graphql-api`, `test-client`, `tests`, `uploads`
 - Spec: [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
-| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
-| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
-| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
-| [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-
 #### Package files
 
 - [`django_strawberry_framework/testing/client.py`](django_strawberry_framework/testing/client.py)
@@ -2568,7 +2149,7 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 
 #### Scope
 
-- `test/client.py` (sync + async `TestClient`, a `GraphQLTestMixin`, two `(Mixin, TestCase)` combos), endpoint setting, multipart-upload support; several design decisions to pin; switch the fakeshop tests over.
+- `test/client.py` (sync + async [`TestClient`](docs/GLOSSARY.md#testclient), a `GraphQLTestMixin`, two `(Mixin, TestCase)` combos), endpoint setting, multipart-upload support; several design decisions to pin; switch the fakeshop tests over.
 
 #### Definition of done
 
@@ -2579,20 +2160,13 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - [x] Live HTTP tests under `examples/fakeshop/test_query/` switch to the helper.
 - [x] Tests under `tests/testing/test_client.py`.
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/test/client.py` — `TestClient` (subclasses Strawberry's `strawberry.test.BaseGraphQLTestClient`), `AsyncTestClient` (subclasses `TestClient`, takes an `AsyncClient`, overrides `.query()` and `.login()`). The `.query()` / `.mutate()` API surface lives on the upstream `BaseGraphQLTestClient`; strawberry-django adds Django-specific `request()`, `login()`, and the async `query()` override. `request()` switches to `format="multipart"` when `files=` is provided.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/testing.py` — module-level `graphql_query` function; `GraphQLTestMixin` (the reusable mixin carrying `.query(...)`, `assertResponseNoErrors`, `assertResponseHasErrors`); `GraphQLTestCase` (`(GraphQLTestMixin, TestCase)`); `GraphQLTransactionTestCase` (`(GraphQLTestMixin, TransactionTestCase)`).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/settings.py #"TESTING_ENDPOINT"` — graphene reads `TESTING_ENDPOINT` (default `/graphql`) from its own settings dict so the testing helper has a project-wide override knob.
-- both upstreams ship a GraphQL test client / mixin.
-
 #### Architectural posture
 
-- **Mixin-first shape** (graphene-django convention): the reusable piece is `GraphQLTestMixin`; the concrete `GraphQLTestCase` / `GraphQLTransactionTestCase` are two-line `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)` combinations so consumers with their own custom TestCase base can compose the mixin in directly. Our equivalent follows the same mixin-first shape rather than only shipping the concrete subclasses.
+- **Mixin-first shape** (graphene-django convention): the reusable piece is `GraphQLTestMixin`; the concrete [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) / `GraphQLTransactionTestCase` are two-line `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)` combinations so consumers with their own custom TestCase base can compose the mixin in directly. Our equivalent follows the same mixin-first shape rather than only shipping the concrete subclasses.
 - **`.query()` return type — decide before writing the spec**: strawberry-django returns a typed `Response` dataclass (`data` / `errors` / `extensions`); graphene-django's `GraphQLTestMixin.query` returns a raw Django `HttpResponse` paired with `assertResponseNoErrors` / `assertResponseHasErrors` helpers that parse the body. The two flavors are not interchangeable — pick one and pin it (the typed-dataclass shape is the more DRF-shaped choice and composes better with future typed-error work).
 - **Async**: strawberry-django's `AsyncTestClient` subclasses `TestClient` (not `BaseGraphQLTestClient` directly), takes a `django.test.client.AsyncClient`, and only overrides `.query()` + `.login()`. The sync `request()` is reused via `cast("Awaitable", ...)`. Our equivalent ports the same inheritance shape (or picks a flatter alternative explicitly in the spec).
 - **Endpoint resolution**: project-wide default reads from `DJANGO_STRAWBERRY_FRAMEWORK["GRAPHQL_TESTING_ENDPOINT"]` (mirrors graphene's `TESTING_ENDPOINT` knob; final settings-key name pinned during implementation), with a per-instance / per-call override identical to strawberry-django's `path` constructor argument and graphene-django's `graphql_url` per-call argument.
-- **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `DONE-037-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls.
+- **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `DONE-037-0.0.11` ([Upload scalar](docs/GLOSSARY.md#upload-scalar)) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls.
 - **Strawberry base-class reuse — decide before writing the spec**: subclass `strawberry.test.BaseGraphQLTestClient` (less code, couples our `.query()` / `.mutate()` shape to upstream Strawberry's choices) vs. roll our own base (more code, full control over the public surface). The strawberry-django decision was to subclass; the package's DRF-first stance argues for considering the from-scratch alternative.
 
 #### Why it matters
@@ -2621,35 +2195,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Labels: `debugging`, `django-integration`, `middleware`
 - Spec: [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
-| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
-| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
-| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
-| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
-| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
-| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [Django Trac #37064 hardening](docs/GLOSSARY.md#django-trac-37064-hardening) | shipped (`0.0.7`) |
-
 #### Package files
 
 - [`django_strawberry_framework/middleware/debug_toolbar.py`](django_strawberry_framework/middleware/debug_toolbar.py)
@@ -2662,16 +2207,10 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - [x] `debug_toolbar` is a soft dependency: top-level package import must succeed without `django-debug-toolbar` installed; the middleware module raises `ImportError` with an install hint when actually imported.
 - [x] In-process test against a fakeshop request that emits SQL, covering both the GraphiQL HTML path and the JSON operation path.
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py` — `DebugToolbarMiddleware` (subclasses upstream `debug_toolbar.middleware.DebugToolbarMiddleware`); module-level `_get_payload` helper; `_HTML_TYPES` constant for content-type sniffing.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/templates/strawberry_django/debug_toolbar.html` — HTML snippet rendered into the GraphiQL response; ships as a template asset alongside the Python module.
-- strawberry-graphql-django ships a debug-toolbar middleware; graphene-django ships none.
-
 #### Architectural posture
 
 - **Not a from-scratch middleware**: strawberry-django **subclasses** `debug_toolbar.middleware.DebugToolbarMiddleware` and overrides `process_view` (to tag GraphiQL requests) and `_postprocess` (to inject the toolbar payload into the response). Our equivalent follows the same subclass-and-override shape; we do not re-implement the panel-rendering logic that `django-debug-toolbar` already owns.
-- **GraphiQL-view detection**: strawberry-django tags `request._is_graphiql = bool(view and issubclass(view, BaseView))` where `BaseView` is `strawberry.django.views.BaseView`. Our equivalent uses the same `issubclass` check against whichever view class the package settles on (working name `DjangoGraphQLView`; pinned during implementation).
+- **GraphiQL-view detection**: strawberry-django tags `request._is_graphiql = bool(view and issubclass(view, BaseView))` where `BaseView` is `strawberry.django.views.BaseView`. Our equivalent uses the same `issubclass` check against whichever view class the package settles on (working name [`DjangoGraphQLView`](docs/GLOSSARY.md#djangographqlview); pinned during implementation).
 - **Two output paths, not one**:
 - **HTML response** (the GraphiQL page itself): the middleware appends a rendered toolbar template to the response body and refreshes `Content-Length`.
 - **JSON response** (a `/graphql/` operation result): the middleware parses the body, injects a `debugToolbar` key carrying per-panel `title` / `subtitle` metadata plus the toolbar's `requestId`, and re-encodes via `DjangoJSONEncoder`.
@@ -2683,10 +2222,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - `graphene-django` ships **no** equivalent; this card is strawberry-graphql-django parity only.
 - developer experience.
 
-#### Note
-
-- subclass django-debug-toolbar's middleware with two injection paths (GraphiQL HTML + `/graphql/` JSON), a template asset, introspection-skip behavior, and a soft dependency. Single module + tests.
-
 <a id="channels_asgi_router_migration_aid"></a>
 ### [DONE-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
 
@@ -2696,41 +2231,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Relative size: S
 - Labels: `asgi`, `channels`, `django-integration`
 - Spec: [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
-| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
-| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
-| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
-| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
-| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | shipped (`0.0.14`) |
-| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
-| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 
 #### Package files
 
@@ -2744,15 +2244,10 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 
 #### Definition of done
 
-- [x] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
+- [x] Implement `django_strawberry_framework/routers.py` exposing [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) (final name pinned during implementation).
 - [x] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [x] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
 - [x] Migration guide (`TODO-BETA-071-0.1.8`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/routers.py` — `AuthGraphQLProtocolTypeRouter` wrapping `ProtocolTypeRouter`, `URLRouter`, `AllowedHostsOriginValidator`, `AuthMiddlewareStack`, plus `GraphQLHTTPConsumer` / `GraphQLWSConsumer`.
-- strawberry-graphql-django ships a Channels `ProtocolTypeRouter` helper; graphene-django ships none.
 
 #### Architectural posture
 
@@ -2764,10 +2259,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - `strawberry-graphql-django` ships a small `routers.py` that builds a `ProtocolTypeRouter` over `GraphQLHTTPConsumer` and `GraphQLWSConsumer` for consumers using Channels. The module is ~30 lines but is the single import that makes ASGI / WebSocket migration painless.
 - Shipping a functionally-equivalent helper lets strawberry-graphql-django migrants update one import line in their ASGI entrypoint. This card exists primarily to reduce migration friction, not to expand the API surface.
 - small slice; explicit migration aid.
-
-#### Note
-
-- small `routers.py` (~30 lines) with a soft `channels` dependency; tests for both channels-present and channels-absent paths. Pure migration-aid card.
 
 #### Card references
 
@@ -2783,51 +2274,11 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Labels: `auth`, `mutations`, `public-api`
 - Spec: [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
-| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
-| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-
 #### Definition of done
 
 - [x] Implement `django_strawberry_framework/auth/` with `login_mutation`, `logout_mutation`, `register_mutation`, and a `current_user` query helper, each composable with the existing permissions surface.
 - [x] Mirrored tests under `tests/auth/`.
 - [x] Documented as opt-in: consumers must import explicitly; auth mutations are not injected into every schema.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/auth/` — `mutations.py` (login / logout / register), `queries.py` (`current_user`), `utils.py`.
-- strawberry-graphql-django ships a small auth-mutations module.
 
 #### Why it matters
 
@@ -2836,10 +2287,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 #### Dependencies
 
 - depends on `DONE-036-0.0.11`.
-
-#### Note
-
-- new `auth/` module (`login` / `logout` / `register` + `current_user` query helper) composing with permissions; builds on DONE-036-0.0.11's mutation infra. Mirrored tests; opt-in import.
 
 #### Card references
 
@@ -2855,49 +2302,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Labels: `mutations`, `public-api`, `serializers`
 - Spec: [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
-| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
-| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
-| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [RELAY_GLOBALID_STRATEGY](docs/GLOSSARY.md#relay_globalid_strategy) | shipped (`0.0.9`) |
-| [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) | shipped (`0.0.9`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-
 #### Package files
 
 - [`django_strawberry_framework/rest_framework/`](django_strawberry_framework/rest_framework/)
@@ -2910,7 +2314,7 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 #### Definition of done
 
 - [x] Add `docs/SPECS/spec-039-serializer_mutations-0_0_13.md`.
-- [x] Implement `django_strawberry_framework/rest_framework/` exposing `SerializerMutation` (final name pinned during implementation) on the DRF-style Meta surface: `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`.
+- [x] Implement `django_strawberry_framework/rest_framework/` exposing [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) (final name pinned during implementation) on the DRF-style Meta surface: `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`.
 - [x] Serializer-field → Strawberry input mapping lives in `rest_framework/serializer_converter.py`, dual-purposed for inputs and outputs (mirroring graphene's `is_input=True` flag).
 - [x] `rest_framework` is a soft dependency: package import must succeed without DRF installed; the helper raises `ImportError` with an install hint when actually called.
 - [x] Validation errors surface through the shared `errors: list[FieldError]` envelope from `DONE-036-0.0.11`, populated from `serializer.errors`.
@@ -2923,13 +2327,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - `tests/rest_framework/` (new)
 - `examples/fakeshop/apps/products/schema.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/mutation.py` — `SerializerMutationOptions` carrying `lookup_field`, `model_class`, `model_operations=["create", "update"]`, `serializer_class`, `optional_fields`; `SerializerMutation` class; `fields_for_serializer(serializer, only_fields, exclude_fields, is_input=False, convert_choices_to_enum=True, lookup_field=None, optional_fields=())` helper.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/serializer_converter.py` — DRF-field → GraphQL-type registry; same module covers input and output via `is_input` flag.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/types.py` — shared `ErrorType` envelope.
-- graphene-django ships `SerializerMutation`; the highest-leverage write-side feature for DRF migrants.
-
 #### Why it matters
 
 - `graphene-django` ships `SerializerMutation`, which builds a mutation from a DRF `Serializer` / `ModelSerializer`. This is the highest-leverage write-side feature for DRF migrants — they already have serializers defined and want to reuse them in GraphQL.
@@ -2938,11 +2335,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 #### Dependencies
 
 - `DONE-036-0.0.11` — general mutation infrastructure (including the shared `errors` envelope).
-
-#### Note
-
-- no on-board predecessor.
-- new `rest_framework/` subpackage (serializer converter dual-purposed for inputs + outputs, plus `SerializerMutation`); soft DRF dependency. Reuses DONE-036-0.0.11's infra + error envelope. Spec + tests + live HTTP.
 
 #### Card references
 
@@ -2958,42 +2350,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Relative size: L
 - Labels: `forms`, `mutations`, `public-api`
 - Spec: [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
-| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
 
 #### Package files
 
@@ -3019,26 +2375,14 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - `tests/forms/` (new)
 - `examples/fakeshop/apps/products/schema.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/mutation.py` — `BaseDjangoFormMutation`, `DjangoFormMutationOptions`, `DjangoFormMutation`, `DjangoModelDjangoFormMutationOptions`, `DjangoModelFormMutation`, plus `fields_for_form(form, only_fields, exclude_fields)` helper.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/converter.py` — `convert_form_field` registry mapping Django form fields → GraphQL types.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/types.py` — `ErrorType` envelope shape.
-- graphene-django ships `DjangoFormMutation` / `DjangoModelFormMutation`.
-
 #### Why it matters
 
-- `graphene-django` ships `DjangoFormMutation` and `DjangoModelFormMutation`: mutation classes that consume a Django `Form` / `ModelForm` and translate field validation + `cleaned_data` into a GraphQL mutation surface. Many graphene-django consumers rely on this as their write-side abstraction because it reuses validation they already have.
+- `graphene-django` ships [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) and `DjangoModelFormMutation`: mutation classes that consume a Django `Form` / `ModelForm` and translate field validation + `cleaned_data` into a GraphQL mutation surface. Many graphene-django consumers rely on this as their write-side abstraction because it reuses validation they already have.
 - Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `DONE-036-0.0.11`.
 
 #### Dependencies
 
 - `DONE-036-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to.
-
-#### Note
-
-- no on-board predecessor.
-- new `forms/` subpackage (form-field converter + `Form`/`ModelForm` mutation classes) on the DRF-style Meta surface; reuses DONE-036-0.0.11's mutation infra + shared error envelope. Spec + tests + live HTTP.
 
 #### Card references
 
@@ -3055,31 +2399,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Labels: `converters`, `mutations`, `scalars`, `uploads`
 - Spec: [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
-| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
-| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
-| [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
-| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-
 #### Package files
 
 - [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
@@ -3088,7 +2407,7 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 
 #### Definition of done
 
-- [x] Scalar conversion in `types/converters.py` returns `DjangoFileType` / `DjangoImageType` (or local equivalents) for `FileField` / `ImageField`.
+- [x] Scalar conversion in `types/converters.py` returns [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) / [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) (or local equivalents) for `FileField` / `ImageField`.
 - [x] Mutation input-type generation (`DONE-036-0.0.11`) maps the same fields to Strawberry's `Upload` scalar.
 - [x] Synthetic-model tests cover both read and write paths.
 - [x] `docs/GLOSSARY.md` documents the conversion table change.
@@ -3099,19 +2418,9 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - `django_strawberry_framework/mutations/` (input mapping)
 - `tests/types/test_converters.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py` — output mappings `files.FileField: DjangoFileType`, `files.ImageField: DjangoImageType`; input mappings `files.FileField: Upload`, `files.ImageField: Upload`.
-- strawberry-graphql-django maps `FileField` / `ImageField` to `Upload` (input) and file/image output types.
-
 #### Why it matters
 
 - `strawberry-graphql-django` maps `FileField` / `ImageField` to `Upload` on the input side and to `DjangoFileType` / `DjangoImageType` (with `name` / `path` / `size` / `url`) on the output side. Without it, every consumer that touches user uploads has to hand-roll the mapping.
-
-#### Note
-
-- pairs with `DONE-036-0.0.11` for the write side.
-- bounded converter-table addition: `FileField` / `ImageField` → file/image output types on read, `Upload` on the input side. Touches `converters.py` + mutation input mapping + tests. Pairs with `DONE-036-0.0.11`.
 
 #### Card references
 
@@ -3126,49 +2435,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Relative size: XL
 - Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
 - Spec: [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [`auto`-typed annotations](docs/GLOSSARY.md#auto-typed-annotations) | shipped (`0.0.9`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
-| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
-| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
-| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 
 #### Package files
 
@@ -3197,11 +2463,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - `tests/mutations/` (new)
 - `examples/fakeshop/apps/products/schema.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/mutations/` — `mutations.py` (create/update/delete classes), `fields.py` (`DjangoMutationField`), `resolvers.py` (sync/async write resolvers), `types.py` (input-type generation).
-- mutations are the single largest unscoped gap vs strawberry-graphql-django (create / update / delete + auto-generated Input / PartialInput types).
-
 #### Why it matters
 
 - Mutations are the single largest unscoped gap against `strawberry-graphql-django`. Consumers migrating from strawberry-graphql-django will notice the missing write side immediately.
@@ -3209,13 +2470,8 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 
 #### Dependencies
 
-- `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution.
+- `DONE-018-0.0.6` ([`Meta.primary`](docs/GLOSSARY.md#metaprimary)) — explicit primary type drives mutation target resolution.
 - `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`.
-
-#### Note
-
-- no on-board predecessor.
-- `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / DONE-039-0.0.13 / DONE-040-0.0.13.
 
 #### Card references
 
@@ -3236,34 +2492,6 @@ Security-audit remediation program, card 1 of 4. Amends spec-041 (channels_route
 - Relative size: M
 - Labels: `hardening`, `optimizer`, `performance`, `query-planning`
 - Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 
 #### Package files
 
@@ -3291,7 +2519,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 - G2 cache-safety argument (spec-004 B1 grounding): gating at plan-build time is safe with ZERO cache-key change because the plan-cache key's first component is the printed operation AST (`_print_operation_with_reachable_fragments`, `extension.py:920-982`), and `print_ast(operation)` includes the `query` / `mutation` / `subscription` keyword - a query document and a mutation document can never collide on one cache entry.
 - G2 FK-id-elision-under-non-`QUERY`-ops decision - **RESOLVED** (spec Decision 5): elision stays enabled, with a resolver-time loaded-check. With the optimizer's `only` suppressed the full source row loads, so the FK `attname` column the elision stub reads is normally present; but a consumer-returned `.only(...)` can still defer it, so `types/resolvers.py::_build_fk_id_stub` verifies the column is loaded and falls back **loudly** (strictness-visible) when it is not - never a silent per-row lazy load. Pinned by tests in `tests/types/test_resolvers.py`.
 - **[DEFERRED - G3 ships no runtime code in spec-035; moved to the abstract-return optimizer entry card (BACKLOG `polymorphic_interface_connections`); see spec-035 Decision 6/7, Revision 3-4.]** G3 - fragment type-condition narrowing. The walker treats `type_condition` purely as a fragment marker (`walker.py:845` is `hasattr(selection, "type_condition")`); `_included_field_selections` (`walker.py:733`) inlines every fragment body unconditionally. Two verified failure modes on interface/union queries: (a) fields from sibling concrete types miss the current `field_map` and fall through the unknown-name guard (`walker.py:203` `if django_field is None:` -> `continue`) - those branches are silently UNPLANNED, so every sibling-type relation selection is an N+1 the plan can never cover (B3 strictness fires at runtime, which is detection, not prevention); (b) a same-named relation existing on two members gets planned for the wrong branch - a spurious `select_related` join / over-projection (over-fetch, never wrong data).
-- **[DEFERRED - G3 ships no runtime code in spec-035; moved to the abstract-return optimizer entry card (BACKLOG `polymorphic_interface_connections`); see spec-035 Decision 6/7, Revision 3-4.]** G3 implementation (bounded, registry-only): when a fragment carries a non-None `type_condition`, inline its body only when the condition's type name matches the current planning type - the `type_cls` returned by `_resolve_field_map` (`walker.py:197`): its own GraphQL name, a name in its `Meta.interfaces`, or the registered primary type name for the model; otherwise skip the fragment subtree. Resolve names through the registry/definition only - NO graphql-core schema lookups in the walk, preserving the B7 invariant (zero per-request Django/schema introspection). Upstream's heavier alternative for contrast: per-model concrete-type resolution via `get_possible_concrete_types` (`strawberry_django/utils/inspect.py:206-245`) with a per-concrete-type `ResolveInfo` re-walk (`optimizer.py:1492-1517`) - explicitly out of scope; we narrow, we do not multi-plan.
+- **[DEFERRED - G3 ships no runtime code in spec-035; moved to the abstract-return optimizer entry card (BACKLOG `polymorphic_interface_connections`); see spec-035 Decision 6/7, Revision 3-4.]** G3 implementation (bounded, registry-only): when a fragment carries a non-None `type_condition`, inline its body only when the condition's type name matches the current planning type - the `type_cls` returned by `_resolve_field_map` (`walker.py:197`): its own GraphQL name, a name in its [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces), or the registered primary type name for the model; otherwise skip the fragment subtree. Resolve names through the registry/definition only - NO graphql-core schema lookups in the walk, preserving the B7 invariant (zero per-request Django/schema introspection). Upstream's heavier alternative for contrast: per-model concrete-type resolution via `get_possible_concrete_types` (`strawberry_django/utils/inspect.py:206-245`) with a per-concrete-type `ResolveInfo` re-walk (`optimizer.py:1492-1517`) - explicitly out of scope; we narrow, we do not multi-plan.
 - **[DEFERRED - G3 ships no runtime code in spec-035; moved to the abstract-return optimizer entry card (BACKLOG `polymorphic_interface_connections`); see spec-035 Decision 6/7, Revision 3-4.]** G3 cache-safety argument: narrowing is a pure function of (document, target_model, origin) - all three are already plan-cache key components (`extension.py:920-982`), so narrowed plans cache correctly with no key change.
 
 #### Definition of done
@@ -3299,7 +2527,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 - [x] Spec file added under `docs/` (numbered to the card at implementation time, suffix `optimizer_hardening-0_0_10`; it stays at the live working path until the next spec author's batched archive sweep relocates it to `docs/SPECS/`), recording all three guard mechanisms, the G2 elision decision, and the deferred-findings table from the 2026-06-11 audit with upstream file:line anchors.
 - [x] G1: early-return lands in `extension.py::_optimize`; test pins the pass-through - root resolver evaluates the queryset (`len(qs)`) then returns it; assert exactly one SQL query total and that the returned object is the SAME queryset instance (not a re-executing clone). A second test pins that the manager-coercion path (`Model.objects`) still optimizes (the guard must sit after `extension.py:714`).
 - [x] G2: a mutation operation whose root resolver returns a queryset produces a plan with empty `only_fields` while `select_related` / `prefetch_related` survive; a textually-identical selection set under a `query` operation still projects `only_fields`; both plans coexist in the cache (distinct printed-AST keys). Subscription operations covered by the same gate.
-- [x] G2: the FK-id elision under non-QUERY ops decision is pinned by a dedicated test matching whatever the spec records.
+- [x] G2: the [FK-id elision](docs/GLOSSARY.md#fk-id-elision) under non-QUERY ops decision is pinned by a dedicated test matching whatever the spec records.
 - [ ] **[DEFERRED to the abstract-return optimizer entry card — BACKLOG `polymorphic_interface_connections`; see spec-035 Decision 6/7 / Revision 3]** G3: union and interface fragment tests - sibling-type fragment bodies are excluded from the plan (no spurious `select_related` / `only` entries); matching-type and interface-implementor fragments still plan; the same-named-relation-on-two-members shape is a dedicated regression test; B3 strictness keys remain branch-sensitive after narrowing (no regression in `tests/optimizer/` strictness coverage).
 - [ ] **[DEFERRED to the abstract-return optimizer entry card — BACKLOG `polymorphic_interface_connections`; see spec-035 Decision 6/7 / Revision 3]** Strictness `warn` no longer fires for relation selections inside correctly-narrowed sibling fragments that the resolver never executes (the old silent-N+1 signature is gone from that path).
 - [x] No B1-B8 regressions: full suite green at the 100% coverage gate; the plan-cache hit path gains zero allocations (memoized id-resolver check stays ~40ns, cache-hit promotion unchanged); `ruff format` + `ruff check` clean.
@@ -3313,12 +2541,6 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 - `tests/optimizer/test_extension.py`, `tests/optimizer/test_walker.py` - mirrored guard tests.
 - `docs/SPECS/spec-035-optimizer_hardening-0_0_10.md` - new (lives at the live working path; the `docs/SPECS/` archive move is the next spec author's batched sweep, never per-card).
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1781` - the resolve hook optimizes only when `isinstance(ret, QuerySet) and ret._result_cache is None`; `optimizer.py:1628` re-guards inside `optimize()` with `is_optimized(qs) or qs._result_cache is not None`; `queryset.py:50-62` monkeypatches `QuerySet._clone` to carry the optimized flag across clones. The execution-state half of this contract (G1) is the part we are missing; the flag half is redundant under our O3 root gate.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1784` and `:1817` - `enable_only` is ANDed with `info.operation.operation == OperationType.QUERY`, so `.only()` is never applied to mutation/subscription querysets while select/prefetch optimization stays on - exactly the G2 split this card adopts.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1492-1517` + `utils/inspect.py:206-245` (`get_possible_concrete_types`) - upstream resolves the concrete types a model can render as and re-walks hints per concrete type under a synthesized `ResolveInfo`; G3 adopts the narrowing outcome through the registry instead of the schema, without the per-type re-walk.
-
 #### Why it matters
 
 - G2 is sequencing-critical: the 0.0.11 mutations cohort (`Mutations + auto-generated Input types` onward) makes mutation root resolvers returning querysets a mainstream path; shipping mutations on top of an ungated `.only()` bakes deferred-refetch storms and deferred-`save()` surprises into the first write-side release.
@@ -3329,14 +2551,6 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 #### Dependencies
 
 - **[DEFERRED - G3 ships no runtime code in spec-035; moved to the abstract-return optimizer entry card (BACKLOG `polymorphic_interface_connections`); see spec-035 Decision 6/7, Revision 3-4.]** G3 rewrites fragment inlining in the same `walker.py` selection-normalization seam (`_included_field_selections` / `_named_children`) that connection-aware planning extends; land after it to avoid concurrent walker churn, and so G3's union/interface tests can cover connection-wrapped fragments too.
-
-#### Note
-
-- Deferred audit finding (owned elsewhere): windowed nested-prefetch pagination (`strawberry_django/pagination.py:209-282`, `RowNumber` window partitioned by the relation FK) and `totalCount` reuse from the `_strawberry_total_count` window annotation (`relay/list_connection.py`) are the nested-connection performance findings - both already scoped under `Connection-aware optimizer planning`.
-- Deferred audit finding (not scheduled): annotation hints - upstream supports `field(annotate=...)` including callables receiving `Info` (`strawberry_django/optimizer.py:492-511`, placeholder-label mechanism at `:206-210` / `:786-798`); we have no annotate path, so computed DB fields cannot be auto-planned. Adjacent to the BACKLOG model-property / cached-property optimization-hints item; promote together if scheduled.
-- Deferred audit finding (deliberate non-adoption, record as a spec non-goal): prefetch MERGING - upstream's `PrefetchInspector.merge` (`strawberry_django/utils/inspect.py:324-387`) unions `only` sets and merges conflicting `Prefetch` querysets, using an `_optimizer_sentinel` marker (`optimizer.py:352-355`) to permit unsafe merges of its own prefetches. Our consumer-wins drop in `diff_plan_for_queryset` (spec-004 B8) is a permission-boundary safety stance, not an oversight; revisit only behind a strict no-custom-filter merge precondition.
-- Deferred audit findings (out of scope, record as spec non-goals): GenericForeignKey prefetch (`strawberry_django/optimizer.py:1081-1087`), django-polymorphic / InheritanceManager `select_subclasses` cooperation (`optimizer.py:1251-1252`, `:1643-1664`), and a `DjangoOptimizerExtension.disabled()` contextvar escape hatch (`optimizer.py:1796-1803`).
-- Audit method note: both inventories were produced from source on 2026-06-11 (36 upstream capabilities; full subsystem map of ours); every gap claimed here was re-verified by direct grep/read of our package before this card was written - no claim rests on the inventory alone.
 
 #### Card references
 
@@ -3355,53 +2569,6 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 - Labels: `optimizer`, `permissions`, `public-api`, `security`
 - Spec: [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
-| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
-| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-
 #### Package files
 
 - [`django_strawberry_framework/permissions.py`](django_strawberry_framework/permissions.py)
@@ -3415,7 +2582,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 #### Planning note
 
-Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe; per-field permission hooks via the reserved `Meta.fields_class` slot are deferred to the later FieldSet work (`TODO-BETA-059-0.1.1`), not shipped in this card.
+Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe; per-field permission hooks via the reserved [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) slot are deferred to the later [FieldSet](docs/GLOSSARY.md#fieldset) work (`TODO-BETA-059-0.1.1`), not shipped in this card.
 
 #### Dependencies
 
@@ -3423,7 +2590,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Scope
 
-- `apply_cascade_permissions`
+- [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions)
 - reserved `Meta.fields_class` slot for per-field permission hooks; the per-field read-gate itself ships with the later FieldSet work (`TODO-BETA-059-0.1.1`), not in this card
 - Optimizer cooperation: cascaded relations downgrade to `Prefetch(queryset=...)` so visibility filters survive the join (carries the existing `get_queryset` → `Prefetch` downgrade contract across the cascade walk).
 - composable permission rules that remain visible from the owning type/query surface
@@ -3444,20 +2611,14 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - [x] Check all permission-related ORM paths for N+1 behavior.
 - [x] `apply_cascade_permissions` exported from the public surface (`from django_strawberry_framework import apply_cascade_permissions`). Both sync and async-aware variants ship together.
 - [x] The four upstream invariants are each pinned by a dedicated test: ContextVar cycle guard; single-column FK/O2O scope; multi-DB pinning to the caller's alias; nullable-FK rows preserved.
-- [x] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on `FilterSet` / `OrderSet`) composes with the new cascade visibility. Decision recorded in `docs/SPECS/spec-034-permissions-0_0_10.md` before the implementation pass starts; tests pin both shapes.
-- [x] Cascade composes with `DjangoConnectionField` (`DONE-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
+- [x] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on [`FilterSet`](docs/GLOSSARY.md#filterset) / [`OrderSet`](docs/GLOSSARY.md#orderset)) composes with the new cascade visibility. Decision recorded in `docs/SPECS/spec-034-permissions-0_0_10.md` before the implementation pass starts; tests pin both shapes.
+- [x] Cascade composes with [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) (`DONE-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
 - [x] Live HTTP coverage in `examples/fakeshop/test_query/` exercises real fakeshop permission users (via `services.create_users(1)`) across a 2-deep FK cascade. Real users, not mocked `info.context.user`.
 
 #### Foundation-slice seam
 
 - `apply_cascade_permissions(cls, queryset, info)` walks the model graph at call time; `registry.iter_definitions()` (shipped in 0.0.4) is the public iterator that walk uses to find each owner type's `get_queryset`.
 - `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; field-level permission hooks (`fields_class`) extend the same skip-set semantics.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_queryset` is graphene_django's per-type visibility hook, applied to related fields by `converter.py`'s `CustomField.wrap_resolve` (which routes FK/O2O resolution through `_type.get_queryset` unless `bypass_get_queryset` is set) — the same per-type visibility contract this card's `apply_cascade_permissions` automates by walking FK/O2O edges into each target type's `get_queryset`, so the graphene_django parity is required.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/utils.py::bypass_get_queryset` is graphene_django's explicit per-resolver escape hatch from that visibility hook, confirming graphene_django scopes permission filtering per-relation rather than cascading it; this card's cascade walk is the required-parity superset that propagates the same `get_queryset` visibility across the model graph.
-- django-graphene-filters ships rich cascade + per-field permissions; strawberry-graphql-django's per-field story is weaker (🍓 parity-adjacent).
 
 #### Why it matters
 
@@ -3477,10 +2638,6 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Open question — M2M / reverse-relation visibility: the upstream cascade explicitly skips M2M and reverse FK. Decide whether to extend coverage here or defer to a sibling card; if deferring, name the follow-up card in the spec.
 - Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-059-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
 
-#### Note
-
-- full subsystem: `apply_cascade_permissions`, per-field `Meta` permission hooks, and optimizer `Prefetch`-downgrade integration. New `permissions.py` (or package) + `docs/SPECS/spec-034-permissions-0_0_10.md` + tests.
-
 #### Card references
 
 - Dependency: future `DjangoConnectionField` -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
@@ -3496,49 +2653,6 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Labels: `connections`, `optimizer`, `query-planning`, `relay`
 - Spec: [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
-| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
-| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
-| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
-| [`order_input_type`](docs/GLOSSARY.md#order_input_type) | shipped (`0.0.8`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-
 #### Package files
 
 - [`django_strawberry_framework/connection.py`](django_strawberry_framework/connection.py)
@@ -3550,7 +2664,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 #### Definition of done
 
 - [x] New spec at `docs/SPECS/spec-033-connection_optimizer-0_0_9.md` (the canonical structured filename).
-- [x] Walker recognizes connection edge/node shapes without reaching into `DjangoConnectionField` internals.
+- [x] Walker recognizes connection edge/node shapes without reaching into [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) internals.
 - [x] Tests cover the cookbook-equivalent nested-connection shape against fakeshop or the cardinality fixture.
 - [x] No regression on the existing B1-B8 plan-cache and queryset-diff coverage.
 
@@ -3562,27 +2676,9 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - future `django_strawberry_framework/connection.py`
 - mirrored optimizer tests
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_optimize_prefetch_queryset` detects a `StrawberryDjangoConnectionExtension` on a nested field, computes a `SliceMetadata.from_arguments(first, last, before, after, max_results)`, and pushes the cursor slice into the prefetch via `apply_window_pagination` (a `RowNumber` `Window` partitioned by the related field) so each parent's connection is paginated inside one query — the connection-aware planning this card designs, making the strawberry_django parity required.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/list_connection.py::DjangoListConnection.resolve_connection` cooperates with that planner by reading `node._strawberry_total_count` / a `models.Window` annotation for `totalCount` instead of issuing a second `count()` — the per-connection total-count planning this card folds in; graphene_django ships no native connection-aware optimizer, so the claim is correctly strawberry_django-only and required.
-- strawberry-graphql-django plans connection selections natively; graphene-django has only rudimentary connection-aware optimization (⚛️ parity-adjacent).
-
 #### Dependencies
 
 - gated on `DONE-030-0.0.9` / Relay decisions.
-
-#### Note
-
-- bounded optimizer extension: teach the selection-walker to recognize Relay `edges { node }` and plan paginated selections. No new subpackage; touches `walker.py` / `plans.py` / `extension.py` + mirrored tests.
-- The optimizer's plan cache, `select_related` / `prefetch_related` planning, FK-id elision, and queryset diffing are all proven for direct selection trees and nested non-Relay relation paths.
-- Relay-style nested connection selections (`{ allObjects { edges { node { values { edges { node { value } } } } } } }`, mirroring the cookbook recipes shape) have not been exercised against the optimizer.
-- The cookbook reference `AdvancedDjangoFilterConnectionField` does its own argument and queryset construction; the Strawberry equivalent will need the optimizer to recognize Relay edge/node wrappers in its selection walk.
-- Selection-tree walker awareness of Relay `edges { node { ... } }` pattern.
-- Connection-pagination-aware queryset planning (`Prefetch` downgrade for `connection { edges { node } }`, `total_count` aggregate cooperation, slice-aware projections).
-- Plan-cache key hygiene for paginated selections (skip pagination args that do not affect selection shape, hash the ones that do).
-- Strictness-mode interaction with connection paths so unplanned nested connection access still surfaces as N+1.
-- Unblocked the fakeshop products connections-only conversion (the fakeshop-activation card). The products live optimizer tests (`examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_*` — root-node merge, nested reverse-FK prefetch depth-2, nested forward-FK `select_related` depth-2) rely on root-list optimization. A `0.0.9` `DjangoConnectionField` derived an empty plan before this card (the flat walker was connection-unaware), so the products list->connection replacement landed together with this card rather than ahead of it, keeping the `test_products_optimizer_*` SQL-shape coverage honest.
 
 #### Card references
 
@@ -3598,51 +2694,6 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
 - Spec: [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
-| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
-| [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) | shipped (`0.0.9`) |
-| [RELAY_GLOBALID_STRATEGY](docs/GLOSSARY.md#relay_globalid_strategy) | shipped (`0.0.9`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
-| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
-| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
-| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
-| [`order_input_type`](docs/GLOSSARY.md#order_input_type) | shipped (`0.0.8`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-
 #### Package files
 
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
@@ -3657,7 +2708,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Planning note
 
-blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
+blocked on `DONE-030-0.0.9` ([`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield)). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
 
 #### Dependencies
 
@@ -3671,13 +2722,13 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 #### Definition of done
 
 - [x] New spec: `docs/SPECS/spec-032-full_relay-0_0_9.md` covering all eight goals above with worked examples and decision rationale.
-- [x] `DjangoNodeField` and `DjangoNodesField` exported from the package public surface; both wired through the registry's GlobalID decode path and the per-type `get_queryset`.
-- [x] Reverse-FK and M2M relations on `relay.Node`-implementing types expose their Connection counterparts; `Meta.relation_shapes` opt-out documented.
+- [x] [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) and [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) exported from the package public surface; both wired through the registry's GlobalID decode path and the per-type `get_queryset`.
+- [x] Reverse-FK and M2M relations on `relay.Node`-implementing types expose their Connection counterparts; [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) opt-out documented.
 - [x] Cursor pagination math passes the package's hand-authored Relay-spec conformance suite (the `first`/`after`/`last`/`before`/`pageInfo` edge cases), against both a root connection and a synthesized relation connection.
 - [x] `Meta.connection = {"total_count": True}` adds a `totalCount` field that runs `qs.count()` on the unpaginated post-filter queryset.
 - [x] Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
 - [x] Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
-- [x] Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
+- [x] Six schema-validation diagnostics from Goal 6 raise [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) with the documented messages.
 - [x] `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
 - [x] The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-066-0.1.5`.
 - [x] 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
@@ -3686,78 +2737,25 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 
 - `django_strawberry_framework/testing/relay.py` (new) — test helpers
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_node` implements the Relay `Node` interface by running `cls.get_queryset(model.objects, info).get(pk=id)`, so graphene_django's full Relay story routes single-object id lookups through the type's visibility hook — the same Node + global-id + permission-aware root surface this card assembles, hence required parity.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/utils.py::resolve_model_nodes` (and `resolve_model_node`) resolve `relay.GlobalID` values to model instances while running the type's `get_queryset` (via `run_type_get_queryset`), and `DjangoListConnection.resolve_connection` provides the connection half — together the Node + Connection + validated-root Relay story this card mirrors, so the strawberry_django parity is required.
-
 #### Dependencies
 
 - `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when DONE-030-0.0.9 lands.
 - `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
-- `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
-- `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
+- `DONE-028-0.0.8` ([Ordering](docs/GLOSSARY.md#ordering) subsystem) — soft dependency for the orderBy argument on Connections.
+- `DONE-033-0.0.9` ([Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning)) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
 - `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when DONE-034-0.0.10 lands.
 
 #### Decision
 
 - ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/SPECS/spec-015-relay_interfaces-0_0_5.md`][spec-015]).
-- Non-Strawberry-interface classes in `Meta.interfaces` → rejected at validation with the offending class name.
-
-#### Note
-
-- eight-goal umbrella for the complete Relay surface (Root `node`/`nodes` fields, relation-as-Connection upgrade, cursor contracts, permission integration, schema-validation diagnostics, test helpers, fakeshop activation). New `relay.py` + `test/relay.py` + finalizer changes + spec. Cursor mechanics overlap with DONE-030-0.0.9; this card is the connective tissue tying it all together.
-- ~~`Meta.interfaces` design~~ — `Meta.interfaces` accepted end-to-end for any Strawberry interface; `(relay.Node,)` activates the Node foundation.
-- ~~Default `resolve_*` injection~~ — `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` defaults injected when `relay.Node` is in `Meta.interfaces`; consumer overrides preserved via Strawberry's `__func__` identity test.
-- ~~`is_type_of` injection~~ — Unconditional on every `DjangoType`; consumer-declared `is_type_of` preserved.
-- ~~`CompositePrimaryKey` rejection~~ — Django 5.2+ composite-pk models raise `ConfigurationError` at finalization with the documented escape hatch (`id: relay.NodeID[...]` annotation).
-- `node(id: GlobalID!): Node` — single-object refetch. Decodes the GlobalID, dispatches to the type's `resolve_node`, returns the resolved object. Returns `null` if the GlobalID decodes to a type/ID the requesting user can't see (respects `get_queryset`).
-- `nodes(ids: [GlobalID!]!): [Node]!` — batch refetch. Decodes each GlobalID, dispatches per-type to `resolve_nodes` (batched), returns results in input order. Missing IDs become `null` entries (preserves positional correspondence).
-- **Implicit upgrade** (default): every `DjangoType` whose `Meta.interfaces` includes `relay.Node` automatically exposes its reverse-FK and M2M relations as Connections in addition to the existing `list[T]` shape. Field names follow a stable convention (`itemsConnection: ItemConnection` alongside `items: list[Item]`).
-- **Explicit-only**: consumers who want only Connections (or only lists) on a relation declare `Meta.relation_shapes = {"items": "connection"}` (or `"list"`, or `"both"` — `"both"` is the default for Relay types).
-- **Cursor format**: opaque base64-encoded payload by default (`b64("offset:N")`). Documented as opaque — clients must not parse it. `Meta.cursor_field` for stable column-based cursors is **out of scope** for this card; lives in BETTER item 39 sub-feature 3.
-- **`pageInfo`**: emits the four standard fields (`hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`) with correct semantics — including the spec-mandated *"the connection MUST resolve `hasNextPage` correctly even when the consumer didn't request it"* invariant.
-- **Edge cases**: `first: 0` returns empty edges + `pageInfo`. `first: N` with N > remaining rows returns the actual remainder. `after` cursor for a row that no longer exists falls through to the next existing row (no error). Both `first` and `last` in the same query is rejected with a typed error.
-- **`totalCount`**: an opt-in field on every Connection (`Meta.connection = {"total_count": True}`). When selected, runs `qs.count()` on the *unpaginated* queryset (post-filter, pre-slice). Documented as the canonical Relay-compatible total-count surface.
-- `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`)
-- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`)
-- `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-060-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
-- decode the GlobalID server-side (never trust the client's claim of which type the ID belongs to)
-- dispatch to the resolved type's `resolve_node` (which honors `cls.get_queryset(qs, info)`)
-- return `null` for rows the user can't see (not an error — the Relay spec requires `null`, not an exception)
-- never reveal *existence* of hidden rows through error timing or status codes
-- `relay.GlobalID`, `relay.NodeID[...]`, `relay.Connection`, `relay.ListConnection`, `relay.Edge`, `relay.PageInfo` in `Meta.interfaces` → rejected with a message naming the helper and explaining it's a scalar / annotation / field-type rather than an interface.
-- `Meta.connection = {...}` declared on a type that doesn't include `relay.Node` in `Meta.interfaces` → rejected with a message suggesting either remove the `connection` key or add `relay.Node` to interfaces.
-- A `DjangoNodeField()` query field on a schema with **no** `DjangoType`s declaring `relay.Node` → rejected at finalization with *"node lookup configured but no Node types registered."*
-- `node(id:)` and `nodes(ids:)` resolve real product / category / item / entry GlobalIDs
-- Live HTTP tests under `examples/fakeshop/test_query/` exercise the full Relay query shape (refetch, paginated connection, cursor round-trip, `totalCount`)
-- Type-rename GlobalID migrations (Django-migrations-style history that lets old-format IDs decode alongside new)
-- Polymorphic connections (`Connection[Interface]` with auto-dispatched concrete types per edge)
-- `Meta.cursor_field` for stable cursors keyed on a deterministic column
-- Auto-upgrade reverse FK / M2M to Connection based on a row-count threshold
-- Refetchable container schema metadata for `useRefetchableFragment`
-- Permission-aware cursor decoding (cursor decode re-runs `get_queryset` so privileged cursors don't leak)
-- `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`)
-- `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
-- `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
-- `django_strawberry_framework/types/finalizer.py` — auto-upgrade reverse-FK / M2M to Connection
-- `tests/test_relay_node_field.py`, `tests/test_relay_connection.py` (new)
-- `examples/fakeshop/test_query/test_library_api.py` — Relay-shape HTTP tests
-- `examples/fakeshop/apps/products/schema.py` — Relay surface activation (lit up at fakeshop activation time)
-- `docs/SPECS/spec-032-full_relay-0_0_9.md` (new)
-- `docs/GLOSSARY.md` — Relay surface description
-- Relay node refetch from Apollo / Relay Compiler clients (the *"Relay just works"* end state for `1.0.0`)
-- Fakeshop product-catalog Relay activation (Goal 8)
-- Per-type `useFragment` / `useRefetchableFragment` patterns (mechanics; the schema-side `@refetchable` directive support lives in BETTER item 39 sub-feature 5)
-- Every BETTER item 39 sub-feature builds on this card's mechanics
-- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `DONE-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with DONE-033-0.0.9 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
+- Non-Strawberry-interface classes in [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) → rejected at validation with the offending class name.
 
 #### Card references
 
 - Dependency: blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
-- Related: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
-- Related: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
-- Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-060-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-060-0.1.2` - `Meta.search_fields` support
+- Related: `filter: <Type>FilterInput` — generated from [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
+- Related: `orderBy: [<Type>OrderInput!]` — generated from [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
+- Related: `search: String` — generated from [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) (composes with `TODO-BETA-060-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-060-0.1.2` - `Meta.search_fields` support
 - Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when DONE-030-0.0.9 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField` (Relay connection field)
 - Related: `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Related: `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when DONE-034-0.0.10 lands. -> `DONE-034-0.0.10` - Permissions subsystem
@@ -3773,42 +2771,6 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
 - Spec: [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Schema introspection management command](docs/GLOSSARY.md#schema-introspection-management-command) | shipped (`0.0.9`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) | shipped (`0.0.9`) |
-| [RELAY_GLOBALID_STRATEGY](docs/GLOSSARY.md#relay_globalid_strategy) | shipped (`0.0.9`) |
-
 #### Package files
 
 - [`django_strawberry_framework/filters/base.py`](django_strawberry_framework/filters/base.py)
@@ -3823,12 +2785,12 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 
 #### Planning note
 
-Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but before the Full Relay story. This is the Relay identity-format decision: Django model identity should be the durable GlobalID anchor before root Node/refetch behavior and client-cache-facing Relay semantics harden.
+Promoted from BACKLOG.md item 40 and slotted after [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) but before the Full Relay story. This is the Relay identity-format decision: Django model identity should be the durable GlobalID anchor before root Node/refetch behavior and client-cache-facing Relay semantics harden.
 
 #### Scope
 
-- Switch the default Relay GlobalID payload for `DjangoType` rows from GraphQL type name + id to Django model label + id, e.g. `products.item:42`.
-- Add a per-type `Meta.globalid_strategy` override and a schema-wide `DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]` setting, with precedence `Meta` override, then setting, then package default.
+- Switch the default Relay GlobalID payload for [`DjangoType`](docs/GLOSSARY.md#djangotype) rows from GraphQL type name + id to Django model label + id, e.g. `products.item:42`.
+- Add a per-type [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) override and a schema-wide `DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]` setting, with precedence `Meta` override, then setting, then package default.
 - Support the planned strategies: `model` as the new default, `type` as an opt-in legacy/standard Relay convention, `type+model` as a transitional decoder/encoder mode, and callable strategies for fully custom encodings.
 - Route decoded model-label IDs through Django's app registry and the framework registry so multiple `DjangoType`s for one model resolve through the primary type unless the consumer explicitly opts into type-scoped IDs.
 - Document the edge cases: proxy models, multi-table inheritance, slug/custom `resolve_id_attr` values, composite-primary-key rejection, and rare Django model/app rename aliases.
@@ -3857,20 +2819,10 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 - `tests/types/test_relay_interfaces.py` and related Relay tests
 - `docs/GLOSSARY.md`, `docs/README.md`, and the active Relay spec when the feature ships
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene/relay/node.py::Node.to_global_id` — graphene-django Relay nodes encode the GlobalID as base64 `<GraphQL type name>:<id>` (type-name-anchored). Tagged **parity-adjacent, not required**: the type-anchored convention itself already shipped at parity in `DONE-015-0.0.5` (the Relay-supplied `id: GlobalID!`). This card preserves that exact convention as the opt-in `type` strategy and makes a Django-model-anchored payload (`app_label.model:id`, e.g. `products.item:42`) the new default — extending the upstream GlobalID surface with a Django-idiomatic encoding neither upstream offers.
-- `strawberry.relay.GlobalID` (consumed by strawberry-graphql-django; `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py` wires the Relay node types) encodes `to_base64(type_name, node_id)` — also type-name-anchored. Same parity-adjacent relationship: the standard convention stays available as the `type` strategy, while the model-anchored default plus the `Meta.globalid_strategy` override and the `RELAY_GLOBALID_STRATEGY` setting are the beyond-parity differentiator. Tagged `adjacent` (not `required`) for both upstreams so the Alpha cut stays parity-honest — GlobalID parity proper was met in `DONE-015-0.0.5`.
-
 #### Why it matters
 
 - The standard Relay convention bakes the GraphQL type name into durable object identity. In Django apps the model is the durable thing; the GraphQL type is a refactor-friendly facade.
 - Getting this right before `1.0.0` lets consumers rename GraphQL types without invalidating every cached GlobalID. Waiting until after Full Relay ships turns the same decision into migration work.
-
-#### Note
-
-- Original backlog score: Realistic 9/10, Impact 8/10, Difficulty 3/10; bang-for-buck score 24.0.
-- Legitimate legacy mode remains available: projects that intentionally scope identity by GraphQL type can opt into the `type` strategy per type or project-wide.
 
 #### Card references
 
@@ -3888,61 +2840,6 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 - Labels: `connections`, `filters`, `optimizer`, `ordering`, `public-api`, `relay`
 - Spec: [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
-| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`order_input_type`](docs/GLOSSARY.md#order_input_type) | shipped (`0.0.8`) |
-| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
-| [`Ordering`](docs/GLOSSARY.md#ordering) | shipped (`0.0.8`) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
-| [`Meta.description`](docs/GLOSSARY.md#metadescription) | shipped |
-| [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
-| [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
-| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-
 #### Package files
 
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
@@ -3957,7 +2854,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 #### Planning note
 
-Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`DONE-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-060-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-059-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
+Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) (`DONE-027-0.0.8`), `orderBy:` from [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) (`DONE-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-060-0.1.2` lands; [`FieldSet`](docs/GLOSSARY.md#fieldset) selection composition is layered in by `TODO-BETA-059-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
 
 #### Dependencies
 
@@ -3982,7 +2879,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - [x] Implement `django_strawberry_framework/connection.py`.
 - [x] Add `tests/test_connection.py`.
 - [x] Decide whether full Relay support belongs here or a separate `relay/` subpackage.
-- [x] Promote `DjangoConnectionField` only when end-to-end schema usage is tested.
+- [x] Promote [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) only when end-to-end schema usage is tested.
 - [x] When the wrapped type declares `Meta.filterset_class`, the connection field exposes `filter: <Type>FilterInput` and routes input values through the filterset's `apply_sync` / `apply_async` pair.
 - [x] When the wrapped type declares `Meta.orderset_class`, the connection field exposes `orderBy: [<Type>OrderInput!]` and routes through the orderset's `apply_sync` / `apply_async` pair.
 - [x] Connection field composes with `cls.get_queryset(queryset, info)` — visibility scoping runs before any filter / order / cursor work.
@@ -3991,29 +2888,17 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 
 #### Foundation-slice seam
 
-- `finalize_django_types()` is the single architectural entry point that `DjangoConnectionField(DjangoType)` (and `DjangoNodeField`) will auto-trigger as their wrapper.
+- `finalize_django_types()` is the single architectural entry point that `DjangoConnectionField(DjangoType)` (and [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield)) will auto-trigger as their wrapper.
 - An auto-trigger wrapper must respect the single-threaded-setup window: either be constrained to schema-construction time, or acquire a real lock around the finalizer.
-- Connection-aware optimizer planning is its own follow-up slice (`DONE-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py::DjangoConnectionField.connection_resolver` is graphene_django's Relay connection field: it reads `first`/`last`/`before`/`after`, enforces the `first`-or-`last` guard, runs the type's `get_queryset` for visibility, then slices via `resolve_connection` — the exact composition (`get_queryset` -> filter -> order -> cursor slice) this card's `DjangoConnectionField` ships, so the graphene_django parity is required.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py::StrawberryDjangoConnectionExtension.resolve` resolves a Django queryset and hands it to `connection_type.resolve_connection(nodes, info, before=, after=, first=, last=, max_results=)`, layering the relay pagination args on top of the field's auto-derived filter/order arguments — the Strawberry-side analogue of graphene's filter-connection field this card targets, making the strawberry_django parity required.
-- both upstreams ship Relay-shaped connection fields.
+- [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) is its own follow-up slice (`DONE-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
 
 #### Dependencies
 
-- `FilterSet` (`DONE-027-0.0.8`)
-- `OrderSet` (`DONE-028-0.0.8`)
+- [`FilterSet`](docs/GLOSSARY.md#filterset) (`DONE-027-0.0.8`)
+- [`OrderSet`](docs/GLOSSARY.md#orderset) (`DONE-028-0.0.8`)
 - Relay/interface decisions
 - `FieldSet` — **deferred to `TODO-BETA-059-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker.
-- `DjangoType` consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern.
-
-#### Note
-
-- Filtering and Ordering ship before this card lands, so `DjangoConnectionField` consumes the existing filter and order argument factories on day one. `FieldSet` selection composition is layered in by `TODO-BETA-059-0.1.1`; the `search:` arg activates when `TODO-BETA-060-0.1.2` lands.
-- the central read-side primitive — the Relay surface and all Layer-3 arguments compose through it.
-- central Relay-shaped connection field plus cursor-pagination math; the integration point that filters / orders / aggregation / field-selection / optimizer all compose through. New `connection.py` + `docs/SPECS/spec-030-connection_field-0_0_9.md` + tests.
+- [`DjangoType`](docs/GLOSSARY.md#djangotype) consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern.
 
 #### Card references
 
@@ -4034,55 +2919,6 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Labels: `cleanup`, `developer-tools`, `public-api`, `types`
 - Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
-| [`Meta.choice_enum_names`](docs/GLOSSARY.md#metachoice_enum_names) | planned for `0.1.4` |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
-| [Schema introspection management command](docs/GLOSSARY.md#schema-introspection-management-command) | shipped (`0.0.9`) |
-| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
-| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
-| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
-| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
-| [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
-
 #### Package files
 
 - [`django_strawberry_framework/management/commands/inspect_django_type.py`](django_strawberry_framework/management/commands/inspect_django_type.py)
@@ -4098,7 +2934,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 - **Slice 1** — Strawberry `extensions=[instance]` factory-callable migration. Mechanical sweep of every `strawberry.Schema(query=…, extensions=[DjangoOptimizerExtension()])` site, replacing the deprecated instance form with `extensions=[DjangoOptimizerExtension]` (class) or `extensions=[lambda: DjangoOptimizerExtension()]` (factory callable). Strawberry deprecated the instance form upstream; future releases will remove it. Affects `tests/optimizer/test_relay_id_projection.py`, `tests/test_list_field.py`, `tests/types/test_generic_foreign_key.py`, `examples/fakeshop/config/schema.py`, plus the schema-construction snippet in `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md`. ~30 min mechanical. No spec.
 - **Slice 2** — `manage.py inspect_django_type <TypeName>` diagnostic command. New Django management command at `django_strawberry_framework/management/commands/inspect_django_type.py` walking a `DjangoType.__django_strawberry_definition__` and printing per-field: Django field name → Django field type → resolved GraphQL scalar/type → nullability → which `SCALAR_MAP` row (or relation converter) fired. Mirrors Django's `inspectdb` conceptually but scoped to the framework's type-definition surface. Tests via `examples/fakeshop/tests/test_commands.py::call_command("inspect_django_type", "PatronType", ...)`. Sub-1-day. Light spec or none.
-- **Slice 3** — `Meta.nullable_overrides` GraphQL-layer nullability override. New public `Meta` key (and possibly a companion `Meta.required_overrides`) letting consumers decouple the GraphQL type's nullability from the underlying Django column without an `AlterField` migration or a custom resolver. Implemented inside `django_strawberry_framework/types/base.py` and `django_strawberry_framework/types/converters.py`'s scalar-resolution path. Tests in `tests/types/test_converters.py` (override + collision cases) plus a live HTTP test on the library or scalars app demonstrating the override flipping the GraphQL type's nullability without touching the model column. **Requires spec**: `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md` — open design decisions include dict-of-name vs tuple-set per direction, interaction with `Meta.exclude`, error behavior when both override sets name the same field, choice-field interaction, and FK / reverse-FK interaction.
+- **Slice 3** — [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) GraphQL-layer nullability override. New public `Meta` key (and possibly a companion [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides)) letting consumers decouple the GraphQL type's nullability from the underlying Django column without an `AlterField` migration or a custom resolver. Implemented inside `django_strawberry_framework/types/base.py` and `django_strawberry_framework/types/converters.py`'s scalar-resolution path. Tests in `tests/types/test_converters.py` (override + collision cases) plus a live HTTP test on the library or scalars app demonstrating the override flipping the GraphQL type's nullability without touching the model column. **Requires spec**: `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md` — open design decisions include dict-of-name vs tuple-set per direction, interaction with [`Meta.exclude`](docs/GLOSSARY.md#metaexclude), error behavior when both override sets name the same field, choice-field interaction, and FK / reverse-FK interaction.
 
 #### Definition of done
 
@@ -4112,18 +2948,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Slice 2 reads `DjangoTypeDefinition` populated by `finalize_django_types()`; the command is a strict consumer of the existing introspection surface.
 - Slice 3 plugs into `DjangoType._build_annotations` (the converter loop in `django_strawberry_framework/types/base.py`) and the scalar-resolution path in `django_strawberry_framework/types/converters.py`. No finalizer changes — overrides apply at type-construction time, before finalization.
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.__init_subclass_with_meta__` is graphene_django's consumer type-declaration surface, deriving GraphQL field nullability from the Django column (`required = not (field.blank or field.null)` in `converter.py`) and policing `Meta` keys like `fields`/`exclude`/`filterset_class` — the same `DjangoType`/`Meta` DX this card's cleanup pass refines (including the `Meta.nullable_overrides` decoupling), so the graphene_django parity is required.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::is_optional` decides a `DjangoType` field's nullability straight from `model_field.null`/`blank`, with no consumer hook to override it independent of the column — the gap this card's `Meta.nullable_overrides` (Slice 3) closes against the strawberry_django type-definition surface, making the strawberry_django parity required.
-
-#### Note
-
-- three independent slices: Slice 1 `extensions=` factory-form sweep (XS, ~30 min, no spec), Slice 2 `inspect_django_type` command (S, sub-1-day), Slice 3 `Meta.nullable_overrides` (M, needs spec, deferrable to `0.0.9`). Smallest of the three `0.0.8` cards.
-- **Slice 1**: defensive — both upstreams already use the factory-callable form in their consumer docs. Strawberry's removal runway is multiple releases, but landing the migration in 0.0.8 keeps the package's surface aligned with the upstream recommendation.
-- **Slice 2**: differentiating — neither `graphene-django` nor `strawberry-graphql-django` ships an equivalent `manage.py inspect_*` diagnostic for their type definitions. Consumers currently introspect by hand against the GraphQL schema after construction. This command moves that diagnostic to the type-definition layer, before schema construction.
-- **Slice 3**: ⚛️&🍓 required — `strawberry_django.field(required=True/False)` allows per-field GraphQL nullability override against the Django column's native nullability. `graphene_django` allows the same via `DjangoObjectType.Meta.fields` plus per-field overrides on the type class. This card surfaces the same capability through a single `Meta`-key dict that the rest of the package's `Meta`-shaped API already prefers.
-
 <a id="ordering_subsystem"></a>
 ### [DONE-028-0.0.8 - Ordering subsystem](KANBAN.html#ordering_subsystem)
 
@@ -4133,55 +2957,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: L
 - Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
 - Spec: [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`Ordering`](docs/GLOSSARY.md#ordering) | shipped (`0.0.8`) |
-| [`order_input_type`](docs/GLOSSARY.md#order_input_type) | shipped (`0.0.8`) |
-| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
-| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
-| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
-| [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
-| [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
-| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 
 #### Package files
 
@@ -4201,19 +2976,10 @@ planned; three independent slices that ship in any order. Card body counts as co
 - [x] Add `docs/SPECS/spec-028-orders-0_0_8.md`.
 - [x] Add `django_strawberry_framework/orders/`.
 - [x] Add mirrored `tests/orders/`.
-- [x] Promote `Meta.orderset_class` only when ordering is applied end-to-end.
+- [x] Promote [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) only when ordering is applied end-to-end.
 - [x] Support simple fields and relation paths.
 - [x] Define interaction with filters and connection field.
 - [x] Keep ordering declarations introspectable from the owning type/query surface.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField.resolve_queryset` special-cases the `order_by` filter argument (`to_snake_case(v)` before passing it into the filterset), so graphene_django exposes ordering through django-filter's `OrderingFilter` as a first-class connection argument — the directly-comparable ordering surface this card ships, hence required parity.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/ordering.py::apply` walks an `order` type via `process_order` and emits `queryset.order_by(*args)`, where each field resolves through `Ordering.resolve` (the `ASC`/`DESC` plus `NULLS_FIRST`/`NULLS_LAST` enum) into a Django `OrderBy` — the same per-field, list-shaped ordering input this card's `orderBy` argument provides, so the strawberry_django parity is required.
-
-#### Note
-
-- Shipped the ordering subsystem in `0.0.8`. [`OrderSet`][glossary-orderset], [`RelatedOrder`][glossary-relatedorder], and [`Meta.orderset_class`][glossary-metaorderset_class] (promoted out of `DEFERRED_META_KEYS`) land at [`django_strawberry_framework/orders/`][orders] across five files (`base.py`, `sets.py`, `factories.py`, `inputs.py`, `__init__.py`); `tests/orders/` mirrors the layout. Five-layer lazy-resolution pipeline borrowed from `django-graphene-filters` with the same Strawberry-adapted Layer 5 the Filtering subsystem just shipped (`Annotated[\"TypeName\", strawberry.lazy(\"django_strawberry_framework.orders.inputs\")]` over module globals); the shared `LazyRelatedClassMixin` is reused from the neutral `sets_mixins` module via sibling import (per H1 of `spec-028-orders-0_0_8` rev3 — `sets_mixins.py` carries both `LazyRelatedClassMixin` and `ClassBasedTypeNameMixin` for the set family). Layer 6 (dynamic OrderSet generation) deferred to `0.0.9` alongside `DjangoConnectionField` per Decision 12 of `docs/SPECS/spec-028-orders-0_0_8.md`. The public `Ordering` enum borrowed verbatim from `strawberry-django` (six members: ASC / DESC / ASC_NULLS_FIRST / ASC_NULLS_LAST / DESC_NULLS_FIRST / DESC_NULLS_LAST) — NULLS positioning honored via Django `F(value).asc/desc(nulls_first=...)` expressions. The list-shaped `orderBy: [<T>OrderInputType!]` argument's element order IS the tie-breaker mechanism. The **resolver-facing API is the classmethod pair `OrderSet.apply_sync(input_value, queryset, info)` and `OrderSet.apply_async(input_value, queryset, info)`** (sync resolvers call the former; async resolvers await the latter), mirroring the shipped filter subsystem's shape. The apply pipeline runs `check_permissions` with **active-input-only scope** (per-field `check_<field>_permission` gates fire only when the consumer's input names the field); extracts the request from `info.context.request` (with an `isinstance(info.context, HttpRequest)` fallback); applies `queryset.order_by(*OrderBy_expressions)` after visibility scoping (`<OwnerType>.get_queryset`) and after optional filter narrowing (`<TypeName>Filter.apply_*`). The new `order_input_type(BranchOrder)` helper produces the resolver-annotation shape; the finalizer enforces orphan validation by raising `ConfigurationError` for any OrderSet referenced via `order_input_type` but never wired via `Meta.orderset_class` (tracked via `_helper_referenced_ordersets`). `registry.clear()` co-clears the order input namespace via `clear_order_input_namespace()` AND clears `_helper_referenced_ordersets` — alongside the already-shipped filter clears. Per-package input-class namespace is separate from the model-to-`DjangoType` registry AND from the filter-input namespace (`Meta.primary` design preserved). `Meta.orderset_class` promotion runs through finalizer phase 2.5 via `_bind_ordersets()` with four ordered subpasses mirroring the filter side's discipline; the phase binds `_owner_definition`, calls `get_fields()` only after all owners are bound, materializes each generated input class as a module global of `django_strawberry_framework.orders.inputs` before `strawberry.Schema(...)` runs. [`examples/fakeshop/apps/library/`][fakeshop-library] grows `orders.py` (carrying `BranchOrder` / `ShelfOrder` / `BookOrder` / `LoanOrder` / `PatronOrder`) and `orders_genre.py` (carrying `GenreOrder` — cross-module fixture for the Layer-2 absolute-import-path test) wired through `Meta.orderset_class`; root resolvers accept `order_by:` via `order_input_type(<Name>Order)` annotations and call `<OwnerType>.get_queryset(...)` then optionally `<TypeName>Filter.apply_*` then `OrderSet.apply_*`. [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library] grows exactly 14 live HTTP tests covering scalar ASC / scalar DESC_NULLS_LAST on `Book.subtitle` (per B3 of rev3) / forward-FK / reverse-FK with denormalized-multiplicity-pinned / M2M absolute-import-path RelatedOrder / flat-shorthand path (`shelf__code` → `shelfCode`) / filter + order composition / optimizer cooperation / root `get_queryset` honoring / split-pair active-input-only scalar `check_<field>_permission` (denies-for-active + quiet-for-inactive) / active-branch relation-level permission gate (`check_shelves_permission` per H3 of rev3) / multi-field priority via list-element ordering / empty-list no-op / null-direction no-op. Spec: `docs/SPECS/spec-028-orders-0_0_8.md`. After this card moves to Done, `0.0.9` follow-up cards can start; no version files change here unless the maintainer explicitly gives the version-bump command.
 
 #### Card references
 
@@ -4228,59 +2994,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: XL
 - Labels: `example-app`, `filters`, `graphql-api`, `public-api`
 - Spec: [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
-| [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
-| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
-| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
-| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
 
 #### Package files
 
@@ -4304,16 +3017,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
 - [`django_strawberry_framework/types/relay.py`](django_strawberry_framework/types/relay.py)
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField.resolve_queryset` instantiates the type's `Meta.filterset_class` with the GraphQL args as `data`, calls `filterset.is_valid()`, and returns `filterset.qs` (raising `ValidationError` from `filterset.form.errors` otherwise) — this is the same filterset-driven, validation-gated queryset narrowing this card ships, so the graphene_django parity is required.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/filters.py::apply` runs `process_filters(...)` over a strawberry filter type and applies the resulting `Q` via `queryset.filter(q)`, with `StrawberryDjangoFieldFilters.arguments` auto-deriving the `filters:` argument from the type definition — the consumer-facing filter-input surface this card mirrors, making the strawberry_django parity required.
-- both upstreams ship a FilterSet / filter surface; `django-graphene-filters` is the cookbook source.
-
-#### Note
-
-- the milestone anchor: six-layer lazy-resolution filtering pipeline, `FilterSet` / `RelatedFilter` / `Meta.filterset_class`, parity-floor filter primitives, finalizer phase-2.5 wiring, 14 live HTTP tests.
-
 <a id="scalar_conversion_end_to_end_coverage_in_the_fakeshop_example"></a>
 ### [DONE-026-0.0.7 - Scalar conversion end-to-end coverage in the fakeshop example](KANBAN.html#scalar_conversion_end_to_end_coverage_in_the_fakeshop_example)
 
@@ -4324,38 +3027,10 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `example-app`, `graphql-api`, `scalars`, `tests`
 - Spec: [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-
 #### Scope
 
 - Full non-null wire-format sweep covering every field on `ScalarSpecimen`
 - All-NULL nullable wire format covering every nullable converter branch
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py` converts the full Django field set to GraphQL scalars via singledispatch: `convert_big_int_field` (`BigIntegerField → graphene.BigInt`), `convert_field_to_uuid` (`UUIDField`), `convert_json_field_to_string` (`JSONField`), `convert_datetime_to_string`/`convert_date_to_string`, `convert_field_to_decimal`. This card moves the framework's equivalent numeric/date/JSON/UUID converter rows to live `/graphql/` HTTP coverage in both nullable and non-null shapes (incl. a real `BigIntegerField` on `Patron`), a direct match against graphene-django's scalar-conversion feature, justifying the graphene_django required claim.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::field_type_map` maps the same set (`BigIntegerField → int`, `DateField → datetime.date`, `DateTimeField → datetime.datetime`, `DecimalField → decimal.Decimal`, `UUIDField → uuid.UUID`, `JSONField → strawberry.scalars.JSON`); this card's `ScalarSpecimen`/`NullableScalarSpecimen` example app plus eight live HTTP tests exercise the framework's equivalent conversion end-to-end in both shapes, a direct match justifying the strawberry_django required claim. (Both claims pre-exist and are kept; the card is example/test coverage but the behavior under test is genuine scalar-conversion parity, not pure housekeeping.)
-- both upstreams ship scalar conversion for the full numeric / date / JSON / UUID set; this card moves those converter rows to live `/graphql/` HTTP coverage in both nullable and non-null shapes.
-
-#### Note
-
-- new `apps.scalars` example app (paired non-null / nullable models, self-FK + cross-model `SET_NULL` FK) + eight live HTTP tests + a real-domain `BigIntegerField` on `Patron`.
-- `ScalarSpecimen` — every scalar field non-null, exposed via `ScalarSpecimenType`. Adds an intra-model self-FK `parent` (`related_name="children"`) so the example exercises self-referential FK planning under the optimizer.
-- `NullableScalarSpecimen` — every scalar field nullable (`null=True, blank=True`), exposed via `NullableScalarSpecimenType`. Adds a cross-model FK `partner: ForeignKey(ScalarSpecimen, on_delete=SET_NULL, related_name="nullable_partners")` — the only `SET_NULL` ondelete in the example tree, and the only cross-model FK in the scalars app.
-- The pairing is deliberate (not a single model with paired fields). It exercises **upstream code paths no other example app reaches**: Django's two-`CreateModel` initial migration path, the registry / `finalize_django_types()` resolving sibling `DjangoType` classes in one app, Strawberry type registration across sibling types in one schema build, the optimizer planning across two managed models in one query, and `SET_NULL` ondelete behavior.
-- `apps.scalars.schema` composes two root resolvers (`all_scalar_specimens`, `all_nullable_scalar_specimens`) into the project root `Query` at [`examples/fakeshop/config/schema.py`][example-schema]; `ScalarsConfig` lands in `INSTALLED_APPS` at [`examples/fakeshop/config/settings.py`][settings].
-- Signed-negative `BigInt` round-trip
-- `BigInt`-at-zero edge case
-- Schema introspection asserting `BigInt` converter resolves correctly in both shapes (`NON_NULL` on `ScalarSpecimenType`; bare `SCALAR` on `NullableScalarSpecimenType`)
-- Cross-model `partner` FK linkage round-trip
-- Reverse-FK `nullablePartners` exposure
-- Self-FK `parent` / `children` traversal
 
 <a id="warning_free_scalar_registration_via_strawberryconfigscalar_map"></a>
 ### [DONE-025-0.0.7 - Warning-free scalar registration via `StrawberryConfig.scalar_map`](KANBAN.html#warning_free_scalar_registration_via_strawberryconfigscalar_map)
@@ -4366,40 +3041,10 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `config`, `internal`, `public-api`, `scalar-map`, `scalars`
 - Spec: [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
-| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-
 #### Package files
 
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
 - [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
-
-#### Verified in upstream
-
-- package-specific scalar-registration plumbing (`StrawberryConfig.scalar_map` via `strawberry_config()`); not an upstream-parity primitive.
-
-#### Note
-
-- `strawberry_config()` factory registering `BigInt` via `scalar_map` and removing the deprecation-suppression block; a documented breaking change in alpha.
 
 <a id="django_trac_37064_hardening_safe_wrap_connection_method"></a>
 ### [DONE-024-0.0.7 - Django Trac #37064 hardening + `safe_wrap_connection_method`](KANBAN.html#django_trac_37064_hardening_safe_wrap_connection_method)
@@ -4410,27 +3055,12 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `django-integration`, `hardening`, `internal`
 - Spec: [spec-024-django_trac_37064_hardening-0_0_7.md](docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
-| [Django Trac #37064 hardening](docs/GLOSSARY.md#django-trac-37064-hardening) | shipped (`0.0.7`) |
-
 #### Package files
 
 - [`django_strawberry_framework/_django_patches.py`](django_strawberry_framework/_django_patches.py)
 - [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
 - `django_strawberry_framework/test/__init__.py` (historical)
 - `django_strawberry_framework/test/_wrap.py` (historical)
-
-#### Verified in upstream
-
-- defensive hardening unique to this package; neither upstream ships a Django Trac #37064 patch.
-
-#### Note
-
-- two-half defense for Trac #37064: a package-level unwrap patch (auto-applied at app-load) plus the cooperative `safe_wrap_connection_method` helper + tests.
 
 <a id="multi_database_cooperation_contract"></a>
 ### [DONE-023-0.0.7 - Multi-database cooperation contract](KANBAN.html#multi_database_cooperation_contract)
@@ -4442,39 +3072,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `multi-db`, `optimizer`, `tests`
 - Spec: [spec-023-multi_db-0_0_7.md](docs/SPECS/spec-023-multi_db-0_0_7.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
-| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py` builds N+1-avoidance plans out of `django.db.models.Prefetch` objects (imported at line 18; `prefetch_related: list[PrefetchType]`) but specifies no multi-database cooperation contract (a grep of the module for `.using(`, `_db`, `router`, `db_for_read` returns nothing). This card pins that exact seam for the framework's `Prefetch`-based optimizer — `OptimizerHint.prefetch(Prefetch(queryset=...using('shard_b')))` round-tripping with `_db` intact through plan construction (`tests/optimizer/test_multi_db.py`) — so it is adjacent: it underpins/extends the same prefetch-plan subsystem strawberry-graphql-django owns, adding a multi-DB guarantee the upstream leaves unspecified.
-- graphene-django has no comparable prefetch-plan optimizer and likewise no multi-DB handling (grep of `graphene_django/*.py` for `.using(`/`_db`/`router`/`db_for_read` returns nothing), so no graphene_django claim is honest here; the contract this card pins (`.using()` preservation, router-aware FK-id stubs, `Prefetch._db` round-trip) is purely a function of the framework's optimizer, which is the strawberry-graphql-django-comparable subsystem.
-- multi-DB is a Django capability neither upstream specifies a contract around (⚛️&🍓 parity-adjacent); pinning ours smooths the migrant story.
-
-#### Note
-
-- pin the multi-DB cooperation contract (router-aware FK-id stubs, `.using()` preservation, `Prefetch` `_db` round-trip) + tests; zero production-code change.
-
 <a id="schema_export_management_command"></a>
 ### [DONE-022-0.0.7 - Schema export management command](KANBAN.html#schema_export_management_command)
 
@@ -4485,40 +3082,12 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `management-command`, `public-api`, `schema`
 - Spec: [spec-022-export_schema-0_0_7.md](docs/SPECS/spec-022-export_schema-0_0_7.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
-| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-
 #### Package files
 
 - [`django_strawberry_framework/management/__init__.py`](django_strawberry_framework/management/__init__.py)
 - [`django_strawberry_framework/management/commands/__init__.py`](django_strawberry_framework/management/commands/__init__.py)
 - [`django_strawberry_framework/management/commands/export_schema.py`](django_strawberry_framework/management/commands/export_schema.py)
 - [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/management/commands/export_schema.py::Command` is the `manage.py export_schema` command: positional `schema` arg, optional `--path`, `import_module_symbol` resolution, `isinstance(..., strawberry.Schema)` guard, SDL via `print_schema`, and `CommandError` paths. This card ships the same-named command with the identical positional `schema` / `--path` / `print_schema` / `CommandError` contract, a direct feature match justifying the strawberry_django required claim.
-- graphene-django's nearest analog `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/management/commands/graphql_schema.py::Command` is a deliberately different `graphql_schema` command (`--schema`/`--out`/`--indent`/`--watch`, JSON-or-`.graphql` output via `schema.introspect()`), which the card explicitly flags as parity-adjacent and not borrowed; correctly excluded from the claim set.
-- strawberry-graphql-django ships `manage.py export_schema`; graphene-django's different `graphql_schema` command is parity-adjacent (deliberately not borrowed).
-
-#### Note
-
-- one management command (positional `schema`, `--path`, SDL via `print_schema`, `CommandError` paths) + tests.
 
 <a id="appspy_and_django_app_config"></a>
 ### [DONE-021-0.0.7 - `apps.py` and Django app config](KANBAN.html#appspy_and_django_app_config)
@@ -4530,36 +3099,9 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `django-app`, `packaging`
 - Spec: [spec-021-apps-0_0_7.md](docs/SPECS/spec-021-apps-0_0_7.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
-| [Upstream patches](docs/GLOSSARY.md#upstream-patches) | shipped |
-
 #### Package files
 
 - [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/apps.py::StrawberryDjangoConfig` is a minimal `AppConfig` (just `name` and `verbose_name`) enabling `INSTALLED_APPS`-driven discovery; this card ships the equivalent `DjangoStrawberryFrameworkConfig` `AppConfig`, a direct feature match that justifies the strawberry_django required claim.
-- both upstreams ship an `apps.py` `AppConfig` for `INSTALLED_APPS`-driven discovery.
-
-#### Note
-
-- tiny `AppConfig` (two class attributes, no `ready()` body in this card's own diff) + tests; the `ready()` body that ships in `0.0.7` arrived with sibling card `DONE-024-0.0.7`, dispatching the single Django patch applier, and the Strawberry and `cross_web` appliers followed at `0.0.11`.
 
 <a id="djangolistfield_non_relay_list"></a>
 ### [DONE-020-0.0.7 - `DjangoListField` (non-Relay list)](KANBAN.html#djangolistfield_non_relay_list)
@@ -4571,50 +3113,11 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
 - Spec: [spec-020-list_field-0_0_7.md](docs/SPECS/spec-020-list_field-0_0_7.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-
 #### Package files
 
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
 - [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
 - [`django_strawberry_framework/list_field.py`](django_strawberry_framework/list_field.py)
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py::DjangoListField` is graphene-django's non-Relay list primitive: it wraps the underlying type in `List(NonNull(...))`, exposes `get_manager()`/`get_queryset` cooperation, and coerces `Manager`/`QuerySet` results in `list_resolver`. This card ships the same-named `DjangoListField` factory (`Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability) for the Strawberry stack; required because it is a direct feature match against a primitive strawberry-graphql-django does not provide.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::field_type_map` maps only relation kinds (`ManyToManyField`, `ManyToOneRel`) to `list[DjangoModelType]` and offers no standalone consumer-facing list field; this confirms the card's premise that strawberry-graphql-django has no non-Relay list-field primitive, so the single `graphene_django` required claim is the honest sole match.
-- graphene-django ships `DjangoListField`; strawberry-graphql-django has no non-Relay list-field primitive.
-
-#### Note
-
-- `DjangoListField` factory: default + consumer resolver, `Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability, root-gated optimizer cooperation.
 
 <a id="consumer_override_semantics_scalar_fields"></a>
 ### [DONE-019-0.0.6 - Consumer override semantics (scalar fields)](KANBAN.html#consumer_override_semantics_scalar_fields)
@@ -4626,36 +3129,10 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `public-api`, `relay`, `scalars`, `types`
 - Spec: [spec-019-consumer_overrides_scalar-0_0_6.md](docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-
 #### Package files
 
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` only injects `strawberry.auto` for model fields lacking a consumer annotation (`for f in model_fields: if existing_annotations.get(f.name): continue`), so a consumer-authored scalar annotation is authoritative and is never overwritten by the synthesized field — exactly this card's consumer-annotation-overrides-synthesized contract — making the claim `required`; the adjacent `MAP_AUTO_ID_AS_GLOBAL_ID` guard that drops `id` from `model_fields` to avoid clobbering the relay `GlobalID` also mirrors this card's `relay.Node` `id`-collision handling.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.__init_subclass_with_meta__` yanks consumer-declared class-attribute fields via `yank_fields_from_attrs` alongside the auto-`construct_fields` model conversion, so a field a consumer declares on the type takes precedence over the auto-generated scalar — graphene_django supports the same consumer-authored scalar-override-on-a-model-type feature, so the claim is `required`.
-- both upstreams support consumer-authored scalar field overrides on model-backed types.
 
 #### Test plan
 
@@ -4665,18 +3142,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 #### Decision
 
 - **`relay.Node` `id` collision rejected at type-creation time.** A consumer
-
-#### Note
-
-- annotation/assigned scalar-override contract (four-corner matrix), `relay.Node` `id`-collision rejection, cross-type choice-enum cache semantics.
-- `DjangoType.__init_subclass__` collected `consumer_annotated_scalar_fields`
-- `DjangoTypeDefinition` gained `consumer_annotated_scalar_fields: frozenset[str]`.
-- The previously-skipped `test_consumer_annotation_overrides_synthesized`
-- **Consumer annotation overrides are authoritative.** `_build_annotations`'s
-- No new public API. No `Meta.field_overrides = {...}`-style key. Opt-out
-- The four `consumer_*_fields` sets on `DjangoTypeDefinition`
-- Resolver / metadata overrides for scalars stay on the assigned
-- Type-annotation overrides are the consumer's responsibility for runtime
 
 <a id="multiple_djangotypes_per_model_with_metaprimary"></a>
 ### [DONE-018-0.0.6 - Multiple DjangoTypes per model with `Meta.primary`](KANBAN.html#multiple_djangotypes_per_model_with_metaprimary)
@@ -4688,26 +3153,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `optimizer`, `public-api`, `registry`, `types`
 - Spec: [spec-018-meta_primary-0_0_6.md](docs/SPECS/spec-018-meta_primary-0_0_6.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
-
 #### Package files
 
 - [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
@@ -4717,11 +3162,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
 - [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` gives every Django type its own `is_type_of` closure returning `isinstance(obj, (cls, model))` (with a `get_strawberry_type_cast` short-circuit) and keeps no model-to-type registry at all, so multiple types can back the same model and disambiguation rides on `is_type_of`/`strawberry.cast` rather than an explicit primary flag; this card's registry storing many types per model with an explicit `Meta.primary` selection plus a finalize-time ambiguity audit extends and formalizes that implicit upstream behavior, making the link `adjacent`. graphene_django has no equivalent — `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/registry.py::Registry.register` stores exactly one type per model (`self._registry[cls._meta.model] = cls`), so no claim is made there.
-- 🍓 parity-adjacent (strawberry-graphql-django has an implicit primary-type concept via `is_type_of`; graphene-django ships no equivalent) — not required on either side.
-
 #### Test plan
 
 - 100% coverage across `tests/test_registry.py`, `tests/types/test_base.py`,
@@ -4729,24 +3169,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 #### Decision
 
 - Two primary types for the same model: rejected at registration time
-
-#### Note
-
-- registry stores multiple types per model, `Meta.primary` flag, ambiguity audit at finalize, relation-deferral, optimizer origin-type threading.
-- Registry stores multiple types per model (`_types: dict[Model, list[Type]]`).
-- New `Meta.primary: bool` flag (default `False`); validated in `_validate_meta`.
-- `registry.register(..., *, primary: bool = False) -> bool` and
-- New registry surface: `primary_for(model)`, `types_for(model)`,
-- `registry.get(model)` returns the primary if declared, else the single
-- `finalize_django_types()` runs `audit_primary_ambiguity()` first: any
-- Relation conversion in `types/base.py` defers all **auto-synthesized**
-- Optimizer planning threads the resolved origin Strawberry type from
-- Schema audit (`optimizer/extension.py`) iterates every reachable
-- `model_for_type` continues to work for any registered type so
-- `DjangoTypeDefinition` gains `primary: bool = False`.
-- Single-type-no-primary stays backward compatible: `registry.get(model)`
-- `Meta.primary` is a per-class declaration, not a registry-level
-- Already-shipped consumer relation overrides (direct annotation
 
 <a id="deferred_scalar_conversions"></a>
 ### [DONE-017-0.0.6 - Deferred scalar conversions](KANBAN.html#deferred_scalar_conversions)
@@ -4758,58 +3180,15 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `converters`, `public-api`, `scalars`
 - Spec: [spec-017-deferred_scalars-0_0_6.md](docs/SPECS/spec-017-deferred_scalars-0_0_6.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
-| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
-
 #### Package files
 
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
 - [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_big_int_field` maps `models.BigIntegerField` to graphene's `BigInt` scalar (defined at `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene/types/scalars.py::BigInt`), and the same module maps `models.JSONField`/`HStoreField` to `JSONString` and `ArrayField` to `List` — graphene_django ships a direct `BigIntegerField -> BigInt`-scalar conversion plus JSON/Array/HStore handlers matching this card, so the claim is `required`.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::field_type_map` maps `json.JSONField` to `strawberry.scalars.JSON` and resolves `ArrayField` to a nested `list[...]` via `_resolve_array_field_type`, giving strawberry_django direct equivalents for this card's `JSONField -> strawberry.scalars.JSON` and `ArrayField` conversions; the same map routes `BigIntegerField`/`PositiveBigIntegerField` to plain `int` (no dedicated big-int scalar), so the JSON/Array conversion parity is the `required` anchor on this side.
-- both upstreams ship scalar conversion for `BigIntegerField` / `JSONField` / `HStoreField` / `ArrayField`, etc.
-
 #### Test plan
 
 - 100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the suppression are explicit.
-
-#### Note
-
-- `BigInt` scalar + strict parser/serializer, `JSONField` / `ArrayField` / `HStoreField` conversion, `SCALAR_MAP` value-type widening.
-- Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
-- Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.
-- Strict `BigInt` serializer — rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`.
-- `BigIntegerField → BigInt` and `PositiveBigIntegerField → BigInt` in `SCALAR_MAP`. `BigAutoField` preserved as `int` (no override recourse at the time; annotation-override recourse now available via `DONE-019-0.0.6`).
-- `JSONField → strawberry.scalars.JSON` in `SCALAR_MAP`.
-- `ArrayField` and `HStoreField` mapped via sentinel-guarded branches in `convert_scalar`. `HStoreField` not added to `SCALAR_MAP`.
-- `ArrayField` rejects nested arrays and outer `choices` with `ConfigurationError`.
-- `SCALAR_MAP`'s declared value type widened from `dict[type[models.Field], type]` to `dict[type[models.Field], Any]`.
-- `BigInt` added to `django_strawberry_framework.__all__`; `tests/base/test_init.py`'s pinned `__all__` and `__version__` assertions updated.
-- Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/GLOSSARY.md` package-version line, `uv.lock`.
-- Docs: `docs/GLOSSARY.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
-- The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-025-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor.
 
 #### Card references
 
@@ -4825,13 +3204,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: M
 - Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
 - Spec: [spec-016-fieldmeta_consolidation-0_0_6.md](docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 
 #### Package files
 
@@ -4866,22 +3238,10 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `django_strawberry_framework/optimizer/walker.py`
 - `django_strawberry_framework/optimizer/extension.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_get_model_hints` sources per-type optimization metadata from a single canonical place — `getattr(get_django_definition(object_definition.origin), 'store', None)` (and per-field `getattr(field, 'store', None)`), where `get_django_definition` (`/Users/riordenweber/projects/strawberry-django-main/strawberry_django/utils/typing.py::get_django_definition`) returns the one `__strawberry_django_definition__` on the type rather than any parallel copy; this card's retirement of the legacy class-attribute mirrors so the optimizer reads `FieldMeta` only from `DjangoTypeDefinition.field_map` via `registry.get_definition(...)` aligns the framework's metadata-sourcing posture with strawberry_django's single-definition design, but it is an internal SSoT refactor with no consumer-visible surface, so the link is `adjacent`, not `required`.
-
 #### Why it matters
 
 - Three reader sites were re-deriving relation shape via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map` — duplicating logic and creating drift surface for any future relation-flag addition.
 - `DjangoType.__init_subclass__` was writing legacy class-attribute mirrors (`cls._optimizer_field_map`, `cls._optimizer_hints`) that survived `registry.clear()`, then four optimizer sites read those mirrors instead of the canonical `DjangoTypeDefinition`. Two parallel sources of field metadata with no enforced consistency.
-
-#### Note
-
-- consolidate field metadata onto `DjangoTypeDefinition` (single source of truth) and retire legacy class-attribute mirrors across ~7 reader sites.
-- Commit `de35a62` (`refactor(types,optimizer): consolidate metadata onto DjangoTypeDefinition`).
-- `CHANGELOG.md` (under `[Unreleased] → Changed`)
-- Originally tracked as `BACKLOG.md` item 35 ("`FieldMeta` single-source-of-truth consolidation and mirror retirement"). Promoted to a DONE card and removed from `BACKLOG.md` when the work shipped — per `BACKLOG.md`'s "graduate into a `KANBAN.md` card when scheduled" workflow. This is the first `BACKLOG.md` item to graduate; the precedent for shipped items: strike-through with SHIPPED status is fine while the item awaits a release; once a release is imminent, move the item to a `KANBAN.md` `DONE` card and delete it from `BACKLOG.md` so the strategic-differentiation file doesn't keep pointing at completed architecture debt.
-- The consolidation eliminates ~7 sites of duplicated relation-shape logic and removes legacy class-attribute residue that previously survived `registry.clear()`. Single source of truth for field metadata reduces drift surface whenever Django adds a new relation flag or changes a descriptor attribute.
 
 <a id="005_relay_interfaces_and_node_foundation"></a>
 ### [DONE-015-0.0.5 - 0.0.5 Relay interfaces and Node foundation](KANBAN.html#005_relay_interfaces_and_node_foundation)
@@ -4892,29 +3252,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: L
 - Labels: `public-api`, `relay`, `types`
 - Spec: [spec-015-relay_interfaces-0_0_5.md](docs/SPECS/spec-015-relay_interfaces-0_0_5.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 
 #### Package files
 
@@ -4941,11 +3278,11 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Scope
 
-- `Meta.interfaces` accepted end-to-end for any Strawberry interface.
+- [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) accepted end-to-end for any Strawberry interface.
 - Four Relay node resolver defaults injected when `relay.Node` is declared (canonical order: `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes`); consumer-declared overrides are preserved via Strawberry's `__func__` identity test.
 - Automatic synthesized `id: int!` suppression when `relay.Node` is in `Meta.interfaces`; the Relay-supplied `id: GlobalID!` is used instead.
-- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
-- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
+- `is_type_of` injection is unconditional for every [`DjangoType`](docs/GLOSSARY.md#djangotype) (Relay-declared or not); consumer-declared `is_type_of` is preserved.
+- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
 - Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default`; async `get_queryset` hooks are awaited on the async branch and rejected with `ConfigurationError` on the sync branch.
 - `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
 - Package version bumped to `0.0.5` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -4973,20 +3310,9 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `tests/base/test_init.py`
 - `uv.lock`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` injects the four relay defaults (`resolve_id`, `resolve_id_attr`, `resolve_node`, `resolve_nodes`) when `issubclass(cls, relay.Node)` and preserves a consumer-declared resolver via the `existing_resolver.__func__ is getattr(relay.Node, attr).__func__` identity test, and unconditionally installs `is_type_of` unless already in `cls.__dict__` — strawberry_django ships exactly this Node-wiring contract, so the card's `relay.Node`-default injection plus `__func__`-preserving override and unconditional `is_type_of` is `required` against it.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType` accepts a `Meta.interfaces` tuple, auto-enables a Relay `Connection` when any interface `issubclass(interface, Node)`, and provides `get_node`/`get_queryset`/`resolve_id`/`is_type_of` for Node-backed model types (with the global `id` resolved as a `GlobalID` via `graphene.relay.node.AbstractNode`) — graphene_django offers the same end-to-end `Meta.interfaces`-with-Node feature this card matches, so the claim is `required`.
-- both upstreams ship Relay Node interfaces; this shipped our 🍓-shaped Relay Node integration.
-
 #### Architectural posture
 
 - Borrowed patterns from `strawberry-django` (spec "Borrowing posture", Decision 3). The override discriminator triad stays distinct across the three injection sites: `__dict__` membership for `is_type_of`, tuple membership for id suppression, `__func__` identity for the four `resolve_*` defaults.
-
-#### Note
-
-- Relay Node foundation: `Meta.interfaces`, four `resolve_*` defaults, `id: GlobalID!` suppression, `is_type_of` injection, composite-PK rejection, sync + async node resolution.
-- `examples/fakeshop/apps/library/schema.py` (`GenreType` declares `Meta.interfaces = (relay.Node,)`)
 
 <a id="move_test_fixture_out_of_example_settings"></a>
 ### [DONE-014-0.0.4 - Move test fixture out of example settings](KANBAN.html#move_test_fixture_out_of_example_settings)
@@ -4996,18 +3322,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: S
 - Labels: `cleanup`, `example-app`, `internal`, `tests`
 - Spec: [spec-014-testing_shift-0_0_4.md](docs/SPECS/spec-014-testing_shift-0_0_4.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
 
 #### Scope
 
@@ -5035,12 +3349,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: S
 - Labels: `example-app`, `internal`, `m2m`, `tests`
 - Spec: [spec-013-real_m2m_coverage-0_0_4.md](docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 
 #### Package files
 
@@ -5073,12 +3381,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `internal`, `release`, `versioning`
 - Spec: [spec-012-version_release_alignment-0_0_4.md](docs/SPECS/spec-012-version_release_alignment-0_0_4.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-
 #### Scope
 
 - Package metadata, runtime version, lockfile, tests, and changelog now agree on `0.0.4`.
@@ -5092,11 +3394,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `uv.lock`
 - `CHANGELOG.md`
 
-#### Note
-
-- release housekeeping (version alignment).
-- align package metadata / runtime version / lockfile / tests / changelog on `0.0.4`.
-
 <a id="stale_placeholder_cleanup"></a>
 ### [DONE-011-0.0.4 - Stale placeholder cleanup](KANBAN.html#stale_placeholder_cleanup)
 
@@ -5106,17 +3403,10 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `cleanup`, `docs`, `internal`, `tests`
 - Spec: [spec-011-stale_placeholder_cleanup-0_0_4.md](docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
-
 #### Scope
 
 - Replaced stale M2M and forward-reference skips with definition-order tests.
-- Scalar field override semantics is a separate concern from definition order and is owned by `DONE-019-0.0.6`, which ships it at `0.0.6`.
+- [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) is a separate concern from definition order and is owned by `DONE-019-0.0.6`, which ships it at `0.0.6`.
 
 #### Files likely touched
 
@@ -5127,10 +3417,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 #### Why it matters
 
 - internal test/doc cleanup.
-
-#### Note
-
-- `DONE-019-0.0.6`
 
 #### Card references
 
@@ -5145,23 +3431,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: L
 - Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-010-foundation-0_0_4.md](docs/SPECS/spec-010-foundation-0_0_4.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Package files
 
@@ -5190,12 +3459,12 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Dedicated test files: `tests/types/test_definition_order.py`, `tests/types/test_definition_order_schema.py`, `tests/optimizer/test_definition_order.py`, plus `tests/test_registry.py` extensions for idempotency / phase-1 atomicity / phase-2/3 partial-mutation contract / pending-set cleanup / class-mutation residue.
 - Documentation sweep: `README.md`, `docs/README.md`, `docs/GLOSSARY.md`, `TODAY.md`, and `CHANGELOG.md`.
 - Version bump to `0.0.4` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`.
-- Deletion of `TypeRegistry.lazy_ref`; unsupported and unresolved relations now fail with explicit `ConfigurationError` messages at annotation-building or finalization time.
+- Deletion of `TypeRegistry.lazy_ref`; unsupported and unresolved relations now fail with explicit [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) messages at annotation-building or finalization time.
 
 #### Foundation-slice seam
 
-- The forward-reserved slots on `DjangoTypeDefinition` are the architectural seam where the cookbook-shaped Layer 3 subsystems plug in (each subsystem moves its `Meta` key out of `DEFERRED_META_KEYS`, populates the matching slot in collection, and consumes it during finalization or in `DjangoConnectionField`).
-- The pending-resolution pattern (record at class creation, resolve at finalization, fail loud on missing target with named source model / field / target) generalizes directly to lazy related class references for `RelatedFilter`, `RelatedOrder`, and `RelatedAggregate`.
+- The forward-reserved slots on `DjangoTypeDefinition` are the architectural seam where the cookbook-shaped Layer 3 subsystems plug in (each subsystem moves its `Meta` key out of `DEFERRED_META_KEYS`, populates the matching slot in collection, and consumes it during finalization or in [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield)).
+- The pending-resolution pattern (record at class creation, resolve at finalization, fail loud on missing target with named source model / field / target) generalizes directly to lazy related class references for [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter), [`RelatedOrder`](docs/GLOSSARY.md#relatedorder), and `RelatedAggregate`.
 
 #### Files likely touched
 
@@ -5216,17 +3485,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `CHANGELOG.md`
 - `docs/SPECS/spec-010-foundation-0_0_4.md`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_onetoone_field_to_djangomodel` (and the sibling FK / M2M converters) wrap related-type resolution in `graphene.Dynamic(dynamic_type)` callables that look up `registry.get_type_for_model(model)` only when the schema is built, giving graphene definition-order independence for relations; this slice ships the equivalent capability through `finalize_django_types()`'s three-phase finalizer that resolves a `PendingRelation` registry against registered `DjangoType`s before `strawberry.type(cls)` runs, so the claim is adjacent because it matches the observable behavior via an explicit collected-types finalize gate rather than graphene's per-field deferred callables.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` achieves cross-type relation resolution by forcing relation annotations to `strawberry.auto` and clearing `StrawberryAnnotation.__resolve_cache__` so Strawberry re-evaluates forward references after all types are decorated, with no first-class pending-relation registry; this card's `PendingRelation` / `add_pending_relation` / `finalize_django_types()` foundation delivers the same definition-order-independent relation resolution but as an explicit registry-plus-finalizer mechanism with a `PendingRelationAnnotation` sentinel that errors if `strawberry.Schema(...)` is built early, so the claim is adjacent because the framework underpins and diverges from strawberry_django's implicit lazy-annotation approach rather than matching its public API at parity.
-
-#### Note
-
-- internal Layer-2 foundation (`DjangoTypeDefinition`, finalizer, pending-relation resolution) — enables the parity subsystems rather than being one itself.
-- definition-order-independent finalizer, pending-relation registry, manual-override contract, real cardinality coverage — the seam every Layer-3 subsystem plugs into.
-- The previous foundation-slice in-progress cards have been retired; this card is their successor in Done.
-
 <a id="rich_schema_architecture"></a>
 ### [DONE-009-0.0.4 - Rich schema architecture](KANBAN.html#rich_schema_architecture)
 
@@ -5237,48 +3495,11 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `layer-3`, `public-api`, `relations`, `types`
 - Spec: [spec-009-rich_schema_architecture-0_0_4.md](docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`Ordering`](docs/GLOSSARY.md#ordering) | shipped (`0.0.8`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
-| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
-| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
-
 #### Scope
 
 - Lay out the long-term architecture for filters, orders, aggregates, connections, permissions, and fieldsets.
 - Compare Graphene, django-graphene-filters, and strawberry-graphql-django patterns against this package's DRF-shaped API.
 - Define how the 0.0.4 foundation slice becomes the base for later Layer 3 subsystems.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::type` is the public `@strawberry_django.type(model)` entrypoint that generates a Strawberry type from a Django model and (via `_process_type`) wires relations, filters, ordering, and pagination as decorator kwargs; this card lays out the package's long-term Layer-3 architecture (filters, orders, aggregates, connections, permissions, fieldsets) over a DRF-shaped API and explicitly compares strawberry_django patterns, so it is adjacent because the planned architecture extends and reshapes that upstream surface rather than matching one of its features at parity.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_field_to_list_or_connection` shows graphene's relation-to-connection/list dispatch keyed off `_type._meta.connection` / `filter_fields` / `filterset_class` on the related `DjangoObjectType`; this card's scope explicitly contrasts Graphene/django-graphene-filters patterns when defining how the foundation slice becomes the base for later connection/filter subsystems, so the claim is adjacent because the package's DRF-shaped layered architecture differs from graphene's Meta-flag dispatch rather than reaching parity with a single graphene feature.
-
-#### Note
-
-- Architecture design record paired with the narrower 0.0.4 foundation implementation spec.
 
 <a id="definition_order_independence_design"></a>
 ### [DONE-008-0.0.4 - Definition-order independence design](KANBAN.html#definition_order_independence_design)
@@ -5290,35 +3511,11 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-008-definition_order_independence-0_0_4.md](docs/SPECS/spec-008-definition_order_independence-0_0_4.md)
 
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
-
 #### Scope
 
 - Frame the class-definition-time relation-resolution problem.
 - Compare options for preserving concrete related `DjangoType`s without import-order coupling.
 - Set the failure-mode requirements that the 0.0.4 foundation slice implements.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_field_to_djangomodel` converts every Django relation field into a `graphene.Dynamic(dynamic_type)` whose `dynamic_type` defers `registry.get_type_for_model(model)` to schema-build time (`graphene/types/dynamic.py::Dynamic.get_type`), so a related `DjangoObjectType` need not exist when the owning type is defined; this card frames the same class-definition-time relation-resolution problem but proposes an explicit pending-relation/finalizer design rather than per-field lazy callables, so the claim is adjacent (it underpins and differs from graphene's surface, not a parity match of a public feature).
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` resolves relation annotations per class at decoration time by resetting `StrawberryAnnotation.__resolve_cache__` and forcing relation fields back to `strawberry.auto` so Strawberry re-evaluates forward references later, with no global collected-types finalize gate; this card compares that import-order-coupling-avoidance approach against the package's planned design, so it is adjacent because the framework's proposed deferred-finalize architecture extends and differs from strawberry_django's lazy-annotation mechanism rather than matching it at parity.
-
-#### Note
-
-- Problem-space design record for definition-order independence.
 
 <a id="004_onboarding_docs_and_spec_consolidation"></a>
 ### [DONE-007-0.0.4 - 0.0.4 onboarding docs and spec consolidation](KANBAN.html#004_onboarding_docs_and_spec_consolidation)
@@ -5328,12 +3525,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: S
 - Labels: `docs`, `internal`, `release`
 - Spec: [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 
 #### Scope
 
@@ -5356,11 +3547,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 - internal docs cleanup / spec consolidation — no upstream-parity surface.
 
-#### Note
-
-- onboarding-doc consolidation across README / docs / CHANGELOG; completed spec content folded into durable docs.
-- Future in-flight design docs use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN matches the KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"), then get folded into durable docs when shipped.
-
 <a id="documentationstatus_positioning_for_shipped_layer_2"></a>
 ### [DONE-006-0.0.3 - Documentation/status positioning for shipped Layer 2](KANBAN.html#documentationstatus_positioning_for_shipped_layer_2)
 
@@ -5369,18 +3555,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: S
 - Labels: `docs`, `internal`
 - Spec: [spec-006-public_surface-0_0_3.md](docs/SPECS/spec-006-public_surface-0_0_3.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Package files
 
@@ -5409,11 +3583,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 - internal docs / status-positioning card — no upstream-parity surface.
 
-#### Note
-
-- docs pass: `docs/README.md`, `docs/GLOSSARY.md`, `docs/TREE.md` quickstart + status positioning.
-- User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
-
 <a id="djangotype_contract_and_boundary"></a>
 ### [DONE-005-0.0.3 - DjangoType contract and boundary](KANBAN.html#djangotype_contract_and_boundary)
 
@@ -5423,18 +3592,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: M
 - Labels: `docs`, `public-api`, `registry`, `types`
 - Spec: [spec-005-django_type_contract-0_0_3.md](docs/SPECS/spec-005-django_type_contract-0_0_3.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
 
 #### Package files
 
@@ -5447,14 +3604,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Reject unsupported or deferred `Meta` keys instead of accepting unwired surface area.
 - Remove consumer override promises that the implementation cannot honor yet.
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/registry.py::Registry.register` stores one type per model (`self._registry[cls._meta.model] = cls`, last-write-wins, with the multiple-types assertion left commented out) and `types.py::validate_fields` only `warnings.warn`s when `Meta.fields`/`exclude` name unknown fields -- this card tightens both: it documents the same one-model-one-type registry constraint as a hard alpha boundary and raises (rather than warns) on unsupported/deferred `Meta` keys, so it is adjacent to graphene's looser model-to-type registry and field-validation surface, narrowing rather than matching it.
-
-#### Note
-
-- Contract companion to the 0.0.3 public-surface documentation pass.
-
 <a id="optimizer_beyond_slices_b1_b8"></a>
 ### [DONE-004-0.0.3 - Optimizer beyond slices B1-B8](KANBAN.html#optimizer_beyond_slices_b1_b8)
 
@@ -5464,21 +3613,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
 - Spec: [spec-004-optimizer_beyond-0_0_3.md](docs/SPECS/spec-004-optimizer_beyond-0_0_3.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
 
 #### Package files
 
@@ -5497,7 +3631,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 - B1: plan cache keyed by selected operation AST, directive variables, model, root runtime path, and the resolver's origin Strawberry type
 - B2: forward-FK-id elision
 - B3: strictness mode (`off`, `warn`, `raise`)
-- B4: `Meta.optimizer_hints` with `OptimizerHint`
+- B4: [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) with [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint)
 - B5: plan introspection via context
 - B6: schema-build-time audit
 - B7: precomputed optimizer field metadata
@@ -5514,17 +3648,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `tests/optimizer/test_field_meta.py`
 - `tests/optimizer/test_plans.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::optimize` is strawberry-django's optimization entry point: it short-circuits when `is_optimized(qs)` (a per-queryset already-optimized flag set via `get_queryset_config(qs).optimized`) and otherwise applies the accumulated `OptimizerStore` to the queryset -- the same production-grade extension surface this card extends, where B1's AST-keyed plan cache and B8's `diff_plan_for_queryset` per-path reconciliation against consumer `select_related`/`prefetch_related`/`Prefetch` go beyond strawberry-django's single boolean guard, so the existing required claim covers the shared apply-optimizations-once core that these beyond-slices features build on.
-
-#### Note
-
-- continuation of DONE-002-0.0.2's optimizer lineage (⚛️ parity-adjacent).
-- eight optimizer sub-features B1–B8: AST plan cache, FK-id elision, strictness modes, `OptimizerHint`, context plan introspection, schema audit, precomputed field metadata, queryset diffing.
-- B8 went beyond the initial simple exact-match diff and now handles subtree-aware prefetch reconciliation.
-- Fragment-spread directive and multi-operation cache-key bugs have been fixed in source; the alpha-review entries that recorded them (the B1 plan-cache key in `spec-004-optimizer_beyond-0_0_3`) are now historical.
-
 #### Card references
 
 - Related: continuation of DONE-002-0.0.2's optimizer lineage (⚛️ parity-adjacent). -> `DONE-002-0.0.2` - Optimizer O1-O6 foundation
@@ -5538,19 +3661,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: M
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
-| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
-| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
-| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Package files
 
@@ -5567,14 +3677,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Emit nested `Prefetch` objects for many-side branches that need shaped child querysets.
 - Recurse through single-valued relation chains with `select_related` and `only()` fields intact.
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_get_hints_from_django_relation` builds a depth>1 nested plan by recursing through `_get_model_hints(..., level=level + 1)`, rebasing the child `OptimizerStore`'s `only`/`select_related` under the relation path, and emitting `Prefetch(path, queryset=field_qs)` for many-side branches -- the identical behavior this card ships in `optimizer/walker.py` (`_build_prefetch_child_queryset` recurses one level deeper and `_plan_prefetch_relation` emits `Prefetch(lookup_path, queryset=child_queryset)`, while `_plan_select_relation` recurses through single-valued chains preserving `select_related` + `only()`), so O4 nested-prefetch-chain planning is required parity with strawberry-django's nested relation hinting.
-
-#### Note
-
-- Design record for the O4 slice split out from the broader optimizer foundation.
-
 <a id="optimizer_o1_o6_foundation"></a>
 ### [DONE-002-0.0.2 - Optimizer O1-O6 foundation](KANBAN.html#optimizer_o1_o6_foundation)
 
@@ -5584,14 +3686,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-002-optimizer-0_0_2.md](docs/SPECS/spec-002-optimizer-0_0_2.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 
 #### Package files
 
@@ -5615,7 +3709,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 - root-gated optimizer extension
 - nested `Prefetch` chains
 - same-query `select_related` recursion
-- `only()` projection
+- [`only()` projection](docs/GLOSSARY.md#only-projection)
 - custom `get_queryset` downgrade to `Prefetch`
 
 #### Files likely touched
@@ -5627,16 +3721,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `tests/optimizer/test_walker.py`
 - `tests/optimizer/test_plans.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::DjangoOptimizerExtension` is strawberry-django's N+1 solver: a `SchemaExtension` whose `resolve` walks the selection tree, builds an `OptimizerStore` (lists of `only`/`select_related`/`prefetch_related`), and applies it to the root queryset, with `_get_prefetch_queryset` running the target type's `get_queryset` inside generated `Prefetch` objects -- the same root-gated extension, selection-tree walker, `select_related`/`only()` projection, nested `Prefetch` chains, and custom-`get_queryset`-downgrade-to-`Prefetch` behavior this card's O1-O6 foundation ships, so it is required parity with strawberry-django's optimizer extension.
-- strawberry-graphql-django ships a heavy optimizer extension; graphene-django has only `select_related_field` (⚛️ parity-adjacent).
-
-#### Note
-
-- heavy optimizer extension: relation resolvers, selection-tree walker, root-gated planning, nested `Prefetch` chains, `only()` projection, `get_queryset` downgrade.
-- Shipped behavior is consolidated into `docs/GLOSSARY.md`; source/tests are the truth for optimizer behavior.
-
 <a id="djangotype_core_foundation"></a>
 ### [DONE-001-0.0.1 - DjangoType core foundation](KANBAN.html#djangotype_core_foundation)
 
@@ -5646,32 +3730,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Relative size: L
 - Labels: `public-api`, `registry`, `relations`, `scalars`, `types`
 - Spec: [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md)
-
-#### Glossary terms
-
-| Term | Status |
-| --- | --- |
-| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
-| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
-| [`Meta.choice_enum_names`](docs/GLOSSARY.md#metachoice_enum_names) | planned for `0.1.4` |
-| [`Meta.description`](docs/GLOSSARY.md#metadescription) | shipped |
-| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
-| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
-| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
-| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
-| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
-| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
-| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
 
 #### Package files
 
@@ -5685,7 +3743,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Scope
 
-- `DjangoType` base class
+- [`DjangoType`](docs/GLOSSARY.md#djangotype) base class
 - Meta validation
 - scalar conversion
 - relation conversion
@@ -5703,12 +3761,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `tests/types/test_converters.py`
 - `tests/types/test_resolvers.py`
 
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType` is graphene's model-backed type: a nested `Meta` declares `model`/`fields`/`exclude`, `construct_fields` selects model fields, `convert_choice_field_to_enum` (`converter.py`) turns Django `choices` into GraphQL enums, `Registry.register` (`registry.py`) maps model to type, and a classmethod `get_queryset(queryset, info)` scopes visibility -- the exact surface `DjangoType` ships (base class, Meta validation, scalar/relation conversion, choice enums, registry, `get_queryset` hook), so this is required parity with graphene's canonical type-generation feature.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` is strawberry-django's adapter behind `@strawberry_django.type`: it reads `model`/`fields`/`exclude`, marks model fields `strawberry.auto`, and records a `StrawberryDjangoDefinition` in the registry, while `queryset.py::run_type_get_queryset` invokes the type's `get_queryset(qs, info)` -- the same model-to-Strawberry-type contract and same `get_queryset` visibility hook `DjangoType` implements, so this is required parity with strawberry-django's core type surface.
-- `DjangoObjectType` (graphene-django) / `@strawberry_django.type` (strawberry-graphql-django) are the namesake primitive.
-
 #### Architectural posture
 
 - The public shape is intentionally narrow and explicit.
@@ -5717,14 +3769,9 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 - Deferred Meta keys are rejected, not silently accepted.
 
-#### Note
-
-- core foundational subsystem: `DjangoType` base, Meta validation, scalar/relation conversion, choice enums, type registry, relation resolvers, `get_queryset` hook.
-- Definition-order independence is now covered by `DONE-010-0.0.4`.
-
 #### Card references
 
-- Related: Definition-order independence is now covered by `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
+- Related: [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) is now covered by `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
 
 ## Release readiness checklist
 

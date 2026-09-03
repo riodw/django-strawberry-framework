@@ -38,9 +38,9 @@ import sys
 from pathlib import Path
 
 try:
-    from build_kanban_html import configure_django
+    from _kanban_lib import configure_django
 except ModuleNotFoundError:  # imported as ``scripts.check_kanban_anchors`` (repo root on path)
-    from scripts.build_kanban_html import configure_django
+    from scripts._kanban_lib import configure_django
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 KANBAN_MD_PATH = REPO_ROOT / "KANBAN.md"

@@ -11,13 +11,16 @@ from __future__ import annotations
 import argparse
 import ast
 import re
-import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+try:
+    from _kanban_lib import REPO_ROOT, check_freshness, configure_django, render_parser
+except ModuleNotFoundError:  # imported as ``scripts.build_tree_md`` (repo root on path)
+    from scripts._kanban_lib import REPO_ROOT, check_freshness, configure_django, render_parser
+
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "TREE.md"
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "django_strawberry_framework"
 DELIMITER = "## django_strawberry_framework (current on-disk layout)"
@@ -130,25 +133,16 @@ class TreePosition:
 
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
-    parser = argparse.ArgumentParser(
-        description="Render the dynamic django_strawberry_framework section of docs/TREE.md.",
-    )
-    parser.add_argument(
-        "--md",
-        type=Path,
+    parser = render_parser(
+        "Render the dynamic django_strawberry_framework section of docs/TREE.md.",
+        flag="--md",
         default=DEFAULT_MD_PATH,
-        help="Markdown file to update. Defaults to docs/TREE.md.",
     )
     parser.add_argument(
         "--package-dir",
         type=Path,
         default=DEFAULT_PACKAGE_DIR,
         help="Package directory to render. Defaults to django_strawberry_framework/.",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Exit with status 1 if docs/TREE.md is not already up to date.",
     )
     return parser.parse_args()
 
@@ -600,8 +594,6 @@ def fetch_planned_paths() -> list[PlannedPath]:
     non-``current`` rows with at least one ``wip``/``todo`` card link are
     planned, and the lowest-numbered linking card owns the annotation.
     """
-    from build_kanban_html import configure_django
-
     configure_django()
     from apps.kanban.models import TrackedPath
 
@@ -997,13 +989,8 @@ def main() -> int:
     """CLI entry point."""
     args = parse_args()
     rendered = render_tree_doc(args.md, args.package_dir)
-    current = args.md.read_text()
     if args.check:
-        if current != rendered:
-            print(f"{args.md} is not up to date; run scripts/build_tree_md.py.", file=sys.stderr)
-            return 1
-        print(f"{args.md} is up to date.")
-        return 0
+        return check_freshness(args.md, rendered, script="scripts/build_tree_md.py")
 
     args.md.write_text(rendered)
     print(f"Wrote {args.md}")

@@ -31,7 +31,7 @@ def _remap_card_ref_placeholders(text: str, old_to_new: dict[int, int]) -> str:
 
     Card prose (``Card.planning_note`` / ``CardItem.text``) references a source
     card's outgoing references by their ``order`` (see
-    ``scripts/build_kanban_md.py::resolve_card_refs_for_card``). Whenever those
+    ``scripts/build_kanban_md.py::resolve_card_refs``). Whenever those
     orders are renumbered the placeholders must move with them or they resolve to
     the wrong -- or a missing -- reference. A single ``re.sub`` pass reads the
     original numbering so remaps that swap positions cannot collide.
@@ -103,7 +103,7 @@ def _dedupe_and_renumber_references(apps, schema_editor):
                 CardItem.objects.using(alias).filter(pk=item.pk).update(text=new_text)
         # ``CardReference.raw_text`` is the third prose surface carrying
         # ``{{card_ref:N}}`` placeholders (the exporter resolves them at
-        # build_kanban_md.py::resolve_card_refs_for_card), so it renumbers too.
+        # build_kanban_md.py::resolve_card_refs), so it renumbers too.
         for reference in manager.filter(source_card=source_id):
             new_raw = _remap_card_ref_placeholders(reference.raw_text or "", old_to_new)
             if new_raw != (reference.raw_text or ""):

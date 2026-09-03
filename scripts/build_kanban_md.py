@@ -1,239 +1,315 @@
-"""Build ``KANBAN.md`` from the shared kanban dashboard payload."""
+"""Build ``KANBAN.md`` from the shared kanban dashboard payload.
+
+``KANBAN.md`` is the agent-facing export; ``KANBAN.html`` is the human-facing one.
+Both render the same deep-sorted payload (``_kanban_lib``), but the markdown drops
+surfaces that only add reading cost for an agent: the ``snapshot`` and
+``board-columns`` reference docs, the WIP/DONE spec map (every card already carries
+its ``Spec:`` line), and each card's ``note`` section (process provenance), plus
+``verified_upstream`` once a card is Done (the shipped spec holds that evidence).
+``MD_OMITTED_DOC_KEYS``, ``MD_OMITTED_SECTION_KEYS`` and
+``MD_OMITTED_DONE_SECTION_KEYS`` name the omissions; the HTML export keeps them all.
+Glossary links are derived, not stored: every ``GlossaryTerm`` title is searched for
+in each card's own text and the first mention per card becomes the link, so a term is
+linked exactly where the prose names it. In place of the spec map the markdown gets a
+``## Card index``: one row per rendered card, in board order, self-linking to the
+card's anchor.
+
+The export is one pass: :func:`plan_board` routes every card to its column
+(``COLUMN_ROUTES``), picks the active version and fills the computed tokens once, and
+every renderer, the dropped-card guard and the write summary read that :class:`Board`.
+"""
 
 from __future__ import annotations
 
-import argparse
 import re
-import sys
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 try:
-    from _kanban_lib import CARD_REF_RE, PLACEHOLDER_RE, cli_exit, placeholder_defects
-    from build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
+    from _kanban_lib import (
+        CARD_REF_RE,
+        PLACEHOLDER_RE,
+        REPO_ROOT,
+        build_dashboard_snapshot,
+        check_freshness,
+        cli_exit,
+        configure_django,
+        fetch_dashboard_data,
+        finalize_markdown,
+        placeholder_defects,
+        render_parser,
+        version_tuple,
+    )
 except ModuleNotFoundError:  # imported as ``scripts.build_kanban_md`` (repo root on path)
-    from scripts._kanban_lib import CARD_REF_RE, PLACEHOLDER_RE, cli_exit, placeholder_defects
-    from scripts.build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
+    from scripts._kanban_lib import (
+        CARD_REF_RE,
+        PLACEHOLDER_RE,
+        REPO_ROOT,
+        build_dashboard_snapshot,
+        check_freshness,
+        cli_exit,
+        configure_django,
+        fetch_dashboard_data,
+        finalize_markdown,
+        placeholder_defects,
+        render_parser,
+        version_tuple,
+    )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
 KANBAN_HTML_PATH = "KANBAN.html"
+GLOSSARY_MD_PATH = "docs/GLOSSARY.md"
 LINK_DEFINITIONS_KEY = "link-definitions"
+PREAMBLE_DOC_KIND_KEY = "preamble"
 COLUMN_DOC_KIND_KEY = "column"
+DEFINITION_OF_DONE_SECTION_KEY = "definition_of_done"
+# Board docs and card sections the markdown export omits (the HTML export keeps them).
+MD_OMITTED_DOC_KEYS = frozenset({"snapshot", "board-columns"})
+MD_OMITTED_SECTION_KEYS = frozenset({"note"})
+MD_OMITTED_DONE_SECTION_KEYS = frozenset({"verified_upstream"})
+# A glossary term is inlined only as a standalone token: not glued to an identifier
+# character, a dotted/``::``-qualified path, or a path separator on either side.
+TERM_BOUNDARY_BEFORE = r"(?<![A-Za-z0-9_.:/\-])"
+TERM_BOUNDARY_AFTER = r"(?![A-Za-z0-9_.:/\-])"
+# Regions a term match may not straddle: an existing link or a ``#"substring"``
+# citation pinpoint (any overlap rejects -- the pinpoint must stay byte-exact), and an
+# inline code span (a match must contain the whole span or none of it, so a term is
+# linked when it IS the span, never when it sits inside a longer literal).
+LINK_SPAN_RE = re.compile(r"\[[^\]]*\]\([^)]*\)|#\"[^\"\n]*\"")
+CODE_SPAN_RE = re.compile(r"`[^`\n]+`")
 
 
-def column_doc_keys(board_docs: list[dict[str, Any]]) -> set[str]:
-    """Return the card-bearing column keys, derived from the ``column`` board docs.
-
-    The set of columns that carry cards is DB-owned (every ``BoardDoc`` of kind
-    ``column``), not a script-frozen tuple, so adding or renaming a column reshapes
-    the export from the data with no code edit.
-    """
-    return {doc["key"] for doc in board_docs if doc["kind"]["key"] == COLUMN_DOC_KIND_KEY}
+# --------------------------------------------------------------------------------------
+# Column routing
+# --------------------------------------------------------------------------------------
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
-    parser = argparse.ArgumentParser(
-        description="Render KANBAN.md from the same GraphQL payload used by KANBAN.html.",
-    )
-    parser.add_argument(
-        "--md",
-        type=Path,
-        default=DEFAULT_MD_PATH,
-        help="Markdown file to write. Defaults to the repository-root KANBAN.md.",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Exit with status 1 if KANBAN.md is not already up to date.",
-    )
-    return parser.parse_args()
+class Placement(NamedTuple):
+    """The facts column routing reads off a card, plus the board's active version."""
+
+    status: str
+    milestone: str
+    version: str
+    active: str
 
 
-def finalize_markdown(lines: list[str]) -> str:
-    """Normalize rendered markdown lines into one trailing-newline document.
-
-    Each element may itself be a multi-line block (a rendered card body, a link
-    block), so trailing whitespace is stripped per physical line after the join,
-    not per element - stripping per element would leave interior lines ragged.
-    """
-    joined = "\n".join(lines)
-    text = "\n".join(line.rstrip() for line in joined.split("\n")).strip()
-    return f"{text}\n"
+# ``column key -> rule``, first match wins; a card no rule claims is unrouted (backlog,
+# never rendered). Any in-flight (``wip``) card belongs in the In progress column
+# whether or not it targets the board's headline active version: routing on
+# ``version == active`` alone dropped a second concurrent wip version straight through
+# to the never-rendered backlog bucket.
+COLUMN_ROUTES: tuple[tuple[str, Callable[[Placement], bool]], ...] = (
+    ("done", lambda facts: facts.status == "done"),
+    ("backlog", lambda facts: facts.status == "backlog"),
+    (
+        "in-progress",
+        lambda facts: (
+            facts.status == "wip" or (bool(facts.active) and facts.version == facts.active)
+        ),
+    ),
+    ("to-do-alpha-010", lambda facts: facts.status == "todo" and facts.milestone == "alpha"),
+    (
+        "to-do-beta-100",
+        lambda facts: facts.status == "todo" and facts.milestone in {"beta", "stable"},
+    ),
+)
+UNROUTED_COLUMN_KEY = "backlog"
+# Columns listed newest card first.
+DESCENDING_COLUMN_KEYS = frozenset({"done"})
 
 
 def card_key(card: dict[str, Any]) -> str:
-    """Return the kanban card id for ``card``.
-
-    Reads the ``cardId`` GraphQL field (sourced from ``Card.card_id`` in the
-    model layer) instead of recomputing the ``<STATUS>[-<MILESTONE>]-NNN-X.Y.Z``
-    format here - single source of truth shared with ``Card.__str__`` and the
-    KANBAN.html renderer.
-    """
+    """The card id, read from ``cardId`` (``Card.card_id``) rather than recomputed here."""
     return card["cardId"]
 
 
-def card_url(card: dict[str, Any]) -> str:
-    """Return the relative dashboard URL for ``card``."""
-    return f"{KANBAN_HTML_PATH}#{card['slug']}"
-
-
-def spec_paths_for_card(card: dict[str, Any]) -> list[str]:
-    """Return the DB-backed spec path for ``card``, when it has one.
-
-    Reads the repo-relative ``SpecDoc.path`` directly (the GitHub URL is derived
-    from it in the model layer), so the exporter no longer reverse-parses a
-    hardcoded URL prefix.
-    """
-    spec = card.get("spec")
-    if not spec:
-        return []
-    db_path = spec.get("path", "")
-    return [db_path] if db_path else []
-
-
-def spec_link(path: str) -> str:
-    """Return a Markdown link to a repository spec path."""
-    return f"[{Path(path).name}]({path})"
-
-
-def glossary_term_link(term: dict[str, Any]) -> str:
-    """Return a Markdown link to a glossary term anchor."""
-    return f"[{term['title']}](docs/GLOSSARY.md#{term['anchor']})"
-
-
-def tracked_path_link(tracked_path: dict[str, Any], *, planned: bool) -> str:
-    """Return a Markdown link or planned/historical marker for a tracked path.
-
-    Non-current paths read as ``historical`` on DONE cards (the file once
-    existed) and ``planned`` on WIP/TODO cards (the file does not exist yet).
-    """
-    path = tracked_path["path"]
-    if tracked_path.get("isCurrent", True):
-        return f"[`{path}`]({path})"
-    marker = "planned" if planned else "historical"
-    return f"`{path}` ({marker})"
+def versions_for(cards: list[dict[str, Any]], status: str) -> list[str]:
+    """Distinct target versions of the cards in ``status``, ascending."""
+    return sorted(
+        {
+            card["targetVersion"]["number"]
+            for card in cards
+            if card["status"]["key"] == status and card.get("targetVersion")
+        },
+        key=version_tuple,
+    )
 
 
 def active_version(cards: list[dict[str, Any]]) -> str:
     """Return the version currently in progress.
 
-    Derived from ``status`` alone: the lowest ``wip`` target version names the
-    active version, so the ``## In progress`` column no longer needs a per-card
-    flag. Falls back to the latest shipped version when the board has no ``wip``
-    card. This only steers which *todo* cards are pulled forward into the In
-    progress column - ``wip`` cards land there unconditionally (see
-    :func:`card_column_key`), so a second, higher in-flight version never hides
-    its own cards.
+    The lowest ``wip`` target version names the active version, falling back to the
+    latest shipped version when the board has no ``wip`` card. It only steers which
+    *todo* cards are pulled forward into the In progress column; ``wip`` cards land
+    there unconditionally (see ``COLUMN_ROUTES``).
     """
-    wip_versions = sorted(
-        {
-            card["targetVersion"]["number"]
-            for card in cards
-            if card["status"]["key"] == "wip" and card.get("targetVersion")
-        },
-        key=version_tuple,
-    )
+    wip_versions = versions_for(cards, "wip")
     if wip_versions:
         return wip_versions[0]
-    done_versions = sorted(
-        {
-            card["targetVersion"]["number"]
-            for card in cards
-            if card["status"]["key"] == "done" and card.get("targetVersion")
-        },
-        key=version_tuple,
-    )
+    done_versions = versions_for(cards, "done")
     return done_versions[-1] if done_versions else ""
 
 
 def card_column_key(card: dict[str, Any], active: str) -> str:
-    """Return the board column key that owns ``card``.
+    """Return the board column key that owns ``card`` (see ``COLUMN_ROUTES``)."""
+    facts = Placement(
+        status=card["status"]["key"],
+        milestone=(card.get("milestone") or {}).get("key", ""),
+        version=(card.get("targetVersion") or {}).get("number", ""),
+        active=active,
+    )
+    return next((key for key, rule in COLUMN_ROUTES if rule(facts)), UNROUTED_COLUMN_KEY)
 
-    ``active`` is the board's in-progress version (see :func:`active_version`):
-    a non-Done card sharing it belongs to the ``## In progress`` column.
+
+# --------------------------------------------------------------------------------------
+# Board plan
+# --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Board:
+    """The markdown export's single pass over the payload.
+
+    ``docs`` are the board docs in render order with the link-definitions doc and the
+    md-omitted docs removed; ``column_docs`` is its card-bearing subset. Cards are
+    routed once into ``cards_by_column`` and the computed tokens are filled once.
     """
-    status = card["status"]["key"]
-    milestone = card["milestone"]["key"] if card.get("milestone") else ""
-    version = card["targetVersion"]["number"] if card.get("targetVersion") else ""
-    if status == "done":
-        return "done"
-    if status == "backlog":
-        return "backlog"
-    if status == "wip":
-        # Any in-flight card belongs in the In progress column, whether or not it
-        # targets the board's headline active version. Routing on ``version ==
-        # active`` alone dropped a second concurrent wip version straight through
-        # to the never-rendered ``backlog`` bucket.
-        return "in-progress"
-    if active and version == active:
-        return "in-progress"
-    if status == "todo" and milestone == "alpha":
-        return "to-do-alpha-010"
-    if status == "todo" and milestone in {"beta", "stable"}:
-        return "to-do-beta-100"
-    return "backlog"
+
+    cards: list[dict[str, Any]]
+    docs: list[dict[str, Any]]
+    column_docs: list[dict[str, Any]]
+    link_definitions: dict[str, Any] | None
+    cards_by_column: dict[str, list[dict[str, Any]]]
+    computed: dict[str, str]
+    doc_count: int
+
+    def column_cards(self, column_key: str) -> list[dict[str, Any]]:
+        """Cards of one column in display order (payload order is by number)."""
+        cards = self.cards_by_column.get(column_key, [])
+        return cards[::-1] if column_key in DESCENDING_COLUMN_KEYS else cards
+
+    @property
+    def exported_cards(self) -> list[dict[str, Any]]:
+        """Every card under a rendered column doc, board order."""
+        return [card for doc in self.column_docs for card in self.column_cards(doc["key"])]
 
 
-def sorted_column_cards(column_key: str, cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return cards in the display order for one board column."""
-    return sorted(
-        cards,
-        key=lambda value: value["number"],
-        reverse=column_key == "done",
+def render_relative_size_scale(sizes: list[dict[str, Any]]) -> str:
+    """Render the ``## Relative size`` bullet scale from the (order-sorted) lookup rows."""
+    return "\n".join(
+        f"- **{size['label']}** - {size['description']}"
+        for size in sizes
+        if size.get("description")
     )
 
 
-def size_label(card: dict[str, Any]) -> str:
-    """Render a card's relative size."""
-    relative_size = card.get("relativeSize")
-    if not relative_size:
-        return ""
-    return relative_size["label"]
+def compute_tokens(
+    dashboard_data: dict[str, Any],
+    active: str,
+    *,
+    has_in_progress: bool,
+) -> dict[str, str]:
+    """Derive the board-wide computed placeholders from the card/doc data.
 
-
-def resolve_card_refs(text: str, doc: dict[str, Any]) -> str:
-    """Replace ``{{card_ref:N}}`` placeholders using FK-backed doc references."""
-    references = {reference["order"]: reference for reference in doc.get("cardReferences", [])}
-
-    def replace(match: re.Match[str]) -> str:
-        reference = references.get(int(match.group(1)))
-        if reference is None:
-            raise RuntimeError(
-                f"Board doc {doc['key']!r} references card_ref:{match.group(1)}, "
-                "but no cardReference with that order exists on the doc.",
-            )
-        return card_key(reference["card"])
-
-    return CARD_REF_RE.sub(replace, text)
-
-
-def resolve_card_refs_for_card(text: str, card: dict[str, Any]) -> str:
-    """Replace ``{{card_ref:N}}`` placeholders using a card's FK-backed references.
-
-    The card-side mirror of :func:`resolve_card_refs` (which serves ``BoardDoc``
-    bodies): ``N`` indexes the card's ``outgoingReferences`` by ``order`` and
-    resolves to the *current* id of the referenced target card. The card id is a
-    deliberately unstable, recomputed ordinal, so prose stores the stable
-    placeholder and the id is resolved at render time from the reference FK --
-    never a literal id snapshot that would drift on the next renumber.
+    These are facts the DB already knows, so the prose stores a ``{{token}}``
+    placeholder instead of a frozen literal - the renderer fills it from the live data
+    and it can never go stale. The KANBAN.html Vue app resolves the same tokens
+    client-side, so both exports stay consistent.
     """
-    references = {
-        reference["order"]: reference for reference in card.get("outgoingReferences", [])
+    dates = [card.get("updatedDate") for card in dashboard_data["cards"]]
+    dates += [doc.get("updatedDate") for doc in dashboard_data["boardDocs"]]
+    dates = [date for date in dates if date]
+    return {
+        "active_version": active,
+        "last_refreshed": max(dates)[:10] if dates else "",
+        "in_progress_intro": "" if has_in_progress else "No cards in progress.",
+        "relative_size_scale": render_relative_size_scale(
+            dashboard_data["lookups"].get("relativeSizes", []),
+        ),
     }
 
+
+def plan_board(dashboard_data: dict[str, Any]) -> Board:
+    """Route the cards, select the docs and fill the tokens; expects a deep-sorted payload."""
+    cards = dashboard_data["cards"]
+    active = active_version(cards)
+    cards_by_column: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for card in cards:
+        cards_by_column[card_column_key(card, active)].append(card)
+
+    all_docs = dashboard_data["boardDocs"]
+    link_def_docs = [doc for doc in all_docs if doc["key"] == LINK_DEFINITIONS_KEY]
+    if len(link_def_docs) > 1:
+        # The payload is namespace-filtered to ``kanban`` upstream, so exactly one
+        # link-definitions doc reaches here today. Guard the invariant rather than let a
+        # loosened filter make the pick silently order-dependent.
+        raise RuntimeError(
+            f"Expected at most one {LINK_DEFINITIONS_KEY!r} board doc, found {len(link_def_docs)}.",
+        )
+    docs = [
+        doc
+        for doc in all_docs
+        if doc["key"] != LINK_DEFINITIONS_KEY and doc["key"] not in MD_OMITTED_DOC_KEYS
+    ]
+    return Board(
+        cards=cards,
+        docs=docs,
+        column_docs=[doc for doc in docs if doc["kind"]["key"] == COLUMN_DOC_KIND_KEY],
+        link_definitions=link_def_docs[0] if link_def_docs else None,
+        cards_by_column=dict(cards_by_column),
+        computed=compute_tokens(
+            dashboard_data,
+            active,
+            has_in_progress=bool(cards_by_column.get("in-progress")),
+        ),
+        doc_count=len(all_docs),
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Text helpers
+# --------------------------------------------------------------------------------------
+
+
+def resolve_card_refs(
+    text: str,
+    references: list[dict[str, Any]],
+    *,
+    card_field: str,
+    site: str,
+) -> str:
+    """Replace ``{{card_ref:N}}`` placeholders from FK-backed reference rows.
+
+    ``N`` indexes ``references`` by ``order`` and resolves to the *current* id of the
+    card under ``card_field`` (``card`` on a ``BoardDoc`` reference, ``targetCard`` on
+    a card's outgoing reference). The card id is a deliberately unstable, recomputed
+    ordinal, so prose stores the stable placeholder and the id is resolved at render
+    time - never a literal id snapshot that would drift on the next renumber. ``site``
+    names the owner in the error when a placeholder has no backing row.
+    """
+    by_order = {reference["order"]: reference for reference in references}
+
     def replace(match: re.Match[str]) -> str:
-        reference = references.get(int(match.group(1)))
+        reference = by_order.get(int(match.group(1)))
         if reference is None:
             raise RuntimeError(
-                f"Card {card['cardId']!r} references card_ref:{match.group(1)}, "
-                "but no outgoingReference with that order exists on the card.",
+                f"{site} references card_ref:{match.group(1)}, "
+                "but no reference with that order exists on it.",
             )
-        return card_key(reference["targetCard"])
+        return card_key(reference[card_field])
 
     return CARD_REF_RE.sub(replace, text)
+
+
+def resolve_computed_tokens(text: str, computed: dict[str, str]) -> str:
+    """Replace every ``{{token}}`` from :func:`compute_tokens` in ``text``."""
+    for token, value in computed.items():
+        text = text.replace(f"{{{{{token}}}}}", value)
+    return text
 
 
 def bullet_lines(prefix: str, text: str) -> list[str]:
@@ -246,308 +322,304 @@ def bullet_lines(prefix: str, text: str) -> list[str]:
     return rendered
 
 
-def render_relative_size_scale(dashboard_data: dict[str, Any]) -> str:
-    """Render the ``## Relative size`` bullet scale from the RelativeSize table.
-
-    The five rows (and their effort blurbs) live in the lookup table, so the
-    scale is derived rather than frozen in the board prose. Sorted by ``order``.
-    """
-    sizes = sorted(
-        dashboard_data["lookups"].get("relativeSizes", []),
-        key=lambda size: size.get("order", 0),
-    )
-    return "\n".join(
-        f"- **{size['label']}** - {size['description']}"
-        for size in sizes
-        if size.get("description")
+def block(heading: str, body: list[str]) -> list[str]:
+    """A heading over ``body`` with the blank lines markdown wants; nothing when empty."""
+    return (
+        [
+            heading,
+            "",
+            *body,
+            "",
+        ]
+        if body
+        else []
     )
 
 
-def compute_tokens(dashboard_data: dict[str, Any]) -> dict[str, str]:
-    """Derive the board-wide computed placeholders from the card/doc data.
+def fetch_glossary_terms() -> list[dict[str, Any]]:
+    """Load every glossary term the inliner may link (title + anchor), from the DB."""
+    from apps.glossary.models import GlossaryTerm
 
-    These are facts the DB already knows, so the prose stores a ``{{token}}``
-    placeholder instead of a frozen literal - the renderer fills it from the
-    live data and it can never go stale. The KANBAN.html Vue app resolves the
-    same tokens client-side, so both exports stay consistent.
+    return [
+        {"title": title, "anchor": anchor}
+        for title, anchor in GlossaryTerm.objects.values_list("title", "anchor")
+    ]
+
+
+def term_pattern(title: str) -> re.Pattern[str]:
+    """Match a glossary title as written (own backticks) or in its bare form."""
+    variants = {title, title.replace("`", "")}
+    alternation = "|".join(
+        re.escape(variant) for variant in sorted(variants, key=len, reverse=True)
+    )
+    return re.compile(TERM_BOUNDARY_BEFORE + "(?:" + alternation + ")" + TERM_BOUNDARY_AFTER)
+
+
+Spans = list[tuple[int, int]]
+
+
+class GlossaryInliner:
+    r"""Link the first in-text mention of every glossary term inside one card.
+
+    Derived, not stored: the whole glossary is searched against the card's text, so a
+    link lands exactly where the prose names the term and nowhere else. One link per
+    term per card, longest title first so ``Meta.fields`` never fires inside
+    ``Meta.fields_class``. A match may not overlap an existing link or a ``#"..."``
+    citation pinpoint at all, and may not cut a code span in half; it may swallow a
+    whole span (a backticked ``Foo`` becomes a linked span) or several (a backticked
+    ``BigInt`` followed by ``scalar``).
     """
-    cards = dashboard_data["cards"]
 
-    active = active_version(cards)
-    has_in_progress = any(card_column_key(card, active) == "in-progress" for card in cards)
-    dates = [card.get("updatedDate") for card in cards]
-    dates += [doc.get("updatedDate") for doc in dashboard_data["boardDocs"]]
-    dates = [date for date in dates if date]
-    last_refreshed = max(dates)[:10] if dates else ""
+    def __init__(self, glossary_terms: list[dict[str, Any]]) -> None:
+        self._pending = {
+            term["anchor"]: (term, term_pattern(term["title"]))
+            for term in sorted(glossary_terms, key=lambda term: -len(term["title"]))
+        }
 
-    return {
-        "active_version": active,
-        "last_refreshed": last_refreshed,
-        "in_progress_intro": "" if has_in_progress else "No cards in progress.",
-        "relative_size_scale": render_relative_size_scale(dashboard_data),
-    }
+    def inline(self, text: str) -> str:
+        """Return ``text`` with every still-unlinked term's first mention linked."""
+        protected = self._protected(text)
+        for anchor in list(self._pending):
+            term, pattern = self._pending[anchor]
+            match = self._find(pattern, text, protected)
+            if match is None:
+                continue
+            del self._pending[anchor]
+            link = f"[{match.group(0)}]({GLOSSARY_MD_PATH}#{term['anchor']})"
+            text = text[: match.start()] + link + text[match.end() :]
+            protected = self._protected(text)
+        return text
+
+    @staticmethod
+    def _protected(text: str) -> tuple[Spans, Spans]:
+        """The (link-or-pinpoint, code-span) regions of ``text``."""
+        links = [(m.start(), m.end()) for m in LINK_SPAN_RE.finditer(text)]
+        spans = [(m.start(), m.end()) for m in CODE_SPAN_RE.finditer(text)]
+        return links, spans
+
+    @staticmethod
+    def _find(
+        pattern: re.Pattern[str],
+        text: str,
+        protected: tuple[Spans, Spans],
+    ) -> re.Match[str] | None:
+        links, spans = protected
+        for match in pattern.finditer(text):
+            lo, hi = match.span()
+            if any(a < hi and lo < b for a, b in links):
+                continue
+            if any(a < hi and lo < b and not (lo <= a and b <= hi) for a, b in spans):
+                continue
+            return match
+        return None
 
 
-def resolve_computed_tokens(text: str, computed: dict[str, str]) -> str:
-    """Replace every ``{{token}}`` from :func:`compute_tokens` in ``text``."""
-    for token, value in computed.items():
-        text = text.replace(f"{{{{{token}}}}}", value)
-    return text
+# --------------------------------------------------------------------------------------
+# Renderers
+# --------------------------------------------------------------------------------------
+
+
+def doc_body(doc: dict[str, Any], computed: dict[str, str]) -> str:
+    """A board doc's body with card refs and computed tokens resolved, stripped."""
+    text = resolve_card_refs(
+        doc.get("body", ""),
+        doc.get("cardReferences", []),
+        card_field="card",
+        site=f"Board doc {doc['key']!r}",
+    )
+    return resolve_computed_tokens(text, computed).strip()
 
 
 def render_doc(doc: dict[str, Any], computed: dict[str, str]) -> list[str]:
     """Render one ordered board-prose document."""
+    body = doc_body(doc, computed)
     if doc["key"] == LINK_DEFINITIONS_KEY:
-        return [resolve_computed_tokens(resolve_card_refs(doc["body"], doc), computed).strip()]
-
-    lines = []
+        return [body]
+    lines: list[str] = []
     if doc.get("title"):
-        heading = "#" if doc["kind"]["key"] == "preamble" else "##"
-        lines.extend([f"{heading} {doc['title']}", ""])
-
-    body = resolve_computed_tokens(resolve_card_refs(doc.get("body", ""), doc), computed).strip()
+        heading = "#" if doc["kind"]["key"] == PREAMBLE_DOC_KIND_KEY else "##"
+        lines += [f"{heading} {doc['title']}", ""]
     if body:
-        lines.extend([body, ""])
+        lines += [body, ""]
     return lines
 
 
-def render_spec_map(dashboard_data: dict[str, Any]) -> list[str]:
-    """Render the WIP/DONE card-to-spec map."""
-    cards = [card for card in dashboard_data["cards"] if card["status"]["key"] in {"wip", "done"}]
-    cards = sorted(
-        cards,
-        key=lambda card: (
-            0 if card["status"]["key"] == "wip" else 1,
-            -int(card["number"]) if card["status"]["key"] == "done" else int(card["number"]),
-        ),
-    )
-    lines = [
-        "## WIP / DONE spec map",
-        "",
-        "| Card | Spec file |",
-        "| --- | --- |",
+def render_card_index(board: Board) -> list[str]:
+    """Render the ``## Card index``: every rendered card, board order, self-linked.
+
+    Markdown-only. Rows follow the same column order and per-column sort the card
+    bodies use, so the index reads top-to-bottom exactly as the board does.
+    """
+    rows = [
+        f"| [`{card_key(card)}`](#{card['slug']}) | {card['title']} | {doc['title']} |"
+        for doc in board.column_docs
+        for card in board.column_cards(doc["key"])
     ]
-    for card in cards:
-        specs = spec_paths_for_card(card)
-        spec_text = (
-            "<br>".join(spec_link(path) for path in specs) if specs else "No dedicated spec"
-        )
-        lines.append(f"| `{card_key(card)}` - {card['title']} | {spec_text} |")
-    lines.append("")
-    return lines
-
-
-def render_glossary_terms(card: dict[str, Any]) -> list[str]:
-    """Render the card-to-glossary term table."""
-    glossary_links = sorted(
-        card.get("glossaryLinks", []),
-        key=lambda link: link["order"],
+    return block(
+        "## Card index",
+        [
+            "Every card on the board, in board order. Links jump to the card.",
+            "",
+            "| Card | Title | Column |",
+            "| --- | --- | --- |",
+            *rows,
+        ],
     )
-    if not glossary_links:
-        return []
 
-    lines = [
-        "#### Glossary terms",
-        "",
-        "| Term | Status |",
-        "| --- | --- |",
-    ]
-    for glossary_link in glossary_links:
-        term = glossary_link["term"]
-        lines.append(f"| {glossary_term_link(term)} | {term['statusText']} |")
-    lines.append("")
-    return lines
+
+def tracked_path_link(link: dict[str, Any]) -> str:
+    """Return a Markdown link or planned/historical marker for one tracked-path link.
+
+    A non-current path reads as ``planned`` on a ``predicted`` link (the file does not
+    exist yet) and ``historical`` on a ``changed`` one (the file once existed).
+    """
+    path = link["path"]["path"]
+    if link["path"].get("isCurrent", True):
+        return f"[`{path}`]({path})"
+    marker = "planned" if link["kind"] == "predicted" else "historical"
+    return f"`{path}` ({marker})"
 
 
 def render_tracked_paths(card: dict[str, Any]) -> list[str]:
     """Render the tracked paths linked to one card.
 
-    The link ``kind`` (``changed`` vs ``predicted``), not the card's status,
-    decides whether these are package files (actually changed) or predicted
-    files -- the through model carries the distinction per link.
+    The link ``kind`` (``changed`` vs ``predicted``), not the card's status, decides
+    whether these are package files (actually changed) or predicted files -- the
+    through model carries the distinction per link.
     """
-    path_links = sorted(
-        card.get("pathLinks", []),
-        key=lambda link: link["path"]["path"],
-    )
-    if not path_links:
-        return []
-
-    planned = all(link["kind"] == "predicted" for link in path_links)
+    links = card.get("pathLinks", [])
+    planned = all(link["kind"] == "predicted" for link in links)
     heading = "#### Predicted files" if planned else "#### Package files"
-    lines = [heading, ""]
-    lines.extend(
-        f"- {tracked_path_link(link['path'], planned=link['kind'] == 'predicted')}"
-        for link in path_links
+    return block(heading, [f"- {tracked_path_link(link)}" for link in links])
+
+
+def parity_text(card: dict[str, Any]) -> str:
+    """One ``emoji label (level)`` entry per parity claim, comma-joined."""
+    return ", ".join(
+        f"{claim['upstream']['emoji']} {claim['upstream']['label']} ({claim['level']['label']})".strip()
+        for claim in card.get("parityClaims", [])
     )
-    lines.append("")
+
+
+def spec_link(card: dict[str, Any]) -> str:
+    """A Markdown link to the card's DB-backed spec path (``SpecDoc.path``), or ``""``."""
+    path = (card.get("spec") or {}).get("path", "")
+    return f"[{Path(path).name}]({path})" if path else ""
+
+
+def card_meta_lines(card: dict[str, Any]) -> list[str]:
+    """The ``- Label: value`` bullets under a card heading, empty values skipped."""
+    meta = (
+        ("Priority", (card.get("priority") or {}).get("label", "")),
+        ("Parity", parity_text(card)),
+        ("Status", (card.get("status") or {}).get("label", "")),
+        ("Relative size", (card.get("relativeSize") or {}).get("label", "")),
+        ("Labels", ", ".join(f"`{label['key']}`" for label in card.get("labels", []))),
+        ("Spec", spec_link(card)),
+    )
+    return [f"- {label}: {value}" for label, value in meta if value]
+
+
+def card_item_lines(card: dict[str, Any], card_text: Callable[[str], str]) -> list[str]:
+    """One ``####`` block per item section, in section order (items arrive pre-sorted)."""
+    omitted = set(MD_OMITTED_SECTION_KEYS)
+    if card["status"]["key"] == "done":
+        omitted |= MD_OMITTED_DONE_SECTION_KEYS
+    lines: list[str] = []
+    for section_key, grouped in groupby(
+        card.get("items", []),
+        key=lambda item: item["section"]["key"],
+    ):
+        items = list(grouped)
+        if section_key in omitted:
+            continue
+        body: list[str] = []
+        for item in items:
+            prefix = "-"
+            if section_key == DEFINITION_OF_DONE_SECTION_KEY:
+                prefix = "- [x]" if item["isComplete"] else "- [ ]"
+            body += bullet_lines(prefix, card_text(item["text"]))
+        lines += block(f"#### {items[0]['section']['label']}", body)
     return lines
 
 
-def render_card(card: dict[str, Any]) -> list[str]:
+def card_reference_lines(card: dict[str, Any], card_text: Callable[[str], str]) -> list[str]:
+    """The ``#### Card references`` block: one bullet per outgoing reference."""
+    body: list[str] = []
+    for reference in card.get("outgoingReferences", []):
+        target_card = reference["targetCard"]
+        target = f"`{card_key(target_card)}` - {target_card['title']}"
+        kind = reference["kind"]["label"]
+        text = card_text(reference.get("rawText", "").strip())
+        if text:
+            body += bullet_lines(f"- {kind}:", f"{text} -> {target}")
+        else:
+            body.append(f"- {kind}: {target}")
+    return block("#### Card references", body)
+
+
+def render_card(card: dict[str, Any], glossary_terms: list[dict[str, Any]]) -> list[str]:
     """Render a kanban card with its lookup metadata and child rows."""
-    slug = card["slug"]
-    lines = [
-        f'<a id="{slug}"></a>',
-        f"### [{card_key(card)} - {card['title']}]({card_url(card)})",
+    glossary = GlossaryInliner(glossary_terms)
+
+    def card_text(text: str) -> str:
+        resolved = resolve_card_refs(
+            text,
+            card.get("outgoingReferences", []),
+            card_field="targetCard",
+            site=f"Card {card_key(card)!r}",
+        )
+        return glossary.inline(resolved)
+
+    planning_note = (card.get("planningNote") or "").strip()
+    return [
+        f'<a id="{card["slug"]}"></a>',
+        f"### [{card_key(card)} - {card['title']}]({KANBAN_HTML_PATH}#{card['slug']})",
         "",
+        *card_meta_lines(card),
+        "",
+        *render_tracked_paths(card),
+        *block("#### Planning note", [card_text(planning_note)] if planning_note else []),
+        *block(
+            "#### Dependencies",
+            [f"- `{card_key(dep)}` - {dep['title']}" for dep in card.get("dependencies", [])],
+        ),
+        *card_item_lines(card, card_text),
+        *card_reference_lines(card, card_text),
     ]
 
-    if card.get("priority"):
-        lines.append(f"- Priority: {card['priority']['label']}")
-    parity_claims = sorted(
-        card.get("parityClaims", []),
-        key=lambda claim: claim["upstream"]["order"],
-    )
-    if parity_claims:
-        parity = ", ".join(
-            f"{claim['upstream']['emoji']} {claim['upstream']['label']} ({claim['level']['label']})".strip()
-            for claim in parity_claims
-        )
-        lines.append(f"- Parity: {parity}")
-    if card.get("status"):
-        lines.append(f"- Status: {card['status']['label']}")
-    size = size_label(card)
-    if size:
-        lines.append(f"- Relative size: {size}")
-    labels = sorted(card.get("labels", []), key=lambda label: label["key"])
-    if labels:
-        lines.append("- Labels: " + ", ".join(f"`{label['key']}`" for label in labels))
-    specs = spec_paths_for_card(card)
-    if specs:
-        label = "Spec" if len(specs) == 1 else "Specs"
-        lines.append(f"- {label}: " + ", ".join(spec_link(path) for path in specs))
-    lines.append("")
 
-    lines.extend(render_glossary_terms(card))
-    lines.extend(render_tracked_paths(card))
-
-    planning_note = card.get("planningNote") or ""
-    if planning_note:
-        lines.extend(
-            [
-                "#### Planning note",
-                "",
-                resolve_card_refs_for_card(planning_note.strip(), card),
-                "",
-            ],
-        )
-
-    dependencies = sorted(
-        card.get("dependencies", []),
-        key=lambda dependency: dependency["number"],
-    )
-    if dependencies:
-        lines.extend(["#### Dependencies", ""])
-        for dependency in dependencies:
-            lines.append(f"- `{card_key(dependency)}` - {dependency['title']}")
-        lines.append("")
-
-    item_groups = defaultdict(lambda: {"section": None, "items": []})
-    for item in card.get("items", []):
-        section = item["section"]
-        group = item_groups[section["key"]]
-        group["section"] = section
-        group["items"].append(item)
-    for group in sorted(item_groups.values(), key=lambda value: value["section"]["order"]):
-        section = group["section"]
-        lines.extend([f"#### {section['label']}", ""])
-        for item in sorted(group["items"], key=lambda value: value["order"]):
-            if section["key"] == "definition_of_done":
-                marker = "[x]" if item["isComplete"] else "[ ]"
-                lines.extend(
-                    bullet_lines(
-                        f"- {marker}",
-                        resolve_card_refs_for_card(item["text"], card),
-                    ),
-                )
-            else:
-                lines.extend(
-                    bullet_lines(
-                        "-",
-                        resolve_card_refs_for_card(item["text"], card),
-                    ),
-                )
-        lines.append("")
-
-    references = sorted(
-        card.get("outgoingReferences", []),
-        key=lambda reference: reference["order"],
-    )
-    if references:
-        lines.extend(["#### Card references", ""])
-        for reference in references:
-            target_card = reference["targetCard"]
-            target = f"`{card_key(target_card)}` - {target_card['title']}"
-            kind = reference["kind"]["label"]
-            text = resolve_card_refs_for_card(
-                reference.get("rawText", "").strip(),
-                card,
-            )
-            if text:
-                lines.extend(bullet_lines(f"- {kind}:", f"{text} -> {target}"))
-            else:
-                lines.append(f"- {kind}: {target}")
-        lines.append("")
-
-    return lines
-
-
-def render_markdown(dashboard_data: dict[str, Any]) -> str:
+def render_markdown(board: Board, glossary_terms: list[dict[str, Any]]) -> str:
     """Render the complete kanban board markdown."""
-    docs = sorted(dashboard_data["boardDocs"], key=lambda doc: doc["order"])
-    link_def_docs = [doc for doc in docs if doc["key"] == LINK_DEFINITIONS_KEY]
-    if len(link_def_docs) > 1:
-        # The payload is namespace-filtered to ``kanban`` upstream, so exactly one
-        # link-definitions doc reaches here today. Guard the invariant rather than
-        # let a loosened filter make the ``next()``-style pick silently order-dependent.
-        raise RuntimeError(
-            f"Expected at most one {LINK_DEFINITIONS_KEY!r} board doc, "
-            f"found {len(link_def_docs)}.",
-        )
-    link_definitions = link_def_docs[0] if link_def_docs else None
-    docs = [doc for doc in docs if doc["key"] != LINK_DEFINITIONS_KEY]
-
-    card_column_doc_keys = column_doc_keys(dashboard_data["boardDocs"])
-
-    cards_by_column = defaultdict(list)
-    active = active_version(dashboard_data["cards"])
-    for card in dashboard_data["cards"]:
-        cards_by_column[card_column_key(card, active)].append(card)
-
-    computed = compute_tokens(dashboard_data)
-    rendered = []
-    rendered_card_ids = set()
-    for doc in docs:
-        if doc["kind"]["key"] == "column" and doc["key"] not in card_column_doc_keys:
-            continue
-        rendered.extend(render_doc(doc, computed))
-        if doc["key"] == "board-columns":
-            rendered.extend(render_spec_map(dashboard_data))
-        if doc["key"] in card_column_doc_keys:
-            for card in sorted_column_cards(doc["key"], cards_by_column.get(doc["key"], [])):
-                rendered.extend(render_card(card))
+    first_column_doc = board.column_docs[0] if board.column_docs else None
+    rendered: list[str] = []
+    rendered_card_ids: set[Any] = set()
+    for doc in board.docs:
+        if doc is first_column_doc:
+            rendered += render_card_index(board)
+        rendered += render_doc(doc, board.computed)
+        if doc in board.column_docs:
+            for card in board.column_cards(doc["key"]):
+                rendered += render_card(card, glossary_terms)
                 rendered_card_ids.add(card["id"])
+    if board.link_definitions is not None:
+        rendered += render_doc(board.link_definitions, board.computed)
 
-    if link_definitions is not None:
-        rendered.extend(render_doc(link_definitions, computed))
-
-    # Every non-backlog card must have actually been rendered. This catches a card
-    # routed to an unrendered column (e.g. the earlier wip-version misroute) and a
-    # COLUMN_DOC_KEYS entry whose backing board doc was renamed or deleted - both of
-    # which would otherwise drop cards from the export while ``main()`` still reports
-    # them as written.
+    # Every routed card must have actually been rendered. This catches a card routed to
+    # a column key with no ``column`` board doc behind it (a renamed or deleted doc, or
+    # the earlier wip-version misroute), which would otherwise drop cards from the
+    # export while ``main()`` still reports them as written.
     expected_card_ids = {
         card["id"]
-        for card in dashboard_data["cards"]
-        if card_column_key(card, active) != "backlog"
+        for column_key, cards in board.cards_by_column.items()
+        if column_key != UNROUTED_COLUMN_KEY
+        for card in cards
     }
     dropped = expected_card_ids - rendered_card_ids
     if dropped:
         raise RuntimeError(
-            f"{len(dropped)} non-backlog card(s) were not rendered "
-            f"(ids {sorted(dropped)}): a card routed to an unrendered column, or a "
-            "COLUMN_DOC_KEYS board doc is missing from the payload.",
+            f"{len(dropped)} routed card(s) were not rendered (ids {sorted(dropped)}): "
+            "the card's column key has no ``column`` board doc in the payload.",
         )
 
     text = finalize_markdown(rendered)
@@ -560,7 +632,7 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     # string rejected here can never be one that export publishes unresolved.
     leftovers = sorted(set(PLACEHOLDER_RE.findall(text)))
     if leftovers:
-        sites = placeholder_defects(dashboard_data["cards"], dashboard_data["boardDocs"])
+        sites = placeholder_defects(board.cards, board.docs)
         detail = "".join(f"\n  - {site}" for site in sites)
         raise RuntimeError(
             f"KANBAN.md still contains unresolved placeholders: {leftovers}."
@@ -575,30 +647,23 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
 
 def main() -> int:
     """Build the markdown board."""
-    args = parse_args()
+    args = render_parser(
+        "Render KANBAN.md from the same GraphQL payload used by KANBAN.html.",
+        flag="--md",
+        default=DEFAULT_MD_PATH,
+    ).parse_args()
     configure_django()
-    dashboard_data = fetch_dashboard_data()
-    markdown = render_markdown(dashboard_data)
+    board = plan_board(build_dashboard_snapshot(fetch_dashboard_data()))
+    markdown = render_markdown(board, fetch_glossary_terms())
 
     if args.check:
-        current = args.md.read_text(encoding="utf-8") if args.md.exists() else ""
-        if current != markdown:
-            print(f"{args.md} is not up to date; run scripts/build_kanban_md.py.", file=sys.stderr)
-            return 1
-        print(f"{args.md} is up to date.")
-        return 0
+        return check_freshness(args.md, markdown, script="scripts/build_kanban_md.py")
 
     args.md.write_text(markdown, encoding="utf-8")
-    active = active_version(dashboard_data["cards"])
-    exported_card_count = sum(
-        1 for card in dashboard_data["cards"] if card_column_key(card, active) != "backlog"
-    )
-    excluded_card_count = len(dashboard_data["cards"]) - exported_card_count
+    exported = len(board.exported_cards)
     print(
-        "Wrote "
-        f"{exported_card_count} cards "
-        f"(excluded {excluded_card_count} backlog cards) and "
-        f"{len(dashboard_data['boardDocs'])} board docs to {args.md}",
+        f"Wrote {exported} cards (excluded {len(board.cards) - exported} backlog cards) "
+        f"and {board.doc_count} board docs to {args.md}",
     )
     return 0
 

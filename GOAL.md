@@ -1,25 +1,38 @@
-# GOAL
+# GOAL — the North Star
+
+**This file is the destination.** Everything else in the repo describes where we are ([`TODAY.md`][today], [`docs/GLOSSARY.md`][glossary]), how to work ([`AGENTS.md`][agents], [`START.md`][start], [`docs/builder/BUILD.md`][build]), or what to do next ([`KANBAN.md`][kanban]). When a card, a spec, or a review disagrees with this file, this file wins until the maintainer changes it. Nothing here narrates what has shipped; that is the snapshot's job and it rots here.
 
 ## North star
 
-`django-strawberry-framework` should be **the DRF-shaped, `class Meta`-driven Django integration for Strawberry GraphQL**. The destination is the developer experience proven by `django-graphene-filters` — declarative `Meta` classes, automatic input-type generation, rich filter / order / aggregate / fieldset sidecars, layered permissions including cascade visibility — on a modern Strawberry foundation, without Graphene runtime baggage.
+`django-strawberry-framework` is **the DRF-shaped, `class Meta`-driven Django integration for Strawberry GraphQL**. The destination is the developer experience `django-graphene-filters` proved — declarative `Meta` classes, generated input and output types, filter / order / aggregate / fieldset sidecars, layered permissions including cascade visibility — on a Strawberry engine, with no Graphene runtime and no decorators on consumer classes. `django-graphene-filters` is the surface reference (what the schema author writes); `strawberry-graphql-django` is the behavioral reference for the engine side (optimizer downgrade rules, scalar conversion). Its `recipes` cookbook ([`recipes/schema.py`][cookbook-schema]) is the structural parent of the example below.
 
-For the shipped surface today, see [`docs/GLOSSARY.md`][glossary]. For the per-card sequencing toward this north star, see [`KANBAN.md`][kanban].
+## How to continue the board from this file
+
+1. Learn the repo: [`AGENTS.md`][agents] (law), [`START.md`][start] (context), [`docs/README.md`][docs-readme] (how consumers use it), [`docs/TREE.md`][tree] (where things live).
+2. Pick the next card: the first `To Do` card in version order on [`KANBAN.md`][kanban]. Spec and slice mechanics are in [`docs/builder/BUILD.md`][build]; shipped behavior folds into the glossary, tree, and board in the closing slice.
+3. Judge every card against this file before building it: it must move the `astronomy` app below closer to running verbatim, satisfy a success criterion, and violate no non-goal. A card that fails that test is a question for the maintainer, not a build.
+4. Stop when the board is empty and the definition of done below holds.
+
+## Definition of done
+
+- **`0.1.0` beta.** Feature parity with the overlap of `graphene-django` and `strawberry-graphql-django`. A feature both ship is foundational; a feature only one ships is optional and earns its own card or none.
+- **`0.1.x`.** The Layer-3 sidecars land one card each (`FieldSet`, search, aggregates, redaction, explain mode, migration guides, the adversarial suite), until the `astronomy` app runs as written.
+- **`1.0.0` stable.** API freeze and strict SemVer from here. The `astronomy` app and the cookbook port both run verbatim against a production-profile mount, the production security profile in [`docs/README.md`][docs-readme] is package-enforced or documented row by row, coverage stays at 100%, and every migration guide has been walked from a real upstream project.
+- **Wide production ready** means a Django team can adopt it from the docs alone, deploy it behind the documented mount, and never hand-build schema machinery this package exists to generate.
 
 ## What success looks like in your code
 
-When the package is feature-complete at `1.0.0`, a single Django app — call it `astronomy`, with one parent model (`Galaxy`) and one child model (`CelestialBody`) — is laid out across six files. Every file is short. Nothing is hand-rolled that the package can generate.
-
-> **Reading this as a glossary lookup**: every symbol you see below (`DjangoType`, `FilterSet`, `RelatedFilter`, `apply_cascade_permissions`, `Meta.filterset_class`, `Meta.orderset_class`, `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields`, `DjangoConnectionField`, `DjangoNodeField`, `OrderSet`, `RelatedOrder`, `AggregateSet`, `RelatedAggregate`, `FieldSet`, …) has a per-feature entry in [`docs/GLOSSARY.md`][glossary]. Use that file when a symbol is unfamiliar — it answers *"is this shipped today, and what exactly does it do?"* for every symbol shown below. The [alphabetical Index][glossary-index] at the top of `GLOSSARY.md` is the fastest entry point — every entry is deep-linked, so you can also URL-jump straight to e.g. [`#filterset`][glossary-filterset] or [`#metafilterset_class`][glossary-metafilterset-class].
+At `1.0.0`, a single Django app — call it `astronomy`, one parent model (`Galaxy`) and one child model (`CelestialBody`) — is laid out across seven short files. Nothing is hand-rolled that the package can generate. This app is the acceptance test for the whole project: when it runs as written, the destination is reached. Every symbol below has a [`docs/GLOSSARY.md`][glossary] entry answering "is this shipped today, and what exactly does it do?" (start at its [Index][glossary-index], e.g. [`#filterset`][glossary-filterset]).
 
 ```bash
 apps/astronomy/
 ├── models.py        # Django models
-├── schema.py        # DjangoType nodes + Query
-├── filters.py       # FilterSet + RelatedFilter (filterset_class)
-├── orders.py        # OrderSet + RelatedOrder       (orderset_class)
-├── aggregates.py    # AggregateSet + RelatedAggregate (aggregate_class)
-└── fields.py        # FieldSet                     (fields_class)
+├── schema.py        # DjangoType nodes + Query + the schema
+├── mutations.py     # DjangoMutation writes + Mutation
+├── filters.py       # FilterSet + RelatedFilter        (filterset_class)
+├── orders.py        # OrderSet + RelatedOrder          (orderset_class)
+├── aggregates.py    # AggregateSet + RelatedAggregate  (aggregate_class)
+└── fields.py        # FieldSet                         (fields_class)
 ```
 
 ### `models.py`
@@ -40,9 +53,6 @@ class Galaxy(models.Model):
     class Meta:
         verbose_name = "Galaxy"
         verbose_name_plural = "Galaxies"
-
-    def __str__(self):
-        return self.name
 
 
 class CelestialBody(models.Model):
@@ -71,25 +81,23 @@ class CelestialBody(models.Model):
     class Meta:
         verbose_name = "Celestial Body"
         verbose_name_plural = "Celestial Bodies"
-
-    def __str__(self):
-        return self.name
 ```
 
 ### `schema.py`
 
-One `DjangoType` per model, each with the full `class Meta` sidecar declaration. `Meta.filterset_class` / `orderset_class` / `aggregate_class` / `fields_class` / `search_fields` point at the four sibling files below. `get_queryset` is the DRF-style visibility hook, composed with `apply_cascade_permissions` so the same row-level rule applies to direct lookups, connection pagination, and nested relation traversal.
+One `DjangoType` per model, each with the full `class Meta` sidecar declaration pointing at the sibling files below. `get_queryset` is the DRF-style visibility hook, composed with `apply_cascade_permissions` so one row-level rule covers direct lookups, connection pagination, nested relation traversal, and the mutation locate.
 
 ```python
 import strawberry
 from strawberry import relay
 
 from django_strawberry_framework import (
-    DjangoType,
-    DjangoNodeField,
     DjangoConnection,
     DjangoConnectionField,
+    DjangoNodeField,
     DjangoOptimizerExtension,
+    DjangoSchema,
+    DjangoType,
     apply_cascade_permissions,
     finalize_django_types,
     strawberry_config,
@@ -97,6 +105,7 @@ from django_strawberry_framework import (
 
 from . import aggregates, filters, models, orders
 from . import fields as fieldsets
+from .mutations import Mutation
 
 
 class GalaxyNode(DjangoType):
@@ -154,12 +163,50 @@ class Query:
 
 
 finalize_django_types()
-_optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(
+_optimizer = DjangoOptimizerExtension(strictness="raise")
+schema = DjangoSchema(
     query=Query,
+    mutation=Mutation,
     config=strawberry_config(),
     extensions=[lambda: _optimizer],
 )
+```
+
+### `mutations.py` — declarative writes
+
+One `DjangoMutation` per operation; the `Input` / `PartialInput` types, the `FieldError` envelope, and the deny-by-default `DjangoModelPermission` check are generated. The form and DRF-serializer flavors share this exact shape via `Meta.form_class` / `Meta.serializer_class`.
+
+```python
+import strawberry
+
+from django_strawberry_framework import DjangoMutation, DjangoMutationField
+
+from . import models
+
+
+class CreateCelestialBody(DjangoMutation):
+    class Meta:
+        model = models.CelestialBody
+        operation = "create"
+
+
+class UpdateCelestialBody(DjangoMutation):
+    class Meta:
+        model = models.CelestialBody
+        operation = "update"
+
+
+class DeleteCelestialBody(DjangoMutation):
+    class Meta:
+        model = models.CelestialBody
+        operation = "delete"
+
+
+@strawberry.type
+class Mutation:
+    create_celestial_body = DjangoMutationField(CreateCelestialBody)
+    update_celestial_body = DjangoMutationField(UpdateCelestialBody)
+    delete_celestial_body = DjangoMutationField(DeleteCelestialBody)
 ```
 
 ### `filters.py` — declarative filters (`filterset_class`)
@@ -403,15 +450,15 @@ class CelestialBodyFieldSet(FieldSet):
         return _resolve_date(root.updated_date, info, "astronomy.view_celestialbody")
 ```
 
-That is the entire `astronomy` app. **Six files, ~270 lines of consumer code total**, and it ships a richly-shaped Relay-node GraphQL API with: filtering across all fields and the FK relation; ordering across all fields and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; full-text-like search across two fields plus the relation; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; N+1-safe queryset planning across every nested selection. The shipped `0.0.14` surface already does all but three of these — the per-field aggregates, the fieldset redaction / denial / tiered visibility, and the relation-aware search. The remaining Layer-3 cards in [`KANBAN.md`][kanban] bring those sidecars online between now and `1.0.0`.
+That is the entire `astronomy` app: **seven files, about 370 lines of consumer code**, shipping a Relay-node GraphQL API with filtering and ordering across every field and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; search across two fields plus the relation; create / update / delete with generated inputs and a shared error envelope; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; and N+1-safe planning across every nested selection, with `strictness="raise"` turning any miss into a test failure. Which of these run today is [`TODAY.md`][today]'s question; which card brings each remaining one is [`KANBAN.md`][kanban]'s.
 
 ## Migration shape
 
-The package's audience is teams who already know one of three stacks. Each migration story is a small `class Meta` shape change on top of code they already have.
+The audience is teams who already know one of three stacks. Each migration is a small `class Meta` shape change on top of code they already have; the full guides are a board card, these are the shapes they must preserve.
 
 ### Coming from `graphene-django`
 
-`DjangoObjectType` becomes `DjangoType`, you drop the Graphene runtime, and you gain the N+1 optimizer for free:
+`DjangoObjectType` becomes `DjangoType`, the Graphene runtime goes, the N+1 optimizer arrives:
 
 ```diff
 - from graphene_django import DjangoObjectType
@@ -426,9 +473,7 @@ The package's audience is teams who already know one of three stacks. Each migra
 + finalize_django_types()
 ```
 
-- `DjangoListField` replaces graphene-django's symbol of the same name with no shape change at the migration site: `all_branches: list[BranchType] = DjangoListField(BranchType)` is the same one-line declaration graphene-django consumers already type — the package picks up the consumer's class-attribute annotation for outer nullability and the type-level `get_queryset` keeps cooperating with the optimizer.
-
-Your `Meta.filterset_class` / `Meta.orderset_class` / `Meta.fields_class` / `Meta.search_fields` declarations carry over verbatim. The mental model is identical; only the import line and the GraphQL engine underneath change.
+`DjangoListField` keeps its name and its one-line shape. `Meta.filterset_class` / `orderset_class` / `fields_class` / `search_fields` declarations carry over verbatim: same mental model, different import line and engine.
 
 ### Coming from `strawberry-graphql-django`
 
@@ -450,11 +495,11 @@ The decorator becomes a nested `Meta` class — same Strawberry engine, Django-s
 + finalize_django_types()
 ```
 
-The optimizer, scalar conversions, and relation resolution machinery are richer than the upstream's — plan caching, FK-id elision, queryset diffing, strictness mode for accidental N+1 detection. See [`docs/GLOSSARY.md`][glossary] for the enhancement catalog.
+An unregistered relation target raises at `finalize_django_types()` here, where upstream silently substitutes a `pk`-only stub. That is deliberate and a non-goal guards it.
 
 ### Coming from DRF + `django-filter`
 
-Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged. The `DjangoMutation` base ships today (`0.0.11`) for model-driven `create` / `update` / `delete` — a nested `class Meta: model = …; operation = "create"` auto-generates the `Input` / `PartialInput` types and surfaces validation through the shared `FieldError` envelope. Form-based mutations shipped in `0.0.12` via `Meta.form_class` — `DjangoModelFormMutation` (a `ModelForm`) and `DjangoFormMutation` (a plain `Form`), each reusing the same `FieldError` envelope (populated from `form.errors`). The DRF `Serializer`-flavored mutation (`Meta.serializer_class`, the `SerializerMutation` shape below) shipped in `0.0.13`, building on the same shipped base and reusing the same `FieldError` envelope; `0.0.13` also added the opt-in session-auth surface (`login` / `logout` / `register` + `current_user`, imported from the `django_strawberry_framework.auth` submodule).
+An existing `django_filters.FilterSet` migrates with a one-line parent-class swap: the package's `FilterSet` **is** a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive carries over unchanged. An existing `ModelSerializer` or `ModelForm` becomes a mutation by naming it in `Meta`, and all three mutation flavors share one `FieldError` envelope.
 
 ```python
 from django_strawberry_framework.filters import FilterSet
@@ -479,14 +524,7 @@ class CategoryType(DjangoType):
         filterset_class = CategoryFilter
 
 
-# Shipped today (0.0.11) — the model-driven flavor:
-class CreateCategory(DjangoMutation):
-    class Meta:
-        model = Category
-        operation = "create"
-
-
-# Shipped in 0.0.13 — the DRF-serializer flavor on the same base:
+# The DRF-serializer mutation flavor (the model-driven one is in `astronomy/mutations.py` above):
 class CreateCategoryFromSerializer(SerializerMutation):
     class Meta:
         serializer_class = CategorySerializer
@@ -495,10 +533,6 @@ class CreateCategoryFromSerializer(SerializerMutation):
 ```
 
 GraphQL becomes another transport for the same business logic — no parallel field definitions, no re-validated payloads, no duplicate filter declarations.
-
-## Working reference
-
-`django-graphene-filters` is the working feature-complete reference. The goal is not to copy its Graphene internals — it's to recreate **what the package enables for the schema author**: declarative filter / order / aggregate / fieldset sidecars, lazy related class references, generated input / output types with stable class-derived names, layered permissions including cascade visibility, async aggregate paths, and Relay-node-shaped output. The `Galaxy` / `CelestialBody` example above is a structural twin of the `django-graphene-filters` `recipes` cookbook ([`recipes/schema.py`][cookbook-schema]: `ObjectType` / `Object` / `Attribute` / `Value`), reduced to two models so the shape stays legible. The per-feature shipped / planned breakdown lives in [`docs/GLOSSARY.md`][glossary].
 
 ## Success criteria
 
@@ -509,10 +543,11 @@ The project hits the goal when a Django developer can:
 3. **Add nested filtering / ordering / aggregation / search** without hand-built input or output types.
 4. **Enforce row, field, and cascade permissions declaratively** — the same hook covers reads and writes.
 5. **Rely on automatic ORM optimization** — nested GraphQL selections get the right `select_related` / `prefetch_related` / `only()` plan from one selection-tree walk that cooperates with consumer-shaped querysets.
-6. **Write mutations declaratively from `ModelForm`, `ModelSerializer`, or auto-generated `Input` types** — one shared `errors: list[FieldError]` envelope across every flavor, plus `Upload` scalar for `FileField` / `ImageField`. The auto-generated `Input`-type flavor — including the `Upload` scalar and the `FileField` / `ImageField` → `Upload` mutation-input mapping — shipped for generated `DjangoMutation` inputs in `0.0.11`; the `ModelForm` flavor (`DjangoModelFormMutation`, plus the plain-`Form` `DjangoFormMutation` sibling) shipped in `0.0.12`; and the `ModelSerializer` flavor (`SerializerMutation`) shipped in `0.0.13`.
-7. **Migrate from `graphene-django`, `strawberry-graphql-django`, `django-graphene-filters`, or DRF + `django-filter`** without bringing the source package along — the `Meta` mental model carries over; only the import line changes. The import-only promise covers `Meta`-driven domain declarations; project-level engine configuration (a schema's `extensions=` list, the `GRAPHENE` settings block) migrates by documented recipe — for example, the `graphene-django` debug surface ports by removing `_debug` and `DjangoDebugMiddleware`, adding `DjangoDebugExtension` to the Strawberry schema's `extensions=` list, and reading `response.extensions.debug`.
+6. **Write mutations declaratively from `ModelForm`, `ModelSerializer`, or auto-generated `Input` types** — one shared `errors: [FieldError!]!` envelope across every flavor, `Upload` for `FileField` / `ImageField`, deny-by-default write permissions, and a transaction that spans the response.
+7. **Migrate from `graphene-django`, `strawberry-graphql-django`, `django-graphene-filters`, or DRF + `django-filter`** without bringing the source package along. The import-only promise covers `Meta`-driven domain declarations; project-level engine configuration (`extensions=`, the `GRAPHENE` settings block) migrates by documented recipe.
+8. **Deploy it internet-facing from the docs alone** — the production security profile is the package's default posture, not a checklist the consumer discovers after an incident.
 
-The project misses the goal if users must routinely hand-build the same schema machinery the package is supposed to generate.
+The project misses the goal if users must routinely hand-build the same schema machinery the package is supposed to generate, or must read the source to deploy it safely.
 
 ## Non-goals
 
@@ -531,25 +566,28 @@ The destination is a Django-native, Strawberry-powered framework that makes rich
 
 Two example projects prove the goal:
 
-- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`-driven create / update / delete plus file-upload mutations, beside the `library`, `scalars`, `kanban`, and `glossary` apps — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; image-upload mutations; sharded multi-database stress mode. `ModelSerializer`-driven mutations (`0.0.13`) and session-auth mutations exercised by the existing test users (the `accounts` app, `0.0.13`) now ship.
-- **Cookbook parity**: a Strawberry version of `django-graphene-filters`'s [`recipes/schema.py`][cookbook-schema] should be a clean port — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The astronomy example above is the structural reduction of that port; the full cookbook is the proof.
-
-For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].
+- **Fakeshop** (`examples/fakeshop/`) grows into the full Relay-shaped showcase: every sidecar the `astronomy` app declares, every mutation flavor, session auth, file and image uploads, and the sharded multi-database mode, each exercised by live `/graphql/` tests. It stays a development fixture and never a deployment.
+- **Cookbook parity**: a Strawberry port of `django-graphene-filters`'s [`recipes/schema.py`][cookbook-schema] — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The `astronomy` app is the two-model reduction of that port; the full cookbook is the proof.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[agents]: AGENTS.md
 [kanban]: KANBAN.md
+[start]: START.md
+[today]: TODAY.md
 
 <!-- docs/ -->
+[docs-readme]: docs/README.md
 [glossary]: docs/GLOSSARY.md
 [glossary-filterset]: docs/GLOSSARY.md#filterset
 [glossary-index]: docs/GLOSSARY.md#index
-[glossary-metafilterset-class]: docs/GLOSSARY.md#metafilterset_class
+[tree]: docs/TREE.md
 
 <!-- docs/SPECS/ -->
 
 <!-- docs/builder/ -->
+[build]: docs/builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->
 
@@ -562,4 +600,4 @@ For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].
 <!-- .venv/ -->
 
 <!-- External -->
-[cookbook-schema]: ../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+[cookbook-schema]: https://github.com/riodw/django-graphene-filters/blob/master/examples/cookbook/cookbook/recipes/schema.py

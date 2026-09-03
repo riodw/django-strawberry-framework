@@ -11,7 +11,7 @@
 [changelog-image]: https://img.shields.io/badge/changelog-CHANGELOG.md-blue
 [changelog-url]: https://github.com/riodw/django-strawberry-framework/blob/main/CHANGELOG.md
 
-A DRF-shaped Django integration for [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry). Build GraphQL APIs from Django models with `class Meta`, not decorators — and get a cooperative N+1 optimizer in the box.
+GraphQL for Django the way DRF taught you: `class Meta`, not decorators. Built on [Strawberry](https://github.com/strawberry-graphql/strawberry), with a cooperative N+1 optimizer in the box.
 
 ```python
 from django_strawberry_framework import DjangoType, finalize_django_types
@@ -29,55 +29,34 @@ class ItemType(DjangoType):
 finalize_django_types()
 ```
 
-That's the entire surface for a model-backed GraphQL type. Relations are wired automatically; nested selections become Django ORM `select_related` / `prefetch_related` / `only` calls without you touching the resolver.
+That's a complete model-backed type. Relations wire themselves; nested selections become `select_related` / `prefetch_related` / `only()` without you touching a resolver.
 
 ## Why this package exists
 
-Django developers think in `class Meta`, querysets, DRF, and django-filter. The Python GraphQL world has moved to [Strawberry](https://github.com/strawberry-graphql/strawberry) — but Strawberry's Django ecosystem leans on decorators and Strawberry-shaped configuration, not Django-shaped configuration.
+Django developers think in `class Meta`, querysets, DRF, and django-filter. Strawberry's existing Django integration thinks in decorators. This package keeps Strawberry as the engine and makes `class Meta` the configuration surface, so it feels like `graphene-django` evolved onto a modern engine rather than replaced by a different one.
 
-This package closes that gap: Strawberry stays as the engine, `class Meta` becomes the configuration surface, your existing querysets stay yours, and the shipped N+1 optimizer *cooperates* with the `select_related` / `prefetch_related` you've already written instead of replacing them. The result feels like `graphene-django` evolved onto a modern engine instead of replaced by a different one.
+## What you get
 
-## Why it's fast
+**Everything hangs off one `Meta`.** Fields, Relay, filtering, ordering, all on the type:
 
-Five optimizer wins over `strawberry-graphql-django`, all on the mainstream (concretely-typed) path:
+```python
+class ItemType(DjangoType):
+    class Meta:
+        model = Item
+        fields = ("id", "name", "category", "entries")
+        interfaces = (relay.Node,)
+        filterset_class = ItemFilter   # a django-filter-shaped FilterSet
+        orderset_class = ItemOrder     # its OrderSet twin
+```
 
-- **Cross-request plan cache** — upstream re-walks the selection tree every request; we walk once, serve from a 256-entry LRU (`cache_info()`). Structurally, every repeat of a cacheable query is a hit (one miss, then all hits). The per-request selection-tree walk this eliminates — which upstream pays on every request — measured ~85–150 µs depending on selection depth in one local run ([`bench_plan_cache.py`][bench-plan-cache]); absolute µs vary by machine and dataset, so read them as a single benchmark, not a fixed package property.
-- **Strictness / N+1 detection** — `strictness="raise"` → `OptimizerError` on unplanned lazy load; a CI gate. Upstream: preventive-only, no detective mode.
-- **FK-id join elision** — `{ relation { id } }` reads the parent's existing FK column — no join/prefetch. Upstream resolves the same selection with a `select_related` JOIN.
-- **Class-creation-time metadata** — frozen at type creation, not memoized on first request.
-- **Postgres lateral nested pagination** (shipped `0.0.14`) — nested Relay connection pages can fetch via `CROSS JOIN LATERAL`, paging per parent at O(parents × page) instead of the windowed prefetch's O(all children); measured 6.4× on dense count-free pages in one local run ([`bench_nested_fetch.py`][bench-nested-fetch]), same benchmark caveat as above. Opt-in per extension instance (`nested_connection_strategy="lateral"` / `"auto"`, or the `NESTED_CONNECTION_STRATEGY` setting); the windowed strategy stays the default everywhere, while `"auto"` selects lateral only when the nested queryset's effective routed alias is PostgreSQL and executes the same bounded window on every other vendor. Upstream paginates nested relations with window functions only.
+**Root fields in one line.** `DjangoConnectionField` gives Relay cursor pagination with `filter:` / `orderBy:` derived from the type above; `DjangoListField` is the plain-list alternative.
 
-Run it: `uv run python scripts/bench_plan_cache.py`. The lateral benchmark needs a Postgres server: `FAKESHOP_PG_DSN=... uv run python scripts/bench_nested_fetch.py`.
-
-## Is this for you?
-
-**Coming from `graphene-django`?** Your `class Meta` shape stays — `DjangoObjectType` becomes `DjangoType`, you drop the Graphene runtime, and you gain the N+1 optimizer for free. Same mental model, modern Strawberry engine.
-
-**Coming from `strawberry-graphql-django`?** Keep Strawberry; lose the decorators. Configuration moves into `class Meta` so it's consistent with the rest of your Django app. Plus the optimizer wins above, and queryset diffing.
-
-**Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over — and filtering *and* ordering ship today via `Meta.filterset_class` / `Meta.orderset_class`. All three mutation flavors ship today on the same nested-`Meta` shape and shared `FieldError` envelope: the model-driven `DjangoMutation` create/update/delete foundation (`0.0.11` — auto-generated `<Model>Input` / `<Model>PartialInput` and the `DjangoMutationField` factory), form-based mutations via `Meta.form_class` (`0.0.12` — `DjangoModelFormMutation` for a `ModelForm`, `DjangoFormMutation` for a plain `Form`, errors populated from `form.errors`), and the DRF-serializer flavor via `Meta.serializer_class` (`SerializerMutation`, `0.0.13`), plus opt-in session-auth mutations (`login` / `logout` / `register` + a `current_user` query, imported from the `django_strawberry_framework.auth` submodule, `0.0.13`).
-
-## Status
-
-**`0.0.15`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. The bundled example project (`examples/fakeshop/`) is a **development fixture, never a deployment**: its `DEBUG=True`, checked-in `SECRET_KEY`, GraphiQL, and open permission demonstrations are intentional, it cannot be made production-ready by editing settings (its settings module refuses to load with `DEBUG` off), and taking this package to production means a separate project built against [`docs/README.md`'s production security profile][readme].
-
-**Newest released (`0.0.14`); active prerelease (`0.0.15`).** The `0.0.14` cut is the security-and-integration alpha described below; `0.0.15` development is tracked in [`KANBAN.md`][kanban], and its release notes are open in [`CHANGELOG.md`][changelog]:
-
-- **Channels ASGI router** (`DONE-041`; redesigned on `main` by the transport-security card `046`) — `DjangoGraphQLProtocolRouter`, imported from `django_strawberry_framework.routers`: GraphQL over WebSocket behind Host + Origin validation and `AuthMiddlewareStack`, while HTTP dispatches straight to your own Django ASGI application. Since `046`: `django_application` is required, `url_pattern` became `websocket_url_pattern` (exact match), the Channels HTTP branch is gone — GraphQL over HTTP is the package's own `DjangoGraphQLView` / `AsyncDjangoGraphQLView` in your URLconf, with a cumulative request-body cap (`413`) and a strict UTF-8 wire contract — and the router is no longer constructor-compatible with upstream `AuthGraphQLProtocolTypeRouter`. `channels` is a soft dependency.
-- **Debug-toolbar middleware** (`DONE-042`) — `DebugToolbarMiddleware`, imported from `django_strawberry_framework.middleware.debug_toolbar`: teaches `django-debug-toolbar`'s SQL panel to see Strawberry `/graphql/` traffic (`django-debug-toolbar` is a soft dependency).
-- **Test-client family** (`DONE-043`) — `TestClient` / `AsyncTestClient` plus the `GraphQLTestMixin` / `GraphQLTestCase` unittest family, imported from `django_strawberry_framework.testing`: in-process requests against `/graphql/` returning a typed `Response` (`errors` / `data` / `extensions`), with the multipart-upload ergonomics the `Upload` scalar awaited.
-- **`DjangoDebugExtension`** (`DONE-044`) — a Strawberry `SchemaExtension` capturing an operation's SQL and resolver exceptions into `extensions.debug`, the Strawberry-native equivalent of graphene-django's `_debug` field; never for an internet-facing schema. Ships alongside the pluggable nested-connection fetch-strategy seam (`"windowed"` default / Postgres `"lateral"` / `"auto"`, via `nested_connection_strategy=` or the `NESTED_CONNECTION_STRATEGY` setting).
-- **Secure output and error defaults** (`048`, on `main`) — file/image read output drops the server's absolute filesystem path (`DjangoFileType` / `DjangoImageType` are now `name` / `size` / `url` + image `width` / `height`; `Meta.filesystem_path_fields` opts a column back in, swapping it onto `DjangoFilePathType` / `DjangoImagePathType` — the second intentional break); `DjangoDebugExtension` fails closed under `DEBUG=False` unless explicitly acknowledged, with its payload capped; and `DjangoSchema` gains a production error policy — an unexpected exception reaches the client as a stable message plus a `correlationId` (logged server-side under the same id) while deliberate `GraphQLError`s keep their contract, configurable via `error_policy=` / `ERROR_POLICY`. The resource-policy (`047`) and dependency/CI (`049`) cards complete the program.
-
-Earlier alpha surfaces, each detailed in [`CHANGELOG.md`][changelog] and [`docs/GLOSSARY.md`][glossary]:
-
-- `0.0.13` — DRF-serializer mutations (`SerializerMutation` via `Meta.serializer_class`, a soft DRF dependency) + opt-in session-auth mutations (`login` / `logout` / `register` + `current_user`, from the `django_strawberry_framework.auth` submodule).
-- `0.0.12` — form-based mutations: `DjangoModelFormMutation` (a `ModelForm`) and `DjangoFormMutation` (a plain `Form`) via `Meta.form_class`, `form.errors` mapped onto the shared `FieldError` envelope.
-- `0.0.11` — the model-driven `DjangoMutation` create/update/delete foundation: generated `<Model>Input` / `<Model>PartialInput` types, the shared `FieldError` envelope, `DjangoModelPermission` write authorization, plus the `Upload` scalar and the structured file/image read output.
-- `0.0.10` — cascade visibility permissions (`apply_cascade_permissions`: one call in `get_queryset` cascades visibility across FK / OneToOne edges at zero added round-trips) and two optimizer robustness guards (evaluated querysets pass through untouched; mutations get no `.only()` deferral).
-- `0.0.9` — the Relay release: `DjangoConnectionField` (cursor pagination + sidecar-derived `filter:` / `orderBy:` + opt-in `totalCount`), root `node(id:)` / `nodes(ids:)` refetch with no existence leak, the relation-as-connection upgrade with `Meta.relation_shapes` (**since `0.0.14` the default is `"connection"` alone**), model-anchored `GlobalID`s (`app_label.modelname:<pk>`, so type renames keep cached IDs valid), and connection-aware optimizer planning (one windowed `Prefetch` per relation per request).
-- `0.0.8` — the filtering (`FilterSet` / `RelatedFilter` / `filter_input_type` / `Meta.filterset_class`) and ordering (`OrderSet` / `RelatedOrder` / `Meta.orderset_class`) subsystems, with active-input-only `check_<field>_permission` gates.
-- `0.0.7` — `DjangoListField`, the non-Relay `list[T]` root Query field (default `_default_manager.all()` resolver, `get_queryset` cooperation in sync and async contexts, root-gated optimizer planning, consumer-annotation-driven outer nullability), plus the `DjangoStrawberryFrameworkConfig` app config, the `manage.py export_schema` SDL command, the multi-database cooperation contract, the Django Trac #37064 hardening with its `safe_wrap_connection_method` consumer helper, and warning-free scalar registration through `strawberry_config()`.
+```python
+@strawberry.type
+class Query:
+    all_items: DjangoConnection[ItemType] = DjangoConnectionField(ItemType)
+    all_categories: list[CategoryType] = DjangoListField(CategoryType)
+```
 
 <!-- TODO(spec-050 slice 5): Fold the shipped list-argument surface into the
 0.0.7 capability sentence without rewriting its historical introduction.
@@ -87,34 +66,79 @@ requires visible stable ordering, and that returned/skip coordinates are
 bounded by ResourcePolicy with no pk or DISTINCT injection. Keep version and
 release-note wording owned by spec-053's joint cut. -->
 
-For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`][today]. The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`][glossary]. Per-card sequencing for both releases lives in [`KANBAN.md`][kanban].
+**Three mutation flavors, one shape.** Write against the model, a Django form, or a DRF serializer. Inputs are generated, and all three report validation through the same `FieldError` envelope.
+
+```python
+class CreateItem(DjangoMutation):
+    class Meta:
+        model = Item
+        operation = "create"
+
+class CreateItemViaForm(DjangoModelFormMutation):
+    class Meta:
+        form_class = ItemModelForm
+        operation = "create"
+
+class CreateItemViaSerializer(SerializerMutation):
+    class Meta:
+        serializer_class = ItemSerializer
+        operation = "create"
+```
+
+**And the rest:**
+
+- **N+1 detection.** `DjangoOptimizerExtension(strictness="raise")` turns an unplanned lazy load into an error, so N+1 fails CI instead of surprising production.
+- **Visibility that cascades.** Override `get_queryset` as you already do; `apply_cascade_permissions` pushes it across FK / OneToOne edges with zero extra queries.
+- **Write permissions by default.** Generated mutations deny unless `DjangoModelPermission` (Django's `add` / `change` / `delete`) or your own class says yes.
+- **Production defaults.** Unexpected exceptions are masked behind a `correlationId`, request bodies are capped, and file output never leaks the server's filesystem path.
+- **Session auth.** Opt-in `login` / `logout` / `register` mutations and a `current_user` query.
+- **Tooling.** `TestClient` for in-process GraphQL tests, `DjangoDebugExtension` for SQL in `extensions.debug`, django-debug-toolbar integration, and a Channels router for subscriptions.
+
+## Why it's fast
+
+Five optimizer wins over `strawberry-graphql-django`:
+
+- **Cross-request plan cache.** The selection tree is walked once, not on every request.
+- **N+1 detection.** Upstream is preventive only; `strictness="raise"` is a detective mode.
+- **FK-id join elision.** `{ relation { id } }` reads the FK column already on the parent, no join.
+- **Class-creation-time metadata.** Frozen when the type is created, not memoized on first request.
+- **Postgres lateral nested pagination.** Nested connection pages via `CROSS JOIN LATERAL`, paging per parent instead of numbering every child. Opt-in; measured 6.4× on dense pages in one local run.
+
+Benchmarks: [`bench_plan_cache.py`][bench-plan-cache] and [`bench_nested_fetch.py`][bench-nested-fetch] (needs `FAKESHOP_PG_DSN`). Numbers are from one machine; run them on yours.
+
+## Is this for you?
+
+| | `graphene-django` | `strawberry-graphql-django` | this package |
+| --- | --- | --- | --- |
+| Config surface | `class Meta` | decorators + annotations | `class Meta` |
+| N+1 handling | no bundled optimizer | bundled optimizer | cooperative optimizer that respects your own `select_related` / `prefetch_related` |
+| N+1 detection | none | preventive only | `strictness="raise"` |
+| Filtering | django-filter `FilterSet` | `filter_type` decorated classes | `FilterSet` + `Meta.filterset_class` |
+| Mutations | form and serializer classes | create / update / delete decorators | model, form, and serializer on one `Meta` |
+| Unregistered relation target | silently dropped | `DjangoModelType { pk }` stub | raises at `finalize_django_types()`, naming the field |
+
+Coming from `graphene-django`: your `Meta` stays, `DjangoObjectType` becomes `DjangoType`. Coming from `strawberry-graphql-django`: keep Strawberry, lose the decorators. Coming from DRF: `model` / `fields` / `exclude` / `filterset_class` mean what you think they mean.
+
+## Status
+
+**`0.0.15`, alpha, single maintainer.** Good for internal tools and prototypes, not production yet; public names are stable, edge cases are still hardening. The bundled `examples/fakeshop/` is a development fixture and refuses to run with `DEBUG` off. Going to production means your own project built against the [production security profile][readme-security].
 
 ## Get started → [`docs/README.md`][readme]
 
-Installation, quick start, schema-setup walkthrough, running the example project, and seeding test data live in [`docs/README.md`][readme]. That's the next stop if this looks like your shape.
+Install, quick start, reading and writing data, transport, and deployment all live in [`docs/README.md`][readme].
 
-## Project documentation
-
-- [`docs/README.md`][readme] — install, quick start, walkthrough, status
-- [`docs/GLOSSARY.md`][glossary] — shipped/planned/deferred capability catalog + migration notes
-- [`GOAL.md`][goal] — long-term destination and rich-schema north star
-- [`TODAY.md`][today] — current package capability snapshot for examples and early adopters
-- [`docs/TREE.md`][tree] — package and test layout reference
-- [`KANBAN.md`][kanban] — contributor/maintainer board for shipped, planned, and blocked work
-- [`BACKLOG.md`][backlog] — strategic differentiators beyond parity (post-`1.0.0`)
-- [`CONTRIBUTING.md`][contributing] — dev setup, format, test, build, publish
+- [`docs/GLOSSARY.md`][glossary] — every shipped / planned / deferred capability, by anchor
+- [`TODAY.md`][today] — what the example project can do right now
+- [`GOAL.md`][goal] — where this is going
+- [`KANBAN.md`][kanban] / [`BACKLOG.md`][backlog] — roadmap and post-`1.0.0` ideas
+- [`docs/TREE.md`][tree] — package layout
+- [`CHANGELOG.md`][changelog] · [`CONTRIBUTING.md`][contributing] · [`SECURITY.md`][security]
 
 ## Inspired by
 
 - <https://github.com/riodw/django-graphene-filters>
 - <https://github.com/encode/django-rest-framework>
 - <https://github.com/strawberry-graphql/strawberry-graphql-django>
-
-## Contributing & Security
-
-- Contribution workflow: [`CONTRIBUTING.md`][contributing]
-- Vulnerability reporting: [`SECURITY.md`][security]
-- Release notes: [`CHANGELOG.md`][changelog]
 
 <!-- LINK DEFINITIONS -->
 
@@ -130,6 +154,7 @@ Installation, quick start, schema-setup walkthrough, running the example project
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
 [readme]: docs/README.md
+[readme-security]: docs/README.md#production-security-profile
 [tree]: docs/TREE.md
 
 <!-- docs/SPECS/ -->

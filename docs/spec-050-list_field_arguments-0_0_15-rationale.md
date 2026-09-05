@@ -299,6 +299,22 @@ Spec: [Decision 12][spec-050-d12].
   the [joint version cut][glossary-joint-version-cut], release documentation, and `__version__`
   edit. Touching version literals in card 050 would violate the joint-cut protocol.
 
+### Decision 13 — graphql-core workarounds have a dependency-owned lifecycle
+
+Spec: [Decision 13][spec-050-d13].
+
+*Decision:* Put the `ExecutionContext.complete_list_value` delegator in its own
+`_graphql_core_patches.py` module and gate it with the canonical `graphql_core` dependency key.
+
+*Why:* The patched callable, upstream release cadence, retirement signal, and consumer opt-out
+all belong to graphql-core. Strawberry happens to invoke that executor, but its HTTP-view patch
+has a different owner and a different retirement condition. One module and gate per patched
+dependency keeps disabling or retiring either workaround from silently changing the other.
+
+*Rejected:* Keeping the executor wrapper in `_strawberry_patches.py` because graphql-core is a
+transitive Strawberry dependency. That makes dependency topology decide lifecycle ownership,
+couples unrelated escape hatches, and lets an HTTP-view opt-out restore an executor bug.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
@@ -317,6 +333,7 @@ Spec: [Decision 12][spec-050-d12].
 [spec-050-d9]: spec-050-list_field_arguments-0_0_15.md#decision-9--no-argument-sync-behavior-takes-the-old-branch-async-only-adapts-completion
 [spec-050-d10]: spec-050-list_field_arguments-0_0_15.md#decision-10--coercion-errors-stay-graphql-owned-runtime-domain-errors-are-package-owned
 [spec-050-d12]: spec-050-list_field_arguments-0_0_15.md#decision-12--the-version-bump-belongs-to-the-0015-joint-cut
+[spec-050-d13]: spec-050-list_field_arguments-0_0_15.md#decision-13--graphql-core-workarounds-have-a-dependency-owned-lifecycle
 
 <!-- docs/SPECS/ -->
 [spec-020]: SPECS/spec-020-list_field-0_0_7.md

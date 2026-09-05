@@ -2,7 +2,8 @@
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
 Status: in flight (`0.0.15`)
-Revision: 2026-09-04 - in flight (`0.0.15`) (revision history moved to
+Revision: 2026-09-04 - implementation remediation complete; full and sharded verification
+pending (`0.0.15`) (revision history moved to
 [`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
 
 Deliberation, rejected alternatives, and this spec's change record live in its companion
@@ -760,8 +761,11 @@ For a request carrying any non-null list argument, the color-specific queryset p
    seal's documented canonical ordering, which today runs `type`, `table`, `untrusted`,
    `sliced`, `combined`, `projection`, `alias`. `unevaluated` is taken immediately before
    `sliced` so the trust-family proofs still run first and the two execution-state rejections
-   sit together, making the shipped order `type`, `table`, `untrusted`, `unevaluated`,
-   `sliced`, `combined`, `projection`, `alias`. Second, its own arm at both message-building
+   sit together. Decision 13's routing check is the third new code and takes the position
+   immediately after `untrusted`, so every trust-family proof still runs first and no
+   reconstructed queryset is returned before routing intent is proven, making the shipped
+   order `type`, `table`, `untrusted`, `routing`, `unevaluated`, `sliced`, `combined`,
+   `projection`, `alias`. Second, its own arm at both message-building
    sites,
    [`django_strawberry_framework/utils/querysets.py::_visibility_result_error`][querysets] and
    [`django_strawberry_framework/utils/querysets.py::_prepared_visibility_source`][querysets],
@@ -1179,6 +1183,21 @@ state is the triplet above.
 This card's Slice 5 folds its shipped surface into docs but does not move version state or
 create a [`CHANGELOG.md`][changelog] entry. This spec grants no exception to the
 maintainer-only changelog rule.
+
+### Decision 13 — graphql-core workarounds have a dependency-owned lifecycle
+
+The async-only queryset adapter exposes an upstream executor defect rather than creating it:
+the installed graphql-core `ExecutionContext.complete_list_value` materializes an
+`AsyncIterable`, recursively completes the list, and returns the recursive completion
+awaitable without awaiting it. The workaround belongs to
+`django_strawberry_framework/_graphql_core_patches.py::apply`, not Strawberry's HTTP-view
+patch module. `DjangoStrawberryFrameworkConfig.ready` dispatches it independently, and
+`APPLY_UPSTREAM_PATCHES = {"graphql_core": False}` disables only this dependency boundary.
+
+The retirement sentinel calls the captured upstream method on the actual bug shape and asserts
+that awaiting it once still yields a residual awaitable. When upstream fixes the defect, that
+sentinel fails and the module can be removed without disturbing Strawberry body parsing. See
+the [rationale][rationale-d13] for the rejected shared-gate design.
 
 ## Implementation plan
 
@@ -1915,6 +1934,7 @@ structural checks, and link/kanban verification prescribed by
 [rationale-d9]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-9--no-argument-sync-behavior-takes-the-old-branch-async-only-adapts-completion
 [rationale-d10]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-10--coercion-errors-stay-graphql-owned-runtime-domain-errors-are-package-owned
 [rationale-d12]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-12--the-version-bump-belongs-to-the-0015-joint-cut
+[rationale-d13]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-13--graphql-core-workarounds-have-a-dependency-owned-lifecycle
 [rationale-risks]: spec-050-list_field_arguments-0_0_15-rationale.md#risks-and-open-questions--the-fallback-positions
 [tree]: TREE.md
 

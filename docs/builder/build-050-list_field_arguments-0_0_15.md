@@ -3,7 +3,7 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: complete
+Status: implementation complete; full-coverage and sharded verification pending
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).
@@ -80,7 +80,8 @@ Status: complete
         wording, and `CHANGELOG.md` to card 053's joint cut; `pyproject.toml` and `uv.lock`
         have no duplicate root-package version to bump.
 - [x] **Cross-slice integration pass (Worker 1)**
-- [x] **Final test-run gate (Worker 1)** -> [`docs/builder/bld-final.md`][bld-final]
+- [ ] **Final test-run gate (Worker 1)** — the prior gate is superseded; rerun full coverage and
+      sharded verification after remediation -> [`docs/builder/bld-final.md`][bld-final]
 
 <!-- LINK DEFINITIONS -->
 

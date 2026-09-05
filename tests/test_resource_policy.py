@@ -727,6 +727,18 @@ def test_bounded_rows_preserves_none():
     assert bounded_rows(None, info) is None
 
 
+def test_bounded_rows_checks_deadline_before_preserving_none():
+    info = SimpleNamespace(context={})
+    stash_resource_policy(
+        info.context,
+        ResourcePolicy(max_list_rows=2, execution_deadline_seconds=1),
+    )
+    info.context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
+
+    with pytest.raises(ResourceLimitExceeded, match="execution_deadline_seconds"):
+        bounded_rows(None, info)
+
+
 async def test_bounded_rows_async_preserves_none():
     info = SimpleNamespace(context={})
     stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))

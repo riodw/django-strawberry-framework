@@ -5,11 +5,17 @@ import importlib
 import django.apps
 from cross_web import DjangoHTTPRequestAdapter
 from django.test.testcases import SimpleTestCase
+from graphql.execution.execute import ExecutionContext
 from strawberry.http.async_base_view import AsyncBaseHTTPView
 from strawberry.http.base import BaseView
 from strawberry.http.sync_base_view import SyncBaseHTTPView
 
-from django_strawberry_framework import _cross_web_patches, _django_patches, _strawberry_patches
+from django_strawberry_framework import (
+    _cross_web_patches,
+    _django_patches,
+    _graphql_core_patches,
+    _strawberry_patches,
+)
 from django_strawberry_framework.apps import DjangoStrawberryFrameworkConfig
 
 
@@ -36,10 +42,10 @@ def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry():
 def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes():
     # ``ready`` is deliberately absent from this set: it is required on
     # this class, not forbidden. The package ships a ``ready()`` body
-    # that dispatches the three upstream patch modules' ``apply()``
+    # that dispatches the four upstream patch modules' ``apply()``
     # calls, and the ``ready`` tests below pin it positively. See
     # ``django_strawberry_framework/apps.py`` ``ready()`` docstring and
-    # the three ``_*_patches`` module docstrings.
+    # the four ``_*_patches`` module docstrings.
     forbidden = {
         "label": "Decision 2 (default last-segment label is already unique)",
         "default_auto_field": "Decision 5 (package ships zero Django models)",
@@ -55,13 +61,13 @@ def test_djangostrawberryframeworkconfig_defines_ready_for_django_patches():
     """The package's ``AppConfig.ready()`` applies the upstream
     patches. Pinned so a future refactor that removes the ``ready()``
     body outright fails loudly; the dispatch behavior itself is pinned
-    by ``test_ready_dispatches_all_three_patch_appliers_and_refires_safely``.
+    by ``test_ready_dispatches_all_four_patch_appliers_and_refires_safely``.
     """
     assert "ready" in DjangoStrawberryFrameworkConfig.__dict__
     assert callable(DjangoStrawberryFrameworkConfig.__dict__["ready"])
 
 
-# Every upstream class attribute the three patch modules replace. A test that
+# Every upstream class attribute the four patch modules replace. A test that
 # drives ``apply()`` (directly or through ``ready()``) mutates process-global
 # state at each of these slots, so a test that also perturbs the patch modules
 # themselves restores both halves from this one table.
@@ -72,6 +78,7 @@ _PATCHED_SLOTS = (
     (SyncBaseHTTPView, "parse_multipart"),
     (AsyncBaseHTTPView, "parse_multipart"),
     (DjangoHTTPRequestAdapter, "body"),
+    (ExecutionContext, "complete_list_value"),
 )
 
 
@@ -80,18 +87,19 @@ def _all_patches_installed():
         _django_patches._patch_is_installed(),
         _strawberry_patches._patch_is_installed(),
         _cross_web_patches._patch_is_installed(),
+        _graphql_core_patches._patch_is_installed(),
     )
 
 
-def test_ready_dispatches_all_three_patch_appliers_and_refires_safely():
-    """``ready()`` itself installs all three upstream patches; a re-fire is safe.
+def test_ready_dispatches_all_four_patch_appliers_and_refires_safely():
+    """``ready()`` itself installs all four upstream patches; a re-fire is safe.
 
     The patch-module suites each pin "installed at collection via
     ``ready()``", but those assertions are masked by the direct
     ``apply()`` calls ``test_apply_is_idempotent`` makes earlier in file
     order on the same worker - a ``ready()`` that lost a dispatch line
     would still pass them. This test owns the dispatch contract
-    deterministically: it reverts all three patches to the captured
+    deterministically: it reverts all four patches to the captured
     upstream originals, drives ``ready()`` through the registered
     AppConfig, and asserts every patch is installed. A second
     ``ready()`` pins dispatch-layer idempotence (some Django test
@@ -101,6 +109,7 @@ def test_ready_dispatches_all_three_patch_appliers_and_refires_safely():
     saved_parse_json = BaseView.__dict__["parse_json"]
     saved_parse_query_params = BaseView.__dict__["parse_query_params"]
     saved_body = DjangoHTTPRequestAdapter.__dict__["body"]
+    saved_complete = ExecutionContext.__dict__["complete_list_value"]
     try:
         SimpleTestCase._remove_databases_failures = (
             _django_patches._original_remove_databases_failures
@@ -108,19 +117,36 @@ def test_ready_dispatches_all_three_patch_appliers_and_refires_safely():
         BaseView.parse_json = _strawberry_patches._original_parse_json
         BaseView.parse_query_params = _strawberry_patches._original_parse_query_params
         DjangoHTTPRequestAdapter.body = property(_cross_web_patches._original_body_fget)
-        assert _all_patches_installed() == (False, False, False)
+        ExecutionContext.complete_list_value = _graphql_core_patches._original_complete_list_value
+        assert _all_patches_installed() == (
+            False,
+            False,
+            False,
+            False,
+        )
 
         config = django.apps.apps.get_app_config("django_strawberry_framework")
         config.ready()
-        assert _all_patches_installed() == (True, True, True)
+        assert _all_patches_installed() == (
+            True,
+            True,
+            True,
+            True,
+        )
 
         config.ready()
-        assert _all_patches_installed() == (True, True, True)
+        assert _all_patches_installed() == (
+            True,
+            True,
+            True,
+            True,
+        )
     finally:
         SimpleTestCase._remove_databases_failures = saved_django
         BaseView.parse_json = saved_parse_json
         BaseView.parse_query_params = saved_parse_query_params
         DjangoHTTPRequestAdapter.body = saved_body
+        ExecutionContext.complete_list_value = saved_complete
 
 
 def test_ready_reinstalls_patches_after_their_modules_reload():
@@ -160,6 +186,7 @@ def test_ready_reinstalls_patches_after_their_modules_reload():
             ),
         ),
         (_cross_web_patches, ("_original_body_fget",)),
+        (_graphql_core_patches, ("_original_complete_list_value",)),
     )
     saved_namespaces = {module: dict(module.__dict__) for module, _ in modules_and_originals}
     saved_slots = tuple(
@@ -174,7 +201,12 @@ def test_ready_reinstalls_patches_after_their_modules_reload():
 
                 assert tuple(getattr(module, name) for name in original_names) == original_captures
                 config.ready()
-                assert _all_patches_installed() == (True, True, True)
+                assert _all_patches_installed() == (
+                    True,
+                    True,
+                    True,
+                    True,
+                )
     finally:
         for module, namespace in saved_namespaces.items():
             module.__dict__.clear()

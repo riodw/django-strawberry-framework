@@ -1,332 +1,240 @@
-# Adversarial review — spec-050 recheck
+# Review: spec-050 implementation (`89ee8ac5`)
 
-Review verdict: **request changes; the current dirty tree is not safe to merge.**
+Scope reviewed: every package file in the commit (`list_field.py`, `_strawberry_patches.py`,
+`orders/sets.py`, `resource_policy.py`, `utils/querysets.py`, `optimizer/extension.py`,
+`__init__.py`), the ten changed test modules, the spec/rationale/glossary/README/board edits, and
+the builder artifacts. Read against `docs/spec-050-list_field_arguments-0_0_15.md` and `AGENTS.md`.
 
-This is a fresh review of the present working tree, not a restatement of the previous report. It
-covers all tracked modifications and deletions, the untracked spec/build artifacts, and the changed
-fakeshop database. I compared the implementation against [`spec-050`][spec-050], its
-[rationale][rationale], the shipped list-field contract, the builder evidence, and the repository's
-test-placement rules.
+Verdict: **the code is close and the contract is implemented; not Done-ready until B1 and B2 are
+resolved.** The pipeline order, the four-field argument record, the seal extensions, the adapter,
+the optimizer unwrap/rewrap, the error vocabulary and the live matrix all match the spec. What
+does not match is the spec itself: the build shipped an executor monkeypatch the spec never
+decided, and the spec/board state still reads "in flight" while the card DoD is fully ticked.
 
-No pytest run was performed. The review therefore treats the checked-in build reports as claims to
-audit, not as results independently reproduced here.
+What I ran (worktree clean apart from this file, so these measure HEAD): `ruff format --check`
+and `ruff check` clean; `check_trailing_commas.py --check` on every changed `.py`/`.md` clean;
+`check_citations.py --check` 970 resolve; every generator `--check` up to date; kanban anchors OK;
+`check_spec_glossary.py --spec` 43 terms OK; zero `TODO(spec-050` outside `docs/builder/`; zero
+new `pragma: no cover`; zero `path:NN` introduced; zero `feedback` in `.py`/board/DB. Pytest was
+not run (AGENTS.md 15).
+
+## Blocking
+
+### B1. The graphql-core executor patch is load-bearing and the spec does not know it exists
+
+`_strawberry_patches.py::_patched_complete_list_value` monkeypatches
+`graphql.execution.execute.ExecutionContext.complete_list_value`. I reproduced the defect it
+fixes outside Django: on graphql-core 3.2.8 a resolver returning an `AsyncIterable` whose
+children have awaitable resolvers yields `data["items"] == <coroutine get_completed_results>`
+plus "never awaited" warnings; with `apply()` the rows come back. So the patch is a correct
+root-cause fix (AGENTS.md 5), and the adapter design cannot ship without it.
+
+The problems are all about where that fact lives:
+
+- Spec Decision 5 says the adapter rides graphql-core's `AsyncIterable` branch as shipped. It
+  does not. `bld-final.md` records the patch as a gate re-loop remediation of a failing
+  connection test; the spec, the rationale and the adapter's glossary entry were not amended.
+  This card's own rule (Decision 9: "a spec may not silently redefine ... while the board still
+  demands the opposite") applies to itself.
+- The patch rides the `strawberry` kill-switch key. A consumer who disables the Strawberry
+  view hardening now silently loses async list completion for every `DjangoListField` with
+  awaitable children. The module docstring admits this; the glossary kill-switch entry mentions
+  it; nothing else does, and it is a semantic change to a shipped setting.
+- `apps.py::DjangoStrawberryFrameworkConfig.ready` ("Three patch modules, one per third-party
+  dependency"), `_cross_web_patches.py`'s docstring, and the glossary "Upstream patches" entry
+  still state one module per dependency. graphql-core is now patched from the Strawberry module.
+- Retirement is a comment, not a probe. `tests/test_strawberry_patches.py::
+  test_patched_complete_list_value_awaits_async_iterable_with_awaitable_children` passes whether
+  or not upstream is fixed, so the day graphql-core awaits the recursion nothing tells you to
+  retire the wrapper.
+
+Required: a spec decision (new Decision, or a 5a) recording the defect, the reproduction, the
+gate-key ruling, and the retirement condition; a rationale entry; the glossary adapter entry
+naming the dependency. Recommend a `_graphql_core_patches.py` with its own `graphql_core` gate key
+in `conf.py` (AGENTS.md 20 is satisfied: the feature that needs the key is landing) so the
+one-module-per-dependency architecture and the per-dependency kill switch stay true; if you rule
+the other way, the three docstrings above must say graphql-core is patched under `strawberry` and
+why. Add a sentinel test that calls the captured `_original_complete_list_value` on the bug shape
+and asserts it still misbehaves, so an upstream fix fails the suite and forces retirement. The
+floor run resolved graphql-core 3.2.12 against a lock of 3.2.8; run the sentinel on both.
+
+### B2. Spec and board state contradict the checked DoD
+
+- Spec `Status: in flight (0.0.15)`; the shipped-spec convention (`spec-036`, `spec-047`) is a
+  `Status: SHIPPED ...` line as the completion source of truth, checklist left unticked. The card
+  DoD in the KANBAN DB is all `[x]` and `bld-final.md` is `final-accepted`, yet the board still
+  renders `WIP-ALPHA-050-0.0.15`. If Done-on-merge is the intent, fine, but the spec Status line
+  must move with it.
+- The ticked DoD row "Full suite green under `fail_under = 100`" has no evidence anywhere in the
+  cycle: `bld-final.md` ran `uv run pytest --no-cov` (per BUILD.md) and states "no line coverage
+  was inspected or asserted". The floor run was also `--no-cov`. Either run the coverage gate and
+  record it, or untick the row until CI reports it.
 
 ## High
 
-### 1. Looking up `aclose` can still replace the primary resolver failure
+### H1. `OrderSet._input_has_active_terms` communicates with `apply_*` through an ambient, never-cleared `ContextVar`
 
-Source: [`resource_policy.py`][resource-policy]
-`::_close_async_iterator #"close = getattr(iterator, \"aclose\", None)"`
+`orders/sets.py::_APPLIED_ORDER_NORMALIZATION` is `.set()` in `OrderSet._apply_orderings` on
+every order application (connection fields included, which never read it) and is never reset.
+Under WSGI the worker thread's context retains the last request's `input_value` and normalized
+data for the life of the thread, and the reuse rule (`applied_cls is cls and (applied_input is
+input_value or applied_input == input_value)`) lets a later request be checked against an earlier
+request's record. `tests/orders/test_sets.py::test_input_has_active_terms_sequence_controls_sync`
+pins the stale record as the mechanism (its third call is only "a second helper call" because the
+record survived). The `==` also dispatches consumer `__eq__` on the input, guarded by a broad
+`except Exception`, which is exactly the dispatch `_to_inert_order_data` was written to avoid.
 
-The helper promises that a source/domain error remains primary and any cleanup failure is attached
-as a note. The `try` begins only after `getattr(iterator, "aclose", None)`, however. An async
-iterator with a hostile `__getattribute__` that raises while `aclose` is being resolved bypasses the
-cleanup-error handler entirely.
+The spec asks for the purity check, not for global state. Root-cause fix: scope the record to the
+request. `apply_sync` / `apply_async` have `info`; stash `(cls, id(input_value), data)` in
+`info.context` the way `stash_resource_policy` already does, have `_input_has_active_terms`
+consume and clear it, and delete the `ContextVar`. Add a test that two sequential requests on one
+thread do not see each other's record. Fix the docstring's "2-call maximum per request" (a miss is
+three calls).
 
-That affects both production callers:
+### H2. Routing-intent check re-reads candidate state outside the seal (Decision 5 deviation)
 
-- `bounded_rows_async` can catch an iteration failure, enter `finally`, and then replace it with the
-  `aclose` lookup failure.
-- `list_field.py::_cleanup_rejected_async_iterable` can build the correct `ListArgumentError`, then
-  replace it while trying to close a rejected async source.
+`utils/querysets.py::_validate_post_orderset_result` calls `_seal_or_defect(candidate, model,
+None, _ORDERSET_RESULT_POLICY)` with `require_shared_alias=False`, so the alias argument is
+inert, then performs a second `object.__getattribute__(post_order_candidate, "__dict__")` to
+compare `_db` / `_hints`. The spec required "one added comparison at an already-proven-shape site
+rather than a new state read", and the package's own doctrine
+(`list_field.py::_validate_djangotype_target` docstring) is that a stateful object can answer the
+first guarded read and detonate the second. The seal accepts `QuerySet` subclasses, and a subclass
+can install `__dict__` as a class-level descriptor. Move the routing comparison inside
+`_seal_or_defect` (extend `_SealPolicy` or generalize the alias parameter to a required
+`(_db, _hints)` pair), emit it as a `routing` defect through `_defect_message` with arms at both
+message sites, and add a `__dict__`-descriptor row beside
+`tests/utils/test_querysets.py::test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute`.
+`_routing_hints_equal` and `_safe_routing_repr` are fine and can move with it.
 
-The tests cover an `aclose()` body that raises, but not acquisition of the `aclose` attribute. The
-distinction is load-bearing because the old inline cleanup placed both lookup and invocation inside
-the same `try`.
+### H3. `tests/test_list_field.py::test_list_field_post_apply_seal_benchmark` cannot fail
 
-Required fix: move optional-close lookup inside the protected cleanup block and treat lookup and
-invocation failures identically. Add one source-error witness through `bounded_rows_async` and one
-pre-bound `ListArgumentError` witness through the list-field rejection path where
-`__getattribute__("aclose")` raises; in both cases the original error must remain primary and the
-cleanup failure must be diagnostic only.
+It runs 220 full seals and asserts `iterations == 200` and `avg_micros > 0`. It is neither a test
+(no falsifiable claim) nor a benchmark (records nothing; the 22.07 us figure exists only in
+`bld-slice-3` prose). The spec's requirement is the recorded number, not a test. Either assert a
+generous budget and pin the baseline in the rationale, or delete the test and keep the measurement
+in the rationale.
 
-### 2. The OrderSet purity check does not compare the value that was actually applied
+### H4. Duplicate package tests survived the integration DRY pass
 
-Sources:
+Same assertions, two homes:
 
-- [`sets.py`][orders-sets] `::OrderSet._apply_orderings`
-- [`sets.py`][orders-sets] `::OrderSet._input_has_active_terms`
-- [`test_sets.py`][test-order-sets]
-  `::test_input_has_active_terms_independent_query_and_double_normalization`
+- `test_normalize_list_arguments_all_boundaries` versus the nine
+  `test_normalize_list_arguments_boundary_N_*` rows.
+- `test_list_argument_error_pickle_roundtrip` versus `test_list_field_error_pickle_round_trip`.
+- `test_synthesized_list_signature_without_and_with_orderset` versus
+  `test_list_field_signature_without_orderset` / `_with_orderset`.
+- `test_resolve_argument_wire_name_fallback_and_custom` versus
+  `test_list_field_direct_call_schema_name_fallback_and_definition_lookup`.
+- `tests/test_list_field.py::test_subpackage_isolation_orders_not_imported_at_package_root`
+  versus `tests/base/test_init.py::test_orders_submodule_not_imported_at_package_root`: the same
+  subprocess spawn twice. Keep the `test_init.py` one (it owns the lazy-export contract).
 
-One request currently normalizes three times: once inside public `apply_sync` / `apply_async`, then
-twice inside `_input_has_active_terms`. The helper compares only its own second and third results.
-It never compares either result with the first normalization that produced the SQL ordering.
-
-A stateful override returning `A`, then `B`, then `B` therefore passes the alleged purity check. A
-concrete bad case is `A = [("name", ASC)]` and `B = []`: the public apply method installs a real
-order, the helper certifies its two identical empty results, and a valid positive-offset request is
-rejected as unordered. The inverse sequence can make the activity verdict claim terms the public
-apply never saw. The tests explicitly pin the count at three, so they institutionalize the gap
-instead of detecting it.
-
-This also contradicts [`spec-050`][spec-050], which says an argument-bearing request may normalize
-once in public apply and once in the activity helper, and says disagreement between those views must
-raise. The promised compatibility constraint is not documented on
-`OrderSet._normalize_input` itself either. Finally, `data1 != data2` and the error's `!r` formatting
-operate on consumer-override output without containment, so hostile equality or representation can
-escape as a raw exception rather than the promised actionable `ConfigurationError`.
-
-Required fix: redesign the seam so the activity verdict is derived from, or compared with, the
-same normalized record that the public apply path actually used. A second pair of unrelated calls
-cannot prove that. Normalize into validated inert data before equality/rendering, document the
-purity obligation on `_normalize_input`, and add the `A/B/B` and `A/A/B` sequences as load-bearing
-controls for both execution colors.
-
-### 3. The graphql-core patch is a reimplementation protected only by a signature check
-
-Source: [`_strawberry_patches.py`][strawberry-patches] `::_patched_complete_list_value`
-
-The patch and `_validate_upstream_shape` describe this as a wrapper/delegator whose upstream body
-changes flow through the captured original. That is false for the exact branch being fixed. For an
-`AsyncIterable`, `_patched_complete_list_value` copies graphql-core's entire async-list branch:
-iterable classification, materialization, recursive completion, and await handling. The original is
-called only for every other source shape.
-
-The repository's own patch discipline distinguishes delegators, which may pin signatures, from
-reimplementations, which must pin the body they supersede. With only a six-parameter signature
-check, a supported graphql-core release can change async iteration error handling, cancellation,
-cleanup, or completion semantics without changing the signature, and this package will silently
-replace that new behavior with the copied old branch.
-
-There is a simpler true-delegation shape: call the captured original for the `AsyncIterable`, await
-its returned awaitable, then await the one residual awaitable produced by the upstream bug. If that
-cannot preserve the required semantics, the copied upstream branch must be source-pinned and
-version-tested as a reimplementation rather than documented as delegation.
-
-The ownership boundary also needs reconciliation. `_strawberry_patches` now mutates a graphql-core
-execution method process-wide under the `"strawberry"` kill-switch key, while the standing glossary
-still says there is one patch module per third-party dependency and describes this module only as
-Strawberry HTTP-view hardening. Disabling the documented Strawberry patch group now also disables a
-mechanism on which the advertised async `DjangoListField` completion path depends. Either split the
-graphql-core concern into truthful ownership/configuration or explicitly document the transitive
-engine patch and the consequence of opting out.
+Keep the parametrized or more precise member of each pair, delete the other. `bld-integration.md`
+reports zero DRY findings; it did not look at the test tree.
 
 ## Medium
 
-### 4. The required client-window SQL test still tests Django slicing, not DjangoListField
+### M1. The sharded live rows never ran in the gate
 
-Sources:
+`examples/fakeshop/test_query/test_multi_db.py::test_post_orderset_routing_mismatch_rejected_on_sharded_db`
+and `::test_post_orderset_hints_routing_mismatch_rejected_on_sharded_db` are behind the
+module-level `FAKESHOP_SHARDED` skip. `bld-final.md` ran the default invocation (40 skipped) and
+records no `FAKESHOP_SHARDED=1 uv run pytest` run. The hint half of the routing invariant is the
+part the spec says explicit-alias cases cannot cover. Run it and record it.
 
-- [`test_list_field.py`][test-list-field] `::test_list_field_no_argument_sql_parity`
-- [`test_list_field.py`][test-list-field] `::test_list_field_window_low_high_marks`
-- [`test_list_field_api.py`][test-list-field-api]
-  `::test_shipped_branches_staff_ordered_offset_limit`
-- [`test_list_field_api.py`][test-list-field-api]
-  `::test_shipped_branches_offset_alone_bounds`
+### M2. No-argument requests pay for the ceiling before the fast path
 
-The no-argument parity test is improved: it now executes the field path, captures SQL, and compares
-omitted arguments with explicit nulls. Its docstring still claims low/high-mark assertions it does
-not make, but it at least observes production SQL.
+`list_field.py::_normalize_list_arguments` calls `policy_from_info` and `effective_bound` on
+every request, including the omitted/all-null case, and `bounded_rows` then recomputes the same
+value through `_raw_list_bound`. Decision 9 asks for an explicit fast path. Return early when
+nothing was supplied (the ceiling only matters once a `limit` exists). `_ListArguments.
+effective_ceiling` is write-only after construction (the pipeline never reads it); either use it
+in place of the recomputation or drop it from the record.
 
-The supplied-window test remains disconnected. It constructs
-`Category.objects.all().order_by("id")`, manually slices it to `[0:5]` and `[3:8]`, then verifies
-Django's own `low_mark`, `high_mark`, `LIMIT`, and `OFFSET`. Removing client limit/offset plumbing
-from `DjangoListField`, `bounded_rows`, or either execution pipeline would leave this test green.
+### M3. `None` source with arguments skips the deadline check that omission performs
 
-The live ordered `offset + limit` case asserts only returned names. The offset-only live case
-captures `LIMIT 100 OFFSET 2`, but no field-path test proves that a smaller supplied limit changes
-the final high mark or produces exactly one `LIMIT`/`OFFSET` pair. The only `LIMIT 5`, `OFFSET 3`,
-and corresponding mark assertions in the dirty tests are on the manually sliced queryset.
+Both `_wrap` bodies do `if source is None: return None` before `bounded_rows(_async)`, while the
+no-argument path passes `None` through `bounded_rows`, whose first act is `_raw_list_bound` and
+therefore `check_deadline`. Decision 3: "an argument-bearing request gets the same clock behavior
+as a bare one"; the exemption is for rejections only. `bounded_rows(None, ...)` already returns
+`None`; delete the early returns.
 
-Required fix: observe the final queryset or captured SQL produced by the real field pipeline for
-limit-only and offset-plus-limit requests. The witness must fail if either client coordinate stops
-reaching the bounding seam and must assert a single composed window, not merely response length.
+### M4. `resource_policy.py::_close_async_iterator` labels every cleanup failure as `bounded_rows_async`
 
-### 5. The final-accepted evidence does not establish the repository's 100% gate
+It is now also the cleanup for `list_field.py::_cleanup_rejected_async_iterable`, so a
+rejection-path `aclose` failure is attached to the `ListArgumentError` as a `bounded_rows_async`
+note. Take the caller label as a parameter.
 
-Sources:
+### M5. `ListArgumentError` accepts an open reason vocabulary and one hard-coded wire name
 
-- [`bld-final.md`][bld-final] `#"Command ran with --no-cov"`
-- [`bld-integration.md`][bld-integration]
-  `#"all six Python files modified during Card 050"`
-- [`KANBAN.md`][kanban] `#"Full suite green under fail_under = 100"`
+The `else` arm of `ListArgumentError.__init__` builds a message from any `reason` string, and
+`tests/test_list_field.py::test_list_argument_error_properties_extensions_and_repr` pins that
+fail-open (`"custom_reason"`). The spec defines exactly five reasons and a stable extensions
+payload; reject unknown reasons at construction and pin the rejection. The `order_required` arm
+with `order_argument=None` emits a literal `'orderBy'`, contradicting "runtime error payloads
+always report the active schema spelling"; every package call site passes `""` or a resolved name,
+so drop the `None` arm or make callers resolve.
 
-The card is marked Done with the 100% coverage Definition-of-Done box checked, but the final report
-explicitly ran `uv run pytest --no-cov` and says coverage was not inspected or asserted. The only
-recorded 100% run is an earlier Slice 2 run, before later test/source slices and before the final
-graphql-core patch remediation. It cannot establish coverage for the final tree.
+### M6. Fail-open `getattr` defaults in `list_field.py`
 
-The integration report also says static inspection covered all six changed production Python files.
-There are now seven: `_strawberry_patches.py` was added to the dirty source set after that pass. The
-final floor command omits `tests/test_strawberry_patches.py`, even though the newly added patch reads
-private graphql-core behavior and the spec explicitly requires supported-version coverage for list
-completion. Thus the most version-sensitive late production change is neither in the recorded
-integration inspection inventory nor in the explicit dependency-floor patch suite.
+`getattr(info, "field_name", None) or "DjangoListField"` appears five times;
+`_resolve_argument_wire_name` reads `get_argument_definition` and `schema` with defaults;
+`_orderset_class_for_target` uses `getattr(definition, "orderset_class", None)` while
+`_synthesized_list_signature` reads `definition.orderset_class` directly. START.md names the
+`getattr(..., default)` shape as one statement coverage cannot see. A real `Info` always has
+`field_name`; the defaults exist for `SimpleNamespace` doubles. One `_field_label(info)` helper and
+one spelling of the `orderset_class` read.
 
-Required fix: return the card to WIP, refresh integration/static inspection for the actual final
-source inventory, include the graphql-core patch tests in floor verification, and run the real
-coverage-gated suite before checking the 100% box. Build artifacts should report the resulting
-commands and snapshot accurately rather than inheriting an earlier slice's result.
+## Low
 
-### 6. Mandated live verdicts are missing while weaker package-schema duplicates remain
+- Three inlined copies of the omitted-argument fast path (`_default`, sync `_wrap`, async
+  `_wrap`) plus a fourth inside `_execute_queryset_pipeline_async`; the sync pipeline has none.
+  Give both pipelines the fast path and call them unconditionally.
+- All three wrappers accept and silently discard unknown `**kwargs`; `_default` binds `_root`
+  unused; `_handle_non_queryset_rejections_sync` takes an unused `_source`.
+- `list_field.py` module docstring still cites only spec-020 / `0.0.7`; add spec-050.
+- `list_field.py` imports four underscore-private names (`_LIST_ARGUMENT_VISIBILITY_POLICY`,
+  `_dispose_sync_awaitable`, `_validate_post_orderset_result`, `_close_async_iterator`). The
+  package already does this elsewhere, so not new, but the spec's "must not import the private
+  seal" holds only because the policy constant rather than `_seal_or_defect` crossed the module.
+- `_seal_or_defect(..., None, _ORDERSET_RESULT_POLICY)`: the positional `None` is dead under
+  `require_shared_alias=False`. Resolves with H2.
+- `docs/builder/bld-003-final.md` (spec-003's committed record) is deleted in this commit under
+  the message's "board state" bullet. BUILD.md's pre-flight permits it; the message does not say it.
 
-Sources:
+## AGENTS.md compliance
 
-- [`spec-050`][spec-050], “Live-first placement is fixed per branch”
-- [`test-list-field`][test-list-field]
-- [`test-list-field-api`][test-list-field-api]
-- [`test-list-field-async-api`][test-list-field-async-api]
+| Rule | Finding |
+|---|---|
+| 3 Meta-first | `orderBy` derives from `Meta.orderset_class`; no decorator on consumer classes. OK |
+| 4 no feedback mention | none in `.py`, board, glossary, tree, spec, or DB; `docs/feedback.md` staged but unnamed. OK |
+| 5 root-cause fix | the executor patch is one, and materializing in-coroutine was correctly refused; the fix is undocumented (B1) |
+| 7 test placement | package tests in `tests/`, live in `test_query/`, `tests/base/test_init.py` grew as permitted; one test duplicated across trees (H4) |
+| 8/9 seeding | library rows via inline `Branch.objects.create`; `_staff_client()` mirrors the existing `test_library_api.py` precedent. OK |
+| 10 live-first | every wire-reachable path I traced has a live row; the two sharded rows were never executed (M1) |
+| 12/13 coverage | zero new `pragma: no cover`; the 100% gate was not measured in any artifact (B2) |
+| 14 same-change tests, orphan sweep | stubs in `test_library_api.py` removed; no orphan imports found |
+| 16/17 format, layout, ASCII | clean at HEAD |
+| 18 ERA001 pseudo | all `TODO(spec-050` anchors swept from source, tests, standing docs |
+| 20 settings keys | none added; B1 asks whether `graphql_core` now needs one |
+| 21 CHANGELOG | untouched in this commit |
+| 26 spec lifecycle | spec stays in `docs/`, companions present, Slice 5 fold-in done; `Status:` stale (B2) |
+| 27 symbol citations | no `path:NN` introduced in code, spec, rationale or plan; `bld-*.md` carry them as permitted |
+| 28 link scaffold | spec, rationale, READMEs pass `check_trailing_commas.py --check` |
+| 31/32/33 version, attribution, branch | version literal untouched; message has no footer; on `main` |
 
-The spec says the final classification of post-OrderSet evaluated, projection, combined, and
-wrong-model results must remain live. The sync live suite covers the combined result only. It has no
-live evaluated, projection, or wrong-model `apply_sync` result. The async live suite does not cover
-the corresponding malformed `apply_async` return shapes either.
+## Verified as matching the spec (no action)
 
-At the same time, the package test file adds large real-schema execution blocks for behavior already
-covered over HTTP: default/Manager/QuerySet/async list completion, generated SDL, public order and
-offset behavior, and serialized sync/async OrderSet errors. This conflicts with the repository's
-live-first rule and the build plan's statement that the package tier is for mechanics that HTTP
-cannot isolate. It also makes the review surface much larger without closing the exact live rows the
-spec named.
-
-Required fix: add the missing public verdicts to the test-local live mounts, then remove redundant
-package schema executions. Keep direct helper, protocol, exact call-count, failure-precedence, and
-sealed-state mechanics in `tests/`; keep public SDL/request/response behavior in the fakeshop HTTP
-tier.
-
-### 7. The normal test suite contains a wall-clock assertion the spec explicitly rejected
-
-Sources:
-
-- [`test_list_field.py`][test-list-field] `::test_list_field_post_apply_seal_benchmark`
-- [`bld-slice-3-sql_and_unit_contracts.md`][bld-s3]
-  `#"Post-apply seal wall-clock benchmark"`
-- [`spec-050`][spec-050], “recording the cost Decision 5 accepts rather than asserting a
-  threshold”
-
-The ordinary test performs 20 warmups, measures 200 iterations, and fails when the average exceeds
-5,000 microseconds. That is an environment-sensitive performance gate despite the spec requiring a
-recorded diagnostic rather than a threshold assertion.
-
-The build artifact does not even describe the code that exists: it reports 1,000 iterations,
-22.07 microseconds measured, a target of 100 microseconds, and a test threshold of 50,000
-microseconds. None of the iteration or threshold values match the current test. A benchmark that is
-both flaky and inaccurately recorded provides negative assurance.
-
-Required fix: remove the wall-clock assertion from the normal correctness suite. Keep structural
-and failability assertions there, and put a reproducible, sufficiently sampled diagnostic result in
-the build artifact with the exact code/command used. If a hard performance gate is desired, amend
-the spec and use a calibrated benchmark mechanism rather than `perf_counter` in a normal pytest row.
-
-### 8. The tracked fakeshop database contains unrelated test-fixture residue
-
-Source: [`fakeshop-db`][fakeshop-db]
-
-The changed SQLite database legitimately carries generated Kanban/glossary state, so reverting the
-whole binary would destroy in-scope work. It also contains an unrelated library graph that mirrors
-ad hoc test data rather than shipped example content:
-
-- branch `id=6`, name `central`;
-- shelf `id=4`, code `A1`, pointing at that branch;
-- genre `id=36`, name `fiction`;
-- books `id=6..8`, titles `a`, `b`, `c`, on that shelf;
-- three book/genre join rows connecting those books to `fiction`.
-
-These rows are not part of spec-050's Kanban/glossary update. Committing them would silently change
-the example database and make the binary diff carry non-reproducible fixture pollution.
-
-Required fix: remove only the unrelated library rows, preserving the intended Kanban/glossary
-changes, then regenerate the Markdown/HTML views from the clean database and verify the binary's
-remaining logical diff.
-
-## Low / documentation blockers
-
-### 9. Several standing descriptions contradict the newly shipped surface
-
-Sources:
-
-- [`spec-050`][spec-050] `#"Status: planned for"`
-- [`README.md`][docs-readme] `#"a non-Relay list[T] with no pagination"`
-- [`GLOSSARY.md`][glossary] `::DjangoListField #"use cases that do not need pagination"`
-- [`GLOSSARY.md`][glossary] `::Upstream patches`
-- [`resource_policy.py`][resource-policy] `::bounded_rows`
-- [`resource_policy.py`][resource-policy] `::bounded_rows_async`
-- [`test_init.py`][test-init] `::test_version`
-
-The consumer guide and glossary still introduce `DjangoListField` as having or needing “no
-pagination,” immediately before describing its new ordered offset pagination. The intended contrast
-is “no Relay envelope, edges, or page info,” not “no pagination.”
-
-The normative spec still targets `WIP-ALPHA-050-0.0.15` and says the work is “planned,” while the
-build plan says `complete`, the final report says `final-accepted`, and the generated Kanban marks
-the card `DONE-050-0.0.15`. Leaving the slice checklist unticked can follow this repository's
-shipped-spec convention when the status line is the completion source of truth; leaving that source
-of truth itself in the planned state cannot. The Slice 5 plan explicitly included ordinary
-card/spec-state reconciliation, so its claim that all documentation is aligned is false on the
-spec's first four lines.
-
-The upstream-patches glossary entry still inventories only Strawberry HTTP-view behavior under
-`_strawberry_patches` and repeats the one-module-per-dependency model, omitting the process-wide
-graphql-core executor patch. The bounding-helper docstrings say `requested_limit` is capped by the
-effective limit, while the helpers deliberately assume prevalidated coordinates and do not clamp;
-the public wrapper rejects an oversized limit. The docs should say “prevalidated” rather than claim
-a second cap that does not exist at that seam.
-
-Finally, `test_version` still says this is a version-only change that must not widen root `__all__`,
-although the same dirty change intentionally adds the root `ListArgumentError` export. A later
-comment was corrected; this earlier one was missed.
-
-Required fix: reconcile the spec's lifecycle line and all standing prose with the actual ownership
-and behavior. These are small edits, but leaving contradictions beside a newly closed public API
-card guarantees migration and maintenance confusion.
-
-## What is solid in this recheck
-
-The previous review's largest blockers were genuinely addressed and are not findings here:
-
-- `trusted_max_rows` is restored as an explicit public opt-in and no longer inferred from
-  `max_rows`.
-- collection-bound validation again precedes target/directive processing;
-- `_ListArguments` is frozen and slotted;
-- runtime errors use the actual field name, converter failures are typed instead of silently
-  guessed, and model-default ordering requires exact `True`;
-- post-OrderSet routing reads candidate state without re-entering hostile attribute access and
-  compares hints without arbitrary value equality or representation;
-- the conditional OrderSet import preserves package-root submodule isolation;
-- the shared visibility/order/window pipeline, adapter placement, optimizer unwrap/rewrap, and
-  explicit no-pk/no-`DISTINCT` contract are directionally coherent.
-
-Those corrections materially improve the implementation. They do not resolve Findings 1–5: the
-remaining primary-error masking and normalization-divergence bugs are production defects, and the
-late global executor patch plus incomplete final evidence make the current Done/accepted state
-premature.
-
-<!-- LINK DEFINITIONS -->
-
-<!-- Root -->
-[kanban]: ../KANBAN.md
-
-<!-- docs/ -->
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[rationale]: spec-050-list_field_arguments-0_0_15-rationale.md
-[spec-050]: spec-050-list_field_arguments-0_0_15.md
-
-<!-- docs/SPECS/ -->
-
-<!-- docs/builder/ -->
-[bld-final]: builder/bld-final.md
-[bld-integration]: builder/bld-integration.md
-[bld-s3]: builder/bld-slice-3-sql_and_unit_contracts.md
-
-<!-- django_strawberry_framework/ -->
-[orders-sets]: ../django_strawberry_framework/orders/sets.py
-[resource-policy]: ../django_strawberry_framework/resource_policy.py
-[strawberry-patches]: ../django_strawberry_framework/_strawberry_patches.py
-
-<!-- tests/ -->
-[test-init]: ../tests/base/test_init.py
-[test-list-field]: ../tests/test_list_field.py
-[test-order-sets]: ../tests/orders/test_sets.py
-
-<!-- examples/ -->
-[fakeshop-db]: ../examples/fakeshop/db.sqlite3
-[test-list-field-api]: ../examples/fakeshop/test_query/test_list_field_api.py
-[test-list-field-async-api]: ../examples/fakeshop/test_query/test_list_field_async_api.py
-
-<!-- scripts/ -->
-
-<!-- .venv/ -->
-
-<!-- External -->
+Decision 1 signature synthesis (empty return annotation, `order_by` conditional, `orders` import
+inside the builder, lazy-export pinned). Decision 3 four-field record, `offset` before `limit`,
+bool rejected, lazy wire names with the zero-call converter assertion. Decision 4 offset ceiling
+`P` regardless of trust. Decision 5 order (visibility with `reject_combined`, apply, post-apply
+seal with `unevaluated` before `sliced`, guard, one window), `combined`/`unevaluated` arms at both
+message sites, adapter with `__aiter__` only, optimizer `finish()` on all three exits. Decision 6
+both predicates, `not query.group_by` falsiness, `"?"` and `Random()` only, `.none()` handled.
+Decision 8 precedence (`queryset_required` before `order_required`), `limit: 0` short-circuits
+(`qs[k:k]` hits Django's `set_empty`), async rejection cleanup via `aiter` + `aclose` with zero
+`__anext__`, sync `close()` declined and pinned. Decision 9 fast-path SQL parity live. Decision 10
+coercion left to graphql-core, integral float pinned. Decision 12 no version, changelog, or lock
+change. Card DoD Scope and `LIMIT`/`OFFSET` rows amended in the DB and rendered.

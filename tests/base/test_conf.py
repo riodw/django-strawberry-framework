@@ -211,12 +211,13 @@ def test_upstream_patches_enabled_mapping_opts_out_per_dependency(settings):
 
     The per-dependency escape hatch: ``{"django": False}`` silences the
     test-only Django patch without dropping the production request-hardening
-    patches (``strawberry`` / ``cross_web``).
+    patches (``strawberry`` / ``cross_web`` / ``graphql_core``).
     """
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
     assert upstream_patches_enabled("django") is False
     assert upstream_patches_enabled("strawberry") is True
     assert upstream_patches_enabled("cross_web") is True
+    assert upstream_patches_enabled("graphql_core") is True
 
 
 @pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
@@ -296,8 +297,8 @@ def test_upstream_patches_enabled_rejects_unknown_dependency_argument():
     constant would otherwise be silently un-opt-out-able; the internal-API
     guard fails loud at the first gate read instead.
     """
-    with pytest.raises(ValueError, match="graphql_core"):
-        upstream_patches_enabled("graphql_core")
+    with pytest.raises(ValueError, match="unknown_dependency"):
+        upstream_patches_enabled("unknown_dependency")
 
 
 # ---------------------------------------------------------------------------

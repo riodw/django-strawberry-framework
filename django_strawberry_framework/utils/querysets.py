@@ -2836,35 +2836,46 @@ def _validate_post_orderset_result(
 ) -> models.QuerySet:
     """Validate and seal the result returned by OrderSet.apply_sync / apply_async."""
     model = model_for(target_type)
+    try:
+        original_state = object.__getattribute__(pre_order_qs, "__dict__")
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{method_name} could not verify the source QuerySet's database routing intent.",
+        ) from exc
+    original_routing = (original_state.get("_db"), original_state.get("_hints"))
     sealed, defect = _seal_or_defect(
         post_order_candidate,
         model,
         None,
         _ORDERSET_RESULT_POLICY,
+        expected_routing=original_routing,
     )
     if defect is not None:
-        code, detail = defect
         model_name = _safe_class_name(model)
-        raise ConfigurationError(
-            f"{method_name} must return an unevaluated, unsliced, uncombined QuerySet of "
-            f"{model_name} rows; got {code} defect ({detail}).",
+        # Every SHAPE defect renders one wording: the public method's contract is a
+        # single sentence, and naming the code plus its detail is what makes each
+        # rejection actionable. ``routing`` is the one defect that is not a shape
+        # problem, so it keeps its own arm. Spelled as an explicit per-code map
+        # rather than a ``_defect_message`` default so a code added to the seal
+        # without an arm here still self-names as a framework defect.
+        shape_message = (
+            f"{method_name} must return an unevaluated, unsliced, uncombined "
+            f"QuerySet of {model_name} rows; got {defect[0]} defect ({defect[1]})."
         )
-    cand_dict = object.__getattribute__(post_order_candidate, "__dict__")
-    orig_dict = object.__getattribute__(pre_order_qs, "__dict__")
-    cand_db = cand_dict.get("_db")
-    orig_db = orig_dict.get("_db")
-    cand_hints = cand_dict.get("_hints")
-    orig_hints = orig_dict.get("_hints")
-
-    if cand_db != orig_db or not _routing_hints_equal(cand_hints, orig_hints):
-        orig_db_repr = _safe_routing_repr(orig_db)
-        orig_hints_repr = _safe_routing_repr(orig_hints)
-        cand_db_repr = _safe_routing_repr(cand_db)
-        cand_hints_repr = _safe_routing_repr(cand_hints)
-        raise ConfigurationError(
-            f"{method_name} changed database routing intent; expected db={orig_db_repr}, "
-            f"hints={orig_hints_repr}, got db={cand_db_repr}, hints={cand_hints_repr}.",
+        messages = dict.fromkeys(
+            (
+                "type",
+                "table",
+                "untrusted",
+                "unevaluated",
+                "sliced",
+                "combined",
+                "projection",
+            ),
+            shape_message,
         )
+        messages["routing"] = f"{method_name} changed database routing intent; {defect[1]}."
+        raise ConfigurationError(_defect_message(messages, defect, method_name))
     return sealed
 
 
@@ -2873,13 +2884,16 @@ def _seal_or_defect(
     model: type[models.Model],
     required_alias: str | None,
     policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
+    *,
+    expected_routing: tuple[Any, Any] | None = None,
 ) -> tuple[models.QuerySet | None, tuple[str, str] | None]:
     """Rebuild a framework-owned plain ``QuerySet`` from ``candidate``'s validated state.
 
     The single sealing primitive both boundary sites run. Returns
     ``(sealed_queryset, None)`` on success, or ``(None, (code, detail))`` on the
-    first defect. Codes run ``type`` -> ``table`` -> ``untrusted`` -> ``sliced``
-    -> ``combined`` -> ``projection`` -> ``alias`` (the one canonical ordering
+    first defect. Codes run ``type`` -> ``table`` -> ``untrusted`` -> ``routing``
+    -> ``unevaluated`` -> ``sliced`` -> ``combined`` -> ``projection`` -> ``alias``
+    (the one canonical ordering
     every site shares; a new code takes a FIXED position in it, and owes an arm
     at every message-building site that can reach it), except that the outer
     exact-``sql.Query`` check (``untrusted``) runs
@@ -2946,6 +2960,9 @@ def _seal_or_defect(
       ``<model>_set`` accessor spelling). This REPLACES the old
       class-level method inventory: ``untrusted`` now means "cannot be sealed",
       not "overrides a listed method".
+    - ``routing`` -- an OrderSet result changed the source queryset's database alias or
+      router hints. The comparison is performed against the same extracted state the seal
+      consumes, before any reconstructed queryset is returned.
     - ``sliced`` -- when ``policy.reject_sliced`` (every surface that recomposes
       onto the sealed queryset): the query is sliced (a ``LIMIT`` / ``OFFSET``
       was taken). Django forbids reordering or refiltering a sliced query, so
@@ -2991,7 +3008,10 @@ def _seal_or_defect(
     """
     if not isinstance(candidate, models.QuerySet):
         return None, ("type", _safe_type_name(candidate))
-    state = object.__getattribute__(candidate, "__dict__")
+    try:
+        state = object.__getattribute__(candidate, "__dict__")
+    except BaseException:
+        return None, ("untrusted", "the QuerySet instance state is unreadable")
     query = state.get("_query")
     qmodel = state.get("model")
     db = state.get("_db")
@@ -3015,6 +3035,21 @@ def _seal_or_defect(
     state_defect = _queryset_state_defect(state, cls_name)
     if state_defect is not None:
         return None, state_defect
+    if expected_routing is not None:
+        original_db, original_hints = expected_routing
+        candidate_db = state.get("_db")
+        candidate_hints = state.get("_hints")
+        if candidate_db != original_db or not _routing_hints_equal(
+            candidate_hints,
+            original_hints,
+        ):
+            return None, (
+                "routing",
+                f"expected db={_safe_routing_repr(original_db)}, "
+                f"hints={_safe_routing_repr(original_hints)}, got "
+                f"db={_safe_routing_repr(candidate_db)}, "
+                f"hints={_safe_routing_repr(candidate_hints)}",
+            )
     # Validate the candidate's ENTIRE query graph BEFORE cloning it. sql.Query.clone is
     # not a no-dispatch boundary: its body calls bound methods on the source's own
     # sub-objects -- ``self.where.clone()``, ``alias_refcount.copy()`` /
@@ -3291,6 +3326,10 @@ def _visibility_result_error(
                     f"a visibility hook cannot re-route a pinned resolution. Remove the "
                     f".using(...) call."
                 ),
+                "routing": (
+                    f"{name}.get_queryset changed database routing intent ({detail}); "
+                    "a visibility result must preserve the source routing contract."
+                ),
             },
             defect,
             f"{name}.get_queryset",
@@ -3391,6 +3430,10 @@ def _prepared_visibility_source(
                         f"source; the visibility contract composes over {model_name} model "
                         f"rows, not a .values() / .values_list() (or custom-iterable) "
                         f"projection."
+                    ),
+                    "routing": (
+                        f"apply_type_visibility for {name} changed database routing intent "
+                        f"({detail}); the source must preserve its routing contract."
                     ),
                 },
                 defect,

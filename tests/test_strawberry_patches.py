@@ -62,7 +62,6 @@ from unittest import mock
 import pytest
 from cross_web import HTTPException
 from cross_web.request import FormData
-from graphql.execution.execute import ExecutionContext
 from strawberry.http.async_base_view import AsyncBaseHTTPView
 from strawberry.http.base import BaseView
 from strawberry.http.sync_base_view import SyncBaseHTTPView
@@ -99,7 +98,6 @@ def test_patch_is_installed_on_base_view():
     assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
     assert SyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_sync_parse_multipart
     assert AsyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_async_parse_multipart
-    assert ExecutionContext.__dict__["complete_list_value"] is patches._patched_complete_list_value
 
 
 def test_apply_reinstalls_pair_when_parse_query_params_reverted():
@@ -122,26 +120,6 @@ def test_apply_reinstalls_pair_when_parse_query_params_reverted():
         assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
     finally:
         BaseView.parse_query_params = saved
-
-
-def test_apply_reinstalls_when_complete_list_value_reverted():
-    """A partial revert (only ``ExecutionContext.complete_list_value``) triggers full heal."""
-    patches.apply()
-    assert patches._patch_is_installed() is True
-
-    saved = ExecutionContext.__dict__["complete_list_value"]
-    try:
-        ExecutionContext.complete_list_value = patches._original_complete_list_value
-        assert patches._patch_is_installed() is False
-
-        patches.apply()
-        assert patches._patch_is_installed() is True
-        assert (
-            ExecutionContext.__dict__["complete_list_value"]
-            is patches._patched_complete_list_value
-        )
-    finally:
-        ExecutionContext.complete_list_value = saved
 
 
 def test_apply_reinstalls_all_members_when_one_multipart_method_reverted():
@@ -168,10 +146,6 @@ def test_apply_reinstalls_all_members_when_one_multipart_method_reverted():
         )
         assert (
             AsyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_async_parse_multipart
-        )
-        assert (
-            ExecutionContext.__dict__["complete_list_value"]
-            is patches._patched_complete_list_value
         )
     finally:
         AsyncBaseHTTPView.parse_multipart = saved
@@ -649,34 +623,6 @@ def test_apply_fails_loudly_when_parse_multipart_signature_changes(name, method)
             patches.apply()
 
 
-def test_apply_fails_loudly_when_execution_context_missing():
-    """A missing ExecutionContext fails loudly at apply() time."""
-    with mock.patch.object(patches, "ExecutionContext", None):
-        with pytest.raises(RuntimeError, match="complete_list_value"):
-            patches.apply()
-
-
-def test_apply_fails_loudly_when_is_iterable_missing():
-    """A missing is_iterable helper fails loudly at apply() time."""
-    with mock.patch.object(patches, "is_iterable", None):
-        with pytest.raises(RuntimeError, match="is_iterable"):
-            patches.apply()
-
-
-def test_apply_fails_loudly_when_complete_list_value_signature_changes():
-    """The patch pins the complete_list_value arity it delegates to."""
-    with mock.patch.object(
-        patches,
-        "_original_complete_list_value",
-        lambda self, return_type: None,
-    ):
-        with pytest.raises(
-            RuntimeError,
-            match=r"complete_list_value no longer has the expected",
-        ):
-            patches.apply()
-
-
 def test_apply_fails_loudly_when_parse_query_params_body_drifts():
     """A shape-passing but body-drifted upstream must not be silently superseded.
 
@@ -738,30 +684,18 @@ def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
 def test_apply_no_ops_when_toggle_disabled(settings):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
     saved = BaseView.__dict__["parse_json"]
-    saved_complete = ExecutionContext.__dict__["complete_list_value"]
     try:
         BaseView.parse_json = patches._original_parse_json
-        ExecutionContext.complete_list_value = patches._original_complete_list_value
         assert patches._patch_is_installed() is False
 
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
         patches.apply()
         assert patches._patch_is_installed() is False
-        assert (
-            ExecutionContext.__dict__["complete_list_value"]
-            is patches._original_complete_list_value
-        )
-
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
         patches.apply()
         assert patches._patch_is_installed() is True
-        assert (
-            ExecutionContext.__dict__["complete_list_value"]
-            is patches._patched_complete_list_value
-        )
     finally:
         BaseView.parse_json = saved
-        ExecutionContext.complete_list_value = saved_complete
 
 
 def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
@@ -773,32 +707,21 @@ def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
     """
     saved_parse_json = BaseView.__dict__["parse_json"]
     saved_parse_query_params = BaseView.__dict__["parse_query_params"]
-    saved_complete_list_value = ExecutionContext.__dict__["complete_list_value"]
     try:
         BaseView.parse_json = patches._original_parse_json
         BaseView.parse_query_params = patches._original_parse_query_params
-        ExecutionContext.complete_list_value = patches._original_complete_list_value
         assert patches._patch_is_installed() is False
 
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
         patches.apply()
         assert patches._patch_is_installed() is False
-        assert (
-            ExecutionContext.__dict__["complete_list_value"]
-            is patches._original_complete_list_value
-        )
 
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
         patches.apply()
         assert patches._patch_is_installed() is True
-        assert (
-            ExecutionContext.__dict__["complete_list_value"]
-            is patches._patched_complete_list_value
-        )
     finally:
         BaseView.parse_json = saved_parse_json
         BaseView.parse_query_params = saved_parse_query_params
-        ExecutionContext.complete_list_value = saved_complete_list_value
 
 
 def test_the_gated_workarounds_really_stop_hardening_when_opted_out(settings):
@@ -819,18 +742,12 @@ def test_the_gated_workarounds_really_stop_hardening_when_opted_out(settings):
     """
     saved_parse_json = BaseView.__dict__["parse_json"]
     saved_parse_query_params = BaseView.__dict__["parse_query_params"]
-    saved_complete_list_value = ExecutionContext.__dict__["complete_list_value"]
     try:
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
         BaseView.parse_json = patches._original_parse_json
         BaseView.parse_query_params = patches._original_parse_query_params
-        ExecutionContext.complete_list_value = patches._original_complete_list_value
         patches.apply()
         assert patches._patch_is_installed() is False
-        assert (
-            ExecutionContext.__dict__["complete_list_value"]
-            is patches._original_complete_list_value
-        )
 
         view = BaseView()
         assert view.parse_json("42") == 42
@@ -840,7 +757,6 @@ def test_the_gated_workarounds_really_stop_hardening_when_opted_out(settings):
     finally:
         BaseView.parse_json = saved_parse_json
         BaseView.parse_query_params = saved_parse_query_params
-        ExecutionContext.complete_list_value = saved_complete_list_value
 
 
 def test_capture_returns_none_when_upstream_owner_is_missing():
@@ -928,80 +844,3 @@ async def test_patched_async_parse_multipart_translates_a_deep_operations_docume
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
-
-
-class _SimpleAsyncIterable:
-    def __init__(self, items):
-        self.items = items
-
-    def __aiter__(self):
-        async def gen():
-            for item in self.items:
-                yield item
-
-        return gen()
-
-
-async def test_patched_complete_list_value_awaits_async_iterable_with_awaitable_children():
-    """AsyncIterable with awaitable child resolvers completes to an awaited list."""
-    import strawberry
-
-    @strawberry.type
-    class Child:
-        def __init__(self, name: str):
-            self._name = name
-
-        @strawberry.field
-        async def name(self) -> str:
-            return self._name
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def children(self) -> list[Child]:
-            return _SimpleAsyncIterable([Child("alpha"), Child("beta")])
-
-    schema = strawberry.Schema(query=Query)
-    result = await schema.execute("{ children { name } }")
-    assert result.errors is None
-    assert result.data == {"children": [{"name": "alpha"}, {"name": "beta"}]}
-
-
-async def test_patched_complete_list_value_handles_sync_children():
-    """AsyncIterable with sync children completes cleanly without awaitable resolution."""
-    import strawberry
-
-    @strawberry.type
-    class Child:
-        name: str
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def children(self) -> list[Child]:
-            return _SimpleAsyncIterable([Child(name="gamma"), Child(name="delta")])
-
-    schema = strawberry.Schema(query=Query)
-    result = await schema.execute("{ children { name } }")
-    assert result.errors is None
-    assert result.data == {"children": [{"name": "gamma"}, {"name": "delta"}]}
-
-
-def test_patched_complete_list_value_delegates_sync_iterable():
-    """Synchronous iterables bypass the AsyncIterable branch and delegate directly."""
-    import strawberry
-
-    @strawberry.type
-    class Child:
-        name: str
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def children(self) -> list[Child]:
-            return [Child(name="sync_a"), Child(name="sync_b")]
-
-    schema = strawberry.Schema(query=Query)
-    result = schema.execute_sync("{ children { name } }")
-    assert result.errors is None
-    assert result.data == {"children": [{"name": "sync_a"}, {"name": "sync_b"}]}

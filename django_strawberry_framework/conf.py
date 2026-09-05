@@ -51,7 +51,7 @@ DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
 _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
 
 # Toggle for the defensive patches the package ships for upstream bugs
-# (see ``_django_patches`` / ``_strawberry_patches`` / ``_cross_web_patches``).
+# (see the four dependency-owned ``_*_patches`` modules).
 # Accepts a ``bool`` (the global toggle) or a ``Mapping[str, bool]`` keyed by
 # ``UPSTREAM_PATCH_DEPENDENCIES`` names (per-dependency opt-out; missing names
 # stay enabled). Opt-out: defaults to ``True`` so consumers get the fixes
@@ -67,8 +67,16 @@ APPLY_UPSTREAM_PATCHES_KEY = "APPLY_UPSTREAM_PATCHES"
 # view's sync bytes into it), so disabling one of the pair alone is safe but
 # leaves upstream's sync view unfixed. A package view is unaffected by every
 # state of this setting - it owns both its strict decode and its own body
-# source (``views.py::_RawBodyRequestAdapter``).
-UPSTREAM_PATCH_DEPENDENCIES = frozenset({"django", "strawberry", "cross_web"})
+# source (``views.py::_RawBodyRequestAdapter``). ``graphql_core`` independently
+# owns async-iterable list completion and has no HTTP-view lifecycle coupling.
+UPSTREAM_PATCH_DEPENDENCIES = frozenset(
+    {
+        "cross_web",
+        "django",
+        "graphql_core",
+        "strawberry",
+    },
+)
 
 # Default nested-connection fetch strategy for ``DjangoOptimizerExtension``
 # instances constructed without an explicit ``nested_connection_strategy=``
@@ -364,7 +372,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
 
     - ``bool`` - the global toggle: ``False`` stops the framework from
       monkey-patching any of its upstream dependencies (Django,
-      Strawberry, and ``cross_web``) at startup.
+      Strawberry, ``graphql-core``, and ``cross_web``) at startup.
     - ``Mapping[str, bool]`` keyed by ``UPSTREAM_PATCH_DEPENDENCIES``
       names - per-dependency opt-out: ``{"django": False}`` disables
       only the test-only Django teardown patch while the production
@@ -372,7 +380,8 @@ def upstream_patches_enabled(dependency: str) -> bool:
       installed. Missing names default to ``True`` (the opt-out stance
       holds per dependency). ``strawberry`` and ``cross_web`` jointly
       own the malformed-body hardening - see the
-      ``UPSTREAM_PATCH_DEPENDENCIES`` comment.
+      ``UPSTREAM_PATCH_DEPENDENCIES`` comment; ``graphql_core`` owns only
+      executor list completion.
 
     Any other shape raises ``ConfigurationError`` (the
     ``_normalize_user_settings`` fail-loud precedent): a non-bool /
@@ -387,7 +396,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
     first.
 
     Internal API (not exported from the package ``__init__``): the only
-    callers are the three patch modules' ``apply()`` gates, each passing
+    callers are the four patch modules' ``apply()`` gates, each passing
     its own canonical name. A ``dependency`` outside
     ``UPSTREAM_PATCH_DEPENDENCIES`` raises ``ValueError`` so the
     constant and the gate call sites cannot drift apart.

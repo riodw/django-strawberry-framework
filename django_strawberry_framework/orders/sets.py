@@ -24,7 +24,6 @@ On top of that skeleton the module carries:
 from __future__ import annotations
 
 from collections import OrderedDict
-from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db import models
@@ -41,6 +40,7 @@ from ..sets_mixins import (
     require_re_readable_field_declaration,
     should_cache_expansion,
 )
+from ..utils.context import clear_context_key, get_context_value, stash_on_context
 from ..utils.input_values import SetInputTraversal
 from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
 from ..utils.querysets import run_in_one_sync_boundary
@@ -63,10 +63,21 @@ from .inputs import (
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
 
-_APPLIED_ORDER_NORMALIZATION: ContextVar[tuple[type, Any, Any] | None] = ContextVar(
-    "_APPLIED_ORDER_NORMALIZATION",
-    default=None,
-)
+_APPLIED_ORDER_NORMALIZATION_KEY = "_dst_applied_order_normalization"
+
+
+def _record_applied_normalization(
+    info: Any,
+    cls: type,
+    input_value: Any,
+    data: Any,
+) -> None:
+    """Publish one successful normalization on the current request context."""
+    stash_on_context(
+        getattr(info, "context", None),
+        _APPLIED_ORDER_NORMALIZATION_KEY,
+        (cls, id(input_value), data),
+    )
 
 
 def _to_inert_order_data(data: Any) -> Any:
@@ -356,28 +367,24 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # ------------------------------------------------------------------
 
     @classmethod
-    def _input_has_active_terms(cls, input_value: Any) -> bool:
+    def _input_has_active_terms(cls, input_value: Any, info: Any = None) -> bool:
         """Return True if input_value contains at least one non-null ordering direction.
 
         Checks purity by comparing against the normalized record produced by public
-        apply when present (enforcing the 2-call maximum per request: one in apply,
-        one in the active-term check), or across two independent normalizations when
-        called standalone. Any disagreement raises an actionable :class:`ConfigurationError`
-        naming :meth:`_normalize_input`.
+        apply when present (two calls total: one in apply, one in this check), or across
+        two independent normalizations when no record is available (three calls total when
+        public apply ran against an unstashable context). The record is request-scoped and
+        consumed before checking. Any disagreement raises an actionable
+        :class:`ConfigurationError` naming :meth:`_normalize_input`.
         """
-        applied_info = _APPLIED_ORDER_NORMALIZATION.get()
+        context = getattr(info, "context", None)
+        applied_info = get_context_value(context, _APPLIED_ORDER_NORMALIZATION_KEY)
+        clear_context_key(context, _APPLIED_ORDER_NORMALIZATION_KEY)
         applied_data = None
-        if applied_info is not None:
-            applied_cls, applied_input, recorded_data = applied_info
-            if applied_cls is cls:
-                try:
-                    is_same_input = (applied_input is input_value) or (
-                        applied_input == input_value
-                    )
-                except Exception:
-                    is_same_input = applied_input is input_value
-                if is_same_input:
-                    applied_data = recorded_data
+        if isinstance(applied_info, tuple) and len(applied_info) == 3:
+            applied_cls, applied_input_id, recorded_data = applied_info
+            if applied_cls is cls and applied_input_id == id(input_value):
+                applied_data = recorded_data
 
         data_check = cls._normalize_input(input_value)
 
@@ -410,11 +417,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
         Purity obligation:
             This method must be a pure, deterministic function of ``input_value``.
-            An argument-bearing GraphQL request normalizes the input once during
-            public apply (``apply_sync`` or ``apply_async``) and once during the
-            active-term check (``_input_has_active_terms``). Any stateful or
-            non-deterministic disagreement between normalizations raises an
-            actionable :class:`ConfigurationError` naming this method.
+            An argument-bearing GraphQL request normalizes the input once during public
+            apply (``apply_sync`` or ``apply_async``) and once during the active-term check
+            when its request context accepted the one-shot record. If the context cannot
+            store that record, the check performs two independent reads (three calls total).
+            Any stateful or non-deterministic disagreement raises an actionable
+            :class:`ConfigurationError` naming this method.
         """
         return normalize_input_value(cls, input_value)
 
@@ -541,7 +549,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         return annotations, expressions
 
     @classmethod
-    def _apply_orderings(cls, input_value: Any, queryset: models.QuerySet) -> models.QuerySet:
+    def _apply_orderings(
+        cls,
+        input_value: Any,
+        queryset: models.QuerySet,
+        info: Any,
+    ) -> models.QuerySet:
         """Apply the normalized orderings to ``queryset`` - the un-colored tail.
 
         The shared body behind ``apply_sync`` / ``apply_async`` (the order-side
@@ -558,8 +571,8 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         permission-check coloring they run before this.
         """
         data = cls._normalize_input(input_value)
-        _APPLIED_ORDER_NORMALIZATION.set((cls, input_value, data))
         if not data:
+            _record_applied_normalization(info, cls, input_value, data)
             return queryset
         flat_orders = cls.get_flat_orders(data)
         annotations, expressions = cls._resolve_order_expressions(
@@ -567,10 +580,13 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             model=queryset.model,
         )
         if not expressions:
+            _record_applied_normalization(info, cls, input_value, data)
             return queryset
         if annotations:
             queryset = queryset.annotate(**annotations)
-        return queryset.order_by(*expressions)
+        queryset = queryset.order_by(*expressions)
+        _record_applied_normalization(info, cls, input_value, data)
+        return queryset
 
     @classmethod
     def apply_sync(
@@ -603,7 +619,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         request = cls._request_from_info(info)
         cls._run_permission_checks(input_value, request)
-        return cls._apply_orderings(input_value, queryset)
+        return cls._apply_orderings(input_value, queryset, info)
 
     @classmethod
     async def apply_async(
@@ -630,4 +646,4 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         request = cls._request_from_info(info)
         await run_in_one_sync_boundary(cls._run_permission_checks, input_value, request)
-        return cls._apply_orderings(input_value, queryset)
+        return cls._apply_orderings(input_value, queryset, info)

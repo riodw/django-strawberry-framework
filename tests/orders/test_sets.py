@@ -1486,7 +1486,7 @@ def test_input_has_active_terms_independent_query_and_double_normalization():
     assert TrackedOrder.normalize_count == 1
     assert qs_ordered is not None
 
-    has_active = TrackedOrder._input_has_active_terms(active_input)
+    has_active = TrackedOrder._input_has_active_terms(active_input, info)
     assert has_active is True
     assert TrackedOrder.normalize_count == 2  # 1 from apply_sync + 1 from _input_has_active_terms
 
@@ -1499,13 +1499,47 @@ def test_input_has_active_terms_independent_query_and_double_normalization():
     assert TrackedOrder.normalize_count == 1
     assert qs_ordered_async is not None
 
-    has_active_async = TrackedOrder._input_has_active_terms(active_input)
+    has_active_async = TrackedOrder._input_has_active_terms(active_input, info)
     assert has_active_async is True
     assert TrackedOrder.normalize_count == 2  # 1 from apply_async + 1 from _input_has_active_terms
 
 
+def test_applied_normalization_is_consumed_and_never_leaks_to_a_later_request():
+    """A request-scoped normalization record is one-shot and isolated by context."""
+
+    class TrackedOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return [("title", Ordering.ASC)]
+
+    first_input = [{"title": "ASC"}]
+    second_input = [{"title": "ASC"}]
+    first_info = SimpleNamespace(context={"request": HttpRequest()})
+    second_info = SimpleNamespace(context={"request": HttpRequest()})
+
+    TrackedOrder.apply_sync(first_input, Book.objects.all(), first_info)
+    assert TrackedOrder.normalize_count == 1
+
+    # The untouched record on the first request cannot reduce the second request's
+    # standalone purity check from two normalizations to one.
+    assert TrackedOrder._input_has_active_terms(second_input, second_info) is True
+    assert TrackedOrder.normalize_count == 3
+
+    assert TrackedOrder._input_has_active_terms(first_input, first_info) is True
+    assert TrackedOrder.normalize_count == 4
+    assert TrackedOrder._input_has_active_terms(first_input, first_info) is True
+    assert TrackedOrder.normalize_count == 6
+
+
 def test_input_has_active_terms_sequence_controls_sync():
-    """Load-bearing A/B/B and A/A/B normalization sequence controls under sync apply."""
+    """Load-bearing A/B/B and A/A/B/A normalization sequence controls under sync apply."""
     return_a = [("title", Ordering.ASC)]
     return_b = [("title", Ordering.DESC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
@@ -1526,17 +1560,23 @@ def test_input_has_active_terms_sequence_controls_sync():
             cls.idx += 1
             return res
 
-    AbbOrder.apply_sync([{"title": "ASC"}], qs, info)
+    abb_input = [{"title": "ASC"}]
+    AbbOrder.apply_sync(abb_input, qs, info)
     with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
-        AbbOrder._input_has_active_terms([{"title": "ASC"}])
+        AbbOrder._input_has_active_terms(abb_input, info)
 
-    # Sequence A/A/B: Call 1 in apply returns A; Call 2 in first helper returns A; Call 3 in second helper returns B
+    # Sequence A/A/B/A: the hit consumes A/A; the next standalone check compares B/A.
     class AabOrder(OrderSet):
         class Meta:
             model = Book
             fields = ["title"]
 
-        returns = [return_a, return_a, return_b]
+        returns = [
+            return_a,
+            return_a,
+            return_b,
+            return_a,
+        ]
         idx = 0
 
         @classmethod
@@ -1545,14 +1585,15 @@ def test_input_has_active_terms_sequence_controls_sync():
             cls.idx += 1
             return res
 
-    AabOrder.apply_sync([{"title": "ASC"}], qs, info)
-    assert AabOrder._input_has_active_terms([{"title": "ASC"}]) is True
+    aab_input = [{"title": "ASC"}]
+    AabOrder.apply_sync(aab_input, qs, info)
+    assert AabOrder._input_has_active_terms(aab_input, info) is True
     with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
         AabOrder._input_has_active_terms([{"title": "ASC"}])
 
 
 def test_input_has_active_terms_sequence_controls_async():
-    """Load-bearing A/B/B and A/A/B normalization sequence controls under async apply."""
+    """Load-bearing A/B/B and A/A/B/A normalization sequence controls under async apply."""
     import asyncio
 
     return_a = [("title", Ordering.ASC)]
@@ -1575,17 +1616,23 @@ def test_input_has_active_terms_sequence_controls_async():
             cls.idx += 1
             return res
 
-    asyncio.run(AbbOrder.apply_async([{"title": "ASC"}], qs, info))
+    abb_input = [{"title": "ASC"}]
+    asyncio.run(AbbOrder.apply_async(abb_input, qs, info))
     with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
-        AbbOrder._input_has_active_terms([{"title": "ASC"}])
+        AbbOrder._input_has_active_terms(abb_input, info)
 
-    # Sequence A/A/B: Call 1 in apply returns A; Call 2 in first helper returns A; Call 3 in second helper returns B
+    # Sequence A/A/B/A: the hit consumes A/A; the next standalone check compares B/A.
     class AabOrder(OrderSet):
         class Meta:
             model = Book
             fields = ["title"]
 
-        returns = [return_a, return_a, return_b]
+        returns = [
+            return_a,
+            return_a,
+            return_b,
+            return_a,
+        ]
         idx = 0
 
         @classmethod
@@ -1594,8 +1641,9 @@ def test_input_has_active_terms_sequence_controls_async():
             cls.idx += 1
             return res
 
-    asyncio.run(AabOrder.apply_async([{"title": "ASC"}], qs, info))
-    assert AabOrder._input_has_active_terms([{"title": "ASC"}]) is True
+    aab_input = [{"title": "ASC"}]
+    asyncio.run(AabOrder.apply_async(aab_input, qs, info))
+    assert AabOrder._input_has_active_terms(aab_input, info) is True
     with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
         AabOrder._input_has_active_terms([{"title": "ASC"}])
 

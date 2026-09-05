@@ -11,7 +11,7 @@ cluster (17 tests) - 22 total. Three of them cover real bug fixes -
 the own-class-registration guard (rejects a ``DjangoType`` subclass that omits
 its own ``Meta``), the async-callable-object detection (detects
 ``async def __call__`` at construction time so the coroutine return
-doesn't bypass ``_post_process_consumer_async``), and the
+doesn't bypass the async visibility pipeline), and the
 ``functools.partial``-wrapped async-callable-*instance* detection
 (``is_async_callable`` now unwraps ``partial.func`` before the
 ``__call__`` async check - without it that resolver was misclassified as
@@ -39,9 +39,6 @@ import asyncio
 import functools
 import inspect
 import pickle
-import subprocess
-import sys
-import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -70,9 +67,12 @@ from django_strawberry_framework.exceptions import (
     DjangoStrawberryFrameworkError,
 )
 from django_strawberry_framework.list_field import (
+    _field_label,
     _ListArguments,
     _normalize_list_arguments,
+    _orderset_class_for_target,
     _resolve_argument_wire_name,
+    _resolver_root_and_info,
     _synthesized_list_signature,
 )
 from django_strawberry_framework.permissions import apply_cascade_permissions
@@ -559,9 +559,9 @@ def test_djangolistfield_sync_path_rejects_custom_awaitable_from_get_queryset() 
 def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_applied() -> None:
     """Sync consumer resolver returning a ``QuerySet`` receives ``target_type.get_queryset(...)``.
 
-    Pins the sync consumer-resolver wrapper at ``django_strawberry_framework/list_field.py::DjangoListField #"return _post_process_consumer_sync("``
-    - specifically that ``_post_process_consumer_sync`` (the inner call
-    site) applies ``target_type.get_queryset(...)`` to a ``Manager``/``QuerySet``
+    Pins the sync consumer-resolver wrapper's ``prepared_resolver_source`` plus
+    ``_execute_queryset_pipeline_sync`` path, which applies
+    ``target_type.get_queryset(...)`` to a ``Manager``/``QuerySet``
     return (graphene-django parity; spec #"test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_applied").
     """
     services.seed_data(1)
@@ -601,10 +601,9 @@ def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_app
 def test_djangolistfield_consumer_resolver_python_list_return_passes_through() -> None:
     """Sync consumer resolver returning a Python ``list`` bypasses ``target_type.get_queryset(...)``.
 
-    Pins the sync consumer-resolver wrapper at ``django_strawberry_framework/list_field.py::DjangoListField #"return _post_process_consumer_sync("``
-    - specifically that ``_post_process_consumer_sync`` returns the
-    non-``QuerySet`` result unchanged (the ``return source``
-    pass-through arm at ``django_strawberry_framework/utils/querysets.py::post_process_queryset_result_sync #"return source"``; spec #"test_djangolistfield_consumer_resolver_python_list_return_passes_through"). The resolver returns a
+    Pins the sync consumer-resolver wrapper's non-queryset branch: source preparation
+    identifies a plain list, skips type visibility, and bounds the result directly. The
+    resolver returns a
     Python ``list`` that contains a row matching the ``get_queryset``
     exclusion filter; the row's presence in the output proves
     ``get_queryset`` was NOT applied to the list return.
@@ -650,11 +649,9 @@ async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_
 ):
     """Async consumer resolver returning a ``QuerySet`` receives ``target_type.get_queryset(...)``.
 
-    Pins the async consumer-resolver wrapper at ``django_strawberry_framework/list_field.py::DjangoListField #"return await _post_process_consumer_async("``
-    - specifically that the awaited consumer return is fed to
-    ``_post_process_consumer_async`` (the ``await _post_process_consumer_async(...)`` call
-    inside the async ``_wrap``), and the
-    ``apply_type_visibility_async`` call (``django_strawberry_framework/utils/querysets.py::post_process_queryset_result_async #"return await apply_type_visibility_async"``) fires on a ``QuerySet``
+    Pins the async consumer-resolver wrapper's await, source preparation, and
+    ``_execute_queryset_pipeline_async`` path; ``apply_type_visibility_async`` fires on a
+    ``QuerySet``
     result. Pins that the wrapper awaits the consumer coroutine BEFORE
     the isinstance check (spec #"test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied").
     The adapter protocol enables safe async list completion without DJANGO_ALLOW_ASYNC_UNSAFE.
@@ -826,7 +823,7 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
     partial-wrapped async resolvers to the async wrapper. This test pins that
     contract end-to-end through the field's pipeline: ``get_queryset``'s
     ``startswith("a")`` exclusion fires on the awaited QuerySet, proving the
-    partial reached ``_post_process_consumer_async`` and not the sync wrapper.
+    partial reached the async visibility pipeline and not the sync wrapper.
     An explicit ``.func`` unwrap is in place as well. For this shape (partial of
     a plain ``async def``)
     ``inspect.iscoroutinefunction(partial(async_fn))`` is True directly, so the
@@ -880,7 +877,7 @@ async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_ge
     the instance (not a coroutine function -> False) and ``partial.__call__`` is
     the partial's own ``__call__`` (also False), so before ``is_async_callable``
     unwrapped the partial first this resolver was misclassified as sync - its
-    coroutine return bypassed ``_post_process_consumer_async`` and silently
+    coroutine return bypassed the async visibility pipeline and silently
     skipped ``target_type.get_queryset(...)``.
     Pins the ``.func`` unwrap fix: ``get_queryset``'s ``startswith("a")`` exclusion
     must fire on the awaited QuerySet.
@@ -928,10 +925,8 @@ async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_ge
 async def test_djangolistfield_async_consumer_resolver_python_list_return_passes_through() -> None:
     """Async consumer resolver returning a Python ``list`` bypasses ``target_type.get_queryset(...)``.
 
-    Pins the async consumer-resolver wrapper at ``django_strawberry_framework/list_field.py::DjangoListField #"return await _post_process_consumer_async("``
-    - specifically that ``_post_process_consumer_async`` returns a
-    non-``QuerySet`` result unchanged (the ``return source``
-    pass-through arm at ``django_strawberry_framework/utils/querysets.py::post_process_queryset_result_async #"return source"``). Pins that the await-then-isinstance
+    Pins the async consumer-resolver wrapper's plain-list branch: source preparation skips
+    type visibility and bounds the result directly. Pins that the await-then-isinstance
     ordering is symmetric across return shapes (spec #"test_djangolistfield_async_consumer_resolver_python_list_return_passes_through").
     """
     await sync_to_async(services.seed_data)(1)
@@ -2077,53 +2072,8 @@ def test_list_argument_error_properties_extensions_and_repr():
     }
     assert "requires a QuerySet source" in str(err5)
 
-    err6 = ListArgumentError("items", "arg", "custom_reason", value=42)
-    assert "custom_reason" in str(err6)
-
-
-def test_list_argument_error_pickle_roundtrip():
-    err = ListArgumentError("items", "limit", "over_ceiling", value=200, ceiling=100)
-    err.custom_attr = "survives"
-    pickled = pickle.dumps(err)
-    restored = pickle.loads(pickled)
-
-    assert isinstance(restored, ListArgumentError)
-    assert restored.field == "items"
-    assert restored.argument == "limit"
-    assert restored.reason == "over_ceiling"
-    assert restored.value == 200
-    assert restored.ceiling == 100
-    assert restored.extensions == err.extensions
-    assert str(restored) == str(err)
-    assert getattr(restored, "custom_attr", None) == "survives"
-
-
-def test_resolve_argument_wire_name_fallback_and_custom():
-    # Fallback when info is empty / has no schema config:
-    assert _resolve_argument_wire_name(None, "offset") == "offset"
-    assert _resolve_argument_wire_name(None, "limit") == "limit"
-    assert _resolve_argument_wire_name(None, "order_by") == "orderBy"
-    assert _resolve_argument_wire_name(None, "custom") == "custom"
-
-    # Schema config with name converter
-    class DummyConverter:
-        def __init__(self):
-            self.calls = 0
-
-        def from_argument(self, arg):
-            self.calls += 1
-            return arg.name.upper()
-
-    converter = DummyConverter()
-    schema_config = SimpleNamespace(name_converter=converter)
-    info = SimpleNamespace(
-        schema=SimpleNamespace(config=schema_config),
-        get_argument_definition=lambda name: SimpleNamespace(name=name),
-    )
-
-    resolved = _resolve_argument_wire_name(info, "offset")
-    assert resolved == "OFFSET"
-    assert converter.calls == 1
+    with pytest.raises(ValueError, match="Unknown ListArgumentError reason 'custom_reason'"):
+        ListArgumentError("items", "arg", "custom_reason", value=42)
 
 
 def test_resolve_argument_wire_name_zero_calls_on_valid_normalization():
@@ -2155,171 +2105,6 @@ def test_resolve_argument_wire_name_zero_calls_on_valid_normalization():
         _normalize_list_arguments("items", info, None, False, offset=-1)
     assert exc_info.value.reason == "negative"
     assert converter.calls == 1
-
-
-def test_synthesized_list_signature_without_and_with_orderset():
-    class DummyTypeWithoutOrder:
-        pass
-
-    sig, ann = _synthesized_list_signature(DummyTypeWithoutOrder)
-    assert sig.return_annotation is inspect.Signature.empty
-    assert "return" not in ann
-    assert list(sig.parameters.keys()) == [
-        "root",
-        "info",
-        "offset",
-        "limit",
-    ]
-    assert sig.parameters["offset"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert sig.parameters["limit"].kind is inspect.Parameter.KEYWORD_ONLY
-    assert "order_by" not in ann
-
-    # With definition declaring orderset_class:
-    class DummyOrderSet:
-        pass
-
-    definition = SimpleNamespace(orderset_class=DummyOrderSet)
-    dummy_type_with_order = type(
-        "DummyTypeWithOrder",
-        (),
-        {"__django_strawberry_definition__": definition},
-    )
-
-    # Mock order_input_type
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(
-            "django_strawberry_framework.orders.order_input_type",
-            lambda cls: str,
-            raising=False,
-        )
-        sig2, ann2 = _synthesized_list_signature(dummy_type_with_order)
-        assert sig2.return_annotation is inspect.Signature.empty
-        assert "return" not in ann2
-        assert list(sig2.parameters.keys()) == [
-            "root",
-            "info",
-            "offset",
-            "limit",
-            "order_by",
-        ]
-        assert sig2.parameters["order_by"].kind is inspect.Parameter.KEYWORD_ONLY
-        assert ann2["order_by"] == (list[str] | None)
-
-
-def test_subpackage_isolation_orders_not_imported_at_package_root():
-    cmd = [
-        sys.executable,
-        "-c",
-        (
-            "import sys, django_strawberry_framework; "
-            "assert 'django_strawberry_framework.orders' not in sys.modules, "
-            "'orders subpackage leaked into package root import'"
-        ),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-def test_normalize_list_arguments_all_boundaries():
-    info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
-
-    # Boundary 1: offset boolean
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, offset=True)
-    assert exc.value.argument == "offset"
-    assert exc.value.reason == "non_integer"
-    assert exc.value.value == "bool True"
-
-    # Boundary 2: offset non-integer (string, float)
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, offset="ten")
-    assert exc.value.argument == "offset"
-    assert exc.value.reason == "non_integer"
-    assert exc.value.value == "str 'ten'"
-
-    # Boundary 3: offset negative
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, offset=-1)
-    assert exc.value.argument == "offset"
-    assert exc.value.reason == "negative"
-    assert exc.value.value == -1
-
-    # Boundary 4: offset over ceiling
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, offset=101)
-    assert exc.value.argument == "offset"
-    assert exc.value.reason == "over_ceiling"
-    assert exc.value.value == 101
-    assert exc.value.ceiling == 100
-
-    # Boundary 5: limit boolean
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, limit=False)
-    assert exc.value.argument == "limit"
-    assert exc.value.reason == "non_integer"
-    assert exc.value.value == "bool False"
-
-    # Boundary 6: limit non-integer
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, limit=3.14)
-    assert exc.value.argument == "limit"
-    assert exc.value.reason == "non_integer"
-    assert exc.value.value == "float 3.14"
-
-    # Boundary 7: limit negative
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, limit=-10)
-    assert exc.value.argument == "limit"
-    assert exc.value.reason == "negative"
-    assert exc.value.value == -10
-
-    # Boundary 8: limit over ceiling (with effective bound calculation)
-    # 8a: policy 100, field max_rows 50 (untrusted) -> ceiling is 50
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, 50, False, limit=51)
-    assert exc.value.argument == "limit"
-    assert exc.value.reason == "over_ceiling"
-    assert exc.value.value == 51
-    assert exc.value.ceiling == 50
-
-    # 8b: policy 100, field max_rows 200 (trusted=True) -> ceiling is 200
-    rec = _normalize_list_arguments("items", info, 200, True, limit=150)
-    assert rec.limit == 150
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, 200, True, limit=201)
-    assert exc.value.argument == "limit"
-    assert exc.value.reason == "over_ceiling"
-    assert exc.value.value == 201
-    assert exc.value.ceiling == 200
-
-    # Boundary 9: deterministic precedence (offset before limit)
-    with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, offset=-1, limit=-2)
-    assert exc.value.argument == "offset"
-    assert exc.value.reason == "negative"
-
-    # Omission
-    omitted = _normalize_list_arguments("items", info, None, False)
-    assert omitted.offset is None
-    assert omitted.limit is None
-    assert omitted.order_by is None
-    assert omitted.order_by_supplied is False
-    assert omitted.any_argument_supplied is False
-
-    # Zero and empty supplied
-    zero_offset = _normalize_list_arguments("items", info, None, False, offset=0)
-    assert zero_offset.offset == 0
-    assert zero_offset.any_argument_supplied is True
-
-    empty_order = _normalize_list_arguments("items", info, None, False, order_by=[])
-    assert empty_order.order_by == []
-    assert empty_order.order_by_supplied is True
-    assert empty_order.any_argument_supplied is True
-
-    # Slotted record
-    assert hasattr(_ListArguments, "__slots__")
-    assert not hasattr(omitted, "__dict__")
 
 
 @pytest.mark.parametrize("bad_offset", [True, False])
@@ -2635,7 +2420,6 @@ def test_offset_guard_random_term_question_mark():
     args_record = _ListArguments(
         offset=5,
         limit=None,
-        effective_ceiling=None,
         order_by=[{"name": "ASC"}],
         order_by_supplied=True,
         any_argument_supplied=True,
@@ -2643,7 +2427,7 @@ def test_offset_guard_random_term_question_mark():
 
     class DummyOrderSet:
         @classmethod
-        def _input_has_active_terms(cls, val):
+        def _input_has_active_terms(cls, val, info=None):
             return True
 
     with pytest.raises(ListArgumentError, match="requires an active ordering"):
@@ -2672,7 +2456,6 @@ def test_offset_guard_random_term_random_function():
     args_record = _ListArguments(
         offset=5,
         limit=None,
-        effective_ceiling=None,
         order_by=[{"name": "ASC"}],
         order_by_supplied=True,
         any_argument_supplied=True,
@@ -2680,7 +2463,7 @@ def test_offset_guard_random_term_random_function():
 
     class DummyOrderSet:
         @classmethod
-        def _input_has_active_terms(cls, val):
+        def _input_has_active_terms(cls, val, info=None):
             return True
 
     with pytest.raises(ListArgumentError, match="requires an active ordering"):
@@ -2703,7 +2486,6 @@ def test_offset_guard_model_default_active(monkeypatch):
     args_record = _ListArguments(
         offset=5,
         limit=None,
-        effective_ceiling=None,
         order_by=None,
         order_by_supplied=False,
         any_argument_supplied=True,
@@ -2727,7 +2509,6 @@ def test_offset_guard_model_default_cleared_by_order_by(monkeypatch):
     args_record = _ListArguments(
         offset=5,
         limit=None,
-        effective_ceiling=None,
         order_by=None,
         order_by_supplied=False,
         any_argument_supplied=True,
@@ -2972,7 +2753,6 @@ def test_list_field_trusted_return_cap_asymmetry():
         limit=20,
     )
     assert args.limit == 20
-    assert args.effective_ceiling == 25
 
     # limit > 25 rejected
     with pytest.raises(ListArgumentError) as exc_info:
@@ -3112,7 +2892,6 @@ def test_list_field_record_independence():
     assert rec_zero.any_argument_supplied is True
     assert rec_zero.offset == 0
     assert rec_zero.limit is None
-    assert rec_zero.effective_ceiling == 10
 
     # order_by_supplied drives queryset_required even when order_by=[]
     rec_order_empty = _normalize_list_arguments("f", info, None, False, order_by=[])
@@ -3122,8 +2901,82 @@ def test_list_field_record_independence():
     from django_strawberry_framework.list_field import _handle_non_queryset_rejections_sync
 
     with pytest.raises(ListArgumentError) as exc_info:
-        _handle_non_queryset_rejections_sync([1, 2, 3], rec_order_empty, info)
+        _handle_non_queryset_rejections_sync(rec_order_empty, info)
     assert exc_info.value.reason == "queryset_required"
+
+
+def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch):
+    """The no-argument normalization path is allocation-only and policy-free."""
+    monkeypatch.setattr(
+        "django_strawberry_framework.list_field.policy_from_info",
+        lambda _info: pytest.fail("omitted arguments must not resolve policy"),
+    )
+
+    record = _normalize_list_arguments("items", SimpleNamespace(), None, False)
+
+    assert record == _ListArguments(None, None, None, False, False)
+
+
+def test_resolver_call_context_accepts_strawberry_shape_and_rejects_unknown_inputs():
+    info = SimpleNamespace(field_name="items")
+    root = object()
+
+    assert _resolver_root_and_info((root, info), {}) == (root, info)
+    assert _resolver_root_and_info((), {"root": root, "info": info}) == (root, info)
+    with pytest.raises(TypeError, match="only root and info positional"):
+        _resolver_root_and_info((root, info, object()), {})
+    with pytest.raises(TypeError, match="unexpected keyword inputs: surprise"):
+        _resolver_root_and_info((), {"info": info, "surprise": True})
+    with pytest.raises(TypeError, match="multiple values for root"):
+        _resolver_root_and_info((root, info), {"root": root})
+    with pytest.raises(TypeError, match="multiple values for info"):
+        _resolver_root_and_info((root, info), {"info": info})
+    with pytest.raises(TypeError, match="requires info"):
+        _resolver_root_and_info((root,), {})
+
+
+def test_field_and_orderset_metadata_reads_fail_closed():
+    class HostileInfo:
+        @property
+        def field_name(self):
+            raise RuntimeError("unreadable field name")
+
+    class HostileDefinition:
+        @property
+        def orderset_class(self):
+            raise RuntimeError("unreadable sidecar")
+
+    class Target:
+        __django_strawberry_definition__ = HostileDefinition()
+
+    assert _field_label(HostileInfo()) == "DjangoListField"
+    assert _field_label(SimpleNamespace(field_name="items")) == "items"
+    assert _orderset_class_for_target(Target) is None
+
+
+def test_argument_definition_metadata_reads_fail_closed():
+    class HostileInfo:
+        @property
+        def get_argument_definition(self):
+            raise RuntimeError("unreadable argument metadata")
+
+    with pytest.raises(ConfigurationError, match="argument-definition resolver"):
+        _resolve_argument_wire_name(HostileInfo(), "offset")
+
+    with pytest.raises(ConfigurationError, match="is not callable"):
+        _resolve_argument_wire_name(
+            SimpleNamespace(get_argument_definition=object()),
+            "offset",
+        )
+
+    def raise_from_lookup(_name):
+        raise RuntimeError("unreadable argument definition")
+
+    with pytest.raises(ConfigurationError, match="definition for argument"):
+        _resolve_argument_wire_name(
+            SimpleNamespace(get_argument_definition=raise_from_lookup),
+            "offset",
+        )
 
 
 def test_list_field_sync_and_async_awaitable_disposal():
@@ -3340,7 +3193,6 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
     args_record = _ListArguments(
         offset=None,
         limit=None,
-        effective_ceiling=10,
         order_by=[{"name": "ASC"}],
         order_by_supplied=True,
         any_argument_supplied=True,
@@ -3362,7 +3214,7 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
     assert src_fail.anext_calls == 0
     assert src_fail.aclose_calls == 1
     notes = getattr(exc_fail.value, "__notes__", [])
-    assert any("bounded_rows_async iterator cleanup failed" in str(n) for n in notes)
+    assert any("DjangoListField iterator cleanup failed" in str(n) for n in notes)
 
 
 def test_list_field_async_queryset_adapter_protocol():
@@ -3443,7 +3295,6 @@ def test_list_field_deadline_check_position(monkeypatch):
     args_record = _ListArguments(
         offset=1,
         limit=2,
-        effective_ceiling=10,
         order_by=None,
         order_by_supplied=False,
         any_argument_supplied=True,
@@ -3537,7 +3388,6 @@ def test_list_field_declined_sync_cleanup_generator_suspended():
     args_record = _ListArguments(
         offset=2,
         limit=3,
-        effective_ceiling=10,
         order_by=None,
         order_by_supplied=False,
         any_argument_supplied=True,
@@ -3651,39 +3501,6 @@ def test_is_model_default_ordering_active_reverse_and_empty_queryset(monkeypatch
     assert _is_model_default_ordering_active(qs_none_unordered) is False
 
 
-def test_list_field_post_apply_seal_benchmark():
-    """Diagnostic benchmark baseline for post-apply seal (Decision 5)."""
-    from django.db.models import Count
-
-    from django_strawberry_framework.utils.querysets import _validate_post_orderset_result
-
-    class CatBenchType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    qs = (
-        Category.objects.annotate(num_items=Count("items"))
-        .prefetch_related("items")
-        .order_by("name")
-    )
-
-    # Warmup
-    for _ in range(20):
-        _validate_post_orderset_result(CatBenchType, qs, qs, "BenchOrder.apply_sync")
-
-    start = time.perf_counter()
-    iterations = 200
-    for _ in range(iterations):
-        sealed = _validate_post_orderset_result(CatBenchType, qs, qs, "BenchOrder.apply_sync")
-        assert sealed is not None
-    duration = time.perf_counter() - start
-
-    avg_micros = (duration / iterations) * 1_000_000
-    assert iterations == 200
-    assert avg_micros > 0
-
-
 def test_list_field_constructor_validation_precedence():
     """Constructor validates collection bound before target_type or directives."""
     # Negative bound raises collection bound error even if target_type is invalid
@@ -3769,7 +3586,6 @@ def test_list_arguments_immutability_and_slots():
     args = _ListArguments(
         offset=0,
         limit=10,
-        effective_ceiling=10,
         order_by=None,
         order_by_supplied=False,
         any_argument_supplied=True,

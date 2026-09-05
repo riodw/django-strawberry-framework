@@ -1408,8 +1408,8 @@ def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
     and let the ``Int!`` field return ``None`` (which surfaces as the engine's
     opaque ``Cannot return null for non-nullable field ...totalCount`` violation),
     raise a clear package error - symmetric with the sidecar-input rule in
-    ``_post_process_consumer_*``. Single-sited so the sync and async count
-    helpers share one rule.
+    ``_guard_sidecar_input_against_non_queryset``. Single-sited so the sync and
+    async count helpers share one rule.
     """
     if want_count and not isinstance(nodes, models.QuerySet):
         raise GraphQLError(

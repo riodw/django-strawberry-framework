@@ -5178,6 +5178,33 @@ def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
         )
 
 
+def test_validate_post_orderset_result_contains_an_unreadable_instance_dictionary():
+    """A hostile QuerySet ``__dict__`` descriptor becomes a typed seal defect."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    class UnreadableStateQuerySet(models.QuerySet):
+        @property
+        def __dict__(self):
+            raise RuntimeError("consumer descriptor ran")
+
+    source_qs = Category.objects.all()
+    candidate = UnreadableStateQuerySet(
+        model=Category,
+        query=source_qs.query.clone(),
+        using=source_qs.db,
+    )
+
+    with pytest.raises(ConfigurationError, match="untrusted defect"):
+        _validate_post_orderset_result(
+            DummyType,
+            source_qs,
+            candidate,
+            "MyOrderSet.apply_sync",
+        )
+
+
 def test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute():
     """_validate_post_orderset_result accesses _db and _hints without consumer __getattribute__."""
 

@@ -552,6 +552,7 @@ async def _close_async_iterator(
     iterator: Any,
     *,
     primary_error: BaseException | None = None,
+    caller: str = "bounded_rows_async",
 ) -> None:
     """Safely invoke ``iterator.aclose()`` if present.
 
@@ -578,7 +579,7 @@ async def _close_async_iterator(
         try:
             notes = [*getattr(primary_error, "__notes__", ())]
             notes.append(
-                f"bounded_rows_async iterator cleanup failed: {close_error!r}",
+                f"{caller} iterator cleanup failed: {close_error!r}",
             )
             primary_error.__notes__ = notes
         except Exception:
@@ -657,7 +658,11 @@ async def bounded_rows_async(
         raise
     finally:
         if not exhausted:
-            await _close_async_iterator(iterator, primary_error=primary_error)
+            await _close_async_iterator(
+                iterator,
+                primary_error=primary_error,
+                caller="bounded_rows_async",
+            )
     return rows
 
 

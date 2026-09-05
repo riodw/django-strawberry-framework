@@ -155,7 +155,7 @@ Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/li
 - [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercises offset paging with an order, the cap interplay, and an orderBy'd list.
 - [x] `django_strawberry_framework/list_field.py`'s ordering-contract docstring is updated to describe the shipped argument.
 - [x] The migration-guides card gains the offset-mapping note (its upstream-settings/surface table).
-- [x] Full suite green under `fail_under = 100`; live-first placement respected. No version quintet or CHANGELOG entry - the `0.0.15` release state is owned by the DRY-squeeze card's joint cut, which lands last on the line.
+- [ ] Full suite green under `fail_under = 100`; live-first placement respected. No version quintet or CHANGELOG entry - the `0.0.15` release state is owned by the DRY-squeeze card's joint cut, which lands last on the line.
 
 #### Files likely touched
 

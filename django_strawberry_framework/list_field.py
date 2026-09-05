@@ -1,6 +1,7 @@
 """``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
 
 Spec: ``docs/SPECS/spec-020-list_field-0_0_7.md``.
+Extension spec: ``docs/spec-050-list_field_arguments-0_0_15.md``.
 Target release: ``0.0.7``.
 """
 
@@ -46,8 +47,6 @@ from .utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
     is_async_only_iterable,
-    post_process_queryset_result_async,
-    post_process_queryset_result_sync,
     prepared_resolver_source,
     reject_async_iterable_in_sync_context,
     reject_awaitable_sync_source,
@@ -57,23 +56,6 @@ from .utils.querysets import (
 from .utils.typing import is_async_callable, schema_config_from_info
 
 __all__ = ("DjangoListField", "ListArgumentError")
-
-
-# Consumer-resolver post-processing helpers. The field-wrapper Manager -> QuerySet
-# coercion + visibility-hook contract is single-sited in
-# ``utils/querysets.py::post_process_queryset_result_sync`` / ``_async``;
-# these stay as the named consumer-wrapper entry points the
-# ``_wrap`` resolvers call. The default-resolver path bypasses them because
-# ``qs`` is already known to be a ``QuerySet`` from ``initial_queryset(...)`` -
-# no normalization is needed there.
-
-
-def _post_process_consumer_sync(target_type: type, result: Any, info: Info) -> Any:
-    return post_process_queryset_result_sync(target_type, result, info)
-
-
-async def _post_process_consumer_async(target_type: type, result: Any, info: Info) -> Any:
-    return await post_process_queryset_result_async(target_type, result, info)
 
 
 def _validate_djangotype_target(
@@ -194,6 +176,14 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
         ceiling: int | None = None,
         order_argument: str | None = None,
     ) -> None:
+        if reason not in {
+            "negative",
+            "non_integer",
+            "order_required",
+            "over_ceiling",
+            "queryset_required",
+        }:
+            raise ValueError(f"Unknown ListArgumentError reason {reason!r}.")
         self.field = field
         self.argument = argument
         self.reason = reason
@@ -222,8 +212,6 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
             self.value = value
             if order_argument:
                 ordering_phrase = f"via {order_argument!r} or model 'Meta.ordering'"
-            elif order_argument is None:
-                ordering_phrase = "via 'orderBy' or model 'Meta.ordering'"
             else:
                 ordering_phrase = "via model 'Meta.ordering'"
             msg = (
@@ -236,10 +224,6 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
                 f"Invalid argument {argument!r} on {field}: an ordering argument "
                 "requires a QuerySet source."
             )
-        else:
-            self.value = value
-            msg = f"Invalid argument {argument!r} on {field}: {reason}."
-
         extensions: dict[str, Any] = {
             "code": "LIST_ARGUMENT_INVALID",
             "argument": argument,
@@ -278,22 +262,44 @@ def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
     normalizer error branches) so successful requests perform zero name conversions.
     """
     fallback = _DEFAULT_WIRE_NAMES.get(parameter_name, parameter_name)
-    get_arg_def = getattr(info, "get_argument_definition", None)
-    if get_arg_def is None and getattr(info, "schema", None) is None:
+    try:
+        get_arg_def = info.get_argument_definition
+    except AttributeError:
         return fallback
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Failed to read the argument-definition resolver for {parameter_name!r}: {exc}",
+        ) from exc
+    if get_arg_def is None:
+        return fallback
+    if not callable(get_arg_def):
+        raise ConfigurationError(
+            f"Failed to resolve wire name for argument {parameter_name!r}: "
+            "info.get_argument_definition is not callable.",
+        )
 
-    if get_arg_def is not None:
+    try:
         arg_def = get_arg_def(parameter_name)
-        if arg_def is not None:
-            config = schema_config_from_info(info)
-            name_converter = getattr(config, "name_converter", None)
-            if name_converter is not None:
-                try:
-                    return name_converter.from_argument(arg_def)
-                except Exception as exc:
-                    raise ConfigurationError(
-                        f"Failed to resolve wire name for argument {parameter_name!r}: {exc}",
-                    ) from exc
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Failed to read the definition for argument {parameter_name!r}: {exc}",
+        ) from exc
+    if arg_def is not None:
+        config = schema_config_from_info(info)
+        try:
+            name_converter = config.name_converter
+        except AttributeError:
+            return fallback
+        except Exception as exc:
+            raise ConfigurationError(
+                f"Failed to read the name converter for argument {parameter_name!r}: {exc}",
+            ) from exc
+        try:
+            return name_converter.from_argument(arg_def)
+        except Exception as exc:
+            raise ConfigurationError(
+                f"Failed to resolve wire name for argument {parameter_name!r}: {exc}",
+            ) from exc
     return fallback
 
 
@@ -301,7 +307,6 @@ def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
 class _ListArguments:
     offset: int | None
     limit: int | None
-    effective_ceiling: int
     order_by: Any
     order_by_supplied: bool
     any_argument_supplied: bool
@@ -326,9 +331,17 @@ def _normalize_list_arguments(
     norm_limit = None if not limit_supplied else limit
     norm_order_by = None if not order_by_supplied else order_by
 
+    if not any_argument_supplied:
+        return _ListArguments(
+            offset=None,
+            limit=None,
+            order_by=None,
+            order_by_supplied=False,
+            any_argument_supplied=False,
+        )
+
     policy = policy_from_info(info)
     offset_ceiling = policy.max_list_rows
-    effective_ceiling = effective_bound(policy.max_list_rows, max_rows, trusted=trusted_max_rows)
 
     if norm_offset is not None:
         if isinstance(norm_offset, bool) or not isinstance(norm_offset, int):
@@ -355,6 +368,11 @@ def _normalize_list_arguments(
             )
 
     if norm_limit is not None:
+        effective_ceiling = effective_bound(
+            policy.max_list_rows,
+            max_rows,
+            trusted=trusted_max_rows,
+        )
         if isinstance(norm_limit, bool) or not isinstance(norm_limit, int):
             raise ListArgumentError(
                 field_name,
@@ -381,7 +399,6 @@ def _normalize_list_arguments(
     return _ListArguments(
         offset=norm_offset,
         limit=norm_limit,
-        effective_ceiling=effective_ceiling,
         order_by=norm_order_by,
         order_by_supplied=order_by_supplied,
         any_argument_supplied=any_argument_supplied,
@@ -396,7 +413,7 @@ def _synthesized_list_signature(target_type: type) -> tuple[inspect.Signature, d
     (``inspect.Signature.empty``) and omitted from annotations so the outer class attribute
     annotation retains sole ownership of outer nullability (``list[T]`` vs ``list[T] | None``).
     """
-    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    orderset_class = _orderset_class_for_target(target_type)
     params: list[inspect.Parameter] = [
         inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
         inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
@@ -415,10 +432,10 @@ def _synthesized_list_signature(target_type: type) -> tuple[inspect.Signature, d
     ]
     annotations: dict[str, Any] = {"info": Info, "offset": int | None, "limit": int | None}
 
-    if definition is not None and definition.orderset_class is not None:
+    if orderset_class is not None:
         from .orders import order_input_type
 
-        order_ann = list[order_input_type(definition.orderset_class)] | None
+        order_ann = list[order_input_type(orderset_class)] | None
         params.append(
             inspect.Parameter(
                 "order_by",
@@ -475,12 +492,51 @@ async def _cleanup_rejected_async_iterable(iterable: Any, primary_error: BaseExc
         except Exception:
             pass
         return
-    await _close_async_iterator(iterator, primary_error=primary_error)
+    await _close_async_iterator(
+        iterator,
+        primary_error=primary_error,
+        caller="DjangoListField",
+    )
 
 
 def _orderset_class_for_target(target_type: type) -> type | None:
-    definition = getattr(target_type, "__django_strawberry_definition__", None)
-    return getattr(definition, "orderset_class", None)
+    try:
+        definition = target_type.__django_strawberry_definition__
+        return None if definition is None else definition.orderset_class
+    except Exception:
+        return None
+
+
+def _field_label(info: Any) -> str:
+    """Return the resolver field label without allowing consumer descriptors to escape."""
+    try:
+        field_name = info.field_name
+    except Exception:
+        return "DjangoListField"
+    return field_name if isinstance(field_name, str) and field_name else "DjangoListField"
+
+
+def _resolver_root_and_info(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, Info]:
+    """Extract Strawberry's positional resolver context and reject unknown call inputs."""
+    if len(args) > 2:
+        raise TypeError("DjangoListField resolver accepts only root and info positional inputs.")
+    unexpected = set(kwargs) - {"info", "root"}
+    if unexpected:
+        names = ", ".join(sorted(unexpected))
+        raise TypeError(f"DjangoListField resolver received unexpected keyword inputs: {names}.")
+    if args and "root" in kwargs:
+        raise TypeError("DjangoListField resolver received multiple values for root.")
+    if len(args) > 1 and "info" in kwargs:
+        raise TypeError("DjangoListField resolver received multiple values for info.")
+    root = args[0] if args else kwargs.get("root")
+    if len(args) > 1:
+        info = args[1]
+    else:
+        try:
+            info = kwargs["info"]
+        except KeyError as exc:
+            raise TypeError("DjangoListField resolver requires info.") from exc
+    return root, info
 
 
 def _build_non_queryset_rejection_error(
@@ -489,7 +545,7 @@ def _build_non_queryset_rejection_error(
     *,
     target_type: type | None = None,
 ) -> ListArgumentError | None:
-    field_name = getattr(info, "field_name", None) or "DjangoListField"
+    field_name = _field_label(info)
     if args_record.order_by_supplied:
         return ListArgumentError(
             field_name,
@@ -526,7 +582,6 @@ async def _handle_non_queryset_rejections_async(
 
 
 def _handle_non_queryset_rejections_sync(
-    _source: Any,
     args_record: _ListArguments,
     info: Info,
     *,
@@ -609,13 +664,13 @@ def _check_nonzero_offset_guard(
     if (
         args_record.order_by_supplied
         and orderset_class is not None
-        and orderset_class._input_has_active_terms(args_record.order_by)
+        and orderset_class._input_has_active_terms(args_record.order_by, info)
         and queryset.ordered
         and _has_no_random_terms(queryset)
     ):
         has_active_order = True
     if not has_active_order and not _is_model_default_ordering_active(queryset):
-        field_name = getattr(info, "field_name", None) or "DjangoListField"
+        field_name = _field_label(info)
         order_arg = (
             _resolve_argument_wire_name(info, "order_by") if orderset_class is not None else ""
         )
@@ -638,6 +693,11 @@ def _execute_queryset_pipeline_sync(
     *,
     is_async_context: bool,
 ) -> Any:
+    if not args_record.any_argument_supplied:
+        post_vis_qs = apply_type_visibility_sync(target_type, source, info)
+        bounded = bounded_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
+        return wrap_async_queryset_adapter(bounded) if is_async_context else bounded
+
     post_vis_qs = apply_type_visibility_sync(
         target_type,
         source,
@@ -799,9 +859,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
             order_by: Any = strawberry.UNSET,
             **kwargs: Any,
         ) -> Any:
-            _root = args[0] if len(args) > 0 else kwargs.get("root")
-            info: Info = args[1] if len(args) > 1 else kwargs["info"]
-            field_name = getattr(info, "field_name", None) or "DjangoListField"
+            _, info = _resolver_root_and_info(args, kwargs)
+            field_name = _field_label(info)
             args_record = _normalize_list_arguments(
                 field_name,
                 info,
@@ -820,13 +879,6 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     args_record,
                     max_rows,
                     trusted_max_rows,
-                )
-            if not args_record.any_argument_supplied:
-                return bounded_rows(
-                    apply_type_visibility_sync(target_type, qs, info),
-                    info,
-                    max_rows,
-                    trusted=trusted_max_rows,
                 )
             return _execute_queryset_pipeline_sync(
                 target_type,
@@ -854,8 +906,6 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     info,
                     target_type=target_type,
                 )
-            if source is None:
-                return None
             return await bounded_rows_async(
                 source,
                 info,
@@ -874,9 +924,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 order_by: Any = strawberry.UNSET,
                 **kwargs: Any,
             ) -> Any:
-                root = args[0] if len(args) > 0 else kwargs.get("root")
-                info: Info = args[1] if len(args) > 1 else kwargs["info"]
-                field_name = getattr(info, "field_name", None) or "DjangoListField"
+                root, info = _resolver_root_and_info(args, kwargs)
+                field_name = _field_label(info)
                 args_record = _normalize_list_arguments(
                     field_name,
                     info,
@@ -887,23 +936,6 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     order_by=order_by,
                 )
                 raw_source = await user_resolver(root, info)
-                if not args_record.any_argument_supplied:
-                    post_vis_res = await _post_process_consumer_async(
-                        target_type,
-                        raw_source,
-                        info,
-                    )
-                    bounded = await bounded_rows_async(
-                        post_vis_res,
-                        info,
-                        max_rows,
-                        trusted=trusted_max_rows,
-                    )
-                    return (
-                        wrap_async_queryset_adapter(bounded)
-                        if isinstance(bounded, models.QuerySet)
-                        else bounded
-                    )
                 source, is_qs = prepared_resolver_source(
                     raw_source,
                     target_type,
@@ -924,8 +956,6 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     info,
                     target_type=target_type,
                 )
-                if source is None:
-                    return None
                 return await bounded_rows_async(
                     source,
                     info,
@@ -943,9 +973,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 order_by: Any = strawberry.UNSET,
                 **kwargs: Any,
             ) -> Any:
-                root = args[0] if len(args) > 0 else kwargs.get("root")
-                info: Info = args[1] if len(args) > 1 else kwargs["info"]
-                field_name = getattr(info, "field_name", None) or "DjangoListField"
+                root, info = _resolver_root_and_info(args, kwargs)
+                field_name = _field_label(info)
                 args_record = _normalize_list_arguments(
                     field_name,
                     info,
@@ -966,14 +995,6 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         info,
                         args_record,
                     )
-                if not args_record.any_argument_supplied:
-                    post_vis_res = _post_process_consumer_sync(target_type, source, info)
-                    bounded = bounded_rows(post_vis_res, info, max_rows, trusted=trusted_max_rows)
-                    return (
-                        wrap_async_queryset_adapter(bounded)
-                        if in_async_context() and isinstance(bounded, models.QuerySet)
-                        else bounded
-                    )
                 source, is_qs = prepared_resolver_source(
                     source,
                     target_type,
@@ -990,13 +1011,10 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         is_async_context=in_async_context(),
                     )
                 _handle_non_queryset_rejections_sync(
-                    source,
                     args_record,
                     info,
                     target_type=target_type,
                 )
-                if source is None:
-                    return None
                 return bounded_rows(
                     source,
                     info,

@@ -12,16 +12,18 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
     def ready(self) -> None:
         """Apply the package's defensive upstream patches at app-load time.
 
-        Three patch modules, one per third-party dependency:
+        Four patch modules, one per third-party dependency:
         :mod:`django_strawberry_framework._django_patches` (Django),
         :mod:`django_strawberry_framework._strawberry_patches`
         (Strawberry), and
         :mod:`django_strawberry_framework._cross_web_patches`
-        (``cross_web``). Each module's own docstring is the single
+        (``cross_web``), and
+        :mod:`django_strawberry_framework._graphql_core_patches`
+        (``graphql-core``). Each module's own docstring is the single
         source of truth for exactly which upstream bugs it hardens;
         this dispatcher deliberately repeats none of that inventory.
 
-        All three are gated by the ``APPLY_UPSTREAM_PATCHES`` setting
+        All four are gated by the ``APPLY_UPSTREAM_PATCHES`` setting
         (default on); each ``apply()`` self-gates, so a consumer who
         sets ``DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES":
         False}`` gets none of them.
@@ -36,8 +38,10 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
         """
         from django_strawberry_framework._cross_web_patches import apply as apply_cross_web
         from django_strawberry_framework._django_patches import apply as apply_django
+        from django_strawberry_framework._graphql_core_patches import apply as apply_graphql_core
         from django_strawberry_framework._strawberry_patches import apply as apply_strawberry
 
         apply_django()
         apply_strawberry()
         apply_cross_web()
+        apply_graphql_core()

@@ -8,7 +8,7 @@ Cycle artifacts: [`bld-slice-1-argument_normalization.md`][bld-s1],
 [`bld-slice-4-live_acceptance.md`][bld-s4],
 [`bld-slice-5-documentation_fold_in.md`][bld-s5],
 [`bld-integration.md`][bld-int].
-Status: final-accepted
+Status: superseded — remediation applied; full-coverage and sharded verification pending
 
 ## Artifact shape: one Worker 1 pass
 
@@ -191,6 +191,37 @@ No deferred work; the build delivered the spec end-to-end.
 All gate commands and floor verifications have passed with zero errors, zero warnings, zero
 regressions, and zero unaddressed defects. Card 050 (`docs/spec-050-list_field_arguments-0_0_15.md`)
 is fully verified and accepted.
+
+## Post-review supersession — 2026-09-04
+
+The gate verdict above records the state of its original run and is superseded for the current
+worktree. The remediation pass changed package code and tests after that run. Its default
+`pytest --no-cov` invocation did not exercise the `FAKESHOP_SHARDED=1` rows and did not establish
+the repository's `fail_under = 100` coverage gate. Both obligations remain pending; the spec,
+build plan, and board therefore remain in flight until those two invocations are run and recorded.
+
+### The recorded `7601 passed` result does not reproduce
+
+`uv run pytest --no-cov` re-run over the remediated worktree reports
+`7 failed, 7629 passed, 40 skipped`. Every one of the seven also fails at the implementation
+commit itself, measured by running them in a detached `git worktree` checkout of that commit with
+the checkout forced onto `PYTHONPATH` (without that, the editable install resolves the package
+back to the dirty main checkout and the comparison is worthless). The remediation pass therefore
+introduced none of them, and the `7601 passed` line above is wrong rather than stale.
+
+| Failing test | Cause |
+| --- | --- |
+| `tests/utils/test_querysets.py::test_validate_post_orderset_result_routing_hints_none_vs_empty` | Asserts `db='default'`; an unrouted `QuerySet` carries `_db is None`, so the message reads `db=None`. The hints half of the contract holds. |
+| `tests/orders/test_sets.py::test_input_has_active_terms_hostile_eq_and_repr` | `_to_inert_order_data` renders a non-`str` order path through `_safe_arg_repr`, which embeds the object address, so two normalizations of the same hostile term never compare equal and a false purity violation is raised. |
+| `tests/test_list_field.py::test_list_field_direct_call_schema_name_fallback_and_definition_lookup` | Wire-name fallback expectation. |
+| `tests/test_list_field.py::test_list_field_post_orderset_validator_arms` | Post-OrderSet rejection wording. |
+| `tests/test_list_field.py::test_list_field_constructor_validation_precedence` | Asserts `got -1.`; `validate_collection_bound` renders `got int -1.` through `describe_value`. |
+| `tests/test_list_field.py::test_list_arguments_immutability_and_slots` | `super(type, obj)` raises inside the frozen `slots=True` dataclass `__setattr__`, so the immutability assertion never reaches its `FrozenInstanceError`. |
+| `examples/fakeshop/test_query/test_list_field_api.py::test_holder_materialized_and_nullable_none_fields` | A materialized (non-queryset) source with `orderBy` raises `queryset_required`, which is the specified behavior; the live expectation disagrees with Decision 8. |
+
+The second row is a package defect rather than a test defect: the purity comparison must not
+depend on object identity. The rest are assertion expectations that never matched the behavior
+they pin. Both classes must be resolved before this gate can be re-run and accepted.
 
 <!-- LINK DEFINITIONS -->
 

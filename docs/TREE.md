@@ -194,6 +194,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── _boundary_ordering.py         # The marks and the method name the request-body boundary's ordering rests on.
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── _graphql_core_patches.py      # Defensive patch for graphql-core async-iterable list completion.
 ├── _request_body.py              # The one place the package touches Django's private request-body internals.
 ├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its upstream patches at app load.
@@ -319,6 +320,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── _boundary_ordering.py         # The marks and the method name the request-body boundary's ordering rests on.
 ├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── _graphql_core_patches.py      # Defensive patch for graphql-core async-iterable list completion.
 ├── _request_body.py              # The one place the package touches Django's private request-body internals.
 ├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its upstream patches at app load.
@@ -467,6 +469,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
+├── test_graphql_core_patches.py  # Regression coverage for the dependency-owned graphql-core workaround.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
 ├── test_keyset_connection.py     # Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
@@ -703,6 +706,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
+├── test_graphql_core_patches.py  # Regression coverage for the dependency-owned graphql-core workaround.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
 ├── test_keyset_connection.py     # Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.

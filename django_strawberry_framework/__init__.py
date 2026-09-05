@@ -23,7 +23,7 @@ from .error_policy import (  # noqa: E402
 from .extensions.error_policy import DjangoErrorPolicyExtension  # noqa: E402
 from .extensions.resource_policy import DjangoResourcePolicyExtension  # noqa: E402
 from .forms import DjangoFormMutation, DjangoModelFormMutation  # noqa: E402
-from .list_field import DjangoListField  # noqa: E402
+from .list_field import DjangoListField, ListArgumentError  # noqa: E402
 from .mutations import (  # noqa: E402
     DjangoModelPermission,
     DjangoMutation,
@@ -149,6 +149,7 @@ __all__ = (
     "DjangoType",
     "ErrorPolicy",
     "FieldError",
+    "ListArgumentError",
     "OptimizerHint",
     "ResourceLimitExceeded",
     "ResourcePolicy",

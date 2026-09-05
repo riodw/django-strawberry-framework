@@ -16,8 +16,8 @@ from django_strawberry_framework.types import converters
 
 
 def test_version():
-    # This version-only change must not widen the package-root __all__;
-    # DjangoDebugExtension is a subpackage export.
+    # Package version literal; card 050 lands on 0.0.15 where ListArgumentError
+    # is exported from the package root.
     assert __version__ == "0.0.15"
 
 
@@ -63,8 +63,8 @@ def test_public_api_surface_is_pinned():
     # ``DjangoImagePathType``, spec-048 Decision 1) and the three
     # production-error-policy symbols (``DEFAULT_ERROR_POLICY`` /
     # ``ErrorPolicy`` / ``DjangoErrorPolicyExtension``, Decision 7). All of these
-    # cards shipped in ``0.0.14``; the ``0.0.15`` version cut leaves this
-    # public surface unchanged.
+    # cards shipped in ``0.0.14``; the ``0.0.15`` version cut adds
+    # ``ListArgumentError`` (spec-050) to this public surface.
     assert django_strawberry_framework.__all__ == (
         "DEFAULT_ERROR_POLICY",
         "DEFAULT_RESOURCE_POLICY",
@@ -92,6 +92,7 @@ def test_public_api_surface_is_pinned():
         "DjangoType",
         "ErrorPolicy",
         "FieldError",
+        "ListArgumentError",
         "OptimizerHint",
         "ResourceLimitExceeded",
         "ResourcePolicy",
@@ -179,6 +180,7 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions():
         DjangoResourcePolicyExtension,
         DjangoType,
         FieldError,
+        ListArgumentError,
         SyncMisuseError,
         finalize_django_types,
     )
@@ -193,6 +195,9 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions():
     )
     from django_strawberry_framework.forms import (
         DjangoModelFormMutation as FormsDjangoModelFormMutation,
+    )
+    from django_strawberry_framework.list_field import (
+        ListArgumentError as ListListArgumentError,
     )
     from django_strawberry_framework.mutations import (
         DjangoModelPermission as MutationsDjangoModelPermission,
@@ -229,5 +234,24 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions():
     assert DjangoMutation is MutationsDjangoMutation
     assert DjangoMutationField is MutationsDjangoMutationField
     assert FieldError is MutationsFieldError
+    assert ListArgumentError is ListListArgumentError
     assert DjangoErrorPolicyExtension is ExtErrorPolicy
     assert DjangoResourcePolicyExtension is ExtResourcePolicy
+
+
+def test_orders_submodule_not_imported_at_package_root():
+    """Verify importing django_strawberry_framework alone does not import orders submodule."""
+    import subprocess
+    import sys
+
+    cmd = [
+        sys.executable,
+        "-c",
+        (
+            "import sys, django_strawberry_framework; "
+            "assert 'django_strawberry_framework.orders' not in sys.modules, "
+            "'django_strawberry_framework.orders leaked into package root import'"
+        ),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr

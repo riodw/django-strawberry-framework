@@ -109,7 +109,7 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     PROHIBITED_FILTER_KWARGS = frozenset({"_connector", "_negated"})
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
-from ..exceptions import ConfigurationError, _safe_type_name
+from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from .write_transaction import (
     current_write_pipeline,
     pin_write_queryset,
@@ -391,22 +391,46 @@ def is_async_only_iterable(value: Any) -> bool:
     return isinstance(value, AsyncIterable) and not isinstance(value, Iterable)
 
 
-# TODO(spec-050 slice 2): Add the private async-only queryset-row completion
-# adapter here, beside the package's one iterable classifier, so the list field
-# and optimizer share one representation instead of recognizing lookalikes.
-#
-# Pseudocode:
-#
-# - ``_AsyncQuerySetRows`` stores one final sliced plain QuerySet, implements
-#   only ``__aiter__`` by delegating to ``queryset.__aiter__()``, and has no
-#   ``__iter__``. Construction rejects non-querysets rather than becoming a
-#   generic async collection wrapper.
-# - Provide small package-private predicates/accessors for the optimizer to
-#   unwrap the exact adapter and for the list field to wrap a final queryset.
-#   Rewrapping always creates the same adapter around the optimizer's returned
-#   queryset; lists, ``None``, and other iterables are never coerced.
-# - Do not materialize here. The root optimizer must still see the inner lazy
-#   queryset before graphql-core chooses synchronous Iterable completion.
+class _AsyncQuerySetRows:
+    """Async-only completion adapter for a final sliced QuerySet under async execution.
+
+    Exposes ONLY ``__aiter__`` (delegating to ``self._queryset.__aiter__()``)
+    and deliberately omits ``__iter__`` so graphql-core cannot select synchronous
+    ORM iteration in an event-loop thread.
+    """
+
+    __slots__ = ("_queryset",)
+
+    def __init__(self, queryset: models.QuerySet) -> None:
+        if not isinstance(queryset, models.QuerySet):
+            raise TypeError(
+                f"_AsyncQuerySetRows requires a QuerySet; got {_safe_type_name(queryset)}",
+            )
+        self._queryset = queryset
+
+    def __aiter__(self) -> Any:
+        return self._queryset.__aiter__()
+
+
+def is_async_queryset_adapter(val: Any) -> bool:
+    """Return whether ``val`` is an ``_AsyncQuerySetRows`` adapter instance."""
+    return isinstance(val, _AsyncQuerySetRows)
+
+
+def wrap_async_queryset_adapter(qs: Any) -> Any:
+    """Wrap a QuerySet in an async-only completion adapter; pass non-querysets through unchanged."""
+    if isinstance(qs, models.QuerySet):
+        return _AsyncQuerySetRows(qs)
+    return qs
+
+
+def unwrap_async_queryset_adapter(val: Any) -> tuple[Any, bool]:
+    """Unwrap an ``_AsyncQuerySetRows`` adapter to ``(inner_queryset, True)`` or ``(val, False)``."""
+    if isinstance(val, _AsyncQuerySetRows):
+        return val._queryset, True
+    return val, False
+
+
 def reject_async_iterable_in_sync_context(value: Any, *, flavor_noun: str) -> None:
     """Reject an async-only resolver SOURCE under synchronous GraphQL execution.
 
@@ -2698,16 +2722,16 @@ class _SealPolicy:
       outer effective alias, INCLUDING when that alias is ``None``. Set solely
       for a ``Prefetch`` child, so one GraphQL resolution never spans two
       database connections.
+    - ``require_unevaluated`` -- the candidate's ``_result_cache`` must be ``None``.
+      Enabled only for post-OrderSet results; an evaluated queryset cannot safely compose
+      further filtering or windowing.
     """
 
-    # TODO(spec-050 slice 2): Document and add
-    # ``require_unevaluated: bool = False`` as an independent seal axis. It is
-    # enabled only for post-OrderSet results; it must not change the verdict of
-    # any shipped source/result seal.
     require_model_rows: bool = True
     reject_sliced: bool = True
     reject_combined: bool = False
     require_shared_alias: bool = False
+    require_unevaluated: bool = False
 
 
 # Every read surface (Relay node defaults, connection root, list field, the
@@ -2727,46 +2751,123 @@ _UNRECOMPOSED_CHILD_POLICY = _SealPolicy(reject_sliced=False)
 # A ``Prefetch`` child: the same no-recomposition licence, plus the shared-alias
 # requirement that keeps one GraphQL resolution on one database connection.
 _PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=True)
+# List-field visibility policy for active argument execution: default policy with
+# ``reject_combined=True`` so combinators (union, intersect, difference) fail closed.
+_LIST_ARGUMENT_VISIBILITY_POLICY = _SealPolicy(reject_combined=True)
+# Post-OrderSet result policy: model rows, unevaluated, unsliced, uncombined.
+_ORDERSET_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=True)
 
 
-# TODO(spec-050 slice 2): Add argument-aware visibility and post-OrderSet seal
-# policies plus one surface helper; keep all hostile-state reads inside this
-# module.
-#
-# Pseudocode:
-#
-# - ``_LIST_ARGUMENT_VISIBILITY_POLICY`` is the default policy with
-#   ``reject_combined=True``. Both colored list pipelines pass it to
-#   ``apply_type_visibility_*`` for active arguments only; the omitted/all-null
-#   branch keeps the shipped default policy.
-# - ``_ORDERSET_RESULT_POLICY`` requires model rows, unevaluated state,
-#   unsliced state, no combination, and the same ROUTING INTENT as the
-#   pre-order source. A helper accepts the target type, the sealed pre-order
-#   queryset, the candidate result, and the public method name. It calls
-#   ``_seal_or_defect`` with that effective alias, including ``None`` as an
-#   unrouted requirement, and renders every defect as actionable
-#   ``ConfigurationError`` naming ``OrderSet.apply_sync`` or
-#   ``OrderSet.apply_async``.
-# - Routing intent is ``_db`` equality (``None`` included) AND ``_hints``
-#   equality against the pre-order source. ``_db`` alone is NOT the invariant:
-#   Django resolves an unrouted queryset through the router using model plus
-#   ``_hints``, so two candidates can both carry ``_db is None`` and still
-#   resolve to different aliases, and the seal copies whatever hints the
-#   candidate carried into the rebuild. Do NOT compare RESOLVED aliases -- that
-#   calls a consumer router mid-validation; intent equality is stricter and
-#   dispatches nothing. ``_hints`` is already proven ``None`` or an exact
-#   ``dict`` here, so this is one comparison at a proven-shape site.
-# - A returned Manager/list/None/wrong-model/projection/evaluated/sliced/
-#   combined/cross-routed/unreadable queryset is rejected. The successful
-#   return is the freshly sealed plain queryset; list code never reads
-#   ``query``, ``_result_cache``, ``_db``, or iterable-class state itself.
-# - The requirement is on the SEALED OUTPUT, never the candidate's class. A
-#   sealable ``QuerySet`` SUBCLASS is accepted and rebuilt into a plain
-#   framework-owned queryset -- that normalization is this boundary's shipped
-#   feature and must not be narrowed into a subclass rejection. The one
-#   subclass that still fails is the existing rule: one carrying an unresolved
-#   ``_deferred_filter`` cannot be safely baked and fails closed as
-#   ``untrusted``.
+def _routing_hints_equal(cand_hints: Any, orig_hints: Any) -> bool:
+    """Return True if candidate and original routing hints match without consumer dispatch.
+
+    Preserves exact distinction between absent (None) and empty ({}) hints. Keys must
+    match exactly, and values must be identical objects or equal builtin primitives without
+    invoking arbitrary consumer __eq__ methods.
+    """
+    if cand_hints is orig_hints:
+        return True
+    if cand_hints is None or orig_hints is None:
+        return False
+    if type(cand_hints) is not dict or type(orig_hints) is not dict:
+        return False
+    if len(cand_hints) != len(orig_hints):
+        return False
+    for k, orig_v in orig_hints.items():
+        if k not in cand_hints:
+            return False
+        cand_v = cand_hints[k]
+        if cand_v is orig_v:
+            continue
+        if (
+            type(cand_v)
+            in (
+                str,
+                int,
+                float,
+                bool,
+                bytes,
+                type(None),
+            )
+            and type(cand_v) is type(orig_v)
+            and cand_v == orig_v
+        ):
+            continue
+        return False
+    return True
+
+
+def _safe_routing_repr(value: Any) -> str:
+    """Safely format database routing intent without invoking arbitrary consumer code.
+
+    Renders primitives directly, dictionary key-value pairs safely, and non-primitives
+    with their safe class name and id without calling consumer __repr__.
+    """
+    if value is None:
+        return "None"
+    if type(value) is str:
+        return repr(value)
+    if type(value) is dict:
+        items = []
+        for k in sorted(value.keys(), key=str):
+            k_repr = repr(k) if type(k) is str else _safe_arg_repr(k)
+            v = value[k]
+            if type(v) in (
+                int,
+                float,
+                bool,
+                str,
+                bytes,
+                type(None),
+            ):
+                v_repr = repr(v)
+            else:
+                v_repr = f"<{_safe_class_name(v)} at {hex(id(v))}>"
+            items.append(f"{k_repr}: {v_repr}")
+        return "{" + ", ".join(items) + "}"
+    return _safe_arg_repr(value)
+
+
+def _validate_post_orderset_result(
+    target_type: type,
+    pre_order_qs: models.QuerySet,
+    post_order_candidate: Any,
+    method_name: str,
+) -> models.QuerySet:
+    """Validate and seal the result returned by OrderSet.apply_sync / apply_async."""
+    model = model_for(target_type)
+    sealed, defect = _seal_or_defect(
+        post_order_candidate,
+        model,
+        None,
+        _ORDERSET_RESULT_POLICY,
+    )
+    if defect is not None:
+        code, detail = defect
+        model_name = _safe_class_name(model)
+        raise ConfigurationError(
+            f"{method_name} must return an unevaluated, unsliced, uncombined QuerySet of "
+            f"{model_name} rows; got {code} defect ({detail}).",
+        )
+    cand_dict = object.__getattribute__(post_order_candidate, "__dict__")
+    orig_dict = object.__getattribute__(pre_order_qs, "__dict__")
+    cand_db = cand_dict.get("_db")
+    orig_db = orig_dict.get("_db")
+    cand_hints = cand_dict.get("_hints")
+    orig_hints = orig_dict.get("_hints")
+
+    if cand_db != orig_db or not _routing_hints_equal(cand_hints, orig_hints):
+        orig_db_repr = _safe_routing_repr(orig_db)
+        orig_hints_repr = _safe_routing_repr(orig_hints)
+        cand_db_repr = _safe_routing_repr(cand_db)
+        cand_hints_repr = _safe_routing_repr(cand_hints)
+        raise ConfigurationError(
+            f"{method_name} changed database routing intent; expected db={orig_db_repr}, "
+            f"hints={orig_hints_repr}, got db={cand_db_repr}, hints={cand_hints_repr}.",
+        )
+    return sealed
+
+
 def _seal_or_defect(
     candidate: Any,
     model: type[models.Model],
@@ -2996,13 +3097,8 @@ def _seal_or_defect(
     )
     if prefetch_defect is not None:
         return None, prefetch_defect
-    # TODO(spec-050 slice 2): After all type/table/untrusted proof passes,
-    # inspect the already-extracted state without dispatch. When
-    # ``policy.require_unevaluated`` and ``state.get("_result_cache") is not
-    # None``, return ``("unevaluated", "the result cache is populated")`` here,
-    # immediately before ``sliced``. This fixes the canonical order to
-    # type -> table -> untrusted -> unevaluated -> sliced -> combined ->
-    # projection -> alias and prevents the rebuild from erasing evaluation.
+    if policy.require_unevaluated and state.get("_result_cache") is not None:
+        return None, ("unevaluated", "the result cache is populated")
     if policy.reject_sliced and rebuilt_query.is_sliced:
         return None, ("sliced", f"rows {rebuilt_query.low_mark}:{rebuilt_query.high_mark}")
     # ``combinator`` is a plain ``str | None`` slot on the proven-genuine
@@ -3137,18 +3233,7 @@ def _visibility_result_error(
     prose (``"... for the cascade subquery on Model.field ..."``) survives
     the checks moving into this shared boundary; surfaces without bespoke
     prose take the defaults below.
-
-    The reachable subset here is every code except ``combined``, which only a
-    ``reject_combined`` policy emits and which only the cascade sets -- and the
-    cascade always supplies its own ``render_error``.
-
     """
-    # TODO(spec-050 slice 2): Replace the stale reachability sentence above and
-    # add explicit ``unevaluated`` and ``combined`` message arms. Active list
-    # arguments make ``combined`` reachable without a cascade renderer, and the
-    # post-order seal makes ``unevaluated`` a real defect. The prose must name
-    # the source/hook result and the remedy, never expose ``_defect_message``'s
-    # framework-defect fallback.
     code, detail = defect
     if render_error is not None:
         return ConfigurationError(render_error(code, detail))
@@ -3177,12 +3262,22 @@ def _visibility_result_error(
                     f"filter cannot be faithfully rebuilt. Return a queryset backed by a plain "
                     f"django.db.models.sql.Query over model or .values() rows."
                 ),
+                "unevaluated": (
+                    f"{name}.get_queryset returned an evaluated queryset ({detail}); "
+                    f"the visibility contract composes further filters and ordering onto an "
+                    f"unevaluated lazy query. Return an unevaluated QuerySet."
+                ),
                 "sliced": (
                     f"{name}.get_queryset returned a sliced queryset ({detail}); "
                     f"the surface composes further filters and ordering onto the hook result, "
                     f"and Django forbids refiltering or reordering a sliced query, so the next "
                     f"transform would raise a raw TypeError outside the visibility contract. "
                     f"Return the unsliced queryset and let the surface paginate."
+                ),
+                "combined": (
+                    f"{name}.get_queryset returned a combined queryset ({detail}); "
+                    f"active list arguments forbid combined queries. Return a plain uncombined "
+                    f"QuerySet."
                 ),
                 "projection": (
                     f"{name}.get_queryset returned a {detail} projection; the "
@@ -3245,11 +3340,6 @@ def _prepared_visibility_source(
     lazy query state only; it executes zero SQL.
 
     """
-    # TODO(spec-050 slice 2): Add ``unevaluated`` and ``combined`` arms to this
-    # source-site message map too. The active list policy reaches ``combined``
-    # before the hook; ``unevaluated`` remains future-proof/exhaustive even
-    # though the list's source policy does not enable it. Keep both ladders
-    # aligned with the seal's canonical code set.
     model = model_for(type_cls)
     queryset, defect = _seal_or_defect(queryset, model, None, policy)
     if defect is not None:
@@ -3279,12 +3369,22 @@ def _prepared_visibility_source(
                         f"unresolved deferred filter cannot be faithfully rebuilt. Pass a "
                         f"queryset backed by a plain django.db.models.sql.Query."
                     ),
+                    "unevaluated": (
+                        f"apply_type_visibility for {name} requires an unevaluated "
+                        f"QuerySet; got an evaluated queryset ({detail}). Pass an unevaluated "
+                        f"QuerySet."
+                    ),
                     "sliced": (
                         f"apply_type_visibility for {name} got a sliced source "
                         f"queryset ({detail}); the visibility hook and the surface compose "
                         f"further filters and ordering onto the source, and Django forbids "
                         f"refiltering or reordering a sliced query. Pass the unsliced queryset "
                         f"and let the surface paginate."
+                    ),
+                    "combined": (
+                        f"apply_type_visibility for {name} requires an uncombined QuerySet; "
+                        f"got a {detail} queryset. Combined queries (union, intersection, difference) "
+                        f"cannot be safely filtered or ordered."
                     ),
                     "projection": (
                         f"apply_type_visibility for {name} got a {detail} projection "

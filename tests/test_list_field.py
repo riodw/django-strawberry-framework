@@ -35,7 +35,13 @@ are genuinely unreachable from the sync ``GraphQLView`` mounted at
 ``RuntimeError: GraphQL execution failed to complete synchronously``).
 """
 
+import asyncio
 import functools
+import inspect
+import pickle
+import subprocess
+import sys
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -46,6 +52,8 @@ from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db import models
 from django.db.models import Prefetch
+from django.test import RequestFactory
+from graphql import GraphQLError
 from strawberry.schema_directive import Location as _DirectiveLocation
 from strawberry.schema_directive import schema_directive as _schema_directive
 from strawberry.types import Info
@@ -54,11 +62,25 @@ from django_strawberry_framework import (
     DjangoListField,
     DjangoOptimizerExtension,
     DjangoType,
+    ListArgumentError,
     finalize_django_types,
 )
-from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.exceptions import (
+    ConfigurationError,
+    DjangoStrawberryFrameworkError,
+)
+from django_strawberry_framework.list_field import (
+    _ListArguments,
+    _normalize_list_arguments,
+    _resolve_argument_wire_name,
+    _synthesized_list_signature,
+)
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.resource_policy import (
+    ResourcePolicy,
+    stash_resource_policy,
+)
 from django_strawberry_framework.types.relay import SyncMisuseError
 
 
@@ -367,7 +389,7 @@ def _DirectiveHolderType() -> type:
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> None:
+async def test_djangolistfield_async_get_queryset_is_awaited() -> None:
     """Default resolver awaits an ``async def get_queryset(...)`` under ``await schema.execute(...)``.
 
     Pins the async branch at ``django_strawberry_framework/list_field.py::DjangoListField #"if in_async_context():"`` - the
@@ -375,16 +397,8 @@ async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> Non
     ``in_async_context()`` returns True and ``get_queryset`` is
     ``async def`` (spec Decision 2 async path; Decision 3
     ``apply_type_visibility_async``; spec #"test_djangolistfield_async_get_queryset_is_awaited").
-
-    ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set for the duration of the test so
-    Strawberry's GraphQL list-completion can iterate the returned
-    QuerySet inside ``await schema.execute(...)`` without raising
-    ``SynchronousOnlyOperation``. The contract under test is the
-    ``DjangoListField`` async-detection / ``get_queryset`` cooperation,
-    NOT Django's async-ORM rules - the env var is the documented bypass
-    for sync ORM access from an async context in tests.
+    The adapter protocol enables safe async list completion without DJANGO_ALLOW_ASYNC_UNSAFE.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -418,9 +432,9 @@ async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_default_resolver_works_under_sync_and_async_schema_execution(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_default_resolver_works_under_sync_and_async_schema_execution() -> (
+    None
+):
     """A sync ``get_queryset`` resolves correctly under both schema-execution shapes.
 
     Pins the runtime ``in_async_context()`` branch at ``django_strawberry_framework/list_field.py::DjangoListField #"if in_async_context():"``
@@ -431,13 +445,8 @@ async def test_djangolistfield_default_resolver_works_under_sync_and_async_schem
     Strawberry's ``AwaitableOrValue`` dispatch). The Edge cases section
     (spec #"`schema.execute_sync` testing") promises both call shapes work; without
     this test the promise is unverified.
-
-    ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set so the async-branch QuerySet
-    iteration in Strawberry's list-completion can proceed without
-    raising ``SynchronousOnlyOperation``; this test pins the field's
-    in-async-context dispatch, not Django's async-ORM rules.
+    The adapter protocol enables safe async list completion without DJANGO_ALLOW_ASYNC_UNSAFE.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -636,9 +645,9 @@ def test_djangolistfield_consumer_resolver_python_list_return_passes_through() -
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied() -> (
+    None
+):
     """Async consumer resolver returning a ``QuerySet`` receives ``target_type.get_queryset(...)``.
 
     Pins the async consumer-resolver wrapper at ``django_strawberry_framework/list_field.py::DjangoListField #"return await _post_process_consumer_async("``
@@ -647,12 +656,9 @@ async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_
     inside the async ``_wrap``), and the
     ``apply_type_visibility_async`` call (``django_strawberry_framework/utils/querysets.py::post_process_queryset_result_async #"return await apply_type_visibility_async"``) fires on a ``QuerySet``
     result. Pins that the wrapper awaits the consumer coroutine BEFORE
-    the isinstance check (spec #"test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied"). The
-    ``DJANGO_ALLOW_ASYNC_UNSAFE`` env override unblocks Strawberry's
-    list-completion iteration of the returned QuerySet under
-    ``await schema.execute(...)``.
+    the isinstance check (spec #"test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied").
+    The adapter protocol enables safe async list completion without DJANGO_ALLOW_ASYNC_UNSAFE.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -682,9 +688,9 @@ async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_queryset_applied(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_queryset_applied() -> (
+    None
+):
     """Async consumer resolver returning a ``Manager`` receives ``target_type.get_queryset(...)``.
 
     Pins the async field-wrapper's ``Manager -> QuerySet`` coercion at
@@ -692,11 +698,8 @@ async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_q
     coerces a ``Manager`` return through ``_coerced_manager_queryset`` BEFORE
     the is-queryset check so the subsequent ``await apply_type_visibility_async(...)`` runs on a
     real ``QuerySet`` (symmetric with the sync path; spec #"the **field wrapper** owns the `Manager -> QuerySet` coercion").
-    The ``DJANGO_ALLOW_ASYNC_UNSAFE`` env override unblocks Strawberry's
-    list-completion iteration of the returned QuerySet under
-    ``await schema.execute(...)``.
+    The adapter protocol enables safe async list completion without DJANGO_ALLOW_ASYNC_UNSAFE.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -728,9 +731,7 @@ async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_q
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied() -> None:
     """Callable instance with ``async def __call__`` is detected as async at construction.
 
     Pins ``is_async_callable`` detection of callable objects whose
@@ -743,7 +744,6 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
     async schema execution Strawberry would still await the coroutine and
     silently skip ``target_type.get_queryset(...)``.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -777,9 +777,7 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_staticmethod_resolver_gets_get_queryset_applied(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_async_staticmethod_resolver_gets_get_queryset_applied() -> None:
     """A ``@staticmethod async def`` resolver referenced in its class body dispatches async.
 
     The class-body name is the raw, callable ``staticmethod`` descriptor. Without
@@ -787,7 +785,6 @@ async def test_djangolistfield_async_staticmethod_resolver_gets_get_queryset_app
     return raises ``SyncMisuseError``. The visibility exclusion proves the fixed
     path awaited the resolver and applied async post-processing.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -819,9 +816,7 @@ async def test_djangolistfield_async_staticmethod_resolver_gets_get_queryset_app
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied() -> None:
     """``functools.partial`` wrapping an ``async def`` resolver is detected as async.
 
     Contract pin (not a fix for a bug that exists today): Python's
@@ -840,7 +835,6 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
     ``test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied``).
     This test pins the function-partial path regardless.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -875,9 +869,9 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied() -> (
+    None
+):
     """``functools.partial`` wrapping an async callable *instance* is detected as async.
 
     The combination the other two async-resolver tests miss: a
@@ -891,7 +885,6 @@ async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_ge
     Pins the ``.func`` unwrap fix: ``get_queryset``'s ``startswith("a")`` exclusion
     must fire on the awaited QuerySet.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -972,9 +965,7 @@ async def test_djangolistfield_async_consumer_resolver_python_list_return_passes
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_consumer_resolver_async_iterable_is_bounded(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_async_consumer_resolver_async_iterable_is_bounded() -> None:
     """An async iterable return is capped before graphql-core materializes it.
 
     ``graphql-core`` accepts ``AsyncIterable`` list results, but the synchronous
@@ -983,7 +974,6 @@ async def test_djangolistfield_async_consumer_resolver_async_iterable_is_bounded
     mandatory raw-list bound applies without a ``TypeError`` or unbounded
     materialization.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
     rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
     assert len(rows) > 1
@@ -1036,13 +1026,12 @@ async def test_djangolistfield_async_consumer_resolver_async_iterable_is_bounded
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_generator_resolver_is_bounded(monkeypatch) -> None:
+async def test_djangolistfield_async_generator_resolver_is_bounded() -> None:
     """An async-generator resolver is dispatched on the async path and capped.
 
     The wrapper resolves the generator through the async bound, so GraphQL receives
     an already-materialized list of at most ``max_rows`` rows, not the generator.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
     rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
     assert len(rows) > 1
@@ -1072,11 +1061,8 @@ async def test_djangolistfield_async_generator_resolver_is_bounded(monkeypatch) 
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_sync_resolver_returning_async_iterable_is_bounded(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_sync_resolver_returning_async_iterable_is_bounded() -> None:
     """A sync resolver returning an async-only iterable uses the async cap."""
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
     rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
     assert len(rows) > 1
@@ -1109,14 +1095,13 @@ async def test_djangolistfield_sync_resolver_returning_async_iterable_is_bounded
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_partial_async_generator_resolver_is_bounded(monkeypatch) -> None:
+async def test_djangolistfield_partial_async_generator_resolver_is_bounded() -> None:
     """A partial-wrapped async-generator callable instance resolves through the async cap.
 
     The wrapper calls the partial, classifies the returned value by VALUE
     (an async-only iterable), and routes it through the async bound - so
     the async cap, not the sync path, bounds the rows.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
     rows = await sync_to_async(lambda: list(Category.objects.order_by("id")))()
     assert len(rows) > 1
@@ -1179,11 +1164,10 @@ def test_djangolistfield_sync_async_generator_resolver_raises_sync_misuse() -> N
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_async_consumer_resolver_async_iterable_can_exhaust_before_bound(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_async_consumer_resolver_async_iterable_can_exhaust_before_bound() -> (
+    None
+):
     """An async iterable shorter than its cap completes without a close error."""
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
     row = await sync_to_async(lambda: Category.objects.order_by("id").first())()
 
@@ -1214,9 +1198,7 @@ async def test_djangolistfield_async_consumer_resolver_async_iterable_can_exhaus
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_sync_resolver_returning_coroutine_rejects_loudly(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_sync_resolver_returning_coroutine_rejects_loudly() -> None:
     """A sync consumer resolver that RETURNS a coroutine is rejected, never silently leaked.
 
     Regression pin for a visibility-hook (data-isolation) bypass. A plain ``def``
@@ -1236,7 +1218,6 @@ async def test_djangolistfield_sync_resolver_returning_coroutine_rejects_loudly(
     is never resolved without its visibility hook" holds even for this
     mis-declared resolver shape.
     """
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -1278,11 +1259,8 @@ async def test_djangolistfield_sync_resolver_returning_coroutine_rejects_loudly(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_sync_resolver_returning_custom_awaitable_rejects_loudly(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_sync_resolver_returning_custom_awaitable_rejects_loudly() -> None:
     """A non-coroutine ``__await__`` result cannot bypass queryset visibility."""
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
 
     class CategoryType(DjangoType):
@@ -1324,13 +1302,10 @@ async def test_djangolistfield_sync_resolver_returning_custom_awaitable_rejects_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_sync_resolver_returning_future_cancels_it(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_sync_resolver_returning_future_cancels_it() -> None:
     """A rejected asyncio Future is cancelled rather than left pending."""
     import asyncio
 
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
     captured: dict[str, asyncio.Future] = {}
 
@@ -1778,11 +1753,8 @@ def test_djangolistfield_hostile_hook_subclass_serves_only_visible_rows_sync() -
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_hostile_hook_subclass_serves_only_visible_rows_async(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_hostile_hook_subclass_serves_only_visible_rows_async() -> None:
     """Async twin: the hostile subclass overrides are sealed away on the async path too."""
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     public_names = await sync_to_async(_seed_public_private_categories)()
 
     class CategoryType(DjangoType):
@@ -1903,11 +1875,8 @@ def test_djangolistfield_resolver_manager_degrading_to_list_fails_closed_sync() 
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_djangolistfield_resolver_manager_degrading_to_list_fails_closed_async(
-    monkeypatch,
-) -> None:
+async def test_djangolistfield_resolver_manager_degrading_to_list_fails_closed_async() -> None:
     """Sync/async parity: the Manager-degrade failure propagates on the async path too."""
-    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
 
     class CategoryType(DjangoType):
         class Meta:
@@ -2047,81 +2016,1785 @@ async def test_djangolistfield_consumer_resolver_returning_none_async() -> None:
     assert result.data == {"categories": None}
 
 
-# TODO(spec-050 slice 3): Add only the package-impossible mechanics for the
-# argument surface here; wire-reachable behavior belongs in the live fakeshop
-# suites. Use library models with inline ``Model.objects.create(...)`` when a
-# real model graph is needed, and keep product-model rows on ``seed_data(N)``.
-#
-# Pseudocode - construction and typed arguments:
-#
-# - Build schemas around real finalized DjangoTypes with and without
-#   ``Meta.orderset_class``. Assert the callable signature has keyword-only
-#   ``info``, ``offset``, ``limit``, and conditional ``order_by``; assert the
-#   Strawberry arguments use the existing lazy order input and orphan ledger.
-# - Import the package root in an isolated module state and prove it does not
-#   import ``django_strawberry_framework.orders``. Constructing an order-capable
-#   list field may import that subpackage locally.
-# - Compare nullable/non-null outer class annotations before and after signature
-#   synthesis; the wrapper must carry no return annotation of its own.
-# - Call the wrapper/normalizer directly with bool, string, float, negative, and
-#   over-cap values. Assert deterministic offset-before-limit precedence, safe
-#   ``non_integer`` rendering, trusted-return-cap asymmetry, and exact extension
-#   maps. Pickle/copy ``ListArgumentError`` and assert constructor attributes,
-#   ``extensions``, and custom instance state all survive ``__reduce__``.
-# - Exercise ``Info.get_argument_definition`` plus default-fallback lookup with
-#   a real default converter, ``auto_camel_case=False``, and a custom converter;
-#   never assert a hard-coded ``orderBy`` outside the explicit fallback case.
-#   Wire-name resolution is ERROR-LAZY: an instrumented converter records ZERO
-#   ``from_argument`` calls across a batch of successful argument-bearing
-#   requests and exactly one on a rejection.
-# - Pin the record's four fields as INDEPENDENT: ``any_argument_supplied``
-#   selects argument mode and only that; ``offset=0`` with no limit produces the
-#   omission window; ``order_by_supplied`` (not material activity) drives
-#   ``queryset_required`` for ``[]``; material activity is consulted only after
-#   apply. No test may read one as a proxy for another.
-# - Pin the root export: ``ListArgumentError`` is importable from
-#   ``django_strawberry_framework`` and is the same object as the module-level
-#   class (the ``__all__`` tuple itself is pinned in tests/base/test_init.py).
-#
-# Pseudocode - pipeline/seal/order mechanics:
-#
-# - Instrument sync and async consumer resolvers, visibility hooks, public
-#   ``OrderSet.apply_*`` overrides, active-term normalization, and the bounding
-#   helper. Assert validation -> resolver -> visibility -> public apply ->
-#   active-order guard -> one bound, with one await and no recursive await.
-# - Dispose and reject sync-path awaitables, residual async awaitables,
-#   sync-apply awaitables, async-apply non-awaitables, and residual async-apply
-#   awaitables. Assert exact invocation/disposal counts and actionable method
-#   names in ``ConfigurationError``.
-# - Return Manager/list/None/wrong-model/projection/evaluated/sliced/combined/
-#   cross-routed/unreadable candidates from custom OrderSet methods. Assert the
-#   post-order seal rejects each before offset handling; specifically assert the
-#   evaluated and combined prose so an unarmed defect-code fallback cannot pass.
-# - Pair simultaneous failures: combined source before hook/permission, hook
-#   combination before OrderSet, malformed post-apply output before offset,
-#   and ``queryset_required`` before ``order_required`` on plain iterables.
-# - For rejected async-only sources, count zero ``__anext__`` calls, one
-#   optional ``aclose``, and diagnostic notes for iterator-acquisition/close
-#   failures while ``ListArgumentError`` remains primary.
-#
-# Pseudocode - order state, SQL shape, optimizer, and regression sweep:
-#
-# - Unit-pin the private model-default predicate states not constructible as
-#   distinct live verdicts: group-by and ``extra_order_by`` suppress; literal
-#   ``?`` and genuine ``Random()`` terms suppress alone or mixed; stable
-#   ``.reverse()`` qualifies; unreadable state fails; explicit stable order may
-#   qualify ``.none()`` while an unordered empty queryset may not. Never add a
-#   ``-?`` branch, a pk tiebreaker, or DISTINCT.
-# - Compare the old all-omitted/all-null branch's ``str(queryset.query)``,
-#   ``low_mark``, ``high_mark``, result bytes, and query count. Then assert a
-#   smaller limit changes only the high mark and offset changes both marks with
-#   one SQL LIMIT/OFFSET pair.
-# - Assert one deadline check on an argument-bearing path in the same pre-fetch
-#   position as omission; do not add a list-field deadline call.
-# - Inspect the async-only queryset adapter directly: ``__aiter__`` exists,
-#   ``__iter__`` does not. Call ``DjangoOptimizerExtension._optimize`` and prove
-#   unwrap/rewrap plus inner slice marks on the optimized tail, evaluated-inner
-#   early return, and unresolved-return-type early return.
-# - Remove every adapter-relevant ``DJANGO_ALLOW_ASYNC_UNSAFE`` override in this
-#   module once the adapter lands. Retain one only if its test docstring names a
-#   separate legacy synchronous-ORM behavior that cannot exercise completion.
+def test_list_argument_error_properties_extensions_and_repr():
+    err1 = ListArgumentError("items", "offset", "non_integer", value=True)
+    assert issubclass(ListArgumentError, GraphQLError)
+    assert issubclass(ListArgumentError, DjangoStrawberryFrameworkError)
+    assert err1.field == "items"
+    assert err1.argument == "offset"
+    assert err1.reason == "non_integer"
+    assert err1.value == "bool True"
+    assert err1.ceiling is None
+    assert err1.extensions == {
+        "code": "LIST_ARGUMENT_INVALID",
+        "argument": "offset",
+        "reason": "non_integer",
+        "value": "bool True",
+    }
+    assert (
+        "Invalid argument 'offset' on items: expected a non-negative integer, got bool True."
+        in str(err1)
+    )
+
+    err2 = ListArgumentError("items", "offset", "negative", value=-1)
+    assert err2.extensions == {
+        "code": "LIST_ARGUMENT_INVALID",
+        "argument": "offset",
+        "reason": "negative",
+        "value": -1,
+    }
+    assert "Invalid argument 'offset' on items: expected a non-negative integer, got -1." in str(
+        err2,
+    )
+
+    err3 = ListArgumentError("items", "limit", "over_ceiling", value=150, ceiling=100)
+    assert err3.extensions == {
+        "code": "LIST_ARGUMENT_INVALID",
+        "argument": "limit",
+        "reason": "over_ceiling",
+        "value": 150,
+        "ceiling": 100,
+    }
+    assert (
+        "Invalid argument 'limit' on items: value 150 exceeds the maximum allowed ceiling of 100."
+        in str(err3)
+    )
+
+    err4 = ListArgumentError("items", "offset", "order_required", value=5)
+    assert err4.extensions == {
+        "code": "LIST_ARGUMENT_INVALID",
+        "argument": "offset",
+        "reason": "order_required",
+        "value": 5,
+    }
+    assert "requires an active ordering" in str(err4)
+
+    err5 = ListArgumentError("items", "orderBy", "queryset_required")
+    assert err5.extensions == {
+        "code": "LIST_ARGUMENT_INVALID",
+        "argument": "orderBy",
+        "reason": "queryset_required",
+    }
+    assert "requires a QuerySet source" in str(err5)
+
+    err6 = ListArgumentError("items", "arg", "custom_reason", value=42)
+    assert "custom_reason" in str(err6)
+
+
+def test_list_argument_error_pickle_roundtrip():
+    err = ListArgumentError("items", "limit", "over_ceiling", value=200, ceiling=100)
+    err.custom_attr = "survives"
+    pickled = pickle.dumps(err)
+    restored = pickle.loads(pickled)
+
+    assert isinstance(restored, ListArgumentError)
+    assert restored.field == "items"
+    assert restored.argument == "limit"
+    assert restored.reason == "over_ceiling"
+    assert restored.value == 200
+    assert restored.ceiling == 100
+    assert restored.extensions == err.extensions
+    assert str(restored) == str(err)
+    assert getattr(restored, "custom_attr", None) == "survives"
+
+
+def test_resolve_argument_wire_name_fallback_and_custom():
+    # Fallback when info is empty / has no schema config:
+    assert _resolve_argument_wire_name(None, "offset") == "offset"
+    assert _resolve_argument_wire_name(None, "limit") == "limit"
+    assert _resolve_argument_wire_name(None, "order_by") == "orderBy"
+    assert _resolve_argument_wire_name(None, "custom") == "custom"
+
+    # Schema config with name converter
+    class DummyConverter:
+        def __init__(self):
+            self.calls = 0
+
+        def from_argument(self, arg):
+            self.calls += 1
+            return arg.name.upper()
+
+    converter = DummyConverter()
+    schema_config = SimpleNamespace(name_converter=converter)
+    info = SimpleNamespace(
+        schema=SimpleNamespace(config=schema_config),
+        get_argument_definition=lambda name: SimpleNamespace(name=name),
+    )
+
+    resolved = _resolve_argument_wire_name(info, "offset")
+    assert resolved == "OFFSET"
+    assert converter.calls == 1
+
+
+def test_resolve_argument_wire_name_zero_calls_on_valid_normalization():
+    class DummyConverter:
+        def __init__(self):
+            self.calls = 0
+
+        def from_argument(self, arg):
+            self.calls += 1
+            return arg.name
+
+    converter = DummyConverter()
+    schema_config = SimpleNamespace(name_converter=converter)
+    info = SimpleNamespace(
+        context={},
+        schema=SimpleNamespace(config=schema_config),
+        get_argument_definition=lambda name: SimpleNamespace(name=name),
+    )
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+
+    # A valid normalization must make ZERO calls to name_converter.from_argument:
+    record = _normalize_list_arguments("items", info, None, False, offset=10, limit=20)
+    assert record.offset == 10
+    assert record.limit == 20
+    assert converter.calls == 0
+
+    # On rejection, it must make exactly ONE call:
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("items", info, None, False, offset=-1)
+    assert exc_info.value.reason == "negative"
+    assert converter.calls == 1
+
+
+def test_synthesized_list_signature_without_and_with_orderset():
+    class DummyTypeWithoutOrder:
+        pass
+
+    sig, ann = _synthesized_list_signature(DummyTypeWithoutOrder)
+    assert sig.return_annotation is inspect.Signature.empty
+    assert "return" not in ann
+    assert list(sig.parameters.keys()) == [
+        "root",
+        "info",
+        "offset",
+        "limit",
+    ]
+    assert sig.parameters["offset"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["limit"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert "order_by" not in ann
+
+    # With definition declaring orderset_class:
+    class DummyOrderSet:
+        pass
+
+    definition = SimpleNamespace(orderset_class=DummyOrderSet)
+    dummy_type_with_order = type(
+        "DummyTypeWithOrder",
+        (),
+        {"__django_strawberry_definition__": definition},
+    )
+
+    # Mock order_input_type
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "django_strawberry_framework.orders.order_input_type",
+            lambda cls: str,
+            raising=False,
+        )
+        sig2, ann2 = _synthesized_list_signature(dummy_type_with_order)
+        assert sig2.return_annotation is inspect.Signature.empty
+        assert "return" not in ann2
+        assert list(sig2.parameters.keys()) == [
+            "root",
+            "info",
+            "offset",
+            "limit",
+            "order_by",
+        ]
+        assert sig2.parameters["order_by"].kind is inspect.Parameter.KEYWORD_ONLY
+        assert ann2["order_by"] == (list[str] | None)
+
+
+def test_subpackage_isolation_orders_not_imported_at_package_root():
+    cmd = [
+        sys.executable,
+        "-c",
+        (
+            "import sys, django_strawberry_framework; "
+            "assert 'django_strawberry_framework.orders' not in sys.modules, "
+            "'orders subpackage leaked into package root import'"
+        ),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_normalize_list_arguments_all_boundaries():
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+
+    # Boundary 1: offset boolean
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=True)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == "bool True"
+
+    # Boundary 2: offset non-integer (string, float)
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset="ten")
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == "str 'ten'"
+
+    # Boundary 3: offset negative
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=-1)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "negative"
+    assert exc.value.value == -1
+
+    # Boundary 4: offset over ceiling
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=101)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "over_ceiling"
+    assert exc.value.value == 101
+    assert exc.value.ceiling == 100
+
+    # Boundary 5: limit boolean
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, limit=False)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == "bool False"
+
+    # Boundary 6: limit non-integer
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, limit=3.14)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == "float 3.14"
+
+    # Boundary 7: limit negative
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, limit=-10)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "negative"
+    assert exc.value.value == -10
+
+    # Boundary 8: limit over ceiling (with effective bound calculation)
+    # 8a: policy 100, field max_rows 50 (untrusted) -> ceiling is 50
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, 50, False, limit=51)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "over_ceiling"
+    assert exc.value.value == 51
+    assert exc.value.ceiling == 50
+
+    # 8b: policy 100, field max_rows 200 (trusted=True) -> ceiling is 200
+    rec = _normalize_list_arguments("items", info, 200, True, limit=150)
+    assert rec.limit == 150
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, 200, True, limit=201)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "over_ceiling"
+    assert exc.value.value == 201
+    assert exc.value.ceiling == 200
+
+    # Boundary 9: deterministic precedence (offset before limit)
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=-1, limit=-2)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "negative"
+
+    # Omission
+    omitted = _normalize_list_arguments("items", info, None, False)
+    assert omitted.offset is None
+    assert omitted.limit is None
+    assert omitted.order_by is None
+    assert omitted.order_by_supplied is False
+    assert omitted.any_argument_supplied is False
+
+    # Zero and empty supplied
+    zero_offset = _normalize_list_arguments("items", info, None, False, offset=0)
+    assert zero_offset.offset == 0
+    assert zero_offset.any_argument_supplied is True
+
+    empty_order = _normalize_list_arguments("items", info, None, False, order_by=[])
+    assert empty_order.order_by == []
+    assert empty_order.order_by_supplied is True
+    assert empty_order.any_argument_supplied is True
+
+    # Slotted record
+    assert hasattr(_ListArguments, "__slots__")
+    assert not hasattr(omitted, "__dict__")
+
+
+@pytest.mark.parametrize("bad_offset", [True, False])
+def test_normalize_list_arguments_boundary_1_offset_boolean_rejected(bad_offset):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=bad_offset)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == f"bool {bad_offset}"
+
+
+@pytest.mark.parametrize(
+    "bad_offset, expected_desc",
+    [("ten", "str 'ten'"), (3.14, "float 3.14")],
+)
+def test_normalize_list_arguments_boundary_2_offset_non_integer_rejected(
+    bad_offset,
+    expected_desc,
+):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=bad_offset)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == expected_desc
+
+
+@pytest.mark.parametrize("bad_offset", [-1, -10])
+def test_normalize_list_arguments_boundary_3_offset_negative_rejected(bad_offset):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=bad_offset)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "negative"
+    assert exc.value.value == bad_offset
+
+
+@pytest.mark.parametrize("bad_offset", [101, 500])
+def test_normalize_list_arguments_boundary_4_offset_over_ceiling_rejected(bad_offset):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=bad_offset)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == "over_ceiling"
+    assert exc.value.value == bad_offset
+    assert exc.value.ceiling == 100
+
+
+@pytest.mark.parametrize("bad_limit", [True, False])
+def test_normalize_list_arguments_boundary_5_limit_boolean_rejected(bad_limit):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, limit=bad_limit)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == f"bool {bad_limit}"
+
+
+@pytest.mark.parametrize(
+    "bad_limit, expected_desc",
+    [("twenty", "str 'twenty'"), (3.14, "float 3.14")],
+)
+def test_normalize_list_arguments_boundary_6_limit_non_integer_rejected(bad_limit, expected_desc):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, limit=bad_limit)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "non_integer"
+    assert exc.value.value == expected_desc
+
+
+@pytest.mark.parametrize("bad_limit", [-1, -10])
+def test_normalize_list_arguments_boundary_7_limit_negative_rejected(bad_limit):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, limit=bad_limit)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "negative"
+    assert exc.value.value == bad_limit
+
+
+@pytest.mark.parametrize(
+    "field_max, trusted, bad_limit, expected_ceiling",
+    [
+        (
+            50,
+            False,
+            51,
+            50,
+        ),
+        (
+            200,
+            True,
+            201,
+            200,
+        ),
+    ],
+)
+def test_normalize_list_arguments_boundary_8_limit_over_ceiling_rejected(
+    field_max,
+    trusted,
+    bad_limit,
+    expected_ceiling,
+):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, field_max, trusted, limit=bad_limit)
+    assert exc.value.argument == "limit"
+    assert exc.value.reason == "over_ceiling"
+    assert exc.value.value == bad_limit
+    assert exc.value.ceiling == expected_ceiling
+
+
+@pytest.mark.parametrize(
+    "offset_val, limit_val, expected_reason",
+    [(-1, -2, "negative"), (True, -1, "non_integer"), ("bad", 101, "non_integer")],
+)
+def test_normalize_list_arguments_boundary_9_precedence_offset_before_limit(
+    offset_val,
+    limit_val,
+    expected_reason,
+):
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    with pytest.raises(ListArgumentError) as exc:
+        _normalize_list_arguments("items", info, None, False, offset=offset_val, limit=limit_val)
+    assert exc.value.argument == "offset"
+    assert exc.value.reason == expected_reason
+
+
+@pytest.mark.django_db
+async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
+    """Hostile aclose lookup during rejected async iterable cleanup attaches to error notes."""
+    from django_strawberry_framework.orders import OrderSet
+
+    class CategoryOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = CategoryOrder
+
+    class HostileTracker:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        def __getattribute__(self, name: str):
+            if name == "aclose":
+                raise RuntimeError("hostile aclose on tracker")
+            return super().__getattribute__(name)
+
+    tracker = HostileTracker()
+
+    async def resolver_async_iter(root, info, **kwargs):
+        return tracker
+
+    @strawberry.type
+    class Query:
+        cats: list[CategoryType] = DjangoListField(CategoryType, resolver=resolver_async_iter)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    res = await schema.execute("{ cats(offset: 5) { id } }", context_value={})
+    assert res.errors is not None
+    assert "requires an active ordering" in str(res.errors[0])
+    original_error = getattr(res.errors[0], "original_error", None)
+    if original_error is not None:
+        notes = getattr(original_error, "__notes__", [])
+        assert any("hostile aclose on tracker" in str(note) for note in notes)
+
+
+def test_apply_orderset_sync_rejects_awaitable():
+    """_apply_orderset_sync raises SyncMisuseError when apply_sync returns an awaitable."""
+    from django_strawberry_framework.list_field import _apply_orderset_sync
+    from django_strawberry_framework.orders import OrderSet
+
+    class SyncAwaitable:
+        def __await__(self):
+            return iter([])
+
+    class SyncMisuseOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        def apply_sync(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            return SyncAwaitable()
+
+    class SyncMisuseType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = SyncMisuseOrder
+
+    with pytest.raises(SyncMisuseError, match="returned an awaitable in a sync resolver context"):
+        _apply_orderset_sync(SyncMisuseType, Category.objects.all(), None, SimpleNamespace())
+
+
+def test_apply_orderset_async_rejects_non_awaitable():
+    """_apply_orderset_async raises ConfigurationError when apply_async returns non-awaitable."""
+    from django_strawberry_framework.list_field import _apply_orderset_async
+    from django_strawberry_framework.orders import OrderSet
+
+    class AsyncNonAwaitableOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        def apply_async(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            return queryset
+
+    class AsyncNonAwaitableType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = AsyncNonAwaitableOrder
+
+    with pytest.raises(ConfigurationError, match="returned a non-awaitable value"):
+        asyncio.run(
+            _apply_orderset_async(
+                AsyncNonAwaitableType,
+                Category.objects.all(),
+                None,
+                SimpleNamespace(),
+            ),
+        )
+
+
+def test_apply_orderset_async_rejects_residual_awaitable():
+    """_apply_orderset_async raises ConfigurationError when apply_async returns residual awaitable."""
+    from django_strawberry_framework.list_field import _apply_orderset_async
+    from django_strawberry_framework.orders import OrderSet
+
+    class ResidualAwaitable:
+        def __await__(self):
+            return iter([])
+
+    class AsyncResidualAwaitableOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        async def apply_async(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            return ResidualAwaitable()
+
+    class AsyncResidualAwaitableType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = AsyncResidualAwaitableOrder
+
+    with pytest.raises(ConfigurationError, match="returned a residual awaitable value"):
+        asyncio.run(
+            _apply_orderset_async(
+                AsyncResidualAwaitableType,
+                Category.objects.all(),
+                None,
+                SimpleNamespace(),
+            ),
+        )
+
+
+def test_offset_guard_random_term_question_mark():
+    """Offset guard rejects queries ordered by exact '?'."""
+    from django_strawberry_framework.list_field import (
+        _check_nonzero_offset_guard,
+        _has_no_random_terms,
+        _is_random_order_term,
+    )
+
+    assert _is_random_order_term("?") is True
+    assert _is_random_order_term("name") is False
+
+    qs_random = Category.objects.order_by("?")
+    assert _has_no_random_terms(qs_random) is False
+
+    info = SimpleNamespace(context={}, schema=None)
+    args_record = _ListArguments(
+        offset=5,
+        limit=None,
+        effective_ceiling=None,
+        order_by=[{"name": "ASC"}],
+        order_by_supplied=True,
+        any_argument_supplied=True,
+    )
+
+    class DummyOrderSet:
+        @classmethod
+        def _input_has_active_terms(cls, val):
+            return True
+
+    with pytest.raises(ListArgumentError, match="requires an active ordering"):
+        _check_nonzero_offset_guard(qs_random, args_record, DummyOrderSet, info)
+
+
+def test_offset_guard_random_term_random_function():
+    """Offset guard rejects queries ordered by Random() expressions."""
+    from django.db.models.expressions import OrderBy
+    from django.db.models.functions import Random
+
+    from django_strawberry_framework.list_field import (
+        _check_nonzero_offset_guard,
+        _has_no_random_terms,
+        _is_random_order_term,
+    )
+
+    assert _is_random_order_term(Random()) is True
+    assert _is_random_order_term(OrderBy(Random())) is True
+    assert _is_random_order_term("-name") is False
+
+    qs_random = Category.objects.order_by(Random())
+    assert _has_no_random_terms(qs_random) is False
+
+    info = SimpleNamespace(context={}, schema=None)
+    args_record = _ListArguments(
+        offset=5,
+        limit=None,
+        effective_ceiling=None,
+        order_by=[{"name": "ASC"}],
+        order_by_supplied=True,
+        any_argument_supplied=True,
+    )
+
+    class DummyOrderSet:
+        @classmethod
+        def _input_has_active_terms(cls, val):
+            return True
+
+    with pytest.raises(ListArgumentError, match="requires an active ordering"):
+        _check_nonzero_offset_guard(qs_random, args_record, DummyOrderSet, info)
+
+
+def test_offset_guard_model_default_active(monkeypatch):
+    """Model Meta.ordering satisfies offset guard."""
+    from django_strawberry_framework.list_field import (
+        _check_nonzero_offset_guard,
+        _is_model_default_ordering_active,
+    )
+
+    monkeypatch.setattr(Category._meta, "ordering", ("name",))
+
+    qs = Category.objects.all()
+    assert _is_model_default_ordering_active(qs) is True
+
+    info = SimpleNamespace(context={}, schema=None)
+    args_record = _ListArguments(
+        offset=5,
+        limit=None,
+        effective_ceiling=None,
+        order_by=None,
+        order_by_supplied=False,
+        any_argument_supplied=True,
+    )
+    _check_nonzero_offset_guard(qs, args_record, None, info)
+
+
+def test_offset_guard_model_default_cleared_by_order_by(monkeypatch):
+    """Calling .order_by() clears model default ordering and fails offset guard."""
+    from django_strawberry_framework.list_field import (
+        _check_nonzero_offset_guard,
+        _is_model_default_ordering_active,
+    )
+
+    monkeypatch.setattr(Category._meta, "ordering", ("name",))
+
+    qs_cleared = Category.objects.all().order_by()
+    assert _is_model_default_ordering_active(qs_cleared) is False
+
+    info = SimpleNamespace(context={}, schema=None)
+    args_record = _ListArguments(
+        offset=5,
+        limit=None,
+        effective_ceiling=None,
+        order_by=None,
+        order_by_supplied=False,
+        any_argument_supplied=True,
+    )
+    with pytest.raises(ListArgumentError, match="requires an active ordering"):
+        _check_nonzero_offset_guard(qs_cleared, args_record, None, info)
+
+    qs_grouped = Category.objects.all()
+    qs_grouped.query.group_by = ("name",)
+    assert _is_model_default_ordering_active(qs_grouped) is False
+
+
+@pytest.mark.django_db
+async def test_async_completion_adapter_semantics():
+    """_AsyncQuerySetRows wraps queryset in async context, exposes __aiter__, and rejects __iter__."""
+    from django_strawberry_framework.utils.querysets import (
+        _AsyncQuerySetRows,
+        is_async_queryset_adapter,
+        unwrap_async_queryset_adapter,
+        wrap_async_queryset_adapter,
+    )
+
+    await sync_to_async(services.seed_data)(1)
+
+    assert wrap_async_queryset_adapter("not_a_qs") == "not_a_qs"
+    with pytest.raises(TypeError, match="_AsyncQuerySetRows requires a QuerySet"):
+        _AsyncQuerySetRows("not_a_qs")
+
+    qs = Category.objects.all()[:3]
+    adapter = wrap_async_queryset_adapter(qs)
+    assert is_async_queryset_adapter(adapter)
+    assert hasattr(adapter, "__aiter__")
+    assert not hasattr(adapter, "__iter__")
+
+    with pytest.raises(TypeError, match="is not iterable"):
+        for _ in adapter:
+            pass
+
+    rows = [r async for r in adapter]
+    assert len(rows) > 0
+
+    unwrapped, was_adapted = unwrap_async_queryset_adapter(adapter)
+    assert was_adapted is True
+    assert unwrapped is qs
+
+    non_adapter_res, was_adapted2 = unwrap_async_queryset_adapter(qs)
+    assert was_adapted2 is False
+    assert non_adapter_res is qs
+
+
+def test_async_completion_adapter_sync_iter_raises_type_error():
+    """wrap_async_queryset_adapter rejects sync iter() protocol."""
+    from django_strawberry_framework.utils.querysets import wrap_async_queryset_adapter
+
+    qs = Category.objects.all()
+    adapter = wrap_async_queryset_adapter(qs)
+    assert not hasattr(adapter, "__iter__")
+    with pytest.raises(TypeError, match="is not iterable"):
+        iter(adapter)
+
+
+def test_list_field_signature_without_orderset():
+    """Target without Meta.orderset_class generates signature with info, offset, limit, and empty return."""
+
+    class NoOrderType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    finalize_django_types()
+    sig, ann = _synthesized_list_signature(NoOrderType)
+
+    assert sig.parameters["info"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["offset"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["offset"].default is None
+    assert sig.parameters["offset"].annotation == int | None
+    assert sig.parameters["limit"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["limit"].default is None
+    assert sig.parameters["limit"].annotation == int | None
+    assert "order_by" not in sig.parameters
+    assert "orderBy" not in sig.parameters
+    assert sig.return_annotation is inspect.Signature.empty
+    assert "return" not in ann
+
+
+def test_list_field_signature_with_orderset():
+    """Target with Meta.orderset_class adds order_by parameter registered in orphan ledger."""
+    from django_strawberry_framework.orders import OrderSet, order_input_type
+
+    class ItemOrder(OrderSet):
+        class Meta:
+            model = Item
+            fields = ["name"]
+
+    class WithOrderType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            orderset_class = ItemOrder
+
+    finalize_django_types()
+    sig, ann = _synthesized_list_signature(WithOrderType)
+
+    assert "order_by" in sig.parameters
+    assert sig.parameters["order_by"].kind == inspect.Parameter.KEYWORD_ONLY
+    assert sig.parameters["order_by"].default is None
+    assert sig.parameters["order_by"].annotation == ann["order_by"]
+
+    from django_strawberry_framework.orders import _helper_referenced_ordersets
+
+    order_input_type(ItemOrder)
+    assert ItemOrder in _helper_referenced_ordersets
+    assert sig.return_annotation is inspect.Signature.empty
+    assert "return" not in ann
+
+
+def test_list_field_nullable_outer_annotation_preserved():
+    """Outer nullable annotation is preserved without overwrite from synthesized signature."""
+
+    class PreservedType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        items_non_null: list[PreservedType] = DjangoListField(PreservedType)
+        items_nullable: list[PreservedType] | None = DjangoListField(PreservedType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    sdl = str(schema)
+    assert "itemsNonNull(offset: Int = null, limit: Int = null): [PreservedType!]!" in sdl
+    assert "itemsNullable(offset: Int = null, limit: Int = null): [PreservedType!]\n" in sdl
+
+
+def test_list_field_direct_call_type_and_bound_rejections():
+    """Direct calls to normalizer reject bool, float, str, negative, and over-ceiling values."""
+    info = SimpleNamespace(context={}, schema=None)
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    # bool rejected
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, offset=True)
+    assert exc_info.value.reason == "non_integer"
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, limit=False)
+    assert exc_info.value.reason == "non_integer"
+
+    # float and str rejected
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, offset=1.5)
+    assert exc_info.value.reason == "non_integer"
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, limit="bad")
+    assert exc_info.value.reason == "non_integer"
+
+    # negative values rejected
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, offset=-1)
+    assert exc_info.value.reason == "negative"
+    assert exc_info.value.value == -1
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, limit=-5)
+    assert exc_info.value.reason == "negative"
+    assert exc_info.value.value == -5
+
+    # over-ceiling values rejected
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, offset=11)
+    assert exc_info.value.reason == "over_ceiling"
+    assert exc_info.value.ceiling == 10
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments("test_field", info, None, False, limit=11)
+    assert exc_info.value.reason == "over_ceiling"
+    assert exc_info.value.ceiling == 10
+
+
+def test_list_field_direct_call_offset_before_limit_precedence():
+    """Deterministic offset-before-limit precedence when both coordinates are invalid."""
+    info = SimpleNamespace(context={}, schema=None)
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments(
+            "test_field",
+            info,
+            None,
+            False,
+            offset=-1,
+            limit=-1,
+        )
+    assert exc_info.value.argument == "offset"
+    assert exc_info.value.reason == "negative"
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments(
+            "test_field",
+            info,
+            None,
+            False,
+            offset="bad",
+            limit=100,
+        )
+    assert exc_info.value.argument == "offset"
+    assert exc_info.value.reason == "non_integer"
+
+
+def test_list_field_direct_call_safe_non_integer_rendering():
+    """Safe rendering of non-integer values in ListArgumentError message."""
+    info = SimpleNamespace(context={}, schema=None)
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments(
+            "test_field",
+            info,
+            None,
+            False,
+            offset="<script>alert(1)</script>",
+        )
+    assert exc_info.value.reason == "non_integer"
+    assert "Invalid argument 'offset' on test_field" in str(exc_info.value)
+
+
+def test_list_field_trusted_return_cap_asymmetry():
+    """Trusted max_rows widens limit up to field bound, but does not widen offset ceiling."""
+    info = SimpleNamespace(context={}, schema=None)
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    # limit up to 25 accepted when trusted_max_rows=True
+    args = _normalize_list_arguments(
+        "test_field",
+        info,
+        max_rows=25,
+        trusted_max_rows=True,
+        offset=5,
+        limit=20,
+    )
+    assert args.limit == 20
+    assert args.effective_ceiling == 25
+
+    # limit > 25 rejected
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments(
+            "test_field",
+            info,
+            max_rows=25,
+            trusted_max_rows=True,
+            limit=26,
+        )
+    assert exc_info.value.reason == "over_ceiling"
+    assert exc_info.value.ceiling == 25
+
+    # offset > 10 rejected despite trusted_max_rows=True
+    with pytest.raises(ListArgumentError) as exc_info:
+        _normalize_list_arguments(
+            "test_field",
+            info,
+            max_rows=25,
+            trusted_max_rows=True,
+            offset=15,
+        )
+    assert exc_info.value.reason == "over_ceiling"
+    assert exc_info.value.ceiling == 10
+
+
+def test_list_field_error_pickle_round_trip():
+    """ListArgumentError preserves constructor args, extensions, and state across pickle."""
+    err = ListArgumentError(
+        "books",
+        "offset",
+        reason="negative",
+        value=-5,
+        ceiling=10,
+        order_argument="sort",
+    )
+    err.custom_tag = "tagged"
+
+    dumped = pickle.dumps(err)
+    restored = pickle.loads(dumped)
+
+    assert restored.field == "books"
+    assert restored.argument == "offset"
+    assert restored.reason == "negative"
+    assert restored.value == -5
+    assert restored.ceiling == 10
+    assert restored.order_argument == "sort"
+    assert restored.extensions == err.extensions
+    assert getattr(restored, "custom_tag", None) == "tagged"
+
+
+def test_list_field_direct_call_schema_name_fallback_and_definition_lookup():
+    """_resolve_argument_wire_name exercises default fallback and error-lazy converter."""
+    info_no_def = SimpleNamespace(schema=None)
+    assert _resolve_argument_wire_name(info_no_def, "offset") == "offset"
+    assert _resolve_argument_wire_name(info_no_def, "limit") == "limit"
+    assert _resolve_argument_wire_name(info_no_def, "order_by") == "orderBy"
+    assert _resolve_argument_wire_name(info_no_def, "custom_arg") == "custom_arg"
+
+    from strawberry.schema.name_converter import NameConverter
+
+    converter_calls = 0
+
+    class TrackingConverter(NameConverter):
+        def from_argument(self, argument):
+            nonlocal converter_calls
+            converter_calls += 1
+            return super().from_argument(argument)
+
+    class TrackingConfig:
+        name_converter = TrackingConverter()
+
+    class TrackingSchema:
+        config = TrackingConfig()
+
+    class ArgDef:
+        name = "order_by"
+        python_name = "order_by"
+
+    def mock_get_arg_def(name):
+        return ArgDef()
+
+    info_tracking = SimpleNamespace(
+        schema=TrackingSchema(),
+        get_argument_definition=mock_get_arg_def,
+        context={},
+    )
+    stash_resource_policy(info_tracking.context, ResourcePolicy(max_list_rows=10))
+
+    # Successful normalization calls converter 0 times (error-lazy)
+    converter_calls = 0
+    _normalize_list_arguments("field", info_tracking, None, False, offset=1, limit=2)
+    assert converter_calls == 0
+
+    # Error path calls converter once
+    with pytest.raises(ListArgumentError):
+        _normalize_list_arguments("field", info_tracking, None, False, offset=-1)
+    assert converter_calls == 1
+
+    # Converter failure raises ConfigurationError rather than swallowing
+    class FailingConverter(NameConverter):
+        def from_argument(self, argument):
+            raise ValueError("simulated converter failure")
+
+    class FailingConfig:
+        name_converter = FailingConverter()
+
+    class FailingSchema:
+        config = FailingConfig()
+
+    info_failing = SimpleNamespace(
+        schema=FailingSchema(),
+        get_argument_definition=mock_get_arg_def,
+        context={},
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match="Failed to resolve wire name for argument 'order_by'",
+    ):
+        _resolve_argument_wire_name(info_failing, "order_by")
+
+
+def test_list_field_record_independence():
+    """_ListArguments fields operate independently without proxy conflation."""
+    info = SimpleNamespace(context={}, schema=None)
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    # Omitted arguments
+    rec_empty = _normalize_list_arguments("f", info, None, False)
+    assert rec_empty.any_argument_supplied is False
+    assert rec_empty.offset is None
+    assert rec_empty.limit is None
+    assert rec_empty.order_by_supplied is False
+
+    # offset=0 with no limit produces omission-identical window
+    rec_zero = _normalize_list_arguments("f", info, None, False, offset=0)
+    assert rec_zero.any_argument_supplied is True
+    assert rec_zero.offset == 0
+    assert rec_zero.limit is None
+    assert rec_zero.effective_ceiling == 10
+
+    # order_by_supplied drives queryset_required even when order_by=[]
+    rec_order_empty = _normalize_list_arguments("f", info, None, False, order_by=[])
+    assert rec_order_empty.order_by_supplied is True
+    assert rec_order_empty.order_by == []
+
+    from django_strawberry_framework.list_field import _handle_non_queryset_rejections_sync
+
+    with pytest.raises(ListArgumentError) as exc_info:
+        _handle_non_queryset_rejections_sync([1, 2, 3], rec_order_empty, info)
+    assert exc_info.value.reason == "queryset_required"
+
+
+def test_list_field_sync_and_async_awaitable_disposal():
+    """Awaitables returned in invalid contexts are disposed with actionable errors."""
+    from django_strawberry_framework.orders import OrderSet
+
+    class BadSyncOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        def apply_sync(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            async def _coro():
+                return queryset
+
+            return _coro()
+
+    class BadSyncType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = BadSyncOrder
+
+    info = SimpleNamespace(context={"request": RequestFactory().get("/")}, schema=None)
+
+    from django_strawberry_framework.list_field import (
+        _apply_orderset_async,
+        _apply_orderset_sync,
+    )
+
+    with pytest.raises(SyncMisuseError, match="BadSyncOrder.apply_sync returned an awaitable"):
+        _apply_orderset_sync(BadSyncType, Category.objects.all(), None, info)
+
+    # Async apply returning non-awaitable
+    class BadAsyncNonAwaitableOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        def apply_async(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            return queryset
+
+    class BadAsyncNonAwaitableType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = BadAsyncNonAwaitableOrder
+
+    with pytest.raises(
+        ConfigurationError,
+        match="BadAsyncNonAwaitableOrder.apply_async returned a non-awaitable value",
+    ):
+        asyncio.run(
+            _apply_orderset_async(BadAsyncNonAwaitableType, Category.objects.all(), None, info),
+        )
+
+    # Async apply returning residual awaitable after await
+    class BadAsyncResidualOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        async def apply_async(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            async def _inner():
+                return queryset
+
+            return _inner()
+
+    class BadAsyncResidualType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = BadAsyncResidualOrder
+
+    with pytest.raises(
+        ConfigurationError,
+        match="BadAsyncResidualOrder.apply_async returned a residual awaitable value",
+    ):
+        asyncio.run(
+            _apply_orderset_async(BadAsyncResidualType, Category.objects.all(), None, info),
+        )
+
+
+def test_list_field_post_orderset_validator_arms():
+    """Rejection of invalid return candidates from OrderSet apply methods."""
+    from django_strawberry_framework.utils.querysets import _validate_post_orderset_result
+
+    class ItemOrderType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    base_qs = Item.objects.all()
+
+    # 1. Non-QuerySet (None, list, Manager) -> type defect
+    for candidate in [None, [1, 2], Item.objects]:
+        with pytest.raises(
+            ConfigurationError,
+            match="must return an unevaluated, unsliced, uncombined QuerySet",
+        ):
+            _validate_post_orderset_result(
+                ItemOrderType,
+                base_qs,
+                candidate,
+                "CustomOrder.apply_sync",
+            )
+
+    # 2. Wrong model / table
+    with pytest.raises(ConfigurationError, match="table defect"):
+        _validate_post_orderset_result(
+            ItemOrderType,
+            base_qs,
+            Category.objects.all(),
+            "CustomOrder.apply_sync",
+        )
+
+    # 3. Projection / values
+    with pytest.raises(ConfigurationError, match="projection defect"):
+        _validate_post_orderset_result(
+            ItemOrderType,
+            base_qs,
+            Item.objects.values("id"),
+            "CustomOrder.apply_sync",
+        )
+
+    # 4. Evaluated QuerySet
+    evaluated_qs = Item.objects.all()
+    evaluated_qs._result_cache = []
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate_post_orderset_result(
+            ItemOrderType,
+            base_qs,
+            evaluated_qs,
+            "CustomOrder.apply_sync",
+        )
+    assert "got evaluated defect" in str(exc_info.value)
+    assert "must return an unevaluated, unsliced, uncombined QuerySet" in str(exc_info.value)
+
+    # 5. Sliced QuerySet
+    sliced_qs = Item.objects.all()[:2]
+    with pytest.raises(ConfigurationError, match="sliced defect"):
+        _validate_post_orderset_result(
+            ItemOrderType,
+            base_qs,
+            sliced_qs,
+            "CustomOrder.apply_sync",
+        )
+
+    # 6. Combined QuerySet
+    combined_qs = Item.objects.all().union(Item.objects.all())
+    with pytest.raises(ConfigurationError) as exc_info:
+        _validate_post_orderset_result(
+            ItemOrderType,
+            base_qs,
+            combined_qs,
+            "CustomOrder.apply_sync",
+        )
+    assert "got combined defect" in str(exc_info.value)
+    assert "must return an unevaluated, unsliced, uncombined QuerySet" in str(exc_info.value)
+
+    # 7. Changed routing hints
+    hints_qs = Item.objects.all()
+    hints_qs._hints = {"instance": object()}
+    with pytest.raises(ConfigurationError, match="changed database routing intent"):
+        _validate_post_orderset_result(
+            ItemOrderType,
+            base_qs,
+            hints_qs,
+            "CustomOrder.apply_sync",
+        )
+
+
+async def test_list_field_rejected_async_iterator_cleanup_and_notes():
+    """Rejected async-only iterator witnesses 0 anext calls, 1 aclose call, and notes on cleanup error."""
+    from django_strawberry_framework.list_field import _handle_non_queryset_rejections_async
+
+    class InstrumentedAsyncSource:
+        def __init__(self, fail_close=False):
+            self.fail_close = fail_close
+            self.anext_calls = 0
+            self.aclose_calls = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.anext_calls += 1
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            self.aclose_calls += 1
+            if self.fail_close:
+                raise RuntimeError("aclose error")
+
+    info = SimpleNamespace(context={}, schema=None)
+    args_record = _ListArguments(
+        offset=None,
+        limit=None,
+        effective_ceiling=10,
+        order_by=[{"name": "ASC"}],
+        order_by_supplied=True,
+        any_argument_supplied=True,
+    )
+
+    # Clean close
+    src_clean = InstrumentedAsyncSource(fail_close=False)
+    with pytest.raises(ListArgumentError) as exc_clean:
+        await _handle_non_queryset_rejections_async(src_clean, args_record, info)
+    assert exc_clean.value.reason == "queryset_required"
+    assert src_clean.anext_calls == 0
+    assert src_clean.aclose_calls == 1
+
+    # Cleanup error attaches note without masking ListArgumentError
+    src_fail = InstrumentedAsyncSource(fail_close=True)
+    with pytest.raises(ListArgumentError) as exc_fail:
+        await _handle_non_queryset_rejections_async(src_fail, args_record, info)
+    assert exc_fail.value.reason == "queryset_required"
+    assert src_fail.anext_calls == 0
+    assert src_fail.aclose_calls == 1
+    notes = getattr(exc_fail.value, "__notes__", [])
+    assert any("bounded_rows_async iterator cleanup failed" in str(n) for n in notes)
+
+
+def test_list_field_async_queryset_adapter_protocol():
+    """_AsyncQuerySetRows exposes __aiter__ and rejects sync iteration protocol."""
+    from django_strawberry_framework.utils.querysets import _AsyncQuerySetRows
+
+    qs = Category.objects.all()
+    adapter = _AsyncQuerySetRows(qs)
+    assert hasattr(adapter, "__aiter__")
+    assert not hasattr(adapter, "__iter__")
+
+    with pytest.raises(TypeError, match="is not iterable"):
+        iter(adapter)
+
+
+def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
+    """DjangoOptimizerExtension._optimize unwrap/rewrap identity, marks, and early return paths."""
+    from django_strawberry_framework.utils.querysets import (
+        is_async_queryset_adapter,
+        unwrap_async_queryset_adapter,
+        wrap_async_queryset_adapter,
+    )
+
+    ext = DjangoOptimizerExtension()
+
+    # 1. Non-adapted queryset stays non-adapted
+    qs = Category.objects.all()
+    info_unresolved = SimpleNamespace(field_name="cats", return_type=object())
+    out1 = ext._optimize(qs, info_unresolved)
+    assert not is_async_queryset_adapter(out1)
+    assert out1 is qs
+
+    # 2. Adapted queryset on unresolved return type: early return rewraps adapter
+    adapter = wrap_async_queryset_adapter(qs)
+    out2 = ext._optimize(adapter, info_unresolved)
+    assert is_async_queryset_adapter(out2)
+    unwrapped2, was2 = unwrap_async_queryset_adapter(out2)
+    assert was2 is True
+    assert unwrapped2 is qs
+
+    # 3. Adapted queryset on already-evaluated inner queryset: early return rewraps adapter
+    qs_evaluated = Category.objects.all()
+    qs_evaluated._result_cache = []
+    adapter_eval = wrap_async_queryset_adapter(qs_evaluated)
+    out3 = ext._optimize(adapter_eval, info_unresolved)
+    assert is_async_queryset_adapter(out3)
+    unwrapped3, was3 = unwrap_async_queryset_adapter(out3)
+    assert was3 is True
+    assert unwrapped3 is qs_evaluated
+
+    # 4. Sliced adapter preserves slice marks through unwrap/rewrap
+    qs_sliced = Category.objects.all()[2:5]
+    adapter_sliced = wrap_async_queryset_adapter(qs_sliced)
+    out4 = ext._optimize(adapter_sliced, info_unresolved)
+    assert is_async_queryset_adapter(out4)
+    unwrapped4, _ = unwrap_async_queryset_adapter(out4)
+    assert unwrapped4.query.low_mark == 2
+    assert unwrapped4.query.high_mark == 5
+
+
+def test_list_field_deadline_check_position(monkeypatch):
+    """check_deadline is invoked in pre-fetch position for argument-bearing requests."""
+    import django_strawberry_framework.resource_policy as rp
+
+    check_calls = 0
+    orig_check = rp.check_deadline
+
+    def spy_check(info):
+        nonlocal check_calls
+        check_calls += 1
+        return orig_check(info)
+
+    monkeypatch.setattr(rp, "check_deadline", spy_check)
+
+    info = SimpleNamespace(context={}, schema=None)
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    args_record = _ListArguments(
+        offset=1,
+        limit=2,
+        effective_ceiling=10,
+        order_by=None,
+        order_by_supplied=False,
+        any_argument_supplied=True,
+    )
+
+    class ItemDeadType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    check_calls = 0
+    from django_strawberry_framework.list_field import _execute_queryset_pipeline_sync
+
+    monkeypatch.setattr(Item._meta, "ordering", ("name",))
+    res = _execute_queryset_pipeline_sync(
+        ItemDeadType,
+        Item.objects.all(),
+        info,
+        args_record,
+        max_rows=10,
+        trusted_max_rows=False,
+        is_async_context=False,
+    )
+    assert res is not None
+    assert check_calls == 1
+
+
+def test_list_field_seal_axis_subclass_and_routing_intent():
+    """Sealable subclass normalized to plain QuerySet; foreign Query rejected; routing intent enforced."""
+    from django_strawberry_framework.utils.querysets import _validate_post_orderset_result
+
+    class CustomQuerySetSubclass(models.QuerySet):
+        pass
+
+    class ItemSealType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    base_qs = Item.objects.all()
+    sub_qs = CustomQuerySetSubclass(model=Item)
+
+    # 1. Sealable subclass is normalized to plain QuerySet
+    sealed = _validate_post_orderset_result(ItemSealType, base_qs, sub_qs, "Custom.apply")
+    assert type(sealed) is models.QuerySet
+
+    # 2. Subclass with _deferred_filter is rejected as untrusted
+    sub_qs._deferred_filter = True
+    with pytest.raises(ConfigurationError, match="untrusted defect"):
+        _validate_post_orderset_result(ItemSealType, base_qs, sub_qs, "Custom.apply")
+
+    # 3. Routing intent: _db is None accepted when _hints match, rejected when _hints differ
+    qs_match = Item.objects.all()
+    qs_match._hints = {"shard": "a"}
+    base_with_hints = Item.objects.all()
+    base_with_hints._hints = {"shard": "a"}
+    sealed_hints = _validate_post_orderset_result(
+        ItemSealType,
+        base_with_hints,
+        qs_match,
+        "Custom.apply",
+    )
+    assert type(sealed_hints) is models.QuerySet
+
+    qs_mismatch = Item.objects.all()
+    qs_mismatch._hints = {"shard": "b"}
+    with pytest.raises(ConfigurationError, match="changed database routing intent"):
+        _validate_post_orderset_result(
+            ItemSealType,
+            base_with_hints,
+            qs_mismatch,
+            "Custom.apply",
+        )
+
+
+def test_list_field_declined_sync_cleanup_generator_suspended():
+    """Declined sync cleanup: generator truncated by client window stays suspended and resumable."""
+    finally_ran = False
+
+    def sync_numbers():
+        nonlocal finally_ran
+        try:
+            yield from range(10)
+        finally:
+            finally_ran = True
+
+    info = SimpleNamespace(context={}, schema=None)
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    g = sync_numbers()
+    args_record = _ListArguments(
+        offset=2,
+        limit=3,
+        effective_ceiling=10,
+        order_by=None,
+        order_by_supplied=False,
+        any_argument_supplied=True,
+    )
+
+    from django_strawberry_framework.resource_policy import bounded_rows
+
+    res = bounded_rows(g, info, offset=args_record.offset, requested_limit=args_record.limit)
+    assert res == [2, 3, 4]
+    assert finally_ran is False
+
+    assert next(g) == 5
+    assert finally_ran is False
+    g.close()
+    assert finally_ran is True
+
+
+async def test_list_field_async_source_exact_versus_fewer_rows():
+    """Distinguish accepted-stop close from natural exhaustion on async source."""
+    from django_strawberry_framework.resource_policy import bounded_rows_async
+
+    class CountedAsyncIter:
+        def __init__(self, count):
+            self.count = count
+            self.anext_calls = 0
+            self.aclose_calls = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.anext_calls += 1
+            if self.anext_calls > self.count:
+                raise StopAsyncIteration
+            return self.anext_calls
+
+        async def aclose(self):
+            self.aclose_calls += 1
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+
+    # Exact rows (offset=1, limit=2, items=3): reaches stop, calls aclose
+    exact_src = CountedAsyncIter(3)
+    res_exact = await bounded_rows_async(exact_src, info, offset=1, requested_limit=2)
+    assert res_exact == [2, 3]
+    assert exact_src.aclose_calls == 1
+
+    # Fewer rows (offset=1, limit=5, items=2): naturally exhausts, does NOT call aclose
+    fewer_src = CountedAsyncIter(2)
+    res_fewer = await bounded_rows_async(fewer_src, info, offset=1, requested_limit=5)
+    assert res_fewer == [2]
+    assert fewer_src.aclose_calls == 0
+
+
+def test_is_model_default_ordering_active_edge_states(monkeypatch):
+    """_is_model_default_ordering_active rejects group_by, extra_order_by, random, and unreadable."""
+    from django.db.models.expressions import OrderBy
+    from django.db.models.functions import Random
+
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(Category._meta, "ordering", ("name",))
+    qs = Category.objects.all()
+    assert _is_model_default_ordering_active(qs) is True
+
+    # 1. group_by suppresses default ordering
+    qs_group = Category.objects.all()
+    qs_group.query.group_by = ("name",)
+    assert _is_model_default_ordering_active(qs_group) is False
+
+    # 2. extra_order_by suppresses default ordering
+    qs_extra = Category.objects.all()
+    qs_extra.query.extra_order_by = ("name",)
+    assert _is_model_default_ordering_active(qs_extra) is False
+
+    # 3. Recognized random terms alone or mixed suppress
+    monkeypatch.setattr(Category._meta, "ordering", ("?",))
+    assert _is_model_default_ordering_active(Category.objects.all()) is False
+
+    monkeypatch.setattr(Category._meta, "ordering", ("name", "?"))
+    assert _is_model_default_ordering_active(Category.objects.all()) is False
+
+    monkeypatch.setattr(Category._meta, "ordering", (Random(),))
+    assert _is_model_default_ordering_active(Category.objects.all()) is False
+
+    monkeypatch.setattr(Category._meta, "ordering", (OrderBy(Random()),))
+    assert _is_model_default_ordering_active(Category.objects.all()) is False
+
+    # 4. Empty ordering suppresses
+    monkeypatch.setattr(Category._meta, "ordering", ())
+    assert _is_model_default_ordering_active(Category.objects.all()) is False
+
+
+def test_is_model_default_ordering_active_reverse_and_empty_queryset(monkeypatch):
+    """Stable .reverse() satisfies predicate; explicit order satisfies empty queryset; unordered empty fails."""
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    # .reverse() retains default ordering
+    monkeypatch.setattr(Category._meta, "ordering", ("name",))
+    qs_rev = Category.objects.all().reverse()
+    assert _is_model_default_ordering_active(qs_rev) is True
+
+    # Empty queryset with active model ordering satisfies predicate
+    qs_none_ordered = Category.objects.none()
+    assert _is_model_default_ordering_active(qs_none_ordered) is True
+
+    # Empty queryset without model ordering fails predicate
+    monkeypatch.setattr(Category._meta, "ordering", ())
+    qs_none_unordered = Category.objects.none()
+    assert _is_model_default_ordering_active(qs_none_unordered) is False
+
+
+def test_list_field_post_apply_seal_benchmark():
+    """Diagnostic benchmark baseline for post-apply seal (Decision 5)."""
+    from django.db.models import Count
+
+    from django_strawberry_framework.utils.querysets import _validate_post_orderset_result
+
+    class CatBenchType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    qs = (
+        Category.objects.annotate(num_items=Count("items"))
+        .prefetch_related("items")
+        .order_by("name")
+    )
+
+    # Warmup
+    for _ in range(20):
+        _validate_post_orderset_result(CatBenchType, qs, qs, "BenchOrder.apply_sync")
+
+    start = time.perf_counter()
+    iterations = 200
+    for _ in range(iterations):
+        sealed = _validate_post_orderset_result(CatBenchType, qs, qs, "BenchOrder.apply_sync")
+        assert sealed is not None
+    duration = time.perf_counter() - start
+
+    avg_micros = (duration / iterations) * 1_000_000
+    assert iterations == 200
+    assert avg_micros > 0
+
+
+def test_list_field_constructor_validation_precedence():
+    """Constructor validates collection bound before target_type or directives."""
+    # Negative bound raises collection bound error even if target_type is invalid
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField max_rows must be a positive integer, got -1\.",
+    ):
+        DjangoListField(object, max_rows=-1)
+
+    # Zero bound raises collection bound error even if target_type is invalid
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField max_rows must be a positive integer, got 0\.",
+    ):
+        DjangoListField(object, max_rows=0)
+
+    # Valid bound proceeds to target_type validation
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField target_type must be a DjangoType subclass, got <class 'object'>",
+    ):
+        DjangoListField(object, max_rows=10)
+
+
+def test_list_field_post_orderset_validator_zero_consumer_dispatch():
+    """_validate_post_orderset_result extracts routing intent without consumer dispatch."""
+    from django_strawberry_framework.utils.querysets import (
+        _routing_hints_equal,
+        _safe_routing_repr,
+        _validate_post_orderset_result,
+    )
+
+    class CatDispatchType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    base_qs = Category.objects.all()
+
+    class PoisonAttr:
+        def __eq__(self, other):
+            raise RuntimeError("PoisonAttr __eq__ called")
+
+        def __repr__(self):
+            raise RuntimeError("PoisonAttr __repr__ called")
+
+    # Safe routing equal avoids consumer __eq__
+    poison = PoisonAttr()
+    assert _routing_hints_equal({"key": poison}, {"key": poison}) is True
+    assert _routing_hints_equal({"key": poison}, {"key": PoisonAttr()}) is False
+
+    # Safe routing repr avoids consumer __repr__
+    repr_str = _safe_routing_repr({"key": poison})
+    assert "PoisonAttr at" in repr_str
+
+    # None vs {} distinction preserved
+    assert _routing_hints_equal(None, {}) is False
+    assert _routing_hints_equal({}, None) is False
+    assert _routing_hints_equal(None, None) is True
+    assert _routing_hints_equal({}, {}) is True
+
+    # Rejection of routing changes without calling consumer __getattribute__
+    class PoisonGetattributeQS(models.QuerySet):
+        def __getattribute__(self, name):
+            if name in ("_db", "_hints"):
+                raise RuntimeError(f"consumer __getattribute__ called for {name}")
+            return super().__getattribute__(name)
+
+    poison_qs = PoisonGetattributeQS(model=Category)
+    sealed = _validate_post_orderset_result(
+        CatDispatchType,
+        poison_qs,
+        poison_qs,
+        "Poison.apply_sync",
+    )
+    assert sealed is not None
+
+
+def test_list_arguments_immutability_and_slots():
+    """_ListArguments is an immutable slotted dataclass."""
+    import dataclasses
+
+    args = _ListArguments(
+        offset=0,
+        limit=10,
+        effective_ceiling=10,
+        order_by=None,
+        order_by_supplied=False,
+        any_argument_supplied=True,
+    )
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        args.offset = 5
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        args.limit = 20
+    with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+        args.extra_attribute = "disallowed"
+
+
+def test_is_model_default_ordering_active_exact_bool_identity():
+    """_is_model_default_ordering_active requires exact boolean True identity."""
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    query_mock = SimpleNamespace(
+        default_ordering=1,
+        order_by=(),
+        extra_order_by=(),
+        group_by=(),
+        get_meta=lambda: SimpleNamespace(ordering=("name",)),
+    )
+    qs_mock = SimpleNamespace(query=query_mock)
+    assert _is_model_default_ordering_active(qs_mock) is False
+
+    query_mock.default_ordering = True
+    assert _is_model_default_ordering_active(qs_mock) is True

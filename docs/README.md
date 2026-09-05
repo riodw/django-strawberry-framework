@@ -148,7 +148,7 @@ The extension is **prepended** to `extensions=`, because Strawberry unwinds tear
 
 ### `DjangoListField` — a plain list
 
-The smallest root field: a non-Relay `list[T]` with no pagination, edges, or page info.
+The smallest root field: a non-Relay `list[T]` with no Relay envelope, edges, or page info.
 
 ```python
 from django_strawberry_framework import DjangoListField
@@ -162,15 +162,29 @@ class Query:
 
 Outer nullability comes from your annotation: `list[T]` renders `[T!]!`, `list[T] | None` renders `[T!]`. The default resolver pulls `model._default_manager.all()` and applies the type's `get_queryset` in sync and async contexts; your own `resolver=` overrides the body, and a `Manager` or `QuerySet` return still goes through `get_queryset`.
 
-Every list field is row-bounded: the resource policy supplies `max_list_rows` whether or not the field says anything, `max_rows=` narrows it, and `trusted_max_rows=True` is the only way to widen past the policy. Row order is **not** guaranteed unless the query supplies an ordering or the model declares `Meta.ordering`. See [`GLOSSARY.md#djangolistfield`][glossary-djangolistfield].
+Every list field publishes nullable optional `offset` and `limit` arguments (`Int`), with
+wire names governed by the schema's active naming converter (defaulting to camelCase `offset`
+and `limit`). When the target type declares `Meta.orderset_class`, a typed `orderBy` argument
+is conditionally published alongside them. The resolver executes a single pipeline: type
+visibility (`get_queryset`) runs first, user ordering (`OrderSet`) applies second, and a
+single row-bounding window (`offset:offset + limit`) slices the result last.
 
-<!-- TODO(spec-050 slice 5): Replace this complete DjangoListField bullet after
-implementation. Pseudocode: enumerate nullable offset/limit, conditional
-Meta.orderset_class-derived orderBy under the active name converter, the
-get_queryset -> order -> one-window pipeline, returned-row and skip ceilings,
-the nonzero-offset active-order rule, async-safe queryset completion, and the
-no-pk/no-DISTINCT/unique-final-term contract. Do not claim raw nested windows
-or a response envelope. -->
+Both coordinates are bounded by the request's
+[execution resource policy][glossary-execution-resource-policy]: client `limit` is capped by
+`max_list_rows` (or a trusted field `max_rows`), and client `offset` cannot exceed
+`max_list_rows`. These bounds represent accepted-coordinate ceilings on returned rows and
+skips, not database row-scan budgets. A published `offset` is a runtime precondition rather
+than a pagination claim: `offset > 0` requires a materially active order from `orderBy` or a
+still-effective model `Meta.ordering`, raising [`ListArgumentError`][glossary-listargumenterror]
+with `reason: "order_required"` when neither is present.
+
+The contract is strictly **ordered offset**, not stable or repeatable pagination. Flat lists
+inject no primary-key tiebreaker and no `DISTINCT`; consumers wanting deterministic
+pagination across pages with duplicate values must append a unique final term to the ordering
+themselves. Under async execution, returned querysets complete safely through the package's
+internal [async queryset completion adapter][glossary-async-queryset-completion-adapter]
+without requiring `DJANGO_ALLOW_ASYNC_UNSAFE`. See
+[`GLOSSARY.md#djangolistfield`][glossary-djangolistfield].
 
 ### `DjangoConnectionField` — Relay connections
 
@@ -813,6 +827,7 @@ django-strawberry-framework = { path = "../django-strawberry-framework", editabl
 <!-- docs/ -->
 [glossary]: GLOSSARY.md
 [glossary-apply-cascade-permissions]: GLOSSARY.md#apply_cascade_permissions
+[glossary-async-queryset-completion-adapter]: GLOSSARY.md#async-queryset-completion-adapter
 [glossary-auth-mutations]: GLOSSARY.md#auth-mutations
 [glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
@@ -824,8 +839,10 @@ django-strawberry-framework = { path = "../django-strawberry-framework", editabl
 [glossary-djangomodelformmutation]: GLOSSARY.md#djangomodelformmutation
 [glossary-djangomutation]: GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: GLOSSARY.md#djangonodefield
+[glossary-execution-resource-policy]: GLOSSARY.md#execution-resource-policy
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
+[glossary-listargumenterror]: GLOSSARY.md#listargumenterror
 [glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
 [glossary-metanullable_overrides]: GLOSSARY.md#metanullable_overrides
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation

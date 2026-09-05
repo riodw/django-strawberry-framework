@@ -24,6 +24,7 @@ On top of that skeleton the module carries:
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db import models
@@ -61,6 +62,37 @@ from .inputs import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
+
+_APPLIED_ORDER_NORMALIZATION: ContextVar[tuple[type, Any, Any] | None] = ContextVar(
+    "_APPLIED_ORDER_NORMALIZATION",
+    default=None,
+)
+
+
+def _to_inert_order_data(data: Any) -> Any:
+    """Convert normalized order data into inert built-in primitives.
+
+    Guarantees that subsequent equality checks and representations operate
+    purely on built-in primitives (str, None, tuple), shielding the framework
+    from hostile consumer __eq__ and __repr__ implementations.
+    """
+    if not isinstance(data, (list, tuple)):
+        return _safe_arg_repr(data)
+    inert_terms: list[Any] = []
+    for term in data:
+        if isinstance(term, tuple) and len(term) == 2:
+            path, direction = term
+            inert_path = path if isinstance(path, str) else _safe_arg_repr(path)
+            if direction is None:
+                inert_dir = None
+            elif isinstance(direction, Ordering):
+                inert_dir = direction.name
+            else:
+                inert_dir = _safe_arg_repr(direction)
+            inert_terms.append((inert_path, inert_dir))
+        else:
+            inert_terms.append(_safe_arg_repr(term))
+    return tuple(inert_terms)
 
 
 class OrderSetMetaclass(type):
@@ -323,36 +355,66 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # Resolver-facing API (spec-028 Decision 8)
     # ------------------------------------------------------------------
 
-    # TODO(spec-050 slice 2): Add the OrderSet-owned active-term predicate; the
-    # list field must not grow a second order-input walker.
-    #
-    # Pseudocode: normalize through ``cls._normalize_input(input_value)``, pass
-    # that data through ``cls.get_flat_orders(...)``, and return whether any
-    # resulting direction is non-null. Keep it a classmethod so overrides of
-    # both existing canonical helpers remain observable.
-    #
-    # Call this helper only after ``apply_sync`` / ``apply_async`` succeeds, so
-    # permission and invalid-direction errors retain precedence. Re-normalizing
-    # is deliberate: the public apply methods remain override seams. Purity is a
-    # COMPATIBILITY CONSTRAINT on the method, not merely a test counter -- a
-    # stateful override can otherwise return different application and activity
-    # verdicts inside one request. Document ``_normalize_input`` overrides as
-    # pure/deterministic on the method itself, cap its input through the
-    # existing value policy, pin two calls when an override delegates to the
-    # base implementation, and raise an actionable ``ConfigurationError`` naming
-    # the method when the second normalization disagrees with the first rather
-    # than letting an incidental verdict decide the offset guard.
+    @classmethod
+    def _input_has_active_terms(cls, input_value: Any) -> bool:
+        """Return True if input_value contains at least one non-null ordering direction.
+
+        Checks purity by comparing against the normalized record produced by public
+        apply when present (enforcing the 2-call maximum per request: one in apply,
+        one in the active-term check), or across two independent normalizations when
+        called standalone. Any disagreement raises an actionable :class:`ConfigurationError`
+        naming :meth:`_normalize_input`.
+        """
+        applied_info = _APPLIED_ORDER_NORMALIZATION.get()
+        applied_data = None
+        if applied_info is not None:
+            applied_cls, applied_input, recorded_data = applied_info
+            if applied_cls is cls:
+                try:
+                    is_same_input = (applied_input is input_value) or (
+                        applied_input == input_value
+                    )
+                except Exception:
+                    is_same_input = applied_input is input_value
+                if is_same_input:
+                    applied_data = recorded_data
+
+        data_check = cls._normalize_input(input_value)
+
+        if applied_data is not None:
+            inert_applied = _to_inert_order_data(applied_data)
+            inert_check = _to_inert_order_data(data_check)
+            if inert_applied != inert_check:
+                raise ConfigurationError(
+                    f"{cls.__name__}._normalize_input is not pure; returned different results "
+                    f"for the same input ({_safe_arg_repr(applied_data)} != {_safe_arg_repr(data_check)}).",
+                )
+            data_to_walk = applied_data
+        else:
+            data_check2 = cls._normalize_input(input_value)
+            inert_check1 = _to_inert_order_data(data_check)
+            inert_check2 = _to_inert_order_data(data_check2)
+            if inert_check1 != inert_check2:
+                raise ConfigurationError(
+                    f"{cls.__name__}._normalize_input is not pure; returned different results "
+                    f"for the same input ({_safe_arg_repr(data_check)} != {_safe_arg_repr(data_check2)}).",
+                )
+            data_to_walk = data_check
+
+        flat_orders = cls.get_flat_orders(data_to_walk)
+        return any(direction is not None for _, direction in flat_orders)
+
     @classmethod
     def _normalize_input(cls, input_value: Any) -> list[tuple[str, Ordering | None]]:
-        """Delegate to ``normalize_input_value`` so callers see one entry point.
+        """Normalize client order input into an internal term representation.
 
-        Thin classmethod-shaped delegate kept for parity with
-        ``FilterSet._normalize_input``. The filter side's classmethod
-        returns a dict (form-data shape); the order side returns a
-        flat ``[(field_path, Ordering | None), ...]`` list because the
-        order pipeline produces ``OrderBy`` expressions directly rather
-        than threading form-data through ``django-filter``'s form
-        machinery.
+        Purity obligation:
+            This method must be a pure, deterministic function of ``input_value``.
+            An argument-bearing GraphQL request normalizes the input once during
+            public apply (``apply_sync`` or ``apply_async``) and once during the
+            active-term check (``_input_has_active_terms``). Any stateful or
+            non-deterministic disagreement between normalizations raises an
+            actionable :class:`ConfigurationError` naming this method.
         """
         return normalize_input_value(cls, input_value)
 
@@ -496,6 +558,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         permission-check coloring they run before this.
         """
         data = cls._normalize_input(input_value)
+        _APPLIED_ORDER_NORMALIZATION.set((cls, input_value, data))
         if not data:
             return queryset
         flat_orders = cls.get_flat_orders(data)

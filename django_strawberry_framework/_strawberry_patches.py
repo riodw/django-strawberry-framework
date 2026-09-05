@@ -4,8 +4,9 @@ Companion to :mod:`django_strawberry_framework._django_patches`. Where
 that module hardens a Django test-runner bug, this module hardens a
 Strawberry HTTP-view bug that affects live request handling for every
 consumer of ``django-strawberry-framework``. The package ships one
-patch module per third-party dependency it has to patch; this is the
-Strawberry one.
+patch module per third-party dependency boundary; this module hardens
+Strawberry HTTP views as well as the transitive ``graphql-core`` execution
+engine used by Strawberry's schema executor.
 
 The patch is applied once from
 :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`,
@@ -16,8 +17,12 @@ handling; like every patch the package ships it is gated by the
 ``APPLY_UPSTREAM_PATCHES`` setting (default on), so a consumer can opt
 out globally with ``DJANGO_STRAWBERRY_FRAMEWORK =
 {"APPLY_UPSTREAM_PATCHES": False}`` or for this dependency alone with
-``{"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}``. Everything behind
-that gate is a workaround for an upstream *defect*, and nothing behind it
+``{"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}``. Disabling the
+``"strawberry"`` patch disables both the Strawberry view-level hardening
+(malformed-body handling) and the ``graphql-core`` ``complete_list_value``
+engine patch; when disabled, queries returning ``AsyncIterable`` with
+awaitable child fields yield unawaited coroutines instead of resolved values.
+Everything behind that gate is a workaround for an upstream *defect*, and nothing behind it
 is package security policy - which is the whole point of the gate's
 scope. What the gate does NOT scope is the **mount**. :func:`apply`
 assigns ``BaseView.parse_json``, and
@@ -261,10 +266,30 @@ kilobytes) overflows there. Retire the multipart delegates once Strawberry valid
 every file path is a string before traversal, and bounds the document depth it
 will copy (or catches the same structural errors at its HTTP boundary).
 
-Three lifecycles, and one that left
------------------------------------
+A fourth gap: unawaited coroutines in AsyncIterable list completion
+-------------------------------------------------------------------
 
-Read the retirement question per concern, because this module carries three
+When ``graphql-core`` executes an async field whose value is an
+``AsyncIterable`` (such as the package's ``_AsyncQuerySetRows`` adapter),
+:meth:`graphql.execution.execute.ExecutionContext.complete_list_value`
+consumes the items into a list and calls itself recursively via an internal
+``async_iterable_to_list`` helper to complete the list value. When child
+resolvers on those items are awaitable (e.g. nested connections or async
+fields), the recursive call returns a coroutine. Upstream returns this
+coroutine directly without awaiting it, causing the caller to receive an
+unawaited coroutine object instead of the completed list data and emitting
+``RuntimeWarning: coroutine was never awaited``.
+
+:func:`apply` wraps ``ExecutionContext.complete_list_value`` so that when
+``result`` is an ``AsyncIterable`` (and not a synchronous iterable), the
+coroutine returned by ``complete_list_value`` is awaited if it is awaitable
+(``if self.is_awaitable(completed): return await completed``), ensuring
+clean completion of nested awaitable resolvers.
+
+Four lifecycles, and one that left
+----------------------------------
+
+Read the retirement question per concern, because this module carries four
 independent upstream *bugs* that do not retire together:
 
 1. **The ``UnicodeDecodeError`` / ``RecursionError`` translation** -
@@ -278,25 +303,29 @@ independent upstream *bugs* that do not retire together:
 3. **The sync and async multipart delegates** - retirable once upstream
    validates malformed ``map`` containers and paths before the upload
    utility traverses them.
+4. **The ``ExecutionContext.complete_list_value`` wrapper** - retirable once
+   upstream ``graphql-core`` awaits the recursive ``complete_list_value``
+   result in ``async_iterable_to_list`` when child field resolvers are
+   awaitable.
 
 There used to be a third entry: the strict UTF-8 wire contract, which is
 **not** retirable with either, because upstream will never "fix" behavior
 that is not a bug (RFC 8259 auto-detection over raw ``bytes``) - the
 package deliberately narrows it. Keeping a permanent policy in a module
-whose other three concerns are scheduled for deletion made "delete this
-module when 1, 2, and 3 land" a security regression waiting to happen, so the
+whose other four concerns are scheduled for deletion made "delete this
+module when 1, 2, 3, and 4 land" a security regression waiting to happen, so the
 policy moved to ``views.py::_RequestBodyBoundaryMixin.parse_json`` (see
 "Where the strict UTF-8 wire contract lives" above). **This module can now
-be deleted outright once 1, 2, and 3 all retire**, and that is the only
+be deleted outright once 1, 2, 3, and 4 all retire**, and that is the only
 reason the deletion is safe.
 
 Re-checking whether upstream fixed this
 ---------------------------------------
 
-You do not need to redo the research from scratch. Three ways to tell
-whether the three *upstream-bug* halves are still required (the wire
+You do not need to redo the research from scratch. Four ways to tell
+whether the four *upstream-bug* parts are still required (the wire
 contract is not an upstream question at all, and no longer lives here -
-see "Three lifecycles" above):
+see "Four lifecycles" above):
 
 1. End-to-end, for **gap 2 only**. Set ``DJANGO_STRAWBERRY_FRAMEWORK =
    {"APPLY_UPSTREAM_PATCHES": False}`` and run the fakeshop scalar-body
@@ -354,6 +383,10 @@ see "Three lifecycles" above):
        # Gap 3 (multipart map) needs ``map`` to be checked as a mapping
        # before the utility calls ``.items()`` and iterates string paths.
 
+       # Gap 4 (unawaited coroutine in complete_list_value for AsyncIterable):
+       # probe by executing a GraphQL query returning an AsyncIterable with
+       # awaitable child resolvers.
+
    To check a newer release without upgrading, re-read ``parse_json`` /
    ``decode_json`` at the permalink above (gap 1) and ``parse_http_body``
    (gap 2) plus ``replace_placeholders_with_files`` (gap 3) on the current
@@ -375,12 +408,15 @@ the AppConfig.
 
 import inspect
 import textwrap
+from collections.abc import AsyncIterable
 from typing import Any
 
 from .conf import upstream_patches_enabled
 
 try:
     from cross_web import HTTPException
+    from graphql.execution.execute import ExecutionContext
+    from graphql.pyutils import is_iterable
     from strawberry.file_uploads.utils import replace_placeholders_with_files
     from strawberry.http.async_base_view import AsyncBaseHTTPView
     from strawberry.http.base import BaseView
@@ -393,6 +429,8 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     AsyncBaseHTTPView = None  # type: ignore[assignment,misc]
     SyncBaseHTTPView = None  # type: ignore[assignment,misc]
     replace_placeholders_with_files = None  # type: ignore[assignment,misc]
+    ExecutionContext = None  # type: ignore[assignment,misc]
+    is_iterable = None  # type: ignore[assignment,misc]
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -429,6 +467,10 @@ _original_sync_parse_multipart = _captured_upstream_method(
 _original_async_parse_multipart = _captured_upstream_method(
     AsyncBaseHTTPView,
     "parse_multipart",
+)
+_original_complete_list_value = _captured_upstream_method(
+    ExecutionContext,
+    "complete_list_value",
 )
 
 
@@ -481,14 +523,14 @@ _UPSTREAM_PARSE_QUERY_PARAMS_SOURCE = textwrap.dedent(
 
 
 def _validate_upstream_shape() -> None:
-    """Fail loudly when Strawberry no longer exposes the method shapes we patch.
+    """Fail loudly when Strawberry or graphql-core no longer exposes the method shapes we patch.
 
-    Four patched methods have two validation depths (delegators pin the call
+    Five patched methods have two validation depths (delegators pin the call
     shape, reimplementers pin the body - the ``_django_patches`` precedent):
 
-    - ``parse_json`` is wrapped and delegated to, so only the captured
-      delegation target's presence and ``(self, data)`` arity are
-      pinned; upstream body changes flow through the delegated call.
+    - ``parse_json`` and ``complete_list_value`` are wrapped and delegated to,
+      so only their presence and parameter signatures are pinned; upstream
+      body changes flow through the delegated call.
     - ``parse_query_params`` is reimplemented, so on top of presence and
       the ``(self, params)`` arity the captured original's body source
       is pinned against ``_UPSTREAM_PARSE_QUERY_PARAMS_SOURCE``.
@@ -500,17 +542,22 @@ def _validate_upstream_shape() -> None:
         or HTTPException is None
         or SyncBaseHTTPView is None
         or AsyncBaseHTTPView is None
+        or ExecutionContext is None
         or not callable(replace_placeholders_with_files)
+        or not callable(is_iterable)
         or not callable(_original_parse_json)
         or not callable(_original_parse_query_params)
         or not callable(_original_sync_parse_multipart)
         or not callable(_original_async_parse_multipart)
+        or not callable(_original_complete_list_value)
     ):
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's Strawberry patch: expected "
             "BaseView.parse_json, BaseView.parse_query_params, "
             "SyncBaseHTTPView.parse_multipart, AsyncBaseHTTPView.parse_multipart, "
+            "ExecutionContext.complete_list_value, "
             "strawberry.file_uploads.utils.replace_placeholders_with_files, "
+            "graphql.pyutils.is_iterable, "
             "and cross_web.HTTPException. "
             'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
             "or use supported dependency versions.",
@@ -532,6 +579,17 @@ def _validate_upstream_shape() -> None:
                 'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
                 "or use a supported Strawberry version.",
             )
+    parameters = tuple(inspect.signature(_original_complete_list_value).parameters.values())
+    if len(parameters) != 6 or any(
+        parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
+    ):
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Strawberry patch: "
+            "ExecutionContext.complete_list_value no longer has the expected "
+            "(self, return_type, field_nodes, info, path, result) signature. "
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
+            "or use a supported Strawberry version.",
+        )
     try:
         source = textwrap.dedent(inspect.getsource(_original_parse_query_params))
     except (OSError, TypeError):
@@ -775,6 +833,43 @@ async def _patched_async_parse_multipart(self: Any, request: Any) -> Any:
         raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc
 
 
+def _patched_complete_list_value(
+    self: Any,
+    return_type: Any,
+    field_nodes: Any,
+    info: Any,
+    path: Any,
+    result: Any,
+) -> Any:
+    """Wrapper around ``ExecutionContext.complete_list_value``.
+
+    Fixes an upstream bug in ``graphql-core``'s experimental ``AsyncIterable``
+    branch: ``async_iterable_to_list`` calls ``self.complete_list_value`` but
+    fails to await it when child field resolvers are awaitable. True delegation:
+    delegates entirely to the original implementation and awaits residual
+    completion awaitables if present.
+    """
+    res = _original_complete_list_value(
+        self,
+        return_type,
+        field_nodes,
+        info,
+        path,
+        result,
+    )
+    if not is_iterable(result) and isinstance(result, AsyncIterable) and self.is_awaitable(res):
+
+        async def _await_residual(awaitable: Any) -> Any:
+            completed = await awaitable
+            if self.is_awaitable(completed):
+                return await completed
+            return completed
+
+        return _await_residual(res)
+
+    return res
+
+
 def _mark_patch_replacement(patched: Any, original: Any) -> None:
     """Stamp a replacement with its owner and the upstream callable it wraps.
 
@@ -792,6 +887,7 @@ _mark_patch_replacement(_patched_parse_json, _original_parse_json)
 _mark_patch_replacement(_patched_parse_query_params, _original_parse_query_params)
 _mark_patch_replacement(_patched_sync_parse_multipart, _original_sync_parse_multipart)
 _mark_patch_replacement(_patched_async_parse_multipart, _original_async_parse_multipart)
+_mark_patch_replacement(_patched_complete_list_value, _original_complete_list_value)
 
 
 def _patch_is_installed() -> bool:
@@ -799,8 +895,9 @@ def _patch_is_installed() -> bool:
 
     A partial install (a third party reverted one method) reports ``False`` so
     the next ``apply()`` re-installs the complete patch. The scalar guard must
-    never run without its GET shield, and malformed multipart maps must have the
-    same controlled response on both transports.
+    never run without its GET shield, malformed multipart maps must have the
+    same controlled response on both transports, and async iterable list
+    completion must await nested child resolvers.
     """
     return (
         BaseView is not None
@@ -810,6 +907,8 @@ def _patch_is_installed() -> bool:
         and SyncBaseHTTPView.__dict__.get("parse_multipart") is _patched_sync_parse_multipart
         and AsyncBaseHTTPView is not None
         and AsyncBaseHTTPView.__dict__.get("parse_multipart") is _patched_async_parse_multipart
+        and ExecutionContext is not None
+        and ExecutionContext.__dict__.get("complete_list_value") is _patched_complete_list_value
     )
 
 
@@ -818,8 +917,10 @@ def apply() -> None:
 
     Installs :func:`_patched_parse_json` (the two-gap body hardening),
     :func:`_patched_parse_query_params` (the GET shield that keeps the scalar
-    guard off upstream's query-param parses), and the sync/async multipart
-    delegates that normalize malformed multipart structures as one patch.
+    guard off upstream's query-param parses), the sync/async multipart
+    delegates that normalize malformed multipart structures, and
+    :func:`_patched_complete_list_value` (awaiting nested awaitables under
+    AsyncIterable completion) as one patch.
 
     Idempotent and self-healing: re-entrant calls are no-ops when every member
     is still installed, and re-install the complete patch if a third party
@@ -850,3 +951,4 @@ def apply() -> None:
     BaseView.parse_query_params = _patched_parse_query_params
     SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart
     AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart
+    ExecutionContext.complete_list_value = _patched_complete_list_value

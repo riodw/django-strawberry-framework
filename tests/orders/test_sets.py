@@ -19,6 +19,7 @@ from collections import OrderedDict
 from types import SimpleNamespace
 
 import pytest
+import strawberry
 from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
 from django.db.models import F
 from django.http import HttpRequest
@@ -1312,22 +1313,398 @@ assert F is not None
 assert Genre is not None
 
 
-# TODO(spec-050 slice 3): Pin ``OrderSet._input_has_active_terms`` against the
-# same normalization/flattening contract public apply uses.
-#
-# Pseudocode:
-#
-# - Feed ``None``, UNSET, ``[]``, empty input objects, all-null leaves, nested
-#   all-null RelatedOrder branches, and mixed active/null list elements; assert
-#   false until one surviving ``Ordering`` leaf exists and true thereafter.
-# - Override ``_normalize_input`` with a pure counter and let public
-#   ``apply_sync`` / ``apply_async`` delegate normally. A list-field-style call
-#   to public apply followed by the active-term helper performs exactly two
-#   normalizations, while each public apply method is still invoked once.
-# - Override public apply without delegating and prove the helper remains an
-#   independent post-success query; never replace either public method with a
-#   state-returning private shortcut merely to avoid the second normalization.
-# - Purity is a contract, so pin its violation too: an impure
-#   ``_normalize_input`` whose second call disagrees with its first must raise
-#   an actionable ``ConfigurationError`` naming the method, not silently decide
-#   the offset guard on whichever verdict came last.
+def test_input_has_active_terms():
+    """OrderSet._input_has_active_terms detects presence of active ordering terms."""
+    import strawberry
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class BookOrder(OrderSet):
+        shelf = RelatedOrder(ShelfOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(BookOrder)
+    BookInput = factory.arguments
+    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
+
+    # Falsy / empty / unset cases
+    assert not BookOrder._input_has_active_terms(None)
+    assert not BookOrder._input_has_active_terms(strawberry.UNSET)
+    assert not BookOrder._input_has_active_terms([])
+    assert not BookOrder._input_has_active_terms([BookInput()])
+    assert not BookOrder._input_has_active_terms([BookInput(title=None)])
+    assert not BookOrder._input_has_active_terms([BookInput(shelf=ShelfInput())])
+    assert not BookOrder._input_has_active_terms([BookInput(shelf=ShelfInput(code=None))])
+
+    # Active cases
+    assert BookOrder._input_has_active_terms([BookInput(title=Ordering.ASC)])
+    assert BookOrder._input_has_active_terms([BookInput(shelf=ShelfInput(code=Ordering.DESC))])
+    assert BookOrder._input_has_active_terms(
+        [BookInput(title=None), BookInput(shelf=ShelfInput(code=Ordering.ASC))],
+    )
+
+
+def test_input_has_active_terms_purity():
+    """OrderSet._input_has_active_terms raises ConfigurationError when _normalize_input is impure."""
+
+    class ImpureOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        _counter = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls._counter += 1
+            if cls._counter % 2 == 1:
+                return [{"title": Ordering.ASC}]
+            return [{"title": Ordering.DESC}]
+
+    with pytest.raises(
+        ConfigurationError,
+        match="is not pure; returned different results",
+    ):
+        ImpureOrder._input_has_active_terms([{"title": "anything"}])
+
+
+def test_input_has_active_terms_purity_structure_disagreement():
+    """OrderSet._input_has_active_terms raises ConfigurationError when successive normalizations disagree on shape."""
+
+    class FlakyOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        _counter = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls._counter += 1
+            if cls._counter % 2 == 1:
+                return []
+            return [{"title": Ordering.ASC}]
+
+    with pytest.raises(
+        ConfigurationError,
+        match="is not pure; returned different results",
+    ):
+        FlakyOrder._input_has_active_terms([{"title": "anything"}])
+
+
+@pytest.mark.parametrize(
+    ("input_value", "expected"),
+    [
+        (None, False),
+        (strawberry.UNSET, False),
+        ([], False),
+        (["__EMPTY_BOOK_INPUT__"], False),
+        (["__NULL_TITLE_BOOK_INPUT__"], False),
+        (["__EMPTY_SHELF_BOOK_INPUT__"], False),
+        (["__NULL_SHELF_CODE_BOOK_INPUT__"], False),
+        (["__NULL_TITLE_BOOK_INPUT__", "__NULL_SHELF_CODE_BOOK_INPUT__"], False),
+        (["__ACTIVE_TITLE_BOOK_INPUT__"], True),
+        (["__ACTIVE_SHELF_BOOK_INPUT__"], True),
+        (["__NULL_TITLE_BOOK_INPUT__", "__ACTIVE_SHELF_BOOK_INPUT__"], True),
+        (["__ACTIVE_TITLE_BOOK_INPUT__", "__NULL_TITLE_BOOK_INPUT__"], True),
+    ],
+)
+def test_input_has_active_terms_contract(input_value, expected):
+    """Pin OrderSet._input_has_active_terms against a comprehensive input variation matrix."""
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class BookOrder(OrderSet):
+        shelf = RelatedOrder(ShelfOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(BookOrder)
+    BookInput = factory.arguments
+    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
+
+    sentinel_map = {
+        "__EMPTY_BOOK_INPUT__": [BookInput()],
+        "__NULL_TITLE_BOOK_INPUT__": [BookInput(title=None)],
+        "__EMPTY_SHELF_BOOK_INPUT__": [BookInput(shelf=ShelfInput())],
+        "__NULL_SHELF_CODE_BOOK_INPUT__": [BookInput(shelf=ShelfInput(code=None))],
+        "__ACTIVE_TITLE_BOOK_INPUT__": [BookInput(title=Ordering.ASC)],
+        "__ACTIVE_SHELF_BOOK_INPUT__": [BookInput(shelf=ShelfInput(code=Ordering.DESC))],
+    }
+
+    if isinstance(input_value, list) and input_value and isinstance(input_value[0], str):
+        resolved_input = []
+        for sentinel in input_value:
+            resolved_input.extend(sentinel_map[sentinel])
+    else:
+        resolved_input = input_value
+
+    assert BookOrder._input_has_active_terms(resolved_input) is expected
+
+
+def test_input_has_active_terms_independent_query_and_double_normalization():
+    """Pin independent query and 2-call normalization count tracing across sync and async apply."""
+
+    class TrackedOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return super()._normalize_input(input_value)
+
+    factory = OrderArgumentsFactory(TrackedOrder)
+    BookInput = factory.arguments
+    active_input = [BookInput(title=Ordering.ASC)]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    # Standalone helper call without prior apply normalizes twice (purity check)
+    TrackedOrder.normalize_count = 0
+    assert TrackedOrder._input_has_active_terms(active_input) is True
+    assert TrackedOrder.normalize_count == 2
+
+    # Sync: public apply runs once -> 1 normalization; helper call re-verifies applied record -> 1 normalization
+    # Total for the request is exactly 2 calls (not 3)
+    TrackedOrder.normalize_count = 0
+    qs = Book.objects.all()
+    qs_ordered = TrackedOrder.apply_sync(active_input, qs, info)
+    assert TrackedOrder.normalize_count == 1
+    assert qs_ordered is not None
+
+    has_active = TrackedOrder._input_has_active_terms(active_input)
+    assert has_active is True
+    assert TrackedOrder.normalize_count == 2  # 1 from apply_sync + 1 from _input_has_active_terms
+
+    # Async: public apply runs once -> 1 normalization; helper call re-verifies applied record -> 1 normalization
+    # Total for the request is exactly 2 calls (not 3)
+    TrackedOrder.normalize_count = 0
+    import asyncio
+
+    qs_ordered_async = asyncio.run(TrackedOrder.apply_async(active_input, qs, info))
+    assert TrackedOrder.normalize_count == 1
+    assert qs_ordered_async is not None
+
+    has_active_async = TrackedOrder._input_has_active_terms(active_input)
+    assert has_active_async is True
+    assert TrackedOrder.normalize_count == 2  # 1 from apply_async + 1 from _input_has_active_terms
+
+
+def test_input_has_active_terms_sequence_controls_sync():
+    """Load-bearing A/B/B and A/A/B normalization sequence controls under sync apply."""
+    return_a = [("title", Ordering.ASC)]
+    return_b = [("title", Ordering.DESC)]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+    qs = Book.objects.all()
+
+    # Sequence A/B/B: Call 1 in apply returns A; Call 2 in helper returns B -> disagreement
+    class AbbOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        returns = [return_a, return_b, return_b]
+        idx = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            res = cls.returns[cls.idx]
+            cls.idx += 1
+            return res
+
+    AbbOrder.apply_sync([{"title": "ASC"}], qs, info)
+    with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+        AbbOrder._input_has_active_terms([{"title": "ASC"}])
+
+    # Sequence A/A/B: Call 1 in apply returns A; Call 2 in first helper returns A; Call 3 in second helper returns B
+    class AabOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        returns = [return_a, return_a, return_b]
+        idx = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            res = cls.returns[cls.idx]
+            cls.idx += 1
+            return res
+
+    AabOrder.apply_sync([{"title": "ASC"}], qs, info)
+    assert AabOrder._input_has_active_terms([{"title": "ASC"}]) is True
+    with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+        AabOrder._input_has_active_terms([{"title": "ASC"}])
+
+
+def test_input_has_active_terms_sequence_controls_async():
+    """Load-bearing A/B/B and A/A/B normalization sequence controls under async apply."""
+    import asyncio
+
+    return_a = [("title", Ordering.ASC)]
+    return_b = [("title", Ordering.DESC)]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+    qs = Book.objects.all()
+
+    # Sequence A/B/B: Call 1 in apply returns A; Call 2 in helper returns B -> disagreement
+    class AbbOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        returns = [return_a, return_b, return_b]
+        idx = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            res = cls.returns[cls.idx]
+            cls.idx += 1
+            return res
+
+    asyncio.run(AbbOrder.apply_async([{"title": "ASC"}], qs, info))
+    with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+        AbbOrder._input_has_active_terms([{"title": "ASC"}])
+
+    # Sequence A/A/B: Call 1 in apply returns A; Call 2 in first helper returns A; Call 3 in second helper returns B
+    class AabOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        returns = [return_a, return_a, return_b]
+        idx = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            res = cls.returns[cls.idx]
+            cls.idx += 1
+            return res
+
+    asyncio.run(AabOrder.apply_async([{"title": "ASC"}], qs, info))
+    assert AabOrder._input_has_active_terms([{"title": "ASC"}]) is True
+    with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+        AabOrder._input_has_active_terms([{"title": "ASC"}])
+
+
+def test_input_has_active_terms_hostile_eq_and_repr():
+    """Hostile __eq__ and __repr__ in normalized terms do not escape as unhandled exceptions."""
+
+    class HostileEqTerm:
+        def __init__(self, val):
+            self.val = val
+
+        def __eq__(self, other):
+            raise RuntimeError("hostile __eq__ called")
+
+    class HostileReprTerm:
+        def __init__(self, val):
+            self.val = val
+
+        def __repr__(self):
+            raise RuntimeError("hostile __repr__ called")
+
+    # Hostile __eq__ during matching inert comparison
+    class HostileEqOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [("title", Ordering.ASC), (HostileEqTerm("custom"), None)]
+
+    # Conversion to inert built-in primitives prevents HostileEqTerm.__eq__ from ever running
+    assert HostileEqOrder._input_has_active_terms([{"title": "ASC"}]) is True
+
+    # Hostile __repr__ during disagreement error formatting
+    class HostileReprOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        calls = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.calls += 1
+            if cls.calls % 2 == 1:
+                return [("title", Ordering.ASC)]
+            return [("title", HostileReprTerm("boom"))]
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        HostileReprOrder._input_has_active_terms([{"title": "ASC"}])
+    assert "is not pure" in str(exc_info.value)
+    assert "<unprintable" in str(exc_info.value)
+
+
+def test_input_has_active_terms_public_apply_override_independence():
+    """Pin that overriding public apply without delegating leaves helper as an independent post-success query."""
+
+    class CustomApplyOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def apply_sync(cls, input_value, queryset, info, **kwargs):
+            return queryset.filter(pk__gt=0)
+
+        @classmethod
+        async def apply_async(cls, input_value, queryset, info, **kwargs):
+            return queryset.filter(pk__gt=0)
+
+    factory = OrderArgumentsFactory(CustomApplyOrder)
+    BookInput = factory.arguments
+    active_input = [BookInput(title=Ordering.ASC)]
+    empty_input = [BookInput(title=None)]
+
+    # Proves helper is not routed through public apply and remains an independent query
+    assert CustomApplyOrder._input_has_active_terms(active_input) is True
+    assert CustomApplyOrder._input_has_active_terms(empty_input) is False
+    assert CustomApplyOrder._input_has_active_terms(None) is False
+
+
+@pytest.mark.parametrize(
+    ("first_return", "second_return"),
+    [
+        ([{"title": Ordering.ASC}], [{"title": Ordering.DESC}]),
+        ([], [{"title": Ordering.ASC}]),
+        ([{"title": Ordering.ASC}], []),
+    ],
+)
+def test_input_has_active_terms_purity_violation(first_return, second_return):
+    """Impure _normalize_input raising disagreement raises ConfigurationError naming the method."""
+
+    class ImpureOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        calls = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.calls += 1
+            if cls.calls % 2 == 1:
+                return first_return
+            return second_return
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"_normalize_input.*is not pure; returned different results",
+    ):
+        ImpureOrder._input_has_active_terms([{"title": "dummy"}])

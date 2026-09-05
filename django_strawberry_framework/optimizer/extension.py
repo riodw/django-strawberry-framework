@@ -49,7 +49,11 @@ from strawberry.extensions import SchemaExtension
 
 from ..exceptions import _safe_arg_repr
 from ..registry import registry
-from ..utils.querysets import normalize_query_source
+from ..utils.querysets import (
+    normalize_query_source,
+    unwrap_async_queryset_adapter,
+    wrap_async_queryset_adapter,
+)
 from ..utils.typing import (
     strawberry_schema_from_info as _strawberry_schema_from_info,
 )
@@ -1106,19 +1110,14 @@ class DjangoOptimizerExtension(SchemaExtension):
            node type).
 
         """
-        # TODO(spec-050 slice 2): Recognize querysets' exact async-completion
-        # adapter before step 1. Pseudocode: unwrap its inner final sliced
-        # queryset; create one local ``finish(value)`` that rewraps ``value`` for
-        # adapter input and is identity otherwise; run the existing Manager /
-        # QuerySet, evaluated-cache, return-type, and ``apply_to`` pipeline over
-        # the inner value; route EVERY return through ``finish``. In particular,
-        # preserve the wrapper on the evaluated-queryset and unresolved-return-
-        # type early returns as well as the optimized tail. Package tests must
-        # assert adapter identity plus inner low/high marks on all three exits;
-        # response/SQL-only assertions cannot detect a silent optimizer bypass.
-        result, is_queryset = normalize_query_source(result)
+        inner_result, was_adapted = unwrap_async_queryset_adapter(result)
+
+        def finish(val: Any) -> Any:
+            return wrap_async_queryset_adapter(val) if was_adapted else val
+
+        inner_result, is_queryset = normalize_query_source(inner_result)
         if not is_queryset:
-            return result
+            return finish(inner_result)
         # G1 (spec-035 Decision 3): a consumer-evaluated root queryset passes
         # through unchanged. Placement is load-bearing in both directions - it
         # sits AFTER the Manager coercion (a coerced ``.all()`` is always a
@@ -1130,8 +1129,8 @@ class DjangoOptimizerExtension(SchemaExtension):
         # mis-handle an evaluated-but-empty queryset. ``getattr`` is defensive
         # per the package posture - a non-queryset that slipped the gate above
         # simply lacks the attribute and falls through.
-        if getattr(result, "_result_cache", None) is not None:
-            return result
+        if getattr(inner_result, "_result_cache", None) is not None:
+            return finish(inner_result)
         resolved = _resolve_model_from_return_type(info)
         if resolved is None:
             logger.debug(
@@ -1139,8 +1138,8 @@ class DjangoOptimizerExtension(SchemaExtension):
                 "passing queryset through unchanged.",
                 info.field_name,
             )
-            return result
-        return self.apply_to(resolved.origin, resolved.model, result, info)
+            return finish(inner_result)
+        return finish(self.apply_to(resolved.origin, resolved.model, inner_result, info))
 
     def apply_to(
         self,

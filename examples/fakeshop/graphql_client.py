@@ -25,16 +25,28 @@ from django.test import Client
 from django_strawberry_framework.testing import TestClient
 
 
-def post_graphql(query: str, *, client: Client | None = None, variables: dict | None = None):
-    """POST one GraphQL document to the live ``/graphql/`` endpoint via ``TestClient``.
+def post_graphql(
+    query: str,
+    *,
+    client: Client | None = None,
+    variables: dict | None = None,
+    url: str | None = None,
+):
+    """POST one GraphQL document through the shared package ``TestClient``.
 
     Routes through the package client's body-build + decode path;
     ``assert_no_errors`` is off here so error-expecting callers still read
     ``response.json()["errors"]`` (the shared assertion helpers below own the
     error policy). Returns the raw ``HttpResponse`` ``TestClient`` kept on
-    ``Response.response``.
+    ``Response.response``. The configured endpoint is used unless ``url`` supplies
+    a one-call test mount.
     """
-    result = TestClient(client=client).query(query, variables=variables, assert_no_errors=False)
+    result = TestClient(client=client).query(
+        query,
+        variables=variables,
+        assert_no_errors=False,
+        url=url,
+    )
     return result.response
 
 
@@ -59,9 +71,10 @@ def graphql_payload(
     *,
     client: Client | None = None,
     variables: dict | None = None,
+    url: str | None = None,
 ) -> dict[str, Any]:
-    """POST ``query`` and return parsed JSON after asserting HTTP 200."""
-    response = post_graphql(query, client=client, variables=variables)
+    """POST ``query`` to the configured or one-call ``url`` and return parsed JSON."""
+    response = post_graphql(query, client=client, variables=variables, url=url)
     assert response.status_code == 200
     return response.json()
 
@@ -71,9 +84,10 @@ def assert_graphql_success(
     *,
     client: Client | None = None,
     variables: dict | None = None,
+    url: str | None = None,
 ) -> dict[str, Any]:
     """POST ``query``, assert HTTP 200 and no GraphQL errors, then return ``data``."""
-    payload = graphql_payload(query, client=client, variables=variables)
+    payload = graphql_payload(query, client=client, variables=variables, url=url)
     assert "errors" not in payload, payload
     return payload["data"]
 
@@ -84,13 +98,14 @@ def assert_graphql_data(
     *,
     client: Client | None = None,
     variables: dict | None = None,
+    url: str | None = None,
 ):
     """POST ``query`` and assert a 200, no ``errors``, and exact ``data`` equality.
 
     Returns the response so callers can layer extra asserts (headers, query
     capture) on top of the shared preamble.
     """
-    response = post_graphql(query, client=client, variables=variables)
+    response = post_graphql(query, client=client, variables=variables, url=url)
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload

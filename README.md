@@ -58,13 +58,12 @@ class Query:
     all_categories: list[CategoryType] = DjangoListField(CategoryType)
 ```
 
-<!-- TODO(spec-050 slice 5): Fold the shipped list-argument surface into the
-0.0.7 capability sentence without rewriting its historical introduction.
-Pseudocode: say that every DjangoListField now publishes nullable offset/limit,
-that orderBy is published only from Meta.orderset_class, that nonzero offset
-requires visible stable ordering, and that returned/skip coordinates are
-bounded by ResourcePolicy with no pk or DISTINCT injection. Keep version and
-release-note wording owned by spec-053's joint cut. -->
+Every `DjangoListField` publishes nullable `offset` and `limit` arguments, and conditionally
+publishes `orderBy` when the target type declares `Meta.orderset_class`. The contract is strictly
+ordered-offset paging rather than stable or repeatable pagination: `offset > 0` requires a visible
+active order (via `orderBy` or a still-effective model `Meta.ordering`). Returned-row and skip
+coordinates are bounded by `ResourcePolicy` without injecting a primary-key tiebreaker or
+`DISTINCT`.
 
 **Three mutation flavors, one shape.** Write against the model, a Django form, or a DRF serializer. Inputs are generated, and all three report validation through the same `FieldError` envelope.
 

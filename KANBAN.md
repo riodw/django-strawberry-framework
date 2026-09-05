@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-09-02
+Last refreshed: 2026-09-04
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -142,20 +142,20 @@ Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/li
 - Caps and hygiene: the effective row count is the minimum of the client `limit`, the field's `max_rows`, and the request `ResourcePolicy.max_list_rows` (the shipped bound; `trusted_max_rows` semantics unchanged); `offset` is bounded by a policy ceiling rather than unbounded skip; negative, non-integer, or over-ceiling values raise a typed `GraphQLError`, never a silent clamp in the error direction. With neither argument supplied, behavior and SQL are byte-for-byte today's.
 - `orderBy` argument on `DjangoListField` through the shipped [OrderSet](docs/GLOSSARY.md#orderset) argument machinery (the target type's `orderset_class`, the same binding connections use) - this is spec-028's deferred orderBy-argument integration, orphaned since `0.0.9` and adjudicated onto this card by the doc-debt card's archived-spec deferral sweep. `django_strawberry_framework/list_field.py`'s ordering-contract docstring already promises order "unless the query supplies an `orderBy` argument" - an argument the field could not accept until this card, so the docstring becomes true rather than aspirational.
 - Determinism interplay, a spec decision: an `offset` page without an active order (argument or `Meta.ordering`) is database-dependent and unstable across requests. Preferred answer: require an active order whenever `offset` is non-zero (typed error otherwise); the alternative - documenting the instability - must say why upstream's silent instability was kept.
-- SDL consequence stated up front: the three arguments surface on every `DjangoListField` (nullable, optional), which is a schema-visible addition for every consumer; the spec records it as such.
+- SDL consequence stated up front: nullable optional `offset` and `limit` surface on every `DjangoListField`, while `orderBy` surfaces conditionally only when the target type declares `Meta.orderset_class`. A published `offset` is a runtime-precondition coordinate rather than a per-field pagination claim.
 - Migration mapping: ⚛'s connection `offset` and 🍓's `pagination=True` / `OffsetPaginationInput` / `OffsetPaginated[T]` / `offset_paginated()` all map onto this surface; the migration-guides card owes the note, including that nested/windowed offset pagination stays served by nested connections here.
 
 #### Definition of done
 
-- [ ] A spec is written for the card covering the argument shapes, the caps table, the typed-error contract, the offset-requires-order decision, and the connections non-goal.
-- [ ] `offset` / `limit` / `orderBy` ship on `DjangoListField`; with none supplied, generated SDL for existing consumers is unchanged apart from the three new optional arguments and the emitted SQL is unchanged byte-for-byte.
-- [ ] SQL-shape tests pin `LIMIT`/`OFFSET` present exactly when supplied, composed with the policy bound, and no code path injects `DISTINCT`.
-- [ ] `orderBy` composes with type visibility (`get_queryset` narrows first) and reuses the OrderSet pipeline end-to-end; the pk tiebreaker question is answered in the spec (lists have no cursors, so the connection tiebreaker is not blindly inherited).
-- [ ] Typed `GraphQLError` on negative / non-integer / over-ceiling `offset` or `limit`, live-tested on both values.
-- [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercises offset paging with an order, the cap interplay, and an orderBy'd list.
-- [ ] `django_strawberry_framework/list_field.py`'s ordering-contract docstring is updated to describe the shipped argument.
-- [ ] The migration-guides card gains the offset-mapping note (its upstream-settings/surface table).
-- [ ] Full suite green under `fail_under = 100`; live-first placement respected. No version quintet or CHANGELOG entry - the `0.0.15` release state is owned by the DRY-squeeze card's joint cut, which lands last on the line.
+- [x] A spec is written for the card covering the argument shapes, the caps table, the typed-error contract, the offset-requires-order decision, and the connections non-goal.
+- [x] `offset` / `limit` / `orderBy` ship on `DjangoListField`; with none supplied, generated SDL for existing consumers is unchanged apart from the three new optional arguments and the emitted SQL is unchanged byte-for-byte.
+- [x] SQL-shape tests pin that argument omission preserves the existing policy LIMIT unchanged, a smaller client limit lowers the high mark, a positive offset raises the low mark, and no code path injects DISTINCT.
+- [x] `orderBy` composes with type visibility (`get_queryset` narrows first) and reuses the OrderSet pipeline end-to-end; the pk tiebreaker question is answered in the spec (lists have no cursors, so the connection tiebreaker is not blindly inherited).
+- [x] Typed `GraphQLError` on negative / non-integer / over-ceiling `offset` or `limit`, live-tested on both values.
+- [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercises offset paging with an order, the cap interplay, and an orderBy'd list.
+- [x] `django_strawberry_framework/list_field.py`'s ordering-contract docstring is updated to describe the shipped argument.
+- [x] The migration-guides card gains the offset-mapping note (its upstream-settings/surface table).
+- [x] Full suite green under `fail_under = 100`; live-first placement respected. No version quintet or CHANGELOG entry - the `0.0.15` release state is owned by the DRY-squeeze card's joint cut, which lands last on the line.
 
 #### Files likely touched
 

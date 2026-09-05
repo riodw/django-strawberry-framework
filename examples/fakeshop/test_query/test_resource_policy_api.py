@@ -49,11 +49,13 @@ import pytest
 from apps.library import models as library_models
 from apps.products.services import seed_data
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import AsyncClient, Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
+from graphql_client import graphql_payload
 
 from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
@@ -191,6 +193,13 @@ urlpatterns = [
         _probe_view(max_list_rows=MAX_LIST_ROWS, max_page_size=MAX_PAGE_SIZE),
     ),
     path(
+        "rp-list-cost/",
+        _probe_view(
+            max_list_rows=MAX_LIST_ROWS,
+            max_collection_cost=MAX_LIST_ROWS - 1,
+        ),
+    ),
+    path(
         "rp-uploads/",
         _probe_upload_view(
             max_upload_count=MAX_UPLOAD_COUNT,
@@ -209,16 +218,12 @@ def _post(
     client=None,
 ):
     """POST one GraphQL document to a probe mount and return the parsed envelope."""
-    body = {"query": query}
-    if variables is not None:
-        body["variables"] = variables
-    response = (client or Client()).post(
-        mount,
-        data=json.dumps(body),
-        content_type="application/json",
+    return graphql_payload(
+        query,
+        client=client,
+        variables=variables,
+        url=mount,
     )
-    assert response.status_code == 200, response.content
-    return response.json()
 
 
 def _rejection(payload):
@@ -921,23 +926,144 @@ def test_an_oversized_upload_is_rejected_by_the_policy_not_by_the_body_cap():
 # ---------------------------------------------------------------------------
 
 
-# TODO(spec-050 slice 4): Add the request-specific list-argument policy rows at
-# the existing ``/rp-rows/`` mount; keep document admission and runtime window
-# assertions separate.
-#
-# Pseudocode:
-#
-# - Create library Branch rows inline and send a legal smaller ``limit``. Assert
-#   only that many rows serialize, while the pre-execution collection-cost
-#   charge remains ``ResourcePolicy.max_list_rows`` rather than the client limit.
-# - Send ``limit == MAX_LIST_ROWS`` and the first over-ceiling value; assert the
-#   boundary accepts then returns ``LIST_ARGUMENT_INVALID`` with the mount's
-#   request-specific ceiling, never ``DEFAULT_RESOURCE_POLICY``.
-# - Send ordered ``offset == MAX_LIST_ROWS`` and the first larger value. The
-#   former may return an empty page; the latter must report the same narrowed
-#   policy ceiling even when a field declaration is trusted to return more.
-# - Capture queries for numeric/coercion rejection and limit zero so argument
-#   refusal or an empty queryset window performs no row-fetch SQL.
+@pytest.mark.django_db
+def test_list_argument_smaller_limit_serializes_subset_and_charges_full_collection_cost():
+    """Client limit narrows serialized rows while collection cost charges full max_list_rows."""
+    library_models.Branch.objects.create(name="B1", city="Boston")
+    library_models.Branch.objects.create(name="B2", city="Boston")
+    library_models.Branch.objects.create(name="B3", city="Boston")
+
+    # 1. On /rp-rows/ (max_list_rows=3), client limit: 2 serializes exactly 2 rows
+    payload = _post("/rp-rows/", "{ allLibraryBranchesViaListField(limit: 2) { name } }")
+    _no_rejection(payload)
+    assert len(payload["data"]["allLibraryBranchesViaListField"]) == 2
+
+    # 2. On /rp-list-cost/ (max_list_rows=3, max_collection_cost=2), client limit: 1
+    # is rejected because pre-execution collection cost charges max_list_rows (3),
+    # not the client limit (1).
+    cost_payload = _post(
+        "/rp-list-cost/",
+        "{ allLibraryBranchesViaListField(limit: 1) { name } }",
+    )
+    ext = _rejection(cost_payload)
+    assert ext["bound"] == "max_collection_cost"
+    assert ext["charged"] == MAX_LIST_ROWS
+    assert ext["limit"] == MAX_LIST_ROWS - 1
+
+
+@pytest.mark.django_db
+def test_list_argument_limit_at_and_over_narrowed_policy_ceiling():
+    """Client limit at policy ceiling succeeds; over ceiling reports narrowed bound."""
+    for i in range(5):
+        library_models.Branch.objects.create(name=f"B{i}", city="Boston")
+
+    # limit == MAX_LIST_ROWS (3) succeeds
+    payload_at = _post(
+        "/rp-rows/",
+        f"{{ allLibraryBranchesViaListField(limit: {MAX_LIST_ROWS}) {{ name }} }}",
+    )
+    _no_rejection(payload_at)
+    assert len(payload_at["data"]["allLibraryBranchesViaListField"]) == MAX_LIST_ROWS
+
+    # limit == MAX_LIST_ROWS + 1 (4) rejects with LIST_ARGUMENT_INVALID naming ceiling 3
+    payload_over = _post(
+        "/rp-rows/",
+        f"{{ allLibraryBranchesViaListField(limit: {MAX_LIST_ROWS + 1}) {{ name }} }}",
+    )
+    assert payload_over["data"] is None
+    assert "errors" in payload_over
+    err = payload_over["errors"][0]
+    assert err["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
+    assert err["extensions"]["reason"] == "over_ceiling"
+    assert err["extensions"]["argument"] == "limit"
+    assert err["extensions"]["value"] == MAX_LIST_ROWS + 1
+    assert err["extensions"]["ceiling"] == MAX_LIST_ROWS
+
+
+@pytest.mark.django_db
+def test_list_argument_offset_at_and_over_narrowed_policy_ceiling():
+    """Ordered offset at policy ceiling succeeds; over ceiling reports narrowed bound."""
+    staff = get_user_model().objects.create_user(
+        username="staff_rp_offset",
+        password="pw",
+        is_staff=True,
+    )
+    client = Client()
+    client.force_login(staff)
+
+    for i in range(5):
+        library_models.Branch.objects.create(name=f"B{i}", city="Boston")
+
+    # offset == MAX_LIST_ROWS (3) with active ordering succeeds
+    payload_at = _post(
+        "/rp-rows/",
+        f"""
+        query {{
+          allLibraryBranchesViaListField(
+            orderBy: [{{ name: ASC }}]
+            offset: {MAX_LIST_ROWS}
+          ) {{
+            name
+          }}
+        }}
+        """,
+        client=client,
+    )
+    _no_rejection(payload_at)
+    # 5 branches total, offset 3 leaves 2
+    assert len(payload_at["data"]["allLibraryBranchesViaListField"]) == 2
+
+    # offset == MAX_LIST_ROWS + 1 (4) rejects with LIST_ARGUMENT_INVALID naming ceiling 3
+    payload_over = _post(
+        "/rp-rows/",
+        f"""
+        query {{
+          allLibraryBranchesViaListField(
+            orderBy: [{{ name: ASC }}]
+            offset: {MAX_LIST_ROWS + 1}
+          ) {{
+            name
+          }}
+        }}
+        """,
+        client=client,
+    )
+    assert payload_over["data"] is None
+    assert "errors" in payload_over
+    err = payload_over["errors"][0]
+    assert err["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
+    assert err["extensions"]["reason"] == "over_ceiling"
+    assert err["extensions"]["argument"] == "offset"
+    assert err["extensions"]["value"] == MAX_LIST_ROWS + 1
+    assert err["extensions"]["ceiling"] == MAX_LIST_ROWS
+
+
+@pytest.mark.django_db
+def test_list_argument_rejections_and_limit_zero_perform_no_sql():
+    """Argument refusal and limit: 0 perform zero row-fetching queries."""
+    library_models.Branch.objects.create(name="B1", city="Boston")
+    library_models.Branch.objects.create(name="B2", city="Boston")
+
+    # 1. Negative limit rejection
+    with CaptureQueriesContext(connection) as ctx:
+        payload_neg = _post(
+            "/rp-rows/",
+            "{ allLibraryBranchesViaListField(limit: -1) { name } }",
+        )
+    assert "errors" in payload_neg
+    assert len(ctx.captured_queries) == 0
+
+    # 2. Limit zero short-circuit
+    with CaptureQueriesContext(connection) as ctx:
+        payload_zero = _post(
+            "/rp-rows/",
+            "{ allLibraryBranchesViaListField(limit: 0) { name } }",
+        )
+    assert "errors" not in payload_zero, payload_zero
+    assert payload_zero["data"]["allLibraryBranchesViaListField"] == []
+    assert len(ctx.captured_queries) == 0
+
+
 @pytest.mark.django_db
 def test_a_raw_root_list_stops_at_the_configured_maximum():
     """``DjangoListField`` is bounded whether or not the field says anything."""

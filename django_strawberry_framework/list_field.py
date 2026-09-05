@@ -8,33 +8,55 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import strawberry
+from django.db import models
+from django.db.models.functions import Random
+from graphql import GraphQLError
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
 from .exceptions import (
     ConfigurationError,
+    DjangoStrawberryFrameworkError,
     _safe_arg_repr,
     _safe_class_name,
+    _safe_type_name,
+    describe_value,
 )
-from .resource_policy import bounded_rows, bounded_rows_async, validate_collection_bound
+from .resource_policy import (
+    _close_async_iterator,
+    bounded_rows,
+    bounded_rows_async,
+    effective_bound,
+    policy_from_info,
+    validate_collection_bound,
+)
 from .types import DjangoType
 from .types.base import _is_relay_shaped
 from .utils.directives import validated_field_directives
 from .utils.querysets import (
+    _LIST_ARGUMENT_VISIBILITY_POLICY,
+    SyncMisuseError,
+    _dispose_sync_awaitable,
+    _validate_post_orderset_result,
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
     is_async_only_iterable,
     post_process_queryset_result_async,
     post_process_queryset_result_sync,
+    prepared_resolver_source,
     reject_async_iterable_in_sync_context,
+    reject_awaitable_sync_source,
+    reject_residual_async_source,
+    wrap_async_queryset_adapter,
 )
-from .utils.typing import is_async_callable
+from .utils.typing import is_async_callable, schema_config_from_info
 
-__all__ = ("DjangoListField",)
+__all__ = ("DjangoListField", "ListArgumentError")
 
 
 # Consumer-resolver post-processing helpers. The field-wrapper Manager -> QuerySet
@@ -52,24 +74,6 @@ def _post_process_consumer_sync(target_type: type, result: Any, info: Info) -> A
 
 async def _post_process_consumer_async(target_type: type, result: Any, info: Info) -> Any:
     return await post_process_queryset_result_async(target_type, result, info)
-
-
-async def _bounded_async(
-    awaitable: Any,
-    info: Info,
-    max_rows: int | None,
-    *,
-    trusted: bool,
-) -> Any:
-    """Await a visibility-applied result, then apply the field's row bound.
-
-    The bound is applied LAST, never before the visibility hook. A sliced
-    queryset cannot be refiltered or reordered, and both the visibility hook and
-    the surface compose onto the source - so slicing first would turn the bound
-    into a crash on every type that declares a hook. Ordering the two this way is
-    a correctness constraint, not a preference.
-    """
-    return await bounded_rows_async(await awaitable, info, max_rows, trusted=trusted)
 
 
 def _validate_djangotype_target(
@@ -172,119 +176,541 @@ def _validate_relay_djangotype_target(
         raise ConfigurationError(relay_error_message)
 
 
-# TODO(spec-050 slice 1): Add the list-argument record, typed error, wire-name
-# lookup, and synthesized resolver signature before widening the field wrapper.
-# Keep every helper in this module: it owns the arguments, while
-# ``resource_policy.py`` owns only already-validated window coordinates.
-#
-# Pseudocode:
-#
-# - Define a frozen, slotted ``_ListArguments`` record carrying ``offset``,
-#   ``limit``, ``effective_ceiling``, ``order_by``, ``order_by_supplied``, and
-#   ``any_argument_supplied``. ``None`` and ``strawberry.UNSET`` are omission;
-#   zero and an empty order list are supplied values. Keep the questions
-#   SEPARATE and never read one field as a proxy for another:
-#   ``any_argument_supplied`` selects argument mode and nothing else (so it is
-#   what enables reject-combined); the window fields say which rows are
-#   returned, and ``offset=0`` with no limit yields the omission window;
-#   ``order_by_supplied`` -- never material activity -- drives
-#   ``queryset_required``, because ``[]`` is still a supplied argument.
-#   Material order activity is a fourth question answered only after public
-#   apply succeeds.
-# - Define ``ListArgumentError(GraphQLError,
-#   DjangoStrawberryFrameworkError)`` with no N818 suppression. It is PUBLIC:
-#   export it from the package root beside ``ResourceLimitExceeded`` and
-#   ``SyncMisuseError`` and update ``tests/base/test_init.py``'s pinned
-#   ``__all__`` tuple, star-import row, export-identity row, and its stale
-#   comment claiming the 0.0.15 cut leaves the public surface unchanged. The
-#   version literal and its own assertion stay with card 053. Its constructor
-#   alone builds the message and ``LIST_ARGUMENT_INVALID`` extensions. Preserve
-#   field/argument/reason/value/ceiling attributes and implement ``__reduce__``
-#   as ``(self.__class__, complete_constructor_args, self.__dict__)`` so the
-#   dual-base error round-trips without relying on GraphQLError's slots.
-#   Numeric ``negative`` failures carry ``value``; ``over_ceiling`` carries
-#   ``value`` plus ``ceiling``; direct-call ``non_integer`` carries the safe
-#   ``describe_value`` string; ``order_required`` carries the rejected offset;
-#   ``queryset_required`` carries neither optional key. The message names the
-#   active GraphQL field and argument, but never serializes order input.
-# - Resolve a Python parameter's wire name through
-#   ``info.get_argument_definition(parameter)`` plus
-#   ``schema_config_from_info(info).name_converter.from_argument(...)``. Fall
-#   back only for direct helper calls without a real schema: ``offset``,
-#   ``limit``, and default-converted ``orderBy``. Resolve LAZILY, inside the
-#   error constructor only: a successful request must perform ZERO name
-#   conversions. ``from_argument`` is a consumer hook normally run once per
-#   argument at schema-construction time, so calling it per resolver
-#   invocation both wastes work and invokes a shared, possibly stateful
-#   converter concurrently at runtime, where a non-deterministic one could
-#   report a spelling the built schema does not use. Pin the zero-call count on
-#   success and the one-call count on rejection.
-# - Normalize offset before limit. Reject bool/non-int direct calls as
-#   ``non_integer`` with ``describe_value``; reject negatives and values above
-#   their ceilings as ``negative`` / ``over_ceiling``. Compute the return cap
-#   only through ``effective_bound(policy.max_list_rows, max_rows,
-#   trusted=trusted_max_rows)``; offset always uses ``policy.max_list_rows``.
-# - Build one signature from reserved positional-or-keyword ``root=None``
-#   followed by keyword-only ``info``, ``offset: int | None``, and
-#   ``limit: int | None``. If the target definition has ``orderset_class``, add keyword-only
-#   ``order_by: list[order_input_type(orderset_class)] | None``. Keep the
-#   ``order_input_type`` import local, assign both ``__signature__`` and
-#   ``__annotations__``, and do not synthesize a return annotation: the
-#   consumer's class-attribute annotation remains the nullability owner.
-# - The executable wrapper must accept the synthesized keywords itself and
-#   never forward them to ``resolver=``; consumer resolvers remain exactly
-#   ``resolver(root, info)``.
-#
-# TODO(spec-050 slice 2): Replace the current wrapper tails with one colored
-# visibility -> order -> guard -> window pipeline while preserving the exact
-# all-null/omitted fast path.
-#
-# Pseudocode:
-#
-# - Validate scalar/cap arguments before invoking a consumer resolver. Then run
-#   the current await-once/dispose-on-misuse source logic and Manager coercion.
-# - When ``has_active_arguments`` is false, preserve the current colored call
-#   exactly: sync uses ``bounded_rows(...)`` and async uses
-#   ``bounded_rows_async(...)`` after its current visibility path. Do not
-#   rebuild an equivalent ``offset=0`` window on this branch.
-# - On a non-queryset, reject any non-null ``order_by`` first with
-#   ``queryset_required``. Reject ``offset > 0`` second with
-#   ``order_required``. Before either async-only-source rejection escapes,
-#   acquire and close its iterator through resource_policy's shared cleanup
-#   helper without advancing it; attach acquisition/close failures as notes.
-# - On a queryset, apply visibility with the argument-aware reject-combined
-#   policy. If order input was supplied, dispatch through the target
-#   ``OrderSet.apply_sync`` / ``apply_async`` exactly once, enforce the async
-#   method's await-once contract, and pass its result to querysets' shared
-#   post-order seal. Never inspect consumer queryset state in this module.
-# - Ask ``OrderSet._input_has_active_terms`` only after public apply succeeds.
-#   For active input, require ``queryset.ordered`` and reject an exact ``?`` or
-#   recognized ``Random()``/``OrderBy(Random())`` term. For model-default
-#   fallback require non-empty stable ``query.get_meta().ordering``,
-#   ``query.default_ordering is True``, empty ``query.order_by`` and
-#   ``query.extra_order_by``, and falsy ``query.group_by`` exactly as Django's
-#   own rule spells it. A hidden resolver order is not fallback evidence.
-#   Reject everything else with ``order_required``; append neither pk nor
-#   DISTINCT. One private random-term predicate serves both explicit and
-#   model-default checks; do not duplicate expression recognition.
-# - Hand validated ``offset`` / ``limit`` to the one resource-policy bound.
-#   Under async execution, wrap every final queryset in querysets' async-only
-#   completion adapter. This includes a plain ``def`` consumer returning a
-#   Manager/QuerySet: keep its sync visibility color, then adapt the final
-#   queryset based on runtime execution context. Lists, ``None``, and genuine
-#   async-only iterables retain their existing result shapes.
-#
-# TODO(spec-050 slice 5): Replace the complete Ordering contract and Row bound
-# paragraphs in ``DjangoListField``'s docstring when the arguments ship. State
-# conditional Meta-derived ``orderBy``, active schema naming, both ceilings,
-# nonzero-offset ordering, no pk append, and the unique-final-term guidance.
-# Name the contract ORDERED OFFSET, never stable or repeatable pagination: an
-# active order fixes the sort expression, not which of two tied rows falls on
-# either side of the boundary. Say that a published ``offset`` is a RUNTIME
-# PRECONDITION -- usable only where an order source exists, permanently
-# rejecting positive values on a target with neither ``Meta.orderset_class``
-# nor still-effective model ``Meta.ordering`` -- not a claim the field can
-# page. Both ceilings are ACCEPTED COORDINATE ceilings, not scan budgets.
+class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
+    """An argument to ``DjangoListField`` was invalid or violated policy bounds.
+
+    Dual-inherits ``GraphQLError`` (so Strawberry/GraphQL transport serializes it
+    as an execution error with structured extensions) and
+    ``DjangoStrawberryFrameworkError`` (so consumers can catch it alongside any
+    other framework error).
+    """
+
+    def __init__(
+        self,
+        field: str,
+        argument: str,
+        reason: str,
+        value: Any = None,
+        ceiling: int | None = None,
+        order_argument: str | None = None,
+    ) -> None:
+        self.field = field
+        self.argument = argument
+        self.reason = reason
+        self.ceiling = ceiling
+        self.order_argument = order_argument
+
+        if reason == "non_integer":
+            self.value = value if isinstance(value, str) else describe_value(value)
+            msg = (
+                f"Invalid argument {argument!r} on {field}: expected a non-negative "
+                f"integer, got {self.value}."
+            )
+        elif reason == "negative":
+            self.value = value
+            msg = (
+                f"Invalid argument {argument!r} on {field}: expected a non-negative "
+                f"integer, got {value}."
+            )
+        elif reason == "over_ceiling":
+            self.value = value
+            msg = (
+                f"Invalid argument {argument!r} on {field}: value {value} exceeds "
+                f"the maximum allowed ceiling of {ceiling}."
+            )
+        elif reason == "order_required":
+            self.value = value
+            if order_argument:
+                ordering_phrase = f"via {order_argument!r} or model 'Meta.ordering'"
+            elif order_argument is None:
+                ordering_phrase = "via 'orderBy' or model 'Meta.ordering'"
+            else:
+                ordering_phrase = "via model 'Meta.ordering'"
+            msg = (
+                f"Invalid argument {argument!r} on {field}: non-zero offset ({value}) "
+                f"requires an active ordering {ordering_phrase}."
+            )
+        elif reason == "queryset_required":
+            self.value = value
+            msg = (
+                f"Invalid argument {argument!r} on {field}: an ordering argument "
+                "requires a QuerySet source."
+            )
+        else:
+            self.value = value
+            msg = f"Invalid argument {argument!r} on {field}: {reason}."
+
+        extensions: dict[str, Any] = {
+            "code": "LIST_ARGUMENT_INVALID",
+            "argument": argument,
+            "reason": reason,
+        }
+        if self.value is not None:
+            extensions["value"] = self.value
+        if ceiling is not None:
+            extensions["ceiling"] = ceiling
+
+        super().__init__(msg, extensions=extensions)
+
+    def __reduce__(self) -> tuple[object, ...]:
+        """Preserve constructor arguments and instance state across pickle roundtrips."""
+        return (
+            self.__class__,
+            (
+                self.field,
+                self.argument,
+                self.reason,
+                self.value,
+                self.ceiling,
+                self.order_argument,
+            ),
+            self.__dict__,
+        )
+
+
+_DEFAULT_WIRE_NAMES: dict[str, str] = {"offset": "offset", "limit": "limit", "order_by": "orderBy"}
+
+
+def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
+    """Resolve the active GraphQL wire name for an internal parameter name.
+
+    Only invoked on error paths (e.g. inside ``ListArgumentError`` instantiation or
+    normalizer error branches) so successful requests perform zero name conversions.
+    """
+    fallback = _DEFAULT_WIRE_NAMES.get(parameter_name, parameter_name)
+    get_arg_def = getattr(info, "get_argument_definition", None)
+    if get_arg_def is None and getattr(info, "schema", None) is None:
+        return fallback
+
+    if get_arg_def is not None:
+        arg_def = get_arg_def(parameter_name)
+        if arg_def is not None:
+            config = schema_config_from_info(info)
+            name_converter = getattr(config, "name_converter", None)
+            if name_converter is not None:
+                try:
+                    return name_converter.from_argument(arg_def)
+                except Exception as exc:
+                    raise ConfigurationError(
+                        f"Failed to resolve wire name for argument {parameter_name!r}: {exc}",
+                    ) from exc
+    return fallback
+
+
+@dataclass(frozen=True, slots=True)
+class _ListArguments:
+    offset: int | None
+    limit: int | None
+    effective_ceiling: int
+    order_by: Any
+    order_by_supplied: bool
+    any_argument_supplied: bool
+
+
+def _normalize_list_arguments(
+    field_name: str,
+    info: Any,
+    max_rows: int | None,
+    trusted_max_rows: bool,
+    *,
+    offset: Any = None,
+    limit: Any = None,
+    order_by: Any = strawberry.UNSET,
+) -> _ListArguments:
+    offset_supplied = offset is not None and offset is not strawberry.UNSET
+    limit_supplied = limit is not None and limit is not strawberry.UNSET
+    order_by_supplied = order_by is not None and order_by is not strawberry.UNSET
+    any_argument_supplied = offset_supplied or limit_supplied or order_by_supplied
+
+    norm_offset = None if not offset_supplied else offset
+    norm_limit = None if not limit_supplied else limit
+    norm_order_by = None if not order_by_supplied else order_by
+
+    policy = policy_from_info(info)
+    offset_ceiling = policy.max_list_rows
+    effective_ceiling = effective_bound(policy.max_list_rows, max_rows, trusted=trusted_max_rows)
+
+    if norm_offset is not None:
+        if isinstance(norm_offset, bool) or not isinstance(norm_offset, int):
+            raise ListArgumentError(
+                field_name,
+                _resolve_argument_wire_name(info, "offset"),
+                reason="non_integer",
+                value=describe_value(norm_offset),
+            )
+        if norm_offset < 0:
+            raise ListArgumentError(
+                field_name,
+                _resolve_argument_wire_name(info, "offset"),
+                reason="negative",
+                value=norm_offset,
+            )
+        if norm_offset > offset_ceiling:
+            raise ListArgumentError(
+                field_name,
+                _resolve_argument_wire_name(info, "offset"),
+                reason="over_ceiling",
+                value=norm_offset,
+                ceiling=offset_ceiling,
+            )
+
+    if norm_limit is not None:
+        if isinstance(norm_limit, bool) or not isinstance(norm_limit, int):
+            raise ListArgumentError(
+                field_name,
+                _resolve_argument_wire_name(info, "limit"),
+                reason="non_integer",
+                value=describe_value(norm_limit),
+            )
+        if norm_limit < 0:
+            raise ListArgumentError(
+                field_name,
+                _resolve_argument_wire_name(info, "limit"),
+                reason="negative",
+                value=norm_limit,
+            )
+        if norm_limit > effective_ceiling:
+            raise ListArgumentError(
+                field_name,
+                _resolve_argument_wire_name(info, "limit"),
+                reason="over_ceiling",
+                value=norm_limit,
+                ceiling=effective_ceiling,
+            )
+
+    return _ListArguments(
+        offset=norm_offset,
+        limit=norm_limit,
+        effective_ceiling=effective_ceiling,
+        order_by=norm_order_by,
+        order_by_supplied=order_by_supplied,
+        any_argument_supplied=any_argument_supplied,
+    )
+
+
+def _synthesized_list_signature(target_type: type) -> tuple[inspect.Signature, dict[str, Any]]:
+    """Build the resolver ``__signature__`` and ``__annotations__`` for DjangoListField.
+
+    Carries ``offset`` and ``limit`` arguments, plus conditional ``order_by`` if the
+    target type declares ``Meta.orderset_class``. The return annotation is left empty
+    (``inspect.Signature.empty``) and omitted from annotations so the outer class attribute
+    annotation retains sole ownership of outer nullability (``list[T]`` vs ``list[T] | None``).
+    """
+    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    params: list[inspect.Parameter] = [
+        inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+        inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
+        inspect.Parameter(
+            "offset",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation=int | None,
+        ),
+        inspect.Parameter(
+            "limit",
+            inspect.Parameter.KEYWORD_ONLY,
+            default=None,
+            annotation=int | None,
+        ),
+    ]
+    annotations: dict[str, Any] = {"info": Info, "offset": int | None, "limit": int | None}
+
+    if definition is not None and definition.orderset_class is not None:
+        from .orders import order_input_type
+
+        order_ann = list[order_input_type(definition.orderset_class)] | None
+        params.append(
+            inspect.Parameter(
+                "order_by",
+                inspect.Parameter.KEYWORD_ONLY,
+                default=None,
+                annotation=order_ann,
+            ),
+        )
+        annotations["order_by"] = order_ann
+
+    return inspect.Signature(params, return_annotation=inspect.Signature.empty), annotations
+
+
+def _is_random_order_term(term: Any) -> bool:
+    """Classify random order terms: exact '?' or Random() / OrderBy(Random())."""
+    if term == "?" or isinstance(term, Random):
+        return True
+    return isinstance(getattr(term, "expression", None), Random)
+
+
+def _has_no_random_terms(queryset: models.QuerySet) -> bool:
+    """Return True if queryset has no random terms in query.order_by or extra_order_by."""
+    query = queryset.query
+    return all(not _is_random_order_term(term) for term in query.order_by) and all(
+        not _is_random_order_term(term) for term in query.extra_order_by
+    )
+
+
+def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
+    """Return True if the model declares active default ordering on queryset.
+
+    Requires query.default_ordering is True, non-empty and non-random Meta.ordering,
+    empty query.order_by and query.extra_order_by, and falsy query.group_by.
+    """
+    query = queryset.query
+    if query.default_ordering is not True:
+        return False
+    if query.order_by or query.extra_order_by or query.group_by:
+        return False
+    ordering = query.get_meta().ordering
+    if not ordering:
+        return False
+    return not any(_is_random_order_term(term) for term in ordering)
+
+
+async def _cleanup_rejected_async_iterable(iterable: Any, primary_error: BaseException) -> None:
+    try:
+        iterator = aiter(iterable)
+    except BaseException as aiter_err:
+        try:
+            notes = [*getattr(primary_error, "__notes__", ())]
+            notes.append(f"Iterator acquisition failed: {aiter_err!r}")
+            primary_error.__notes__ = notes
+        except Exception:
+            pass
+        return
+    await _close_async_iterator(iterator, primary_error=primary_error)
+
+
+def _orderset_class_for_target(target_type: type) -> type | None:
+    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    return getattr(definition, "orderset_class", None)
+
+
+def _build_non_queryset_rejection_error(
+    args_record: _ListArguments,
+    info: Info,
+    *,
+    target_type: type | None = None,
+) -> ListArgumentError | None:
+    field_name = getattr(info, "field_name", None) or "DjangoListField"
+    if args_record.order_by_supplied:
+        return ListArgumentError(
+            field_name,
+            _resolve_argument_wire_name(info, "order_by"),
+            reason="queryset_required",
+        )
+    if args_record.offset is not None and args_record.offset > 0:
+        has_orderset = False
+        if target_type is not None:
+            has_orderset = _orderset_class_for_target(target_type) is not None
+        order_arg = _resolve_argument_wire_name(info, "order_by") if has_orderset else ""
+        return ListArgumentError(
+            field_name,
+            _resolve_argument_wire_name(info, "offset"),
+            reason="order_required",
+            value=args_record.offset,
+            order_argument=order_arg,
+        )
+    return None
+
+
+async def _handle_non_queryset_rejections_async(
+    source: Any,
+    args_record: _ListArguments,
+    info: Info,
+    *,
+    target_type: type | None = None,
+) -> None:
+    err = _build_non_queryset_rejection_error(args_record, info, target_type=target_type)
+    if err is not None:
+        if is_async_only_iterable(source):
+            await _cleanup_rejected_async_iterable(source, err)
+        raise err
+
+
+def _handle_non_queryset_rejections_sync(
+    _source: Any,
+    args_record: _ListArguments,
+    info: Info,
+    *,
+    target_type: type | None = None,
+) -> None:
+    err = _build_non_queryset_rejection_error(args_record, info, target_type=target_type)
+    if err is not None:
+        raise err
+
+
+def _apply_orderset_sync(
+    target_type: type,
+    queryset: models.QuerySet,
+    order_by: Any,
+    info: Info,
+) -> tuple[models.QuerySet, type | None]:
+    orderset_class = _orderset_class_for_target(target_type)
+    if orderset_class is None:
+        raise ConfigurationError(
+            f"DjangoListField target {_safe_class_name(target_type)} has no orderset_class configured.",
+        )
+    candidate = orderset_class.apply_sync(order_by, queryset, info)
+    if inspect.isawaitable(candidate):
+        _dispose_sync_awaitable(candidate)
+        raise SyncMisuseError(
+            f"{orderset_class.__name__}.apply_sync returned an awaitable in a sync resolver context. "
+            f"Make apply_sync synchronous or execute the query asynchronously.",
+        )
+    sealed = _validate_post_orderset_result(
+        target_type,
+        queryset,
+        candidate,
+        f"{orderset_class.__name__}.apply_sync",
+    )
+    return sealed, orderset_class
+
+
+async def _apply_orderset_async(
+    target_type: type,
+    queryset: models.QuerySet,
+    order_by: Any,
+    info: Info,
+) -> tuple[models.QuerySet, type | None]:
+    orderset_class = _orderset_class_for_target(target_type)
+    if orderset_class is None:
+        raise ConfigurationError(
+            f"DjangoListField target {_safe_class_name(target_type)} has no orderset_class configured.",
+        )
+    candidate_awaitable = orderset_class.apply_async(order_by, queryset, info)
+    if not inspect.isawaitable(candidate_awaitable):
+        raise ConfigurationError(
+            f"{orderset_class.__name__}.apply_async returned a non-awaitable value "
+            f"({_safe_type_name(candidate_awaitable)}); expected an awaitable coroutine or Future.",
+        )
+    candidate = await candidate_awaitable
+    if inspect.isawaitable(candidate):
+        _dispose_sync_awaitable(candidate)
+        raise ConfigurationError(
+            f"{orderset_class.__name__}.apply_async returned a residual awaitable value "
+            f"({_safe_type_name(candidate)}); expected a QuerySet.",
+        )
+    sealed = _validate_post_orderset_result(
+        target_type,
+        queryset,
+        candidate,
+        f"{orderset_class.__name__}.apply_async",
+    )
+    return sealed, orderset_class
+
+
+def _check_nonzero_offset_guard(
+    queryset: models.QuerySet,
+    args_record: _ListArguments,
+    orderset_class: type | None,
+    info: Info,
+) -> None:
+    if args_record.offset is None or args_record.offset <= 0:
+        return
+    has_active_order = False
+    if (
+        args_record.order_by_supplied
+        and orderset_class is not None
+        and orderset_class._input_has_active_terms(args_record.order_by)
+        and queryset.ordered
+        and _has_no_random_terms(queryset)
+    ):
+        has_active_order = True
+    if not has_active_order and not _is_model_default_ordering_active(queryset):
+        field_name = getattr(info, "field_name", None) or "DjangoListField"
+        order_arg = (
+            _resolve_argument_wire_name(info, "order_by") if orderset_class is not None else ""
+        )
+        raise ListArgumentError(
+            field_name,
+            _resolve_argument_wire_name(info, "offset"),
+            reason="order_required",
+            value=args_record.offset,
+            order_argument=order_arg,
+        )
+
+
+def _execute_queryset_pipeline_sync(
+    target_type: type,
+    source: models.QuerySet,
+    info: Info,
+    args_record: _ListArguments,
+    max_rows: int | None,
+    trusted_max_rows: bool,
+    *,
+    is_async_context: bool,
+) -> Any:
+    post_vis_qs = apply_type_visibility_sync(
+        target_type,
+        source,
+        info,
+        policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
+    )
+    orderset_class = None
+    if args_record.order_by_supplied:
+        post_order_qs, orderset_class = _apply_orderset_sync(
+            target_type,
+            post_vis_qs,
+            args_record.order_by,
+            info,
+        )
+    else:
+        post_order_qs = post_vis_qs
+        orderset_class = _orderset_class_for_target(target_type)
+
+    _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
+    bounded = bounded_rows(
+        post_order_qs,
+        info,
+        max_rows,
+        trusted=trusted_max_rows,
+        offset=args_record.offset,
+        requested_limit=args_record.limit,
+    )
+    return wrap_async_queryset_adapter(bounded) if is_async_context else bounded
+
+
+async def _execute_queryset_pipeline_async(
+    target_type: type,
+    source: models.QuerySet,
+    info: Info,
+    args_record: _ListArguments,
+    max_rows: int | None,
+    trusted_max_rows: bool,
+) -> Any:
+    if not args_record.any_argument_supplied:
+        post_vis_qs = await apply_type_visibility_async(target_type, source, info)
+        bounded = bounded_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
+        return wrap_async_queryset_adapter(bounded)
+
+    post_vis_qs = await apply_type_visibility_async(
+        target_type,
+        source,
+        info,
+        policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
+    )
+    orderset_class = None
+    if args_record.order_by_supplied:
+        post_order_qs, orderset_class = await _apply_orderset_async(
+            target_type,
+            post_vis_qs,
+            args_record.order_by,
+            info,
+        )
+    else:
+        post_order_qs = post_vis_qs
+        orderset_class = _orderset_class_for_target(target_type)
+
+    _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
+    bounded = bounded_rows(
+        post_order_qs,
+        info,
+        max_rows,
+        trusted=trusted_max_rows,
+        offset=args_record.offset,
+        requested_limit=args_record.limit,
+    )
+    return wrap_async_queryset_adapter(bounded)
+
+
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
     target_type: type,
     *,
@@ -297,45 +723,64 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
 ) -> Any:
     """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
 
-    See ``docs/SPECS/spec-020-list_field-0_0_7.md`` Decision 1 (mechanism) and
-    Decision 2 (default-resolver shape) for the design contract.
+    Outer nullability comes from the class-attribute annotation: ``list[T]`` renders
+    ``[T!]!`` and ``list[T] | None`` renders ``[T!]``. The default resolver pulls
+    ``model._default_manager.all()`` and applies the target type's ``get_queryset``
+    visibility hook in sync and async contexts. A custom ``resolver=`` overrides
+    the default body; when its return value is a ``Manager`` or ``QuerySet``, the
+    wrapper applies ``get_queryset``.
 
-    Ordering contract: a ``DjangoListField`` does NOT guarantee row order unless
-    the query supplies an ``orderBy`` argument or the model declares
-    ``Meta.ordering``. The default resolver returns
-    ``model._default_manager.all()`` with no tiebreaker, so the response array
-    order is database-dependent. This is intentional and asymmetric with
-    ``DjangoConnectionField``, which appends a pk tiebreaker to guarantee a
-    deterministic total order (its positional cursors require one); a flat list
-    has no cursors, so the unordered sequence is acceptable.
+    Argument surface:
+    - Every ``DjangoListField`` publishes nullable optional ``offset`` and ``limit``
+      arguments (GraphQL ``Int``).
+    - When the target ``DjangoType`` declares ``Meta.orderset_class``, a typed
+      ``orderBy`` argument is conditionally published. Targets without an orderset
+      publish only ``offset`` and ``limit``.
+    - Wire argument names follow the active schema naming converter (by default
+      camelCase ``offset``, ``limit``, ``orderBy``; with ``auto_camel_case=False``,
+      ``order_by``).
 
-    Row bound (spec-047 Decision 6). Every ``DjangoListField`` is bounded: the
-    request's ``ResourcePolicy.max_list_rows`` applies whether or not the field
-    says anything, and ``max_rows=`` narrows it further for this field. There is
-    no unbounded spelling - ``max_rows=None`` means "the policy governs", not
-    "no bound". ``trusted_max_rows=True`` is the explicit widening opt-in: it
-    declares that this field's ``max_rows`` is a deliberate declaration that
-    outranks the request policy, and it is the only way a field can be wider
-    than the policy.
+    Ordering contract (strictly ordered offset):
+    A ``DjangoListField`` provides ordered-offset paging, NOT stable or repeatable
+    pagination. An active order fixes the sort expression, not which of two tied rows
+    falls on either side of a page boundary. Unlike Relay connection fields, flat
+    lists do not inject a primary-key tiebreaker or ``DISTINCT``. Consumers wanting
+    deterministic pagination across pages with duplicate values must add a unique
+    final term to the ordering themselves.
+
+    Non-zero offset precondition:
+    A published ``offset`` argument is a runtime precondition rather than a per-field
+    capability claim. Usable only where an order source exists, ``offset > 0``
+    requires a materially active order on the post-visibility queryset -- either a
+    supplied ``orderBy`` with surviving non-null ordering terms, or a still-effective
+    model ``Meta.ordering``. On a target with neither ``Meta.orderset_class`` nor
+    still-effective model ``Meta.ordering``, positive offset values permanently raise
+    ``ListArgumentError`` with ``reason="order_required"``.
+
+    Row bounds and ceilings:
+    Every ``DjangoListField`` is bounded. The effective row bound is the minimum of
+    the client ``limit``, the field's ``max_rows``, and the request
+    ``ResourcePolicy.max_list_rows`` (with ``trusted_max_rows=True`` permitting
+    field-declared widening). Client ``offset`` is bounded by the request's
+    ``ResourcePolicy.max_list_rows``. Both ceilings are accepted-coordinate ceilings,
+    not physical database scan budgets. Exceeding either ceiling raises
+    ``ListArgumentError`` with ``reason="over_ceiling"``.
+
+    Async execution:
+    Under asynchronous execution, querysets are completed through the package-internal
+    async-only completion adapter, preventing synchronous event-loop iteration during
+    GraphQL result execution while preserving query optimization.
+
+    Optimizer cooperation rides the root-gated optimizer extension hook, so
+    root-position list selections receive automatic select_related / prefetch_related
+    / only planning.
     """
     if max_rows is not None:
         validate_collection_bound(max_rows, field="DjangoListField max_rows")
-    # Decision 5 validation guards: the four shared DjangoType-target
-    # constructor checks (see ``_validate_djangotype_target`` for the
-    # load-bearing ordering and the own-class registration invariant).
     _validate_djangotype_target(target_type, resolver, field="DjangoListField")
-    # The hostile-container containment for the directives iterable, shared with
-    # every other field factory in the package
-    # (``utils/directives.py::validated_field_directives`` owns the one check and
-    # its rationale): a bare string / bytes is iterated element-wise by
-    # Strawberry, a hostile iterator raising midway escapes raw, and a
-    # non-iterable detonates at the ``strawberry.field`` call. Validate BEFORE
-    # handing to Strawberry so the factory fails loud as a ``ConfigurationError``
-    # at the assignment line. ``utils.directives`` imports only ``exceptions``,
-    # so the low-level read-side module can share it without the read->write
-    # layering inversion importing the mutations copy would have created.
     directives = validated_field_directives("DjangoListField", directives)
-    # Async-detection asymmetry (see spec Decision 2,
+
+    # Factory-site async commitment (Decision 3; spec-020 Decision 1
     # "Async-detection asymmetry - intentional, not a harmonization candidate"):
     # ``_default`` uses runtime ``in_async_context()`` per-call so the same
     # factory output dispatches correctly under both ``schema.execute_sync``
@@ -347,85 +792,225 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     # construction and freezes the sync-vs-async handling.
     if resolver is None:
 
-        def _default(root: Any, info: Info) -> Any:  # noqa: ARG001
+        def _default(
+            *args: Any,
+            offset: Any = None,
+            limit: Any = None,
+            order_by: Any = strawberry.UNSET,
+            **kwargs: Any,
+        ) -> Any:
+            _root = args[0] if len(args) > 0 else kwargs.get("root")
+            info: Info = args[1] if len(args) > 1 else kwargs["info"]
+            field_name = getattr(info, "field_name", None) or "DjangoListField"
+            args_record = _normalize_list_arguments(
+                field_name,
+                info,
+                max_rows,
+                trusted_max_rows,
+                offset=offset,
+                limit=limit,
+                order_by=order_by,
+            )
             qs = initial_queryset(target_type)
             if in_async_context():
-                # The async branch DOES need its own coroutine wrapper: the row
-                # bound has to be applied to the awaited value, after the
-                # visibility hook has composed onto the unsliced source.
-                return _bounded_async(
-                    apply_type_visibility_async(target_type, qs, info),
+                return _execute_queryset_pipeline_async(
+                    target_type,
+                    qs,
+                    info,
+                    args_record,
+                    max_rows,
+                    trusted_max_rows,
+                )
+            if not args_record.any_argument_supplied:
+                return bounded_rows(
+                    apply_type_visibility_sync(target_type, qs, info),
                     info,
                     max_rows,
                     trusted=trusted_max_rows,
                 )
-            return bounded_rows(
-                apply_type_visibility_sync(target_type, qs, info),
+            return _execute_queryset_pipeline_sync(
+                target_type,
+                qs,
                 info,
+                args_record,
                 max_rows,
-                trusted=trusted_max_rows,
+                trusted_max_rows,
+                is_async_context=False,
             )
 
         wrapped = _default
     else:
         user_resolver = resolver
 
-        async def _resolve_async_iterable(source: Any, info: Info) -> Any:
+        async def _resolve_async_iterable(
+            source: Any,
+            info: Info,
+            args_record: _ListArguments,
+        ) -> Any:
+            if args_record.any_argument_supplied:
+                await _handle_non_queryset_rejections_async(
+                    source,
+                    args_record,
+                    info,
+                    target_type=target_type,
+                )
+            if source is None:
+                return None
             return await bounded_rows_async(
-                await _post_process_consumer_async(target_type, source, info),
+                source,
                 info,
                 max_rows,
                 trusted=trusted_max_rows,
+                offset=args_record.offset,
+                requested_limit=args_record.limit,
             )
 
         if is_async_callable(user_resolver):
 
-            async def _wrap(root: Any, info: Info) -> Any:
-                # ``await`` the consumer coroutine BEFORE handing
-                # the result to ``_post_process_consumer_async`` so the
-                # isinstance-QuerySet branch sees the awaited value, not the
-                # coroutine itself. The row bound is applied AFTER
-                # post-processing, so a returned ``Manager`` has already been
-                # coerced to a ``QuerySet`` and the visibility hook has already
-                # composed onto the unsliced source.
-                return await bounded_rows_async(
-                    await _post_process_consumer_async(
+            async def _wrap(
+                *args: Any,
+                offset: Any = None,
+                limit: Any = None,
+                order_by: Any = strawberry.UNSET,
+                **kwargs: Any,
+            ) -> Any:
+                root = args[0] if len(args) > 0 else kwargs.get("root")
+                info: Info = args[1] if len(args) > 1 else kwargs["info"]
+                field_name = getattr(info, "field_name", None) or "DjangoListField"
+                args_record = _normalize_list_arguments(
+                    field_name,
+                    info,
+                    max_rows,
+                    trusted_max_rows,
+                    offset=offset,
+                    limit=limit,
+                    order_by=order_by,
+                )
+                raw_source = await user_resolver(root, info)
+                if not args_record.any_argument_supplied:
+                    post_vis_res = await _post_process_consumer_async(
                         target_type,
-                        await user_resolver(root, info),
+                        raw_source,
                         info,
-                    ),
+                    )
+                    bounded = await bounded_rows_async(
+                        post_vis_res,
+                        info,
+                        max_rows,
+                        trusted=trusted_max_rows,
+                    )
+                    return (
+                        wrap_async_queryset_adapter(bounded)
+                        if isinstance(bounded, models.QuerySet)
+                        else bounded
+                    )
+                source, is_qs = prepared_resolver_source(
+                    raw_source,
+                    target_type,
+                    async_guard=reject_residual_async_source,
+                )
+                if is_qs:
+                    return await _execute_queryset_pipeline_async(
+                        target_type,
+                        source,
+                        info,
+                        args_record,
+                        max_rows,
+                        trusted_max_rows,
+                    )
+                await _handle_non_queryset_rejections_async(
+                    source,
+                    args_record,
+                    info,
+                    target_type=target_type,
+                )
+                if source is None:
+                    return None
+                return await bounded_rows_async(
+                    source,
                     info,
                     max_rows,
                     trusted=trusted_max_rows,
+                    offset=args_record.offset,
+                    requested_limit=args_record.limit,
                 )
         else:
-            # ONE sync body serves a plain ``def`` resolver AND a declared
-            # async-generator resolver (the same committed posture the
-            # connection field's sync branch documents): calling either always
-            # yields a NON-awaitable value here, and an async-only return is
-            # classified by VALUE at call time - completed through the async
-            # bound under async execution, rejected through the shared
-            # sync-misuse guard otherwise. No declared-shape check is needed:
-            # calling an async-generator callable (bare, ``partial``-wrapped,
-            # or an async-gen ``__call__`` instance) always produces an
-            # async-only iterable.
 
-            def _wrap(root: Any, info: Info) -> Any:
+            def _wrap(
+                *args: Any,
+                offset: Any = None,
+                limit: Any = None,
+                order_by: Any = strawberry.UNSET,
+                **kwargs: Any,
+            ) -> Any:
+                root = args[0] if len(args) > 0 else kwargs.get("root")
+                info: Info = args[1] if len(args) > 1 else kwargs["info"]
+                field_name = getattr(info, "field_name", None) or "DjangoListField"
+                args_record = _normalize_list_arguments(
+                    field_name,
+                    info,
+                    max_rows,
+                    trusted_max_rows,
+                    offset=offset,
+                    limit=limit,
+                    order_by=order_by,
+                )
                 source = user_resolver(root, info)
                 if is_async_only_iterable(source):
                     reject_async_iterable_in_sync_context(
                         source,
                         flavor_noun="DjangoListField",
                     )
-                    return _resolve_async_iterable(source, info)
+                    return _resolve_async_iterable(
+                        source,
+                        info,
+                        args_record,
+                    )
+                if not args_record.any_argument_supplied:
+                    post_vis_res = _post_process_consumer_sync(target_type, source, info)
+                    bounded = bounded_rows(post_vis_res, info, max_rows, trusted=trusted_max_rows)
+                    return (
+                        wrap_async_queryset_adapter(bounded)
+                        if in_async_context() and isinstance(bounded, models.QuerySet)
+                        else bounded
+                    )
+                source, is_qs = prepared_resolver_source(
+                    source,
+                    target_type,
+                    async_guard=reject_awaitable_sync_source,
+                )
+                if is_qs:
+                    return _execute_queryset_pipeline_sync(
+                        target_type,
+                        source,
+                        info,
+                        args_record,
+                        max_rows,
+                        trusted_max_rows,
+                        is_async_context=in_async_context(),
+                    )
+                _handle_non_queryset_rejections_sync(
+                    source,
+                    args_record,
+                    info,
+                    target_type=target_type,
+                )
+                if source is None:
+                    return None
                 return bounded_rows(
-                    _post_process_consumer_sync(target_type, source, info),
+                    source,
                     info,
                     max_rows,
                     trusted=trusted_max_rows,
+                    offset=args_record.offset,
+                    requested_limit=args_record.limit,
                 )
 
         wrapped = _wrap
+
+    signature, annotations = _synthesized_list_signature(target_type)
+    wrapped.__signature__ = signature
+    wrapped.__annotations__ = annotations
 
     return strawberry.field(
         resolver=wrapped,

@@ -185,10 +185,6 @@ def _require_positive_int(value: Any, label: str) -> None:
         )
 
 
-# TODO(spec-050 slice 5): When list windows ship, revise this class docstring's
-# ``max_list_rows`` entry to distinguish a returned-row ceiling and a separate
-# accepted-skip ceiling from total physical database rows scanned. Preserve the
-# deadline docstring's two ``bounded_rows`` cooperative seams unchanged.
 @dataclass(frozen=True)
 class ResourcePolicy:
     """The immutable per-request resource budget.
@@ -235,7 +231,10 @@ class ResourcePolicy:
     ``max_page_size``
         Ceiling on a connection's effective ``relay_max_results``.
     ``max_list_rows``
-        Ceiling on the rows a raw (non-Relay) list field may evaluate.
+        Ceiling on the returned rows and accepted skip (``offset``) for a
+        raw (non-Relay) list field. This is an accepted-coordinate and
+        returned-row ceiling, not a guarantee on total physical database
+        rows scanned.
 
     The value bounds, charged over coerced-shape input before any id is decoded
     and before any queryset is built:
@@ -469,46 +468,6 @@ def check_deadline(info: Any) -> None:
     )
 
 
-# TODO(spec-050 slice 1): Extend the one raw-list seam with validated client
-# coordinates; do not create a second pagination helper in ``list_field.py``.
-# On both bounding helpers, keep ``declared`` positional-or-keyword and add
-# ``offset`` / ``requested_limit`` only after the bare ``*`` beside ``trusted``.
-# ``_raw_list_bound`` itself remains coordinate-free.
-#
-# Pseudocode:
-#
-# - Let ``_raw_list_bound`` remain the sole deadline + effective-cap lookup.
-#   It must still call ``check_deadline(info)`` exactly once before returning
-#   ``effective_bound(policy.max_list_rows, declared, trusted=trusted)``.
-# - Each bounding function calls that helper before coordinate arithmetic or
-#   source advancement, then derives ``window = requested_limit if supplied
-#   else effective_cap``, ``start = offset``, and ``stop = start + window``.
-#   The list wrapper has already rejected invalid coordinates, so this seam
-#   performs arithmetic, not a second public-domain validation policy.
-# - Preserve the exact no-coordinate caller behavior. Querysets/sequences use
-#   ``result[start:stop]``. An unsliceable sync iterable uses
-#   ``list(islice(result, start, stop))``. For a zero window, return the empty
-#   slice when supported and ``[]`` otherwise without constructing ``islice``
-#   or advancing the source.
-# - For async-only input, acquire one iterator, discard exactly ``offset``
-#   values, collect at most ``window`` values, and never request the item after
-#   the accepted exclusive stop. Natural exhaustion sets ``exhausted=True``;
-#   reaching the stop, a zero window, or an iteration error is early exit.
-# - The SYNC side gets NO early-exit ``close()``. ``list(islice(...))`` leaves
-#   a retained generator suspended, and that is the declined-on-purpose
-#   contract: this helper also bounds every generated relation list, so closing
-#   a consumer's generator would change shipped behavior on callers this card
-#   promises not to touch. Pin the suspension in a test so a later symmetric
-#   card flips it deliberately.
-# - Extract acquisition/optional-``aclose``/diagnostic-note handling to one
-#   package-private async cleanup helper. ``bounded_rows_async`` passes its
-#   acquired iterator to it; list-field pre-bound rejections pass only the
-#   source so it acquires without ``__anext__``. A cleanup failure is primary
-#   only when no source/domain error exists, otherwise it is appended to that
-#   error's ``__notes__``. Never call ``aclose`` after natural exhaustion.
-#
-# TODO(spec-050 slice 5): Update both bounding-helper docstrings with the
-# returned/skip-vs-scan distinction when the coordinate parameters land.
 def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -> int:
     """Deadline check plus the effective raw-list row bound, spelled once for both colors.
 
@@ -526,6 +485,8 @@ def bounded_rows(
     info: Any,
     declared: int | None = None,
     *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
     trusted: bool = False,
 ) -> Any:
     """Apply the request's raw-list row bound to whatever a collection resolver produced.
@@ -536,11 +497,18 @@ def bounded_rows(
     The bound is the tighter of ``ResourcePolicy.max_list_rows`` and the field's
     own ``declared`` maximum unless the field declared ``trusted=True``.
 
-    It is applied by SLICING, so a ``QuerySet`` carries the bound into SQL as a
-    ``LIMIT`` and is never evaluated unbounded; a value that is already a
-    materialized sequence (a consumer resolver's return, or Django's prefetch
-    cache) is truncated in Python, which cannot un-fetch those rows but does stop
-    the response from serializing them.
+    When client coordinate parameters are provided, ``offset`` defines the skip
+    (``start``, defaulting to 0) and ``requested_limit`` defines the returned-row
+    window (assumed prevalidated by the caller; defaulting to the effective
+    ``limit``). The window defines the slice ``start:stop`` (where ``stop = start + window``).
+    These bounds define an accepted-coordinate ceiling on skipped and returned items,
+    not a guarantee on total physical rows scanned by the underlying database query.
+
+    It is applied by SLICING, so a ``QuerySet`` carries the bound into SQL as
+    ``LIMIT`` / ``OFFSET`` and is never evaluated unbounded; a value that is
+    already a materialized sequence (a consumer resolver's return, or Django's
+    prefetch cache) is truncated in Python, which cannot un-fetch those rows but
+    does stop the response from serializing them.
 
     A raw list is the one collection shape Relay pagination does not bound, so
     this is the only thing between a client and the whole table. It is
@@ -550,20 +518,75 @@ def bounded_rows(
     limit = _raw_list_bound(info, declared, trusted=trusted)
     if result is None:
         return None
+    if offset is None and requested_limit is None:
+        try:
+            return result[:limit]
+        except (TypeError, KeyError):
+            # A relation accessor can hand back a non-subscriptable iterable (a
+            # consumer-assigned sequence proxy, a custom manager's cached rows).
+            # Falling back to ``islice`` bounds it rather than letting it through:
+            # the alternative to slicing an unsliceable value is NOT "return it
+            # whole", which would be a bound that silently stops applying to
+            # exactly the shapes nobody anticipated. ``KeyError`` joins
+            # ``TypeError`` because a MAPPING-shaped result - a plain ``dict``, or a
+            # dict subclass whose ``__getitem__`` guards its keys - answers a slice
+            # subscript with ``KeyError`` on interpreters where slices hash, and a
+            # bound seam must never let that raw ``KeyError`` escape a resolver.
+            return list(islice(result, limit))
+
+    start = offset if offset is not None else 0
+    window = requested_limit if requested_limit is not None else limit
+    stop = start + window
+    if window == 0:
+        try:
+            return result[start:start]
+        except (TypeError, KeyError):
+            return []
     try:
-        return result[:limit]
+        return result[start:stop]
     except (TypeError, KeyError):
-        # A relation accessor can hand back a non-subscriptable iterable (a
-        # consumer-assigned sequence proxy, a custom manager's cached rows).
-        # Falling back to ``islice`` bounds it rather than letting it through:
-        # the alternative to slicing an unsliceable value is NOT "return it
-        # whole", which would be a bound that silently stops applying to
-        # exactly the shapes nobody anticipated. ``KeyError`` joins
-        # ``TypeError`` because a MAPPING-shaped result - a plain ``dict``, or a
-        # dict subclass whose ``__getitem__`` guards its keys - answers a slice
-        # subscript with ``KeyError`` on interpreters where slices hash, and a
-        # bound seam must never let that raw ``KeyError`` escape a resolver.
-        return list(islice(result, limit))
+        return list(islice(result, start, stop))
+
+
+async def _close_async_iterator(
+    iterator: Any,
+    *,
+    primary_error: BaseException | None = None,
+) -> None:
+    """Safely invoke ``iterator.aclose()`` if present.
+
+    When ``primary_error`` is provided (iteration failed), cleanup errors are
+    attached to ``primary_error.__notes__`` rather than replacing the primary error.
+    When ``primary_error`` is None (iteration completed normally or short-circuited),
+    cleanup errors are propagated directly.
+    """
+    try:
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
+    except BaseException as close_error:
+        if primary_error is None:
+            raise
+        # ``BaseException.add_note`` is 3.11+, and this runs inside a
+        # ``finally``: on the 3.10 support floor the resulting
+        # ``AttributeError`` would REPLACE the source error, masking
+        # exactly the failure this branch exists to preserve. Writing
+        # the ``__notes__`` list the note protocol is built on is what
+        # ``add_note`` does on 3.11+ (same list, same traceback
+        # rendering) and is the only form that carries the diagnostic
+        # across the whole supported range.
+        try:
+            notes = [*getattr(primary_error, "__notes__", ())]
+            notes.append(
+                f"bounded_rows_async iterator cleanup failed: {close_error!r}",
+            )
+            primary_error.__notes__ = notes
+        except Exception:
+            # The note is a diagnostic attachment, never a failure of
+            # its own: a hostile note surface on the source error (an
+            # unreadable or unassignable ``__notes__``) must not mask
+            # the source error the caller is already propagating.
+            pass
 
 
 async def bounded_rows_async(
@@ -571,6 +594,8 @@ async def bounded_rows_async(
     info: Any,
     declared: int | None = None,
     *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
     trusted: bool = False,
 ) -> Any:
     """Apply a raw-list row bound to a result that may be async-iterable.
@@ -583,22 +608,47 @@ async def bounded_rows_async(
     protocols) stay on ``bounded_rows`` so lazy querysets retain their SQL
     ``LIMIT`` instead of being materialized through the async iterator.
 
+    For async-only iterables, coordinates define an accepted-coordinate and
+    returned-row ceiling rather than a database row-scan guarantee: the helper
+    discards exactly ``offset`` items, collects at most ``window`` items
+    (where ``window`` is prevalidated ``requested_limit``, defaulting to the
+    effective limit), and closes the iterator early without over-requesting
+    subsequent items.
+
     When the prefix ends early, the iterator is closed. A cleanup failure is
     raised when iteration itself succeeded; when iteration already failed, the
     source error remains primary and the cleanup failure is attached as a note
     rather than masking the useful failure.
     """
     if not is_async_only_iterable(result):
-        return bounded_rows(result, info, declared, trusted=trusted)
+        return bounded_rows(
+            result,
+            info,
+            declared,
+            offset=offset,
+            requested_limit=requested_limit,
+            trusted=trusted,
+        )
     limit = _raw_list_bound(info, declared, trusted=trusted)
+    start = offset if offset is not None else 0
+    window = requested_limit if requested_limit is not None else limit
+
     iterator = aiter(result)
+    if window == 0:
+        await _close_async_iterator(iterator)
+        return []
+
     rows: list[Any] = []
     exhausted = False
     primary_error: BaseException | None = None
+    skipped = 0
     try:
         async for item in iterator:
+            if skipped < start:
+                skipped += 1
+                continue
             rows.append(item)
-            if len(rows) >= limit:
+            if len(rows) >= window:
                 break
         else:
             exhausted = True
@@ -607,33 +657,7 @@ async def bounded_rows_async(
         raise
     finally:
         if not exhausted:
-            try:
-                close = getattr(iterator, "aclose", None)
-                if close is not None:
-                    await close()
-            except BaseException as close_error:
-                if primary_error is None:
-                    raise
-                # ``BaseException.add_note`` is 3.11+, and this runs inside a
-                # ``finally``: on the 3.10 support floor the resulting
-                # ``AttributeError`` would REPLACE the source error, masking
-                # exactly the failure this branch exists to preserve. Writing
-                # the ``__notes__`` list the note protocol is built on is what
-                # ``add_note`` does on 3.11+ (same list, same traceback
-                # rendering) and is the only form that carries the diagnostic
-                # across the whole supported range.
-                try:
-                    notes = [*getattr(primary_error, "__notes__", ())]
-                    notes.append(
-                        f"bounded_rows_async iterator cleanup failed: {close_error!r}",
-                    )
-                    primary_error.__notes__ = notes
-                except Exception:
-                    # The note is a diagnostic attachment, never a failure of
-                    # its own: a hostile note surface on the source error (an
-                    # unreadable or unassignable ``__notes__``) must not mask
-                    # the source error the caller is already propagating.
-                    pass
+            await _close_async_iterator(iterator, primary_error=primary_error)
     return rows
 
 

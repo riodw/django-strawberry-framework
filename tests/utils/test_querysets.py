@@ -46,6 +46,7 @@ from django_strawberry_framework.utils.querysets import (
     _CASCADE_SEAL_POLICY,
     _DEFAULT_SEAL_POLICY,
     _INERT_VALUE_TYPES,
+    _LIST_ARGUMENT_VISIBILITY_POLICY,
     _PLAIN_CONTAINER_TYPES,
     _PREFETCH_CHILD_POLICY,
     _RETAINED_TYPES,
@@ -72,7 +73,10 @@ from django_strawberry_framework.utils.querysets import (
     _safe_class_name,
     _seal_or_defect,
     _sealed_prefetch_related_lookups,
+    _SealPolicy,
     _type_is_genuinely_django,
+    _validate_post_orderset_result,
+    _visibility_result_error,
     _where_tree_defect,
     apply_type_visibility_async,
     apply_type_visibility_sync,
@@ -4907,3 +4911,363 @@ def test_bound_value_normalizers_mirror_the_inert_inventory():
     deliberately (it cannot be subclassed).
     """
     assert set(_INERT_VALUE_TYPES) - {bool} == {base for base, _ in _BOUND_VALUE_NORMALIZERS}
+
+
+def test_seal_require_unevaluated():
+    """Populated _result_cache produces an 'unevaluated' defect when require_unevaluated=True."""
+    qs = Category.objects.all()
+    policy_uneval = _SealPolicy(
+        require_model_rows=True,
+        reject_sliced=True,
+        reject_combined=True,
+        require_shared_alias=False,
+        require_unevaluated=True,
+    )
+    # When cache is None: no defect
+    assert qs._result_cache is None
+    sealed, defect = _seal_or_defect(qs, Category, None, policy_uneval)
+    assert defect is None
+    assert sealed is not None
+
+    # When cache is populated: ("unevaluated", "the result cache is populated")
+    qs_eval = Category.objects.all()
+    qs_eval._result_cache = []
+    sealed, defect = _seal_or_defect(qs_eval, Category, None, policy_uneval)
+    assert sealed is None
+    assert defect == ("unevaluated", "the result cache is populated")
+
+
+def test_visibility_defect_messages():
+    """Visibility helpers format actionable error messages for 'unevaluated' and 'combined' defects."""
+
+    class BookType:
+        pass
+
+    err_msg_uneval = str(
+        _visibility_result_error(
+            BookType,
+            Category,
+            None,
+            ("unevaluated", "the result cache is populated"),
+            None,
+        ),
+    )
+    assert (
+        "BookType.get_queryset returned an evaluated queryset (the result cache is populated)"
+        in err_msg_uneval
+    )
+    assert "Return an unevaluated QuerySet." in err_msg_uneval
+
+    err_msg_comb = str(
+        _visibility_result_error(
+            BookType,
+            Category,
+            None,
+            ("combined", "union"),
+            None,
+        ),
+    )
+    assert "BookType.get_queryset returned a combined queryset (union)" in err_msg_comb
+    assert "Return a plain uncombined QuerySet." in err_msg_comb
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    evaluated_qs = Category.objects.all()
+    evaluated_qs._result_cache = []
+    policy_uneval = _SealPolicy(require_unevaluated=True)
+    with pytest.raises(
+        ConfigurationError,
+        match="apply_type_visibility for DummyType requires an unevaluated QuerySet",
+    ):
+        _prepared_visibility_source(DummyType, evaluated_qs, policy=policy_uneval)
+
+    combined_qs = Category.objects.all().union(Category.objects.all())
+    with pytest.raises(
+        ConfigurationError,
+        match="apply_type_visibility for DummyType requires an uncombined QuerySet",
+    ):
+        _prepared_visibility_source(
+            DummyType,
+            combined_qs,
+            policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
+        )
+
+
+def test_apply_type_visibility_sync_combined_result_error():
+    """apply_type_visibility_sync formats combined defect error using _visibility_result_error."""
+
+    class CombinedType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.union(Category.objects.all())
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"CombinedType\.get_queryset returned a combined queryset \(union\); active list arguments forbid combined queries",
+    ):
+        apply_type_visibility_sync(
+            CombinedType,
+            Category.objects.all(),
+            SimpleNamespace(),
+            policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
+        )
+
+
+def test_validate_post_orderset_result_valid():
+    """_validate_post_orderset_result accepts valid, ordered candidate querysets."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    valid_candidate = Category.objects.all().order_by("name")
+    sealed = _validate_post_orderset_result(
+        DummyType,
+        source_qs,
+        valid_candidate,
+        "MyOrderSet.apply_sync",
+    )
+    assert isinstance(sealed, models.QuerySet)
+
+
+def test_validate_post_orderset_result_rejects_non_queryset():
+    """_validate_post_orderset_result rejects non-queryset collections."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got type defect",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, [1, 2, 3], "MyOrderSet.apply_sync")
+
+
+def test_validate_post_orderset_result_rejects_none():
+    """_validate_post_orderset_result rejects None return values."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got type defect",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, None, "MyOrderSet.apply_sync")
+
+
+def test_validate_post_orderset_result_rejects_wrong_model():
+    """_validate_post_orderset_result rejects querysets of an unrelated model."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    wrong_model_qs = Item.objects.all()
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got table defect",
+    ):
+        _validate_post_orderset_result(
+            DummyType,
+            source_qs,
+            wrong_model_qs,
+            "MyOrderSet.apply_sync",
+        )
+
+
+def test_validate_post_orderset_result_rejects_evaluated():
+    """_validate_post_orderset_result rejects querysets with evaluated result cache."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    eval_qs = Category.objects.all()
+    eval_qs._result_cache = []
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got unevaluated defect",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, eval_qs, "MyOrderSet.apply_sync")
+
+
+def test_validate_post_orderset_result_rejects_sliced():
+    """_validate_post_orderset_result rejects sliced querysets."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    sliced_qs = Category.objects.all()[:5]
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got sliced defect",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, sliced_qs, "MyOrderSet.apply_sync")
+
+
+def test_validate_post_orderset_result_rejects_combined():
+    """_validate_post_orderset_result rejects combined querysets."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    comb_qs = Category.objects.all().union(Category.objects.all())
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got combined defect",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, comb_qs, "MyOrderSet.apply_sync")
+
+
+def test_validate_post_orderset_result_rejects_projection():
+    """_validate_post_orderset_result rejects values/projection querysets."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    values_qs = Category.objects.values("id")
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got projection defect",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, values_qs, "MyOrderSet.apply_sync")
+
+
+def test_validate_post_orderset_result_rejects_db_routing_mismatch():
+    """_validate_post_orderset_result rejects querysets routed to a different database."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    diff_db_qs = Category.objects.using("other")
+    with pytest.raises(
+        ConfigurationError,
+        match="changed database routing intent",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, diff_db_qs, "MyOrderSet.apply_sync")
+
+
+def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
+    """_validate_post_orderset_result rejects querysets with divergent database routing hints."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    diff_hints_qs = Category.objects.all()
+    diff_hints_qs._hints = {"instance": 123}
+    with pytest.raises(
+        ConfigurationError,
+        match="changed database routing intent",
+    ):
+        _validate_post_orderset_result(
+            DummyType,
+            source_qs,
+            diff_hints_qs,
+            "MyOrderSet.apply_sync",
+        )
+
+
+def test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute():
+    """_validate_post_orderset_result accesses _db and _hints without consumer __getattribute__."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    class HostileGetattributeQuerySet(models.QuerySet):
+        def __getattribute__(self, name):
+            if name in ("_db", "_hints"):
+                raise AssertionError(f"Hostile consumer __getattribute__ invoked for '{name}'")
+            return super().__getattribute__(name)
+
+    source_qs = HostileGetattributeQuerySet(model=Category)
+    # Should safely read _db and _hints via raw instance __dict__ without invoking HostileQuerySet.__getattribute__
+    sealed = _validate_post_orderset_result(
+        DummyType,
+        source_qs,
+        source_qs,
+        "MyOrderSet.apply_sync",
+    )
+    assert sealed is not None
+
+
+def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
+    """_validate_post_orderset_result compares and reports routing hints without consumer __eq__ or __repr__."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    class HostileValue:
+        def __eq__(self, other):
+            raise AssertionError("Hostile consumer __eq__ invoked")
+
+        def __repr__(self):
+            raise AssertionError("Hostile consumer __repr__ invoked")
+
+    val_a = HostileValue()
+    val_b = HostileValue()
+
+    source_qs = Category.objects.all()
+    source_qs._hints = {"tag": val_a}
+
+    cand_same = Category.objects.all()
+    cand_same._hints = {"tag": val_a}  # Same instance (identity)
+
+    # Comparing identical non-primitive hints must not invoke __eq__
+    sealed = _validate_post_orderset_result(
+        DummyType,
+        source_qs,
+        cand_same,
+        "MyOrderSet.apply_sync",
+    )
+    assert sealed is not None
+
+    cand_diff = Category.objects.all()
+    cand_diff._hints = {"tag": val_b}  # Different instance
+
+    # Rejection formatting must not invoke HostileValue.__repr__
+    with pytest.raises(
+        ConfigurationError,
+        match="changed database routing intent",
+    ) as exc_info:
+        _validate_post_orderset_result(
+            DummyType,
+            source_qs,
+            cand_diff,
+            "MyOrderSet.apply_sync",
+        )
+    assert "HostileValue at 0x" in str(exc_info.value)
+
+
+def test_validate_post_orderset_result_routing_hints_none_vs_empty():
+    """_validate_post_orderset_result preserves distinction between absent (None) and empty ({}) hints."""
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    source_qs._hints = None
+
+    cand_qs = Category.objects.all()
+    cand_qs._hints = {}
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"expected db='default', hints=None, got db='default', hints=\{\}",
+    ):
+        _validate_post_orderset_result(
+            DummyType,
+            source_qs,
+            cand_qs,
+            "MyOrderSet.apply_sync",
+        )

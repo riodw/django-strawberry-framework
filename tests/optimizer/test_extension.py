@@ -5826,3 +5826,84 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
     messages = [str(error) for error in result.errors]
     assert any("Unplanned N+1: items" in message for message in messages)
     assert not any("async context" in message for message in messages)
+
+
+def test_optimizer_unadapted_non_queryset_passthrough():
+    """Non-queryset results pass through _optimize unadapted."""
+    from django_strawberry_framework.utils.querysets import is_async_queryset_adapter
+
+    ext = DjangoOptimizerExtension()
+    non_qs_result = ext._optimize([1, 2, 3], SimpleNamespace())
+    assert non_qs_result == [1, 2, 3]
+    assert not is_async_queryset_adapter(non_qs_result)
+
+
+def test_optimizer_preserves_async_adapter_evaluated_cache():
+    """Evaluated queryset with adapter returns re-wrapped adapter."""
+    from django_strawberry_framework.utils.querysets import (
+        is_async_queryset_adapter,
+        wrap_async_queryset_adapter,
+    )
+
+    ext = DjangoOptimizerExtension()
+    qs_eval = Category.objects.all()
+    qs_eval._result_cache = []
+    adapted_eval = wrap_async_queryset_adapter(qs_eval)
+    assert is_async_queryset_adapter(adapted_eval)
+    eval_res = ext._optimize(adapted_eval, SimpleNamespace())
+    assert is_async_queryset_adapter(eval_res)
+    assert eval_res._queryset is qs_eval
+
+
+def test_optimizer_preserves_async_adapter_unresolved_type():
+    """Unresolved return type with adapter returns re-wrapped adapter."""
+    from django_strawberry_framework.utils.querysets import (
+        is_async_queryset_adapter,
+        wrap_async_queryset_adapter,
+    )
+
+    ext = DjangoOptimizerExtension()
+    qs_unresolved = Category.objects.all()
+    adapted_unresolved = wrap_async_queryset_adapter(qs_unresolved)
+    info_unresolved = SimpleNamespace(
+        return_type=object(),
+        schema=SimpleNamespace(get_type=lambda name: None),
+        field_name="unresolvedField",
+        field_nodes=[],
+    )
+    unresolved_res = ext._optimize(adapted_unresolved, info_unresolved)
+    assert is_async_queryset_adapter(unresolved_res)
+    assert unresolved_res._queryset is qs_unresolved
+
+
+def test_optimizer_preserves_async_adapter_optimized_tail():
+    """Optimized tail with adapter returns re-wrapped adapter."""
+    from django_strawberry_framework.utils.querysets import (
+        is_async_queryset_adapter,
+        wrap_async_queryset_adapter,
+    )
+
+    ext = DjangoOptimizerExtension()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    info_optimized = SimpleNamespace(
+        return_type=schema._schema.type_map["CategoryType"],
+        schema=schema._schema,
+        field_name="categories",
+        field_nodes=[],
+    )
+    qs_valid = Category.objects.all()
+    adapted_valid = wrap_async_queryset_adapter(qs_valid)
+    optimized_res = ext._optimize(adapted_valid, info_optimized)
+    assert is_async_queryset_adapter(optimized_res)
+    assert optimized_res._queryset is not None

@@ -19,8 +19,9 @@ Critical contract pins (do not violate without an explicit spec revision):
   (pytest-django blocks non-default-DB access otherwise).
 - Full ``Branch -> Shelf -> Book`` chain per alias via ``_seed_book_chain``
   (``Book.shelf`` and ``Shelf.branch`` are non-null FKs).
-- Live ``/graphql/`` HTTP exclusively via ``django.test.Client.post(...)`` - NO
-  in-process ``execute_sync(...)`` alternative.
+- Live ``/graphql/`` HTTP only - new ordinary JSON rows use the shared
+  ``graphql_client.py`` helper, and no row uses an in-process ``execute_sync(...)``
+  alternative.
 - Schema built inside a per-test fixture that depends on the shared module
   reload - the holder pattern below defers schema construction until after
   the registry clear so the test sees freshly-reloaded ``BookType``.
@@ -48,15 +49,22 @@ if os.environ.get("FAKESHOP_SHARDED") != "1":
 
 import strawberry
 from apps.library import models
+from django.conf import settings
 from django.db import connections
 from django.test import Client, override_settings
 from django.urls import clear_url_caches, path
-from graphql_client import assert_graphql_success as _graphql_data
+from graphql_client import (
+    assert_graphql_success as _graphql_data,
+)
+from graphql_client import (
+    graphql_payload,
+)
 from strawberry import relay
 from strawberry.django.views import GraphQLView
 from strawberry.types import Info
 
 from django_strawberry_framework import (
+    DjangoListField,
     DjangoMutation,
     DjangoMutationField,
     DjangoOptimizerExtension,
@@ -101,26 +109,150 @@ def _graphql_view(request):
 urlpatterns = [path("graphql/", _graphql_view)]
 
 
-# TODO(spec-050 slice 4): Add the sharded-only post-OrderSet routing rejection
-# to this existing holder mount, never to the default single-DB suite.
-#
-# Pseudocode:
-#
-# - Inside a per-test fixture imported after the schema reload, use monkeypatch
-#   to replace the already-bound ``BranchOrder.apply_sync`` public override for
-#   this test only. It receives a queryset explicitly routed to ``shard_b`` and
-#   maliciously returns a same-model queryset routed to ``default``; do not
-#   create a throwaway DjangoType or rewrite its finalized sidecar.
-# - Expose that type through a test-local DjangoListField resolver returning the
-#   real ``.using("shard_b")`` source, finalize only through the established
-#   fixture discipline, and mount it through ``_current``.
-# - Seed distinguishable rows on both aliases with inline ``using(alias).create``
-#   calls. Request non-null orderBy over live HTTP and assert an actionable
-#   post-order ``ConfigurationError`` names ``OrderSet.apply_sync`` and the
-#   routing mismatch before either alias fetches rows for completion.
-# - Keep the module-level ``FAKESHOP_SHARDED=1`` gate and
-#   ``django_db(databases=["default", "shard_b"])`` marker; clear the holder and
-#   URL caches in teardown exactly like the existing fixtures.
+@pytest.fixture
+def _build_list_field_routing_mismatch_schema(
+    _reload_project_schema_for_acceptance_tests,
+    monkeypatch,
+):
+    """Build a schema with Branch list field whose OrderSet maliciously routes shard_b to default."""
+    from apps.library.orders import BranchOrder
+    from apps.library.schema import BranchType
+
+    def _malicious_apply_sync(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        # Receives shard_b queryset, maliciously returns default queryset
+        return models.Branch.objects.using("default").order_by("name")
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_apply_sync))
+
+    @strawberry.type
+    class _RoutingQuery:
+        branches_shard_b: list[BranchType] = DjangoListField(
+            BranchType,
+            resolver=lambda root, info: models.Branch.objects.using("shard_b"),
+        )
+
+    _current["schema"] = DjangoSchema(
+        query=_RoutingQuery,
+        config=strawberry_config(),
+    )
+    yield
+    _current["schema"] = None
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_post_orderset_routing_mismatch_rejected_on_sharded_db(
+    _build_list_field_routing_mismatch_schema,
+):
+    """Post-OrderSet validation rejects database routing intent mismatch on sharded DB."""
+    models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
+    models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
+
+    query = """
+    query {
+      branchesShardB(orderBy: [{ city: ASC }]) {
+        name
+      }
+    }
+    """
+    client = Client()
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DEBUG=True,
+        MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+    ):
+        clear_url_caches()
+        try:
+            payload = graphql_payload(query, client=client)
+        finally:
+            clear_url_caches()
+
+    assert payload["data"] is None
+    assert "errors" in payload
+    err_msg = payload["errors"][0]["message"]
+    assert "apply_sync changed database routing intent" in err_msg
+    assert "expected db='shard_b'" in err_msg
+    assert "got db='default'" in err_msg
+
+
+@pytest.fixture
+def _build_list_field_hints_mismatch_schema(
+    _reload_project_schema_for_acceptance_tests,
+    monkeypatch,
+):
+    """Build a schema with Branch list field whose OrderSet changes routing hints with db=None."""
+    from apps.library.orders import BranchOrder
+    from apps.library.schema import BranchType
+
+    def _malicious_hints_apply_sync(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        # Receives unrouted queryset with hints={'instance': 1}, returns candidate with hints={'instance': 2}
+        ordered = queryset.order_by("name")
+        ordered._hints = {"instance": 2}
+        return ordered
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_hints_apply_sync))
+
+    def _hints_resolver(root, info):
+        qs = models.Branch.objects.all()
+        qs._hints = {"instance": 1}
+        return qs
+
+    @strawberry.type
+    class _RoutingHintsQuery:
+        branches_hints: list[BranchType] = DjangoListField(
+            BranchType,
+            resolver=_hints_resolver,
+        )
+
+    _current["schema"] = DjangoSchema(
+        query=_RoutingHintsQuery,
+        config=strawberry_config(),
+    )
+    yield
+    _current["schema"] = None
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_post_orderset_hints_routing_mismatch_rejected_on_sharded_db(
+    _build_list_field_hints_mismatch_schema,
+):
+    """Post-OrderSet validation rejects routing hints mismatch when _db is None on both sides."""
+    models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
+
+    query = """
+    query {
+      branchesHints(orderBy: [{ city: ASC }]) {
+        name
+      }
+    }
+    """
+    client = Client()
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DEBUG=True,
+        MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+    ):
+        clear_url_caches()
+        try:
+            payload = graphql_payload(query, client=client)
+        finally:
+            clear_url_caches()
+
+    assert payload["data"] is None
+    assert "errors" in payload
+    err_msg = payload["errors"][0]["message"]
+    assert "apply_sync changed database routing intent" in err_msg
+    assert "expected db=None, hints={'instance': 1}" in err_msg
+    assert "got db=None, hints={'instance': 2}" in err_msg
 
 
 # ---------------------------------------------------------------------------

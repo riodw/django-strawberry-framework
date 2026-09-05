@@ -1,18 +1,12 @@
 # Spec: `DjangoListField` argument surface (`offset`, `limit`, and `orderBy`)
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
-Status: planned for `0.0.15`
-Revision: 2026-09-01 - specification, independent upstream review, audit reconciliation,
-implementation-contract corrections, live-tier compliance review against
-[`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme], and a blocking
-architectural review answered in place. That last pass named the order contract ordered
-offset rather than stable pagination, chose and recorded the universal-`offset` capability
-rule, split the single argument-activity bit into four independent fields, made
-`ListArgumentError` a root export, defined same-route as routing INTENT, replaced an
-impossible zero-advance async-generator finalization assertion, declined the sync cleanup
-contract explicitly, split the sync live suite out of the library application suite, and
-queued two amendments to the parent card. The joint-cut ruling moved from Decision 7 to
-Decision 12 during the earlier review
+Status: in flight (`0.0.15`)
+Revision: 2026-09-04 - in flight (`0.0.15`) (revision history moved to
+[`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
+
+Deliberation, rejected alternatives, and this spec's change record live in its companion
+[`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale].
 
 Predecessors: [`spec-020`][spec-020] (the shipped non-Relay list field),
 [`spec-028`][spec-028] (the shipped ordering subsystem and its explicit list-field
@@ -307,8 +301,8 @@ pops it, combines it with `after`, and converts the result back to a Relay offse
 additionally rejects `before` plus `offset`. The useful migration property is
 discoverability: a migrant expects `offset` to be a normal nullable integer argument. The
 package borrows that spelling on the flat-list field only. It refuses cursor conversion,
-`before` composition, and the connection-wide publication because those make a skip look
-like a cursor while retaining skip instability.
+`before` composition, and the connection-wide publication (*why each was declined: see the
+[rationale][rationale-borrowing]*).
 
 ### From `strawberry-graphql-django` - borrow offset arithmetic, keep this package's shape
 
@@ -320,11 +314,9 @@ queryset as `[offset:offset + limit]`, while
 [`strawberry_django/pagination.py::apply_window_pagination`][upstream-strawberry-pagination]
 expresses the same bounds with `RowNumber` for nested prefetches. The root arithmetic is the
 part borrowed. Its silent max-limit clamp, negative-limit unbounded spelling, generated
-result envelope, decorator surface, and nested raw-list window are refused. The negative
-spelling reaches an unbounded tail when its maximum-limit clamp is disabled, which is the
-shipped default; when configured, the clamp silently rewrites that spelling to the maximum.
-Both behaviors are refused here. This package has a fail-closed resource policy, a
-Meta-class public API, and connections for nested windows.
+result envelope, decorator surface, and nested raw-list window are refused (*why each was
+declined: see the [rationale][rationale-borrowing]*). This package has a fail-closed resource
+policy, a Meta-class public API, and connections for nested windows.
 
 ### From this package - reuse the connection signature proof, not its page rules
 
@@ -332,7 +324,8 @@ Meta-class public API, and connections for nested windows.
 that Strawberry will publish Meta-derived lazy sidecar inputs from a wrapper's assigned
 `__signature__` and `__annotations__`. The list field borrows that mechanism and the
 `order_input_type` call. It does not import the connection's filter input, total-order
-tiebreaker, cursor codec, [`ConnectionExtension`][connection], or page-size rules.
+tiebreaker, cursor codec, [`ConnectionExtension`][connection], or page-size rules (*see the
+[rationale][rationale-borrowing]*).
 
 ## User-facing API
 
@@ -529,7 +522,7 @@ to attach the package code would change the requested SDL and is rejected.
 
 ## Architectural decisions
 
-### Decision 1 - synthesize one resolver signature; do not widen consumer resolvers
+### Decision 1 — synthesize one resolver signature; do not widen consumer resolvers
 
 `DjangoListField` gains a private signature builder parallel in mechanism to
 [`django_strawberry_framework/connection.py::_synthesized_signature`][connection]. It
@@ -552,11 +545,9 @@ annotation map omits `return`. The consumer's class-attribute annotation remains
 erase the shipped nullable-outer spelling even though this card changes only arguments.
 
 The wrapper, not the consumer resolver, consumes all three arguments. Existing consumers
-continue to implement `resolver(root, info)`. Forwarding arguments was rejected because it
-would break every existing two-parameter resolver and would split the package contract
-between default and consumer fields. Inspecting a consumer signature and forwarding only
-accepted names was rejected because behavior would change when a parameter is renamed and
-because the package, not the consumer, must own validation and slice ordering.
+continue to implement `resolver(root, info)`. *Alternatives rejected: see the
+[rationale][rationale-d1] (forwarding arguments to consumer resolvers, inspecting consumer
+signatures).*
 
 The signature builder calls
 [`django_strawberry_framework/orders/__init__.py::order_input_type`][orders-init] with
@@ -577,7 +568,7 @@ reversing that edge would close a module cycle. A neutral parameter-construction
 extractable only if it is genuinely smaller and lives below both modules; the list field
 never imports the connection module merely to avoid a few `inspect.Parameter` calls.
 
-### Decision 2 - sidecar-conditional `orderBy` is the only truthful Meta-first surface
+### Decision 2 — sidecar-conditional `orderBy` is the only truthful Meta-first surface
 
 The card asks for three optional arguments on every `DjangoListField`, but its same Scope
 section says ordering comes from the target's `orderset_class`. Those requirements cannot
@@ -586,28 +577,8 @@ package's DRF-first public API and [`spec-028`][spec-028] Decision 12: `offset` 
 are universal; `orderBy` is present exactly when `Meta.orderset_class` supplies its type and
 semantics.
 
-Rejected alternatives:
-
-- Auto-generating an `OrderSet` from every model would reverse a standing public decision,
-  expose relation and column choices the consumer never approved, and create different
-  ordering inputs for the same `DjangoType` depending on which field factory referenced it.
-- A JSON argument would erase schema validation and the discoverable `Ordering` enum.
-- An empty placeholder input is invalid GraphQL, while a dummy field or always-rejected
-  enum would publish a capability that cannot succeed.
-- Requiring every `DjangoListField` target to declare `Meta.orderset_class` would be a
-  breaking change to the existing pagination-independent field.
-
-The same collision reappears one argument over, on `offset`, and is decided here too, because
-Decision 6 makes a published `offset` unusable on a target with no order source. Two
-alternative capability rules were weighed and rejected. Publishing `offset` only where a
-declared order source exists was rejected because that source may be a model `Meta.ordering`
-a consumer resolver clears at runtime, so the argument's presence still would not predict its
-usability - it would move the dishonesty into SDL instead of removing it. Accepting a
-resolver's own `.order_by(...)` as a documented contract is rejected in Decision 6 for its own
-reason: hidden order cannot explain to a client why one field accepts offset and an
-otherwise-identical one does not. An explicit Meta-first stable-order declaration for list
-fields is a genuine third option and is DEFERRED rather than refused - it is a new public Meta
-key, and it belongs in its own card with its own parity evidence.
+*Alternatives rejected: see the [rationale][rationale-d2] (auto-generating OrderSets, JSON
+argument, dummy input, mandatory orderset_class, conditional offset publication).*
 
 The card body's universal-three-argument sentence is amended by this card rather than
 reinterpreted around it: Slice 5 rewrites that Scope bullet in the KANBAN database to state
@@ -615,7 +586,7 @@ that `offset` and `limit` are universal, `orderBy` is sidecar-conditional, and a
 `offset` is a runtime-precondition coordinate. This qualification is recorded again under
 Risks so implementation review cannot mistake it for an accidental omission.
 
-### Decision 3 - one validation record computes both window and errors
+### Decision 3 — one validation record computes both window and errors
 
 A private immutable normalized-arguments record holds `offset`, `limit`,
 `effective_ceiling`, the order input, and whether that input was supplied. Material
@@ -685,12 +656,10 @@ therefore mathematically the client value when supplied and the effective ceilin
 omitted. This satisfies the card's minimum rule without a silent clamp: a client can ask
 for less, never more.
 
-### Decision 4 - `max_list_rows` also bounds skip; trusted widening does not
+### Decision 4 — `max_list_rows` also bounds skip; trusted widening does not
 
-The maximum accepted offset is the request's `max_list_rows`. A dedicated
-`max_list_offset` setting was considered and rejected for `0.0.15`: the two limits protect
-the same raw-list operation, the card explicitly prefers deriving the ceiling, and a new
-setting would add deployment surface before evidence shows the limits need to differ.
+The maximum accepted offset is the request's `max_list_rows`. *Alternatives rejected: see the
+[rationale][rationale-d4] (a dedicated max_list_offset setting).*
 
 `trusted_max_rows` is deliberately not consulted for offset. It states that a schema author
 trusts a field to return more rows; it says nothing about the cost of making the database
@@ -703,46 +672,25 @@ coordinate ceiling, and concurrent deletes can make any previously valid page ov
 
 Skip and return ceilings are independent dimensions. The request may therefore have
 `offset + effective_limit > max_list_rows`; the maximum untrusted endpoint is twice the
-policy value, while each of the two kinds of work remains separately bounded. Requiring the
-sum to fit under `max_list_rows` would make the accepted `limit` depend on `offset`, turn an
-otherwise-valid page into an error as it moves forward, and make the explicitly accepted
-`offset == max_list_rows` useful only with `limit: 0`. Trusted field widening can raise the
-return half but never the skip half. If deployments later need a single database-scan
-budget, that is a distinct `max_list_scan_rows` policy decision with backend-aware evidence,
-not an undocumented reinterpretation of the shipped return ceiling.
+policy value, while each of the two kinds of work remains separately bounded. Trusted field
+widening can raise the return half but never the skip half. *Why requiring the sum to fit
+under max_list_rows and single scan budgets were rejected: see the [rationale][rationale-d4].*
 
 Accordingly, `max_list_rows` retains a returned/materialized-row meaning on the return
 dimension and is reused as a separate accepted-skip ceiling. Both are ACCEPTED COORDINATE
 CEILINGS, not scan budgets: they bound what a client may ask for, never what the backend plan
-does to satisfy it. Even a small offset can force a sort or a large scan of a filtered
-relation, a to-many aggregate order can add `GROUP BY`, and high offsets commonly degrade with
-table size. The request deadline does not close that gap either: `check_deadline` is one
-cooperative PRE-fetch check, so it can refuse to start a query and cannot interrupt one
-already dispatched. This spec therefore says "accepted coordinate ceiling" rather than "work
+does to satisfy it. This spec therefore says "accepted coordinate ceiling" rather than "work
 budget" for both dimensions, and the `ResourcePolicy`, `bounded_rows`, and
 `bounded_rows_async` docstrings are updated in this card so "evaluate" cannot be read as a
-total scan guarantee.
+total scan guarantee. *Derivation: see the [rationale][rationale-d4].*
 
 The pre-execution collection-cost walker keeps its shipped charge unchanged: a raw list costs
 `ResourcePolicy.max_list_rows` whatever the operation supplies. That charge is a
-SCHEMA-GENERIC FIXED ESTIMATE, and this spec stops calling it a conservative upper bound,
-because after this card it is not one in either direction. It overcharges when a field or a
-client narrows below the policy, and it undercharges in two accepted cases: a positive
-`offset` admits up to another `max_list_rows` of logical skip work the return-dimension walker
-never sees, and a `trusted_max_rows=True` field with `max_rows > P` returns more rows than the
-walker charged (a divergence that already exists for omission and must simply stop being
-called conservative). The accepted logical window is still bounded and statable - at most
-`offset + returned <= 2P` untrusted and `P + F` trusted - but that bound is enforced by the
-runtime coordinate ceilings, not by the document budget, and the two must not be narrated as
-one accounting. Runtime row fetch and serialization still honor the smaller client limit. The
-walker remains schema-generic with no trustworthy marker distinguishing this factory's
-validated `limit` from an unrelated consumer argument of the same name, and teaching it to
-infer semantics from spelling would undercharge arbitrary lists. If the mismatch is later
-judged unacceptable for the resource-policy threat model, the root fix is field metadata
-consumed by the walker under its own evidence-driven policy decision - never name matching in
-[`django_strawberry_framework/extensions/resource_policy.py::_collection_rows`][resource-policy-extension].
+SCHEMA-GENERIC FIXED ESTIMATE. Runtime row fetch and serialization still honor the smaller
+client limit. *Derivation of the fixed estimate and why argument-name matching was rejected:
+see the [rationale][rationale-d4].*
 
-### Decision 5 - validate, then visibility, ordering, and exactly one slice
+### Decision 5 — validate, then visibility, ordering, and exactly one slice
 
 For a request carrying any non-null list argument, the color-specific queryset pipeline is:
 
@@ -833,9 +781,9 @@ For a request carrying any non-null list argument, the color-specific queryset p
    databases when their hints differ - and the seal preserves whatever hints the candidate
    carried, copying them into the rebuild. The enforced invariant is therefore ROUTING INTENT:
    the post-apply candidate's `_db` equals the pre-order sealed source's `_db`, `None`
-   included, AND its `_hints` mapping equals that source's. Resolved-alias equality was
-   rejected as the invariant because computing it calls a consumer router mid-validation;
-   intent equality is stricter, deterministic, and dispatches no consumer code. The shipped
+   included, AND its `_hints` mapping equals that source's. Intent equality is stricter,
+   deterministic, and dispatches no consumer code (*alternatives rejected: see the
+   [rationale][rationale-d5]*). The shipped
    seal already compares `_db` against a required alias and already proves `_hints` is `None`
    or an exact `dict`, so this is one added comparison at an already-proven-shape site rather
    than a new state read. The sharded live suite covers the unrouted/hint-driven mismatch as
@@ -867,14 +815,9 @@ malicious override that discards the input and starts from a fresh manager is ou
 The tests prove conforming delegation and every mechanically enforceable violation rather
 than claiming to authenticate arbitrary consumer code.
 
-This third seal is not a cheap `isinstance` guard and this spec does not present it as one.
-The visibility boundary already performs deep recursive query-graph validation and canonical
-reconstruction twice - once on the source, once on the hook result - and a supplied `orderBy`
-adds a third full walk and rebuild of every annotation, subquery, `Prefetch` tree, and
-expression node. The cost is accepted because the alternative is trusting arbitrary public
-override output, but it is paid on every argument-bearing request that supplies an order, so
-it is stated rather than absorbed into prose about constant-time checks. Slice 3 benchmarks
-the post-apply seal on at least a complex annotated query, a to-many aggregate order, and a
+This third seal is not a cheap `isinstance` guard. The cost of a third full walk and rebuild
+is accepted (*derivation: see the [rationale][rationale-d5]*). Slice 3 benchmarks the
+post-apply seal on at least a complex annotated query, a to-many aggregate order, and a
 queryset carrying prefetch metadata, and the numbers are recorded at card close. A fast path
 is not adopted on intuition: it requires that evidence, and until then the full seal stays for
 every overridable public method. What the list field must not do under any circumstance is
@@ -886,8 +829,8 @@ The implementation extends
 sibling with optional validated `offset` / `limit` values rather than slicing locally in
 [`django_strawberry_framework/list_field.py`][list-field]. `bounded_rows` remains the one
 raw-list bound for root and relation lists; callers without client arguments take its exact
-existing branch. A fresh pagination helper that calls `bounded_rows` and then slices was
-rejected: it would either double-slice or apply offset after truncating the source.
+existing branch. *Alternatives rejected: see the [rationale][rationale-d5] (a fresh
+pagination helper).*
 
 Async queryset completion needs one additional representation boundary.
 [`graphql/execution/execute.py::ExecutionContext.complete_list_value`][graphql-execute]
@@ -929,24 +872,14 @@ the optimized one. The sibling
 already awaits an async resolver result before calling `_optimize`, so the arm needs no second
 async branch of its own.
 
-The cheaper in-repo alternative is deliberately rejected here rather than borrowed. The
-generated relation resolver already faces this exact completion hazard and resolves it without
-a new type: [`django_strawberry_framework/types/resolvers.py::many_resolver`][types-resolvers]
-materializes inside its own coroutine (`[row async for row in bounded]`) and hands graphql-core
-a plain list. That is correct for a relation, whose rows are a leaf of an already-planned
-parent query. It is wrong for a root list: the root plan is applied to the value the resolver
-returns, so materializing before returning would hand
-[`DjangoOptimizerExtension`][glossary-djangooptimizerextension] a list with no queryset left to
-plan, silently dropping root-list optimization on every async request while every assertion
-about rows and SQL still passed. The adapter exists precisely to keep the final sliced queryset
-lazy across the resolver boundary; a package test pins that the optimizer still reaches the
-inner queryset, because the failure mode of the rejected alternative is invisible to result
-assertions. Sync execution,
-materialized values, `None`, and genuine async-only consumer sources retain their existing
-result shapes. Adapter selection keys off the runtime execution context for every final
-queryset, including a plain `def` consumer returning a `Manager`/`QuerySet` under an async
-view; it does not change the shipped callable-color rule for whether a consumer or visibility
-hook is awaited.
+The adapter exists precisely to keep the final sliced queryset lazy across the resolver
+boundary; a package test pins that the optimizer still reaches the inner queryset.
+*Alternatives rejected: see the [rationale][rationale-d5] (in-coroutine list materialization
+via many_resolver).* Sync execution, materialized values, `None`, and genuine async-only
+consumer sources retain their existing result shapes. Adapter selection keys off the runtime
+execution context for every final queryset, including a plain `def` consumer returning a
+`Manager`/`QuerySet` under an async view; it does not change the shipped callable-color rule
+for whether a consumer or visibility hook is awaited.
 
 The safety claim is scoped to FRAMEWORK-OWNED FINAL QUERYSET COMPLETION and must be written
 that way everywhere it appears. The adapter removes the one iteration the framework itself
@@ -958,7 +891,7 @@ accordingly exercises a CONFORMING lazy sync resolver - one that returns a query
 evaluating it - and never implies that an evaluating sync resolver is made safe by the
 adapter's presence.
 
-### Decision 6 - nonzero offset requires a materially active order
+### Decision 6 — nonzero offset requires a materially active order
 
 `offset > 0` succeeds only when at least one of these is true on the post-visibility
 queryset:
@@ -1045,17 +978,11 @@ The rejection is
 same stable code and no ceiling. Offset zero never requires ordering. Omitted offset does not
 require ordering even when a limit is supplied.
 
-Silently accepting unordered offset was rejected because database default order can change
-between requests, query plans, or backends. Graphene-Django ships that weaker behavior: its
-connection accepts offset without an ordering precondition. Strawberry-GraphQL-Django takes
-the other upstream path and silently injects `order_by("pk")` before paginating an unordered
-queryset in
-[`strawberry_django/pagination.py::StrawberryDjangoPagination.get_queryset`][upstream-strawberry-pagination].
-This package rejects both behaviors. Primary-key injection changes SQL and usurps a consumer
-ordering choice; the no-argument fast path additionally must remain byte-identical. Unlike a
-connection, a list mints no cursor that requires a package-owned total order.
+*Alternatives rejected: see the [rationale][rationale-d6] (unordered offset as shipped in
+Graphene-Django, primary-key tiebreaker injection as shipped in
+Strawberry-GraphQL-Django).*
 
-### Decision 7 - active order is not total order; no pk tiebreaker is appended
+### Decision 7 — active order is not total order; no pk tiebreaker is appended
 
 An active `orderBy` or `Meta.ordering` may contain ties. The list field preserves the exact
 declared terms and does not append primary key. This is intentionally weaker than
@@ -1074,13 +1001,10 @@ the problem worse but are not its cause. Nothing in this spec, the field docstri
 glossary entry, or the error text may promise a stable or repeatable page, and Slice 5 sweeps
 the shipped docs for that wording rather than only adding new sentences beside it.
 
-Three contracts were available and the third is the deliberate choice. Requiring a provably
-total order and rejecting unprovable ties was rejected as infeasible over arbitrary Django
-expressions and backend-dependent even where it is possible. Appending a deterministic
-terminal term was rejected as a semantic change to requested order priority that would also
-break the no-argument SQL parity this card owes. Keeping the active-order guard while
-declining the stronger promise is the card's stated minimal shape, and it makes a unique final
-term a CONSUMER obligation the framework documents and does not enforce.
+Keeping the active-order guard while declining the stronger promise is the card's stated minimal
+shape, and it makes a unique final term a CONSUMER obligation the framework documents and does
+not enforce. *Alternatives rejected: see the [rationale][rationale-d7] (requiring a provably
+total order, appending a deterministic terminal pk tiebreaker).*
 
 Django 6.1 ships a `QuerySet.totally_ordered` helper covering common field cases. It is not a
 portable substitute for the declared policy: the package supports Django 5.2 through latest,
@@ -1091,7 +1015,7 @@ Consumers that page through tied values add a unique final term themselves, for 
 `orderBy: [{ city: ASC }, { id: ASC }]`, or declare it in model `Meta.ordering`. The field
 docstring and migration note carry that as the recommendation it is.
 
-### Decision 8 - queryset and iterable sources have explicit, different capabilities
+### Decision 8 — queryset and iterable sources have explicit, different capabilities
 
 `limit` and zero offset work on querysets, materialized sequences, and ordinary iterables.
 The public list-field pipeline permits nonzero offset only for a queryset carrying the
@@ -1125,8 +1049,8 @@ client that always sends pagination variables can therefore turn a legitimate `n
 error, and that is the intended behavior. `orderBy` over a source that cannot be ordered, and
 a positive `offset` over a source whose order cannot be established, are both requests the
 field cannot honor; answering them with `null` would report success for a page that was never
-produced. Short-circuiting `None` after numeric-domain validation was considered and rejected
-on exactly those grounds. Because the surprise is real, both outer annotations are pinned
+produced. *Why short-circuiting None was rejected: see the [rationale][rationale-d8].*
+Because the surprise is real, both outer annotations are pinned
 live: a nullable outer list and a non-null outer list over the same `None`-returning source,
 each with a limit-only request (which preserves `null`) and with a rejected argument (which
 errors, propagating through whichever nullability the consumer annotation declares).
@@ -1157,10 +1081,8 @@ rather than left as an implied promise. A retained sync generator consumed throu
 `list(islice(generator, start, stop))` stays suspended after the accepted stop: its `finally`
 block does not run until something closes or exhausts it, and CPython reference counting is
 not a cross-runtime resource-management contract - it does nothing at all while the caller
-keeps its own reference. Adding an early-exit `close()` was rejected for `0.0.15` because
-`bounded_rows` is also the shipped bound for every generated relation list, so closing a
-consumer's retained generator would be an observable behavior change on exactly the callers
-this card promises not to touch. The Definition of done is narrowed to match: leak-free
+keeps its own reference. *Why sync early-exit close() was rejected for 0.0.15: see the
+[rationale][rationale-d8].* The Definition of done is narrowed to match: leak-free
 early-exit cleanup is promised for async-only sources only. A resource-policy unit test pins
 the declined behavior explicitly - a retained sync generator remains suspended and resumable
 after truncation - so it is a recorded decision rather than an accident, and a later
@@ -1172,13 +1094,13 @@ that returns a sliced queryset. Both are existing `ConfigurationError` paths in
 [`django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync`][querysets]
 and its async sibling, and they apply whether arguments are active or omitted. The list
 field must not directly read `source.query.is_sliced`, import the private seal, or translate
-the failure into a new list-argument reason: each alternative would duplicate or weaken the
-hardened classifier. This also rejects limit-only composition safely. Django can narrow an
+the failure into a new list-argument reason (*alternatives rejected: see the
+[rationale][rationale-d8]*). This also rejects limit-only composition safely. Django can narrow an
 existing slice, but `get_queryset` may need to filter first and cannot legally filter a
 sliced query; accepting it only for identity hooks would make one public argument
 source-dependent and could bypass visibility.
 
-### Decision 9 - no-argument sync behavior takes the old branch; async only adapts completion
+### Decision 9 — no-argument sync behavior takes the old branch; async only adapts completion
 
 When all three arguments are omitted or null, the resolver executes the same visibility and
 `bounded_rows(result, info, max_rows, trusted=trusted_max_rows)` logic as `0.0.14`. The new
@@ -1201,10 +1123,11 @@ since [`spec-047`][spec-047]. A spec may not silently redefine its parent Defini
 while the board still demands the opposite result, so Slice 5 AMENDS that card DoD row in the
 KANBAN database to the shipped contract: omission preserves the existing policy `LIMIT`
 unchanged, a smaller client limit lowers the high mark, and a positive offset raises the low
-mark. Tests pin exactly those three. The neighbouring Scope claim that no-argument SQL is
-byte-for-byte today's survives the amendment unchanged and stays a live assertion.
+mark (*card amendment derivation: see the [rationale][rationale-d9]*). Tests pin exactly those
+three. The neighbouring Scope claim that no-argument SQL is byte-for-byte today's survives
+the amendment unchanged and stays a live assertion.
 
-### Decision 10 - coercion errors stay GraphQL-owned; runtime domain errors are package-owned
+### Decision 10 — coercion errors stay GraphQL-owned; runtime domain errors are package-owned
 
 GraphQL `Int` rejects strings, booleans, integers outside the signed 32-bit wire range, float
 literals, and non-integral or non-finite float variables before a field resolver runs. Those
@@ -1221,12 +1144,10 @@ the wrapper raises `ListArgumentError` with package extensions. Direct unit call
 bypass GraphQL also reject non-integers and bools through the same type, because internal
 callers do not receive GraphQL coercion for free.
 
-A custom stricter integer scalar was rejected because the card explicitly asks for `Int`
-SDL and because over-ceiling validation still needs request context unavailable to scalar
-coercion. A schema extension that rewrites all `Int` coercion errors was rejected as
-overbroad and unable to reliably identify which argument failed after validation.
+*Alternatives rejected: see the [rationale][rationale-d10] (a custom stricter integer scalar,
+a schema extension rewriting all Int coercion errors).*
 
-### Decision 11 - migration maps upstream roots here and nested pagination to connections
+### Decision 11 — migration maps upstream roots here and nested pagination to connections
 
 The future migration guide records:
 
@@ -1241,14 +1162,14 @@ The note also calls out the order precondition and recommends a unique final ord
 Card [`TODO-BETA-071-0.1.8`][kanban], not this flow, owns the eventual guide text; this spec
 pins its required content without editing the card body or future guide now.
 
-### Decision 12 - the version bump belongs to the `0.0.15` joint cut
+### Decision 12 — the version bump belongs to the `0.0.15` joint cut
 
 Cards 050, 051, 052, and 053 are all non-Done at the target patch version. Under the joint
 version-cut rule the last card owns the single
 [`django_strawberry_framework.__version__`][package-init] literal, the
 [`tests/base/test_init.py`][test-base-init] assertion, glossary package-version state, and
 release wording. [`spec-053`][spec-053] and card 053's board definition already claim that
-ownership.
+ownership. *Derivation of the joint-cut version boundary: see the [rationale][rationale-d12].*
 
 [`pyproject.toml`][pyproject] derives the package version dynamically from the literal, and
 `uv.lock` records no editable-root version. Joint-cut deferral therefore means those files
@@ -1810,54 +1731,43 @@ structural checks, and link/kanban verification prescribed by
 
 ## Risks and open questions
 
+*Preferred answers stay in the spec; fallbacks moved to the companion [rationale][rationale-risks].*
+
 - **The card's universal-three-argument sentence conflicts with its Meta-derived-order
   requirement.** Preferred answer for `0.0.15`: the truthful conditional `orderBy` surface
-  in Decision 2. Fallback if the maintainer insists on literal universal publication:
-  explicitly choose and card a dynamic `OrderSet` policy first; do not ship JSON or a dummy
-  input as an invisible workaround.
+  in Decision 2. *Fallback: see the [rationale][rationale-risks].*
 - **GraphQL coercion errors cannot carry the package runtime code.** Preferred answer:
   Decision 10's honest split - all cases are `GraphQLError`, while only field-domain errors
-  carry package extensions. Fallback if one code is mandatory: a future schema-wide audited
-  error-normalization feature, not a weakened scalar local to this field.
+  carry package extensions. *Fallback: see the [rationale][rationale-risks].*
 - **Active order does not prove uniqueness, so the delivered contract is weaker than the
   words "stable subset" suggest.** Preferred answer: name the contract ORDERED OFFSET
   everywhere (Decision 7), require a visible order, document the unique-final-term
   recommendation, and sweep stable/repeatable wording out of the shipped docs rather than
-  layering a caveat beside it. Fallback: a future opt-in deterministic list-order policy;
-  never silently append pk in this card.
+  layering a caveat beside it. *Fallback: see the [rationale][rationale-risks].*
 - **The sync early-exit cleanup contract is declined, not solved.** Preferred answer: promise
   leak-free early exit for async-only sources only, pin the declined sync behavior in a test,
-  and say so in the Definition of done. Fallback once evidence shows retained sync generators
-  leak in practice: one shared sync `close()` contract at the same bounding seam, carded
-  separately because it changes shipped relation-list behavior.
+  and say so in the Definition of done. *Fallback: see the [rationale][rationale-risks].*
 - **Document collection-cost accounting and the runtime coordinate ceilings are two different
   budgets and now visibly disagree.** Preferred answer: describe the document charge as a
   schema-generic fixed estimate, state the accepted logical window bounds outright (Decision
-  4), and change neither mechanism. Fallback if the divergence becomes unacceptable to the
-  resource-policy threat model: field metadata consumed by the walker, with its own evidence;
-  never argument-name matching.
+  4), and change neither mechanism. *Fallback: see the [rationale][rationale-risks].*
 - **Nested `DjangoListField` usage has a shipped glossary promise this card neither keeps nor
   retracts.** Preferred answer: preserve the no-argument nested behavior exactly, declare the
-  new arguments unspecified in that position, and change nothing about the promise. Fallback:
-  a deliberate deprecation card that pays the compatibility cost explicitly.
+  new arguments unspecified in that position, and change nothing about the promise. *Fallback:
+  see the [rationale][rationale-risks].*
 - **`max_list_rows` may be too small as a migration offset ceiling.** Preferred answer:
-  derive it as the card requests and gather real use. Fallback after evidence: add a distinct
-  `ResourcePolicy.max_list_offset` bound in a dedicated policy change with its own document
-  cost semantics.
+  derive it as the card requests and gather real use. *Fallback: see the
+  [rationale][rationale-risks].*
 - **Ordering an already-sliced consumer queryset is a migration trap.** Preferred answer:
   preserve the shared sealed visibility boundary's fail-closed rejection before the hook,
-  under active and omitted arguments alike. Fallback: require the consumer resolver to
-  return an unsliced base queryset; there is no safe filter/reorder-after-slice mode and no
-  identity-hook exception.
+  under active and omitted arguments alike. *Fallback: see the [rationale][rationale-risks].*
 - **Arbitrary custom `OrderSet.apply_*` code can discard visibility predicates.** Preferred
   answer: mechanically reject unsafe output shapes and document the override as a trusted
-  schema-author boundary that must transform the supplied sealed queryset. Fallback if a
-  future product requires enforcement against consumer code itself: redesign `OrderSet` to
-  return a declarative order plan; do not claim predicate-lineage proof from arbitrary Python.
+  schema-author boundary that must transform the supplied sealed queryset. *Fallback: see the
+  [rationale][rationale-risks].*
 - **Django combined querysets do not compose uniformly with order and optimizer operations.**
   Preferred answer: reject every non-null argument on a combined source while preserving the
-  all-null/omitted legacy branch. Fallback after Django/optimizer support exists: card the
-  combinator-aware behavior and SQL matrix explicitly.
+  all-null/omitted legacy branch. *Fallback: see the [rationale][rationale-risks].*
 
 ## Out of scope (explicitly tracked elsewhere)
 
@@ -1993,6 +1903,19 @@ structural checks, and link/kanban verification prescribed by
 [glossary-testclient]: GLOSSARY.md#testclient
 [glossary-visibility-boundary]: GLOSSARY.md#visibility-boundary
 [next]: SPECS/NEXT.md
+[rationale]: spec-050-list_field_arguments-0_0_15-rationale.md
+[rationale-borrowing]: spec-050-list_field_arguments-0_0_15-rationale.md#borrowing-posture--what-was-deliberately-not-borrowed-and-why
+[rationale-d1]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-1--synthesize-one-resolver-signature-do-not-widen-consumer-resolvers
+[rationale-d2]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-2--sidecar-conditional-orderby-is-the-only-truthful-meta-first-surface
+[rationale-d4]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-4--max_list_rows-also-bounds-skip-trusted-widening-does-not
+[rationale-d5]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-5--validate-then-visibility-ordering-and-exactly-one-slice
+[rationale-d6]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-6--nonzero-offset-requires-a-materially-active-order
+[rationale-d7]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-7--active-order-is-not-total-order-no-pk-tiebreaker-is-appended
+[rationale-d8]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-8--queryset-and-iterable-sources-have-explicit-different-capabilities
+[rationale-d9]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-9--no-argument-sync-behavior-takes-the-old-branch-async-only-adapts-completion
+[rationale-d10]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-10--coercion-errors-stay-graphql-owned-runtime-domain-errors-are-package-owned
+[rationale-d12]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-12--the-version-bump-belongs-to-the-0015-joint-cut
+[rationale-risks]: spec-050-list_field_arguments-0_0_15-rationale.md#risks-and-open-questions--the-fallback-positions
 [tree]: TREE.md
 
 <!-- docs/SPECS/ -->

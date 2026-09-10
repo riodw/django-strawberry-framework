@@ -913,7 +913,7 @@ class CreateShelfRejectingViaSerializer(SerializerMutation):
 
 
 class CreateShelfViaHookTargetingPatron(SerializerMutation):
-    """One half of a same-serializer hook-collision pair: a shared ``target`` relation pointed at ``Patron`` (spec-039 High).
+    """One half of a same-serializer hook-collision pair: a shared ``target`` relation pointed at ``Patron`` (spec-039).
 
     Shares ``TargetedShelfSerializer`` with ``CreateShelfViaHookTargetingLoan``; both override
     ``get_serializer_for_schema()`` (the schema-time field map) AND ``get_serializer_kwargs``
@@ -954,7 +954,7 @@ class CreateShelfViaHookTargetingPatron(SerializerMutation):
 
 
 class CreateShelfViaHookTargetingLoan(SerializerMutation):
-    """The collision pair's twin: the shared ``target`` relation pointed at ``Loan`` (spec-039 High).
+    """The collision pair's twin: the shared ``target`` relation pointed at ``Loan`` (spec-039).
 
     Same shared ``TargetedShelfSerializer`` and same ``code`` + ``branch`` + ``target`` shape
     as ``CreateShelfViaHookTargetingPatron``, with ``target`` pointed at ``Loan`` (a different
@@ -989,7 +989,7 @@ class CreateShelfViaHookTargetingLoan(SerializerMutation):
 
 
 class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
-    """Create a ``Shelf`` via a serializer whose UNSUPPORTED default field a hook narrows away (spec-039 High - unsupported-default-field recovery).
+    """Create a ``Shelf`` via a serializer whose UNSUPPORTED default field a hook narrows away (spec-039 - unsupported-default-field recovery).
 
     ``HookNarrowedShelfSerializer``'s default ``.fields`` include an unsupported
     ``SlugRelatedField(many=True)`` ``alt_branches``: default discovery succeeds but its WALK

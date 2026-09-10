@@ -4417,9 +4417,25 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     # validation re-fetch in is_valid(), and the post-write re-fetch relation -
     # none an N+1 / lazy refetch.
     assert len([s for s in category_selects if "select 1" not in s.lower()]) == 3, sql
-    # G2 NO `.only(...)` projection: the post-write re-fetch selects the full item
-    # row (no SQL names a strict deferred column subset), so the row reads back whole.
-    assert "SerG2Widget" in models.Item.objects.values_list("name", flat=True)
+    # The post-write re-fetch is the LAST real `products_item` SELECT; the other one
+    # is the post-save FK attestation's single-column `values()` read above it.
+    refetch_select = [s for s in item_selects if "select 1" not in s.lower()][-1]
+    # G2 NO `.only(...)` projection: the operation selects `node { name category
+    # { name } }`, so a deferred-column projection would name at most id / name /
+    # category_id. The re-fetch names every column OUTSIDE that set, which is what
+    # proves the row reads back whole - and it reads the already-captured SQL rather
+    # than issuing a fresh query. The plan-object half of this contract lives at
+    # `tests/rest_framework/test_resolvers.py::test_serializer_refetch_keeps_select_related_suppresses_only`.
+    undeferred = (
+        "description",
+        "attachment",
+        "is_private",
+        "created_date",
+        "updated_date",
+    )
+    assert all(f'"products_item"."{column}"' in refetch_select for column in undeferred), (
+        refetch_select
+    )
 
 
 # ---------------------------------------------------------------------------

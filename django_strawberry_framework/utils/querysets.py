@@ -355,7 +355,7 @@ _RELAY_ASYNC_RECOURSE = (
 
 
 def sync_pipeline_recourse(flavor_noun: str) -> str:
-    """Build the ``SyncMisuseError`` recourse a sync write pipeline appends (spec-039 Md2).
+    """Build the ``SyncMisuseError`` recourse a sync write pipeline appends (spec-039).
 
     The three write flavors (model / form / serializer) each raise a
     ``SyncMisuseError`` naming the SAME recourse when an ``async def get_queryset`` is
@@ -3609,7 +3609,7 @@ def related_visibility_queryset(
     explicit (default-manager existence, an existence-only check, or skip), because
     that tail genuinely diverges per surface. Single-sites only the resolve + the
     visibility-scoping call, so the ONE place a drift is a data-leak bug class is
-    written once (spec-039 Md3). An ``async def get_queryset`` met here raises
+    written once (spec-039). An ``async def get_queryset`` met here raises
     ``SyncMisuseError`` (inherited from ``apply_type_visibility_sync``).
     """
     from ..registry import registry
@@ -3655,7 +3655,7 @@ def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[st
     """Return the stringified pks among ``query_pks`` actually present in ``queryset`` (one query).
 
     The ``{str(pk) for pk in queryset.filter(pk__in=...).values_list("pk", flat=True)}``
-    lookup the relation membership checks share (spec-039 Md4): the model
+    lookup the relation membership checks share (spec-039): the model
     ``utils/write_values.py::decode_visible_relation_ids`` and the serializer
     ``visible_related_objects`` both build this present-set in one query, stringifying
     each pk for a type-agnostic membership compare (an int pk and its ``"3"`` string
@@ -3676,7 +3676,7 @@ def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[st
 
 
 def pks_all_present(declared_pks: Any, present: set[str]) -> bool:
-    """Return whether every ``declared_pks`` member (stringified) is in ``present`` (spec-039 Md4).
+    """Return whether every ``declared_pks`` member (stringified) is in ``present`` (spec-039).
 
     The subset-membership test the model relation guard
     (``utils/write_values.py::decode_visible_relation_ids``) and the serializer M2M

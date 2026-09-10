@@ -183,7 +183,7 @@ def test_email_field_maps_via_mro_under_charfield():
 
 
 def test_is_input_parameter_is_accepted_and_ignored():
-    """``is_input`` is threaded for graphene-parity but does not branch (spec-039 SR-3)."""
+    """``is_input`` is threaded for graphene-parity but does not branch (spec-039)."""
     a = convert_serializer_field(_bind(serializers.CharField(), "f"), is_input=True)
     b = convert_serializer_field(_bind(serializers.CharField(), "f"), is_input=False)
     assert a.annotation is b.annotation is str

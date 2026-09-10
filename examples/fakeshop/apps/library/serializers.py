@@ -145,7 +145,7 @@ class RejectingShelfSerializer(serializers.ModelSerializer):
 
 
 class TargetedShelfSerializer(serializers.ModelSerializer):
-    """``Shelf`` serializer whose WRITE-ONLY ``target`` relation is pointed at a RUNTIME-supplied model (spec-039 High - the same-serializer hook-shape collision).
+    """``Shelf`` serializer whose WRITE-ONLY ``target`` relation is pointed at a RUNTIME-supplied model (spec-039 - the same-serializer hook-shape collision).
 
     ONE serializer class backs TWO ``SerializerMutation`` declarations; each constructs it
     with a different ``target_model`` (``Patron`` vs ``Loan``) via BOTH
@@ -197,7 +197,7 @@ class TargetedShelfSerializer(serializers.ModelSerializer):
 
 
 def shelf_collision_schema_field_map(target_model):
-    """Schema-time field map of ``code`` + ``branch`` + the write-only ``target`` relation at ``target_model`` (spec-039 High).
+    """Schema-time field map of ``code`` + ``branch`` + the write-only ``target`` relation at ``target_model`` (spec-039).
 
     The two collision mutations' ``get_serializer_for_schema()`` hooks call this with two
     DIFFERENT ``target_model``s, AGREEING with their ``get_serializer_kwargs`` runtime
@@ -289,7 +289,7 @@ class BlankCodeShelfSerializer(serializers.ModelSerializer):
 
 
 class HookNarrowedShelfSerializer(serializers.ModelSerializer):
-    """``Shelf`` serializer whose default field set carries an UNSUPPORTED field a schema hook narrows away (spec-039 High - unsupported-default-field recovery).
+    """``Shelf`` serializer whose default field set carries an UNSUPPORTED field a schema hook narrows away (spec-039 - unsupported-default-field recovery).
 
     Default no-arg discovery SUCCEEDS (the serializer constructs and ``.fields``
     materializes), but its field WALK cannot convert ``alt_branches`` - a

@@ -1646,11 +1646,42 @@ def test_fingerprint_propagates_nested_configuration_error_unwrapped():
     class Parent(serializers.Serializer):
         child = BadConfigChild()
 
-    with pytest.raises(ConfigurationError, match="a specific nested config error"):
+    with pytest.raises(ConfigurationError) as exc:
         serializer_schema_fingerprint(
             dict(Parent().fields),
             nested_configs={"child": NestedSerializerConfig()},
         )
+    # The WHOLE message, never a substring of it: the double-wrap this docstring rules out
+    # would still carry the child's text inside the determinism-fingerprint message.
+    assert str(exc.value) == "a specific nested config error"
+
+
+def test_fingerprint_propagates_deep_nested_configuration_error_unwrapped():
+    """A ConfigurationError from a SECOND-level nested ``get_fields()`` propagates unchanged too."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class BadConfigGrandchild(serializers.Serializer):
+        def get_fields(self):
+            raise ConfigurationError("a specific deep nested config error")
+
+    class Middle(serializers.Serializer):
+        grandchild = BadConfigGrandchild()
+
+    class Parent(serializers.Serializer):
+        child = Middle()
+
+    # The recursion reads each level's ``.fields`` inside its own guard, so the unwrapped
+    # propagation is a per-LEVEL contract: a top-level row cannot observe the arm at depth 2.
+    with pytest.raises(ConfigurationError) as exc:
+        serializer_schema_fingerprint(
+            dict(Parent().fields),
+            nested_configs={
+                "child": NestedSerializerConfig(
+                    nested_fields={"grandchild": NestedSerializerConfig()},
+                ),
+            },
+        )
+    assert str(exc.value) == "a specific deep nested config error"
 
 
 def test_nested_serializer_fields_access_exception_raises_configuration_error():
@@ -1664,12 +1695,21 @@ def test_nested_serializer_fields_access_exception_raises_configuration_error():
     class Parent(serializers.Serializer):
         child = CtxChild()
 
-    with pytest.raises(ConfigurationError, match="Could not read .fields from nested serializer"):
+    with pytest.raises(ConfigurationError) as exc:
         build_serializer_input_class(
             Parent,
             operation_kind="create",
             nested_configs={"child": NestedSerializerConfig()},
         )
+    # The WHOLE message, never its prefix: the closing instruction sentence is the one
+    # text the determinism fingerprint, this input build, and the schema-time ownership
+    # walk all publish, so a prefix match would let one site's tail drift unseen.
+    assert str(exc.value) == (
+        "child: Could not read .fields from nested serializer 'CtxChild' under no-arg "
+        "construction: KeyError: 'user'. A nested serializer opted in via "
+        "Meta.nested_fields must expose a stable, request-independent no-arg .fields "
+        "(override get_serializer_for_schema() on the mutation to return a stable field map)."
+    )
 
 
 def test_normalize_nested_serializer_configs_rejects_non_mapping():
@@ -1743,12 +1783,16 @@ def test_build_nested_serializer_spec_child_fields_configuration_error():
     class Parent(serializers.Serializer):
         child = BrokenChild()
 
-    with pytest.raises(ConfigurationError, match="Explicit config error in child fields"):
+    with pytest.raises(ConfigurationError) as exc:
         build_serializer_input_class(
             Parent,
             operation_kind="create",
             nested_configs={"child": NestedSerializerConfig()},
         )
+    # The WHOLE message, never a substring of it: a nested ConfigurationError propagates
+    # UNWRAPPED under the field-name aggregation prefix, and the only way to see the
+    # difference is equality - a wrap in the generic read failure still contains the text.
+    assert str(exc.value) == "child: Explicit config error in child fields"
 
 
 def test_fingerprint_relation_target():

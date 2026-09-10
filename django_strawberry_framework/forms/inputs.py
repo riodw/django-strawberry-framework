@@ -110,7 +110,7 @@ FORM: str = "form"
 CREATE_SHAPED_KINDS: frozenset[str] = frozenset({CREATE, FORM})
 
 # The form-input namespace lifecycle trio, single-sited via
-# ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
+# ``utils/inputs.py::make_input_namespace`` (spec-039 - the one-ledger shape
 # the mutation, form, and serializer flavors share). ``_materialized_names`` is
 # the ``name -> input_class`` ledger ``materialize_form_input_class`` writes;
 # ``registry.clear()`` routes through
@@ -161,8 +161,8 @@ def clear_form_input_namespace() -> None:
     _clear_input_namespace()
 
 
-# Register the form input-namespace clear as a canonical PRE-BIND clear (spec-039
-# P1.6): the ``finalize_django_types`` pre-bind reset AND ``TypeRegistry.clear()``
+# Register the form input-namespace clear as a canonical PRE-BIND clear (spec-039):
+# the ``finalize_django_types`` pre-bind reset AND ``TypeRegistry.clear()``
 # both iterate ``registry.iter_subsystem_clears()``. This owner registers the
 # executable callback once; the stable owner key makes reload replace it without
 # a central attribute lookup that can drift.
@@ -498,7 +498,8 @@ def _model_less_relation_annotation(
     rule as the model-backed path). The ``<name>_id`` (single) / ``list[<id>]``
     (multi) ``036`` scheme is reused so the wire contract is uniform across the
     model-backed and model-less relation paths. A missing primary still falls
-    back to the raw pk scalar (unlike serializer spec-039 M3, which raises).
+    back to the raw pk scalar (unlike the serializer flavor, which raises when
+    the relation target has no registered primary ``DjangoType`` - spec-039).
 
     A ``ModelChoiceField`` whose ``queryset`` is assigned in ``__init__`` (a valid
     Django idiom) has ``queryset is None`` in the uninstantiated ``base_fields``
@@ -778,7 +779,7 @@ def guard_create_required_fields(
     not the built input shape (spec-038 Decision 7, the create-required guard).
 
     The drop-detection (``required - effective - waived``) is single-sited in
-    ``utils/inputs.py::guard_dropped_required`` (spec-039 Md1), shared with the
+    ``utils/inputs.py::guard_dropped_required`` (spec-039), shared with the
     serializer create guard; the form flavor passes no ``waived`` set (it has no
     injected-field mechanism) and keeps its own pinned error wording.
     """

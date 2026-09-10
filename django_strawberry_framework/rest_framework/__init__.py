@@ -3,16 +3,17 @@
 ``djangorestframework`` is a SOFT dependency: ``import django_strawberry_framework``
 must succeed without it, and ``from django_strawberry_framework import *`` must stay
 DRF-free (``SerializerMutation`` is resolved by name through the root
-``__getattr__``, never added to ``__all__`` - F1). This package gates the DRF
+``__getattr__``, never added to ``__all__``). This package gates the DRF
 import behind one guard so every ``rest_framework/`` module + the root
 ``__getattr__`` route a DRF-absent build through the SAME install-hint
 ``ImportError``.
 
 The install hint names ``djangorestframework>=3.17.0`` - the verified
 floor (place 2 of the three-places-that-must-agree: place 1 is the
-``[dependency-groups].dev`` pin in ``pyproject.toml``, place 3 is the spec Risks
-note; all three say ``>=3.17.0``). Importing THIS package runs ``require_drf()`` as
-its guard, so ``import django_strawberry_framework.rest_framework`` raises the
+``[dependency-groups].dev`` pin in ``pyproject.toml``, place 3 is the spec-039
+soft-dependency Decision; all three say ``>=3.17.0``). Importing THIS package runs
+``require_drf()`` as its guard, so ``import
+django_strawberry_framework.rest_framework`` raises the
 guarded ``ImportError`` when DRF is absent. Generalizes the
 ``types/converters.py`` soft-import precedent (return-``None``) to a RAISING guard.
 """

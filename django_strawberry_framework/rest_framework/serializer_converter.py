@@ -444,7 +444,7 @@ def convert_serializer_field(
 
     ``is_input`` is the graphene-django ``convert_serializer_field(field,
     is_input=...)`` parity parameter - **accepted-and-ignored** (spec-039
-    Decision 7 / SR-3): for 0.0.13 the converter only ever runs on the input
+    Decision 7): for 0.0.13 the converter only ever runs on the input
     side, so there is deliberately NO ``if not is_input:`` branch (a dead branch
     would gate-fail ``fail_under=100``). It is threaded so a future read-side
     caller does not have to widen the signature.
@@ -478,13 +478,13 @@ def convert_serializer_field(
     del is_input  # graphene-parity, accepted-and-ignored.
 
     def _relation_multi(field_: serializers.Field) -> SerializerFieldConversion:
-        # H5: only PrimaryKeyRelatedField(many=True) (a ManyRelatedField of a PK
+        # Only PrimaryKeyRelatedField(many=True) (a ManyRelatedField of a PK
         # child) is a supported relation input; a non-PK child raises here.
         _reject_unsupported_relation_field(field_)
         return _CONVERT_RELATION_MULTI(field_)
 
     def _relation_single(field_: serializers.Field) -> SerializerFieldConversion:
-        # H5: only PrimaryKeyRelatedField is a supported single relation input; a
+        # Only PrimaryKeyRelatedField is a supported single relation input; a
         # SlugRelatedField / HyperlinkedRelatedField / custom RelatedField raises.
         _reject_unsupported_relation_field(field_)
         return _CONVERT_RELATION_SINGLE(field_)
@@ -714,7 +714,7 @@ def _require_relation_primary(field_name: str, related_model: type[models.Model]
     """Return the related model's primary ``DjangoType``, raising if none is registered.
 
     The serializer flavor is STRICTER than the form / model fallback (spec-039
-    Decision 7 / M3): where ``relation_input_annotation`` falls back to the raw pk
+    Decision 7): where ``relation_input_annotation`` falls back to the raw pk
     scalar when no primary ``DjangoType`` is registered for the related model, the
     serializer converter raises a class-creation ``ConfigurationError`` naming the
     field + target model. A serializer relation is meaningless without a typed
@@ -746,7 +746,7 @@ def serializer_only_relation_annotation(
     whose ``source`` names no concrete column) resolves its related model from
     ``field.queryset.model`` (the single ``PrimaryKeyRelatedField``) or
     ``field.child_relation.queryset.model`` (a ``ManyRelatedField``). The id type
-    rides ``annotate_queryset_relation`` after ``_require_relation_primary`` (spec-039 M3:
+    rides ``annotate_queryset_relation`` after ``_require_relation_primary`` (spec-039:
     a missing primary is a class-creation error, not a raw-pk fallback).
 
     A relation with neither a backing column NOR a concrete ``queryset.model``
@@ -990,7 +990,7 @@ def resolve_serializer_field(
         # exposes ``categoryPk`` while the column is resolved via ``source``.
         kind = model_column_write_kind(column)
         if kind in (RELATION_SINGLE, RELATION_MULTI):
-            # H5: only a PK relation (``PrimaryKeyRelatedField`` / ``ManyRelatedField``
+            # Only a PK relation (``PrimaryKeyRelatedField`` / ``ManyRelatedField``
             # of a PK child) decodes to a primary key, so a ``SlugRelatedField`` /
             # ``HyperlinkedRelatedField`` / custom related field over a relation column
             # fails loud here rather than silently misdecoding a pk into a slug-expecting
@@ -1007,11 +1007,11 @@ def resolve_serializer_field(
             # input must describe the same shape the runtime serializer validates.
             if _relation_cardinality(field):
                 kind = RELATION_MULTI
-            # spec-039 M3: the serializer flavor requires a registered primary DjangoType for
+            # spec-039: the serializer flavor requires a registered primary DjangoType for
             # the target (stricter than the model fallback). Resolve + validate it
             # via ``primary_of`` so the id type is the SAME Relay-vs-raw-pk decision
             # the read side makes (a non-Relay target still legitimately uses the
-            # raw pk - M3 forbids a MISSING primary, not a non-Relay one).
+            # raw pk - what is forbidden is a MISSING primary, not a non-Relay one).
             annotation = model_column_write_annotation(
                 column,
                 type_name,

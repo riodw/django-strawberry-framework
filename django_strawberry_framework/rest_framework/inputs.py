@@ -95,7 +95,7 @@ from .serializer_converter import (
 SERIALIZER_INPUTS_MODULE_PATH: str = "django_strawberry_framework.rest_framework.inputs"
 
 # The serializer-input namespace lifecycle trio, single-sited via
-# ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
+# ``utils/inputs.py::make_input_namespace`` (spec-039 - the one-ledger shape
 # the mutation, form, and serializer flavors share). ``_materialized_names`` is the
 # ``name -> input_class`` ledger ``materialize_serializer_input_class`` writes;
 # ``registry.clear()`` routes through
@@ -155,10 +155,10 @@ def clear_serializer_input_namespace() -> None:
 
 
 # Register the serializer input-namespace clear as a canonical PRE-BIND clear
-# (the seam centerpiece). The row is a static STRING pair, so
-# importing this owner only happens with DRF present, so the callback exists
-# exactly when serializer state can exist. A DRF-absent build imports neither
-# state nor callback, preserving the soft-dependency boundary.
+# (the seam centerpiece). The registration passes the executable callback under a
+# stable ``owner``, and importing this owner only happens with DRF present, so the
+# callback exists exactly when serializer state can exist. A DRF-absent build imports
+# neither state nor callback, preserving the soft-dependency boundary.
 register_subsystem_clear(
     clear_serializer_input_namespace,
     owner="rest_framework.input_namespace",
@@ -273,6 +273,71 @@ def normalize_nested_serializer_configs(
             ),
         )
     return normalized
+
+
+# The one instruction a consumer follows to repair an opted-in nested serializer whose
+# ``.fields`` cannot be read no-arg. Single-sited because three schema-time passes publish
+# it - the determinism fingerprint, the input build, and the ownership walk in
+# ``rest_framework/sets.py`` - and separate copies drift independently while a pinning test
+# matching only the shared message PREFIX stays green through the drift.
+NESTED_STABLE_FIELDS_INSTRUCTION: str = (
+    "A nested serializer opted in via Meta.nested_fields must expose a stable, "
+    "request-independent no-arg .fields (override get_serializer_for_schema() on the "
+    "mutation to return a stable field map)."
+)
+
+
+def read_nested_serializer_fields(
+    serializer: serializers.BaseSerializer,
+) -> dict[str, serializers.Field]:
+    """Return an OPTED-IN nested serializer's bound field map, or fail loud.
+
+    The one read-or-reject path for a nested serializer's LAZILY-built ``.fields``: the
+    input build (``_resolve_nested_field``) and the schema-time ownership walk
+    (``rest_framework/sets.py::_assert_schema_source_ownership``) both need the child's
+    bound field map, and a context-requiring nested ``get_fields()`` must surface as the
+    ``ConfigurationError`` naming the override contract instead of a raw consumer
+    exception. A ``ConfigurationError`` raised from deeper in the nested tree propagates
+    UNWRAPPED, so a specific nested config error is never shadowed by this one.
+    """
+    try:
+        return dict(serializer.fields)
+    except ConfigurationError:
+        raise
+    except Exception as exc:  # any DRF/consumer failure -> a clear config error.
+        raise ConfigurationError(
+            f"Could not read .fields from nested serializer {type(serializer).__name__!r} "
+            f"under no-arg construction: {type(exc).__name__}: {exc}. "
+            f"{NESTED_STABLE_FIELDS_INSTRUCTION}",
+        ) from exc
+
+
+def require_nested_fields_mapping(owner_name: str, nested_fields: Any) -> None:
+    """Reject a ``nested_fields`` declaration that is not a mapping.
+
+    The container rejection is worded once for the ``Meta`` validation
+    (``rest_framework/sets.py::_validate_serializer_nested_fields``) and the per-level key
+    validation (``validate_nested_config_keys``), which reject the same shape at two
+    depths of the same opt-in tree.
+    """
+    if not isinstance(nested_fields, Mapping):
+        raise ConfigurationError(
+            f"SerializerMutation {owner_name}.Meta.nested_fields must be a mapping of "
+            f"{{field_name: NestedSerializerConfig}}; got {_safe_arg_repr(nested_fields)}.",
+        )
+
+
+def require_nested_serializer_config(owner_name: str, field_name: Any, config: Any) -> None:
+    """Reject a ``nested_fields`` value that is not a ``NestedSerializerConfig``.
+
+    The per-entry value rejection paired with ``require_nested_fields_mapping``; the same
+    two callers apply it.
+    """
+    if not isinstance(config, NestedSerializerConfig):
+        raise ConfigurationError(
+            f"SerializerMutation {owner_name}.Meta.nested_fields[{field_name!r}] must be a "
+            f"NestedSerializerConfig; got {_safe_arg_repr(config)}.",
+        )
 
 
 def get_serializer_for_schema(
@@ -407,9 +472,8 @@ def _fingerprint_nested(
     except Exception as exc:  # any DRF/consumer failure -> a clear config error.
         raise ConfigurationError(
             f"Could not materialize the nested serializer {child_class.__name__!r}'s fields for the "
-            f"determinism fingerprint: {type(exc).__name__}: {exc}. A nested serializer opted in via "
-            "Meta.nested_fields must expose a stable, request-independent no-arg .fields (override "
-            "get_serializer_for_schema() on the mutation to return a stable field map).",
+            f"determinism fingerprint: {type(exc).__name__}: {exc}. "
+            f"{NESTED_STABLE_FIELDS_INSTRUCTION}",
         ) from exc
     child_fingerprint = _fingerprint_field_map(
         child_field_map,
@@ -667,7 +731,7 @@ def resolve_effective_serializer_fields(
     3. normalize + fail-loud ``Meta.fields`` / ``Meta.exclude`` (mutually
        exclusive; bare-string incl. ``"__all__"`` / duplicate rejection via the shared
        ``normalize_field_name_sequence(flavor="SerializerMutation")`` - called directly,
-       no per-flavor wrapper, spec-039 P2.7; an unknown name raises);
+       no per-flavor wrapper, spec-039; an unknown name raises);
     4. an empty effective set raises (the ``036`` / ``038`` empty-input guard).
 
     ``Meta.fields`` / ``Meta.exclude`` are BOTH validated against the WRITABLE field set
@@ -715,7 +779,7 @@ def resolve_optional_fields(
     ``field.required``. ``optional_fields`` is the consumer value (or the
     ``_ValidatedMutationMeta``-stored normalized tuple); it is normalized + fail-loud
     via the shared ``normalize_field_name_sequence(flavor="SerializerMutation")`` (called
-    directly, no per-flavor wrapper - spec-039 P2.7) (a bare string incl. ``"__all__"`` -
+    directly, no per-flavor wrapper - spec-039) (a bare string incl. ``"__all__"`` -
     no ``"__all__"`` sentinel for field SELECTORS - and a duplicate are rejected),
     then an unknown name (not in the effective field set) raises. ``None`` (unset)
     yields the empty set.
@@ -771,8 +835,11 @@ def resolve_injected_field_specs(
     if not injected_fields:
         return []
     model = _serializer_model(serializer_class)
-    provisional_name = (
-        f"{serializer_class.__name__}{'PartialInput' if operation_kind == PARTIAL else 'Input'}"
+    provisional_name = generated_input_type_name(
+        serializer_class.__name__,
+        is_partial=operation_kind == PARTIAL,
+        is_full_shape=True,
+        token="",
     )
     specs: list[InputFieldSpec] = []
     for name in injected_fields:
@@ -807,7 +874,7 @@ class SerializerInputShape:
     - ``field_specs`` - the ordered tuple of each emitted field's reverse-map
       ``InputFieldSpec`` (input_attr / graphql_name / target_name / kind / source).
     - ``annotations`` - the ordered tuple of each emitted field's stringified EMITTED
-      annotation (post-nullable-widening - High), so two hook-returned shapes with
+      annotation (post-nullable-widening), so two hook-returned shapes with
       the SAME names but a DIFFERENT emitted annotation diverge: a ``CharField`` vs an
       ``IntegerField`` (different base type) under one name, AND a ``required=True,
       allow_null=False`` (``str``) vs ``required=True, allow_null=True`` (``str | None``)
@@ -868,8 +935,12 @@ def describe_serializer_input(name: str) -> str | None:
     shape = _SERIALIZER_SHAPE_REGISTRY.get(name)
     if shape is None:
         return None
-    canonical_suffix = "PartialInput" if shape.operation_kind == PARTIAL else "Input"
-    canonical_name = f"{shape.serializer_class.__name__}{canonical_suffix}"
+    canonical_name = generated_input_type_name(
+        shape.serializer_class.__name__,
+        is_partial=shape.operation_kind == PARTIAL,
+        is_full_shape=True,
+        token="",
+    )
     name_note = (
         "canonical (the DEFAULT full shape)"
         if name == canonical_name
@@ -936,11 +1007,11 @@ def _shape_token(
     """Encode one emitted field's descriptor state as a collision-resistant name token.
 
     Reuses ``utils/inputs.py::pascalize_token`` (promoted from ``mutations/inputs.py``
-    - spec-039 Md5) for the field-name component so the bare concatenation of
+    - spec-039) for the field-name component so the bare concatenation of
     per-field tokens stays uniquely decomposable (no third PascalCase encoder). The
     Full generated-field identity is folded into the token via a stable ``hash``-free
     digest - the EMITTED annotation (post-nullable-widening, so a ``T`` vs ``T | None``
-    nullability difference diverges - M2 / High), requiredness, kind, ``input_attr``,
+    nullability difference diverges), requiredness, kind, ``input_attr``,
     ``graphql_name``, ``source``, the relation ``related_model``, AND the generated SDL
     ``description``. This keeps the deterministic name aligned with the descriptor cache key.
 
@@ -1091,7 +1162,7 @@ def guard_create_required_serializer_fields(
     ``forms/inputs.py::guard_create_required_fields`` per-declaration precedent).
     """
     # The drop-detection (``required - effective - injected``) is single-sited in
-    # ``utils/inputs.py::guard_dropped_required`` (spec-039 Md1), shared with the form
+    # ``utils/inputs.py::guard_dropped_required`` (spec-039), shared with the form
     # create guard; the serializer passes ``Meta.injected_fields`` through the shared
     # subtraction parameter and keeps its own pinned error wording.
     guard_dropped_required(
@@ -1209,15 +1280,15 @@ def _walk_serializer_fields(
     - ``field_specs`` - the ordered reverse-map ``InputFieldSpec`` per emitted field;
     - ``annotation_reprs`` - each field's EMITTED (post-nullable-widening) annotation
       ``repr`` (so the descriptor identity reflects the generated GraphQL nullability -
-      ``allow_null`` widening included - M2 / High);
+      ``allow_null`` widening included);
     - ``descriptions`` - each field's generated SDL description (``None`` when none),
       recorded as a descriptor axis so description-only hook shapes cannot share a class;
     - ``required_state`` - each field's effective requiredness (create honors
       ``field.required`` minus ``optional_fields``; partial forces every field
-      optional - M2: requiredness is orthogonal to nullability);
+      optional; requiredness is orthogonal to nullability);
     - ``triples`` - the ``build_strawberry_input_class`` ``(python_attr, annotation,
       field_kwargs)`` triples (a nullable field widens to ``T | None`` AND carries
-      ``strawberry.UNSET`` so it is OMITTABLE - spec-039 M2 / H3; each also carries a
+      ``strawberry.UNSET`` so it is OMITTABLE - spec-039; each also carries a
       ``description`` threaded from the DRF field's metadata).
 
     Factored out so the canonical-name gate can re-walk the DEFAULT full shape with
@@ -1274,7 +1345,7 @@ def _walk_serializer_fields(
 
         # Nullability: the annotation is widened ``T | None`` when the field is
         # ``allow_null`` OR is optional; a nullable field is ALWAYS omittable (default
-        # ``UNSET``), even when DRF ``required=True`` (H3 - GraphQL cannot express
+        # ``UNSET``), even when DRF ``required=True`` (GraphQL cannot express
         # required-AND-nullable, so omission is allowed at coercion and the resolver
         # strips ``UNSET`` -> DRF raises its own field-keyed required error in-band). A
         # non-nullable required field gets NO default, so GraphQL enforces presence.
@@ -1294,7 +1365,7 @@ def _walk_serializer_fields(
         if description is not None:
             field_kwargs["description"] = description
         # Record the EMITTED (post-widening) annotation repr - NOT the base annotation
-        # (spec-039 High). The descriptor identity + the name token must reflect the
+        # (spec-039). The descriptor identity + the name token must reflect the
         # GraphQL nullability actually generated: two same-name hook shapes differing ONLY
         # in ``allow_null`` (``required=True, allow_null=False`` -> ``T`` vs
         # ``required=True, allow_null=True`` -> ``T | None``) emit DIFFERENT nullability,
@@ -1438,17 +1509,7 @@ def _resolve_nested_field(
         must_map_to="a nested write must map to a single attribute",
     )
     source = field.source if (field.source and field.source != field_name) else None
-    try:
-        nested_field_map = dict(child_serializer.fields)
-    except ConfigurationError:
-        raise
-    except Exception as exc:
-        raise ConfigurationError(
-            f"Could not read .fields from nested serializer {nested_class.__name__!r} "
-            f"under no-arg construction: {type(exc).__name__}: {exc}. A nested serializer opted in "
-            "via Meta.nested_fields must expose a stable, request-independent no-arg .fields "
-            "(override get_serializer_for_schema() on the mutation to return a stable field map).",
-        ) from exc
+    nested_field_map = read_nested_serializer_fields(child_serializer)
     nested_cls, nested_shape = build_serializer_input_class(
         nested_class,
         operation_kind=operation_kind,
@@ -1489,17 +1550,9 @@ def validate_nested_config_keys(
     """
     if not nested_configs:
         return
-    if not isinstance(nested_configs, Mapping):
-        raise ConfigurationError(
-            f"SerializerMutation {serializer_class.__name__}.Meta.nested_fields must be a mapping "
-            f"of {{field_name: NestedSerializerConfig}}; got {_safe_arg_repr(nested_configs)}.",
-        )
+    require_nested_fields_mapping(serializer_class.__name__, nested_configs)
     for name, config in nested_configs.items():
-        if not isinstance(config, NestedSerializerConfig):
-            raise ConfigurationError(
-                f"SerializerMutation {serializer_class.__name__}.Meta.nested_fields[{name!r}] must be a "
-                f"NestedSerializerConfig; got {_safe_arg_repr(config)}.",
-            )
+        require_nested_serializer_config(serializer_class.__name__, name, config)
         field = effective.get(name)
         if field is None:
             raise ConfigurationError(
@@ -1636,7 +1689,12 @@ def build_serializer_input_class(
     # The provisional type name (for the choice-enum ``<TypeName><Field>Enum``
     # build) - the canonical name; the descriptor-derived divergent name is
     # computed after the field walk (it needs the resolved specs / annotations).
-    provisional_name = f"{serializer_class.__name__}{'PartialInput' if is_partial else 'Input'}"
+    provisional_name = generated_input_type_name(
+        serializer_class.__name__,
+        is_partial=is_partial,
+        is_full_shape=True,
+        token="",
+    )
 
     # The per-field walk resolves each field, threads DRF metadata into descriptions,
     # and AGGREGATES every per-field conversion error + input-attr / GraphQL-name

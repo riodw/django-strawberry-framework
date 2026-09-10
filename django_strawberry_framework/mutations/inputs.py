@@ -159,7 +159,7 @@ class FieldError:
 
 
 # The mutation-input namespace lifecycle trio, single-sited via
-# ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
+# ``utils/inputs.py::make_input_namespace`` (spec-039 - the one-ledger shape
 # the mutation, form, and serializer flavors share). ``_materialized_names`` is
 # the ``name -> input_class`` ledger ``materialize_mutation_input_class`` writes;
 # ``registry.clear()`` routes through
@@ -346,9 +346,9 @@ def relation_id_scalar(related_model: type, related_primary_type: type | None) -
     ``scalar_for_field``. This is the id-type rule the three write flavors
     used to re-spell: model-backed ``relation_input_annotation`` and
     column-less ``annotate_queryset_relation`` (form + serializer).
-    Primary-required vs raw-pk fallback stays at those call sites (serializer
-    spec-039 M3 raises before calling this; form / model pass ``registry.get``, which
-    may be ``None``).
+    Primary-required vs raw-pk fallback stays at those call sites (the serializer
+    flavor requires a registered primary and raises before calling this, spec-039;
+    form / model pass ``registry.get``, which may be ``None``).
     """
     if related_primary_type is not None and implements_relay_node(related_primary_type):
         return relay.GlobalID
@@ -639,8 +639,8 @@ def model_column_input_annotation(
     )
 
 
-# ``_pascalize_token`` was promoted to ``utils/inputs.py::pascalize_token`` (spec-039
-# Md5): at three consumers (model + form + serializer) the injective
+# ``_pascalize_token`` was promoted to ``utils/inputs.py::pascalize_token``
+# (spec-039): at three consumers (model + form + serializer) the injective
 # single-leading-capital token encoder graduated to the shared input-name machinery,
 # kept visibly distinct from ``pascal_case``. This alias preserves the historical
 # ``mutations/inputs.py::_pascalize_token`` import path.

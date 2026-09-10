@@ -553,6 +553,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
 ├── rest_framework/    # Package-internal DRF serializer-mutation tests (spec-039).
 │   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry (spec-039).
+│   ├── test_dry_import_ratchet.py  # The serializer flavor IMPORTS its shared substrate; it never redefines it (spec-039).
 │   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
 │   ├── test_resolvers.py         # Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039).
 │   ├── test_sets.py              # ``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039).
@@ -793,6 +794,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
 ├── rest_framework/    # Package-internal DRF serializer-mutation tests (spec-039).
 │   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry (spec-039).
+│   ├── test_dry_import_ratchet.py  # The serializer flavor IMPORTS its shared substrate; it never redefines it (spec-039).
 │   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
 │   ├── test_resolvers.py         # Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039).
 │   ├── test_sets.py              # ``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039).

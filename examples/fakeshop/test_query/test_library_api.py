@@ -7044,7 +7044,7 @@ def test_create_shelf_rejecting_serializer_save_time_all_sentinel():
 
 @pytest.mark.django_db
 def test_serializer_hook_same_serializer_different_targets_distinct_inputs_and_decode_over_http():
-    """Two mutations over ONE serializer whose hooks point a shared ``target`` at different models bind to DISTINCT inputs AND decode ``targetId`` against their OWN model over HTTP (spec-039 High).
+    """Two mutations over ONE serializer whose hooks point a shared ``target`` at different models bind to DISTINCT inputs AND decode ``targetId`` against their OWN model over HTTP (spec-039).
 
     The same-serializer hook-shape collision, reproduced in the REAL project schema:
     ``createShelfViaHookTargetingPatron`` and ``createShelfViaHookTargetingLoan`` share
@@ -7110,7 +7110,7 @@ def test_serializer_hook_same_serializer_different_targets_distinct_inputs_and_d
 
 @pytest.mark.django_db
 def test_create_shelf_via_hook_narrowed_serializer_recovers_unsupported_default_field():
-    """A serializer whose DEFAULT field set has an unsupported field still builds + writes via a narrowing hook (spec-039 High).
+    """A serializer whose DEFAULT field set has an unsupported field still builds + writes via a narrowing hook (spec-039).
 
     ``HookNarrowedShelfSerializer`` declares an unsupported ``SlugRelatedField(many=True)``
     ``alt_branches``: default no-arg discovery succeeds but its field WALK raises converting

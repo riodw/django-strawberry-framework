@@ -420,7 +420,7 @@ def _default_get_form_kwargs(
     """
     del info  # the default ignores ``info``; an override may consult it.
     # The "add ``instance`` only on update" clause is single-sited in
-    # ``mutations/sets.py::construction_kwargs`` (spec-039 Md7), shared with the
+    # ``mutations/sets.py::construction_kwargs`` (spec-039), shared with the
     # serializer ``get_serializer_kwargs`` default.
     return construction_kwargs(data=data, files=files, instance=instance)
 

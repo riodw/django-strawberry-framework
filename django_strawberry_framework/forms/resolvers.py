@@ -595,7 +595,7 @@ def _run_form_pipeline_sync(
 
 
 # The form-flavor module entry points (spec-038 Decision 8), via the shared factory
-# (spec-039 M1a - single-sourced with the model flavor). ``resolve_form_sync``
+# (spec-039 - single-sourced with the model flavor). ``resolve_form_sync``
 # normalizes the ``UNSET``-default kwargs to ``_run_form_pipeline_sync`` (the plain
 # flavor never passes ``id``, so it defaults to ``UNSET`` and the plain body ignores
 # it); ``resolve_form_async`` runs the same body through the shared

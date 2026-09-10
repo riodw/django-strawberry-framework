@@ -40,18 +40,19 @@ requires DRF; the root ``__getattr__`` (and ``rest_framework/__init__.py``'s
 **The resolver seams + the serializer-construction hook bodies.** The
 ``resolve_sync`` / ``resolve_async`` serializer-pipeline overrides (below) delegate
 to ``rest_framework/resolvers.py::resolve_serializer_sync`` /
-``resolve_serializer_async`` - the D8 carry-forward (an inert declaration
+``resolve_serializer_async`` - the Decision 8 carry-forward (an inert declaration
 inherits ``DjangoMutation``'s callable pair; both the overrides here AND the
 resolver bodies land, the same pairing the form flavor uses in
 ``forms/sets.py``). The default ``get_serializer_kwargs`` construction hook ships
 here as the constructor-only customization seam; the resolver consumes
-``get_serializer_kwargs`` (the hook the spec D8 step 4 names) and OWNS the framework
-merge / ``partial`` injection / ``context["request"]`` / H3 ``ConfigurationError``
-rules on top of its return, so those framework-owned invariants never live in the
-consumer-overridable hook. The serializer flavor deliberately has **no** coarse
-``get_serializer`` constructor hook (unlike the form flavor's ``get_form``): its H3
-invariants - ``partial`` and the authorized-actor ``context["request"]`` - cannot be
-entrusted to a consumer-overridable constructor, so construction is framework-owned
+``get_serializer_kwargs`` (the hook Decision 8 step 4 names) and OWNS the framework
+merge / ``partial`` injection / the actor-drift ``context["request"]``
+``ConfigurationError`` rules on top of its return, so those framework-owned
+invariants never live in the consumer-overridable hook. The serializer flavor
+deliberately has **no** coarse ``get_serializer`` constructor hook (unlike the form
+flavor's ``get_form``): its framework-owned invariants - ``partial`` and the
+authorized-actor ``context["request"]`` - cannot be entrusted to a
+consumer-overridable constructor, so construction is framework-owned
 through ``_merged_serializer_kwargs`` (spec-039).
 """
 
@@ -96,6 +97,9 @@ from .inputs import (
     materialize_serializer_input_class,
     normalize_nested_serializer_configs,
     raise_writable_source_ownership_errors,
+    read_nested_serializer_fields,
+    require_nested_fields_mapping,
+    require_nested_serializer_config,
     resolve_effective_serializer_fields,
     resolve_injected_field_specs,
     resolve_optional_fields,
@@ -319,11 +323,7 @@ def _validate_serializer_nested_fields(
     """
     if nested_fields is None:
         return None
-    if not isinstance(nested_fields, Mapping):
-        raise ConfigurationError(
-            f"SerializerMutation {name}.Meta.nested_fields must be a mapping of "
-            f"{{field_name: NestedSerializerConfig}}; got {_safe_arg_repr(nested_fields)}.",
-        )
+    require_nested_fields_mapping(name, nested_fields)
     # The SAME untrusted-mapping containment the schema field map applies: the hook/Meta
     # boundary materializes ``.items()`` and unpacks each entry under a guard, so a hostile
     # mapping (a raising ``items()``, a midway-raising iterator, a wrong-arity entry) becomes
@@ -355,11 +355,7 @@ def _validate_serializer_nested_fields(
                 f"SerializerMutation {name}.Meta.nested_fields keys must be plain strings; "
                 f"got {_safe_arg_repr(field_name)}.",
             )
-        if not isinstance(config, NestedSerializerConfig):
-            raise ConfigurationError(
-                f"SerializerMutation {name}.Meta.nested_fields[{field_name!r}] must be a "
-                f"NestedSerializerConfig; got {_safe_arg_repr(config)}.",
-            )
+        require_nested_serializer_config(name, field_name, config)
         field = field_map.get(field_name)
         if field is None:
             raise ConfigurationError(
@@ -435,17 +431,7 @@ def _assert_schema_source_ownership(
         child_serializer, _many = nested_serializer_child(field_map[field_name])
         child_class = type(child_serializer)
         guard_nested_recursion(child_class, nested_path, field_name)
-        try:
-            child_fields = dict(child_serializer.fields)
-        except ConfigurationError:
-            raise
-        except Exception as exc:
-            raise ConfigurationError(
-                f"Could not read .fields from nested serializer {child_class.__name__!r} "
-                f"under no-arg construction: {type(exc).__name__}: {exc}. A nested serializer opted in "
-                "via Meta.nested_fields must expose a stable, request-independent no-arg .fields "
-                "(override get_serializer_for_schema() on the mutation to return a stable field map).",
-            ) from exc
+        child_fields = read_nested_serializer_fields(child_serializer)
         effective = resolve_effective_serializer_fields(
             child_class,
             fields=config.fields,
@@ -555,7 +541,7 @@ class SerializerMutation(DjangoMutation):
         unset - the ``036`` write-auth seam, spec-039 Decision 11). The snapshot carries
         ``serializer_class`` + the resolved ``model``; ``Meta.fields`` /
         ``Meta.exclude`` are stored RAW (``build_input`` re-resolves them - the form
-        flavor's validate-then-store-raw precedent, D1). ``Meta.optional_fields`` is
+        flavor's validate-then-store-raw precedent). ``Meta.optional_fields`` is
         the MUTATION's own key (spec-039 - NOT the serializer's ``Meta``):
         normalized here (bare-string incl. ``"__all__"`` / duplicate rejected) and
         name-validated against the effective input set, then carried on the snapshot
@@ -629,7 +615,7 @@ class SerializerMutation(DjangoMutation):
         # exclusion, bare-string incl. ``"__all__"`` / duplicate / unknown-name /
         # empty-set guard), which calls the shared
         # ``normalize_field_name_sequence(flavor="SerializerMutation")`` is
-        # single-sited by ``normalize_meta_field_selection`` above (spec-039 P2.7). The
+        # single-sited by ``normalize_meta_field_selection`` above (spec-039). The
         # snapshot stores the normalized tuples so the bind cannot consume a
         # one-shot declaration a second time.
         effective = resolve_effective_serializer_fields(
@@ -773,7 +759,7 @@ class SerializerMutation(DjangoMutation):
         before the snapshot is assigned), resolving the SAME serializer in both windows.
 
         The snapshot is read via ``cls.__dict__`` - the OWN snapshot only, NOT an
-        inherited one (spec-039 Medium): the metaclass assigns ``_mutation_meta`` AFTER
+        inherited one (spec-039): the metaclass assigns ``_mutation_meta`` AFTER
         ``_validate_meta`` runs, so during a SUBCLASS's validation ``cls._mutation_meta``
         would resolve up the MRO to the PARENT's snapshot (the parent's serializer),
         making the default hook discover the wrong serializer's fields. Reading
@@ -810,16 +796,17 @@ class SerializerMutation(DjangoMutation):
         read DjangoType's choice enums are cached per (model, field)), so building a shape
         that then dedupes is harmless.
 
-        **spec-039 P1.7 reuse is partial here, by necessity.** This seam rides the promoted
-        ``build_and_stash_input`` (the materialize-then-stash-``_input_field_specs`` tail,
+        **The promoted build/stash seam is reused only partly here, by necessity
+        (spec-039).** This seam rides the promoted ``build_and_stash_input``
+        (the materialize-then-stash-``_input_field_specs`` tail,
         shared with the form flavor) but does NOT route the cache lookup through
         ``cached_build_input``: that helper looks up its key BEFORE building, which the
         form flavor can do because its key (``form_class``, operation, effective names) is
         known pre-build, whereas the serializer's key is the ``SerializerInputShape``
         DESCRIPTOR - only knowable AFTER the build's pure walk produces it. Forcing this
         path through ``cached_build_input`` would mean building the shape TWICE (once to
-        derive the key, once inside ``build_fn`` on a miss), the exact waste P1.7 names; so
-        the descriptor-keyed dedupe routes through
+        derive the key, once inside ``build_fn`` on a miss), the exact waste the
+        promotion avoids; so the descriptor-keyed dedupe routes through
         ``inputs.dedupe_serializer_input_shape`` after the build (shared with nested
         opt-in builds), while the guard-before-dedupe ordering is preserved here
         directly. The per-declaration guard discipline ``cached_build_input``
@@ -957,7 +944,7 @@ class SerializerMutation(DjangoMutation):
         """
         del info, hook_context  # the default ignores them; an override may consult them.
         # Shared with the form default via ``mutations/sets.py::construction_kwargs``
-        # (spec-039 Md7): create has no ``instance`` key; update injects it from the
+        # (spec-039): create has no ``instance`` key; update injects it from the
         # framework merge, never from this constructor-only hook.
         return construction_kwargs(data=data)
 

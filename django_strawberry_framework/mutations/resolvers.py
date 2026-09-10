@@ -135,7 +135,7 @@ from .permissions import _require_sync_bool_auth_result
 # ``sync_to_async`` worker thread - spec-036), so an ``async def
 # get_queryset`` can never be awaited here regardless of operation context; the
 # recourse is to make the target hook sync. The sentence is single-sourced across
-# the three write flavors via ``sync_pipeline_recourse`` (spec-039 Md2).
+# the three write flavors via ``sync_pipeline_recourse`` (spec-039).
 _MUTATION_ASYNC_RECOURSE = sync_pipeline_recourse("DjangoMutation")
 
 
@@ -1295,7 +1295,7 @@ async def run_pipeline_async(
 
 
 def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:
-    """Return the ``(resolve_sync, resolve_async)`` module-entry pair for a write flavor (spec-039 M1a).
+    """Return the ``(resolve_sync, resolve_async)`` module-entry pair for a write flavor (spec-039).
 
     The two byte-parallel module-level entries every dispatcher-backed write flavor
     exposes: a sync entry normalizing the ``UNSET``-default ``data`` / ``id`` kwargs
@@ -1333,7 +1333,7 @@ def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:
 
 
 # The model-flavor module entry points (spec-036 Decision 8), via the shared factory
-# (spec-039 M1a). ``resolve_mutation_sync`` normalizes the ``UNSET`` kwargs to
+# (spec-039). ``resolve_mutation_sync`` normalizes the ``UNSET`` kwargs to
 # ``_run_pipeline_sync``; ``resolve_mutation_async`` runs it through the shared async
 # boundary. The field factory (``mutations/fields.py``) reads both by name.
 resolve_mutation_sync, resolve_mutation_async = make_resolver_entries(_run_pipeline_sync)

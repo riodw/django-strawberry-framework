@@ -1410,7 +1410,8 @@ No slice in this card edits the package-version state: `[project].version` in
 bump from `0.0.13` to `0.0.14` is owned by the **joint `0.0.14` cut** (the last
 `0.0.14` card to land), the same posture [`spec-039`][spec-039] Decision 14 took
 for the joint `0.0.13` cut. The release-status wording splits the same way
-(`spec-039`'s F8 discipline): Slice 2 updates **implemented-on-main** docs (the
+([`spec-039`][spec-039]'s release-vs-implementation-docs split): Slice 2 updates
+**implemented-on-main** docs (the
 GLOSSARY entry body, the regenerated [`docs/TREE.md`][tree]) but the public
 `shipped (0.0.14)` status flip, the [`README.md`][readme] /
 [`docs/README.md`][docs-readme] "Coming next" → "Shipped today" moves, and the

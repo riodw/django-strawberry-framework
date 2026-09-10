@@ -14,8 +14,8 @@ visibility by id (a write-auth denial ``GraphQLError`` vs an in-band relation
 ``FieldError`` is an observable distinction). The ``transaction.atomic()``
 boundary + the locate preamble + the authorize-before-decode ordering + the
 optimizer re-fetch tail are NOT re-hand-rolled here: they are single-sited in the
-promoted ``mutations/resolvers.py::run_write_pipeline_sync`` skeleton (spec-039
-P1.5), and this flavor supplies only the serializer ``decode_step`` /
+promoted ``mutations/resolvers.py::run_write_pipeline_sync`` skeleton
+(spec-039), and this flavor supplies only the serializer ``decode_step`` /
 ``write_step`` callbacks.
 
 The serializer-specific invariants this module owns:
@@ -35,11 +35,11 @@ The serializer-specific invariants this module owns:
   pk - is type-checked against the relation's **target model**, which is recorded on
   the bind-stashed reverse map (``InputFieldSpec.related_model``, resolved once at
   build from the backing FK via the serializer field's ``source``, or
-  ``field.queryset.model`` for a serializer-only relation - spec-039 H4, so the
+  ``field.queryset.model`` for a serializer-only relation (spec-039), so the
   query path never re-discovers the serializer field set), then **resolved to the
   visible object through
   the related primary ``DjangoType.get_queryset``** via the promoted
-  ``utils/querysets.py::visible_related_object`` (P1.1 - the SAME object-returning
+  ``utils/querysets.py::visible_related_object`` (the SAME object-returning
   visibility query the form decoder re-keys over), reduced to the pk a
   ``PrimaryKeyRelatedField`` expects. A hidden / wrong-model / uncoercible id is a
   field-keyed ``FieldError`` keyed to ``spec.graphql_name`` (the GraphQL wire name
@@ -197,7 +197,7 @@ _OMITTED = object()
 # ``036`` / ``038`` recourse wording: the whole pipeline runs synchronously (under
 # one ``sync_to_async`` worker on the async surface), so an ``async def
 # get_queryset`` can never be awaited here. Single-sourced across the three write
-# flavors via ``sync_pipeline_recourse`` (spec-039 Md2).
+# flavors via ``sync_pipeline_recourse`` (spec-039).
 _SERIALIZER_ASYNC_RECOURSE = sync_pipeline_recourse("serializer mutation")
 
 # DRF's non-field-errors bucket key (``api_settings.NON_FIELD_ERRORS_KEY``,
@@ -1163,11 +1163,22 @@ def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> N
         )
     if spec.required is None and spec.annotation_repr is None:
         return
+    # Both incoherent spellings - the attribute missing and the attribute ``None`` (an
+    # abstract base) - normalize to one rejection: with no validated snapshot the
+    # requiredness / annotation answer is undeterminable, so it leaves the permit path
+    # instead of being coerced onto it. Every bound mutation carries the snapshot, so the
+    # attributes below are read directly.
     meta = getattr(mutation_cls, "_mutation_meta", None)
     if meta is None:
-        return
-    operation = getattr(meta, "operation", "create")
-    optional_fields = frozenset(getattr(meta, "optional_fields", None) or ())
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: field {target!r} carries a schema "
+            "requiredness or annotation contract, but the mutation has no validated Meta "
+            "snapshot, so agreement with the runtime field cannot be determined. A bound "
+            "mutation always carries one; reaching this guard without it is a framework "
+            "invariant violation, not a supported configuration.",
+        )
+    operation = meta.operation
+    optional_fields = frozenset(meta.optional_fields or ())
     runtime_required = (
         False
         if operation == "update"
@@ -1431,7 +1442,7 @@ def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> Non
             owner=(f"{type(serializer).__name__}.{spec.target_name} relation queryset"),
         )
         # ``related_visibility_queryset`` single-sites the ``registry.get`` resolve +
-        # the visibility-scoping call (spec-039 Md3); ``None`` = raw-pk relation with
+        # the visibility-scoping call (spec-039); ``None`` = raw-pk relation with
         # no primary type (no visibility contract to AND on - the pin + lock still apply).
         visible = related_visibility_queryset(
             spec.related_model,
@@ -2141,7 +2152,7 @@ def _serializer_write_step(
     instance: Any,
     provided_data: dict[str, Any],
 ) -> Any | list[FieldError]:
-    """The serializer ``write_step``: construct -> validate -> save (spec-039 P1.5 callback).
+    """The serializer ``write_step``: construct -> validate -> save (spec-039 pipeline callback).
 
     Constructs the serializer through the ``get_serializer_kwargs`` hook + the
     framework merge (``_merged_serializer_kwargs``), runs ``is_valid()`` (a failure
@@ -2369,7 +2380,7 @@ def _serializer_decode_step(
     data: Any,
     info: Any,
 ) -> dict[str, Any] | list[FieldError]:
-    """The serializer ``decode_step``: serializer-field-keyed decode (spec-039 P1.5 callback).
+    """The serializer ``decode_step``: serializer-field-keyed decode (spec-039 pipeline callback).
 
     Decodes the bound input into a serializer-field-keyed ``provided_data`` (the
     ``_decode_serializer_data`` contract: type-check + visibility on every relation
@@ -2413,7 +2424,7 @@ def _run_serializer_pipeline_sync(
     )
 
 
-# The serializer module entries, via the shared factory (spec-039 M1a). The
+# The serializer module entries, via the shared factory (spec-039). The
 # full pair is taken so the three write flavors cannot drift on the UNSET-kwargs
 # or async-boundary contract.
 resolve_serializer_sync, resolve_serializer_async = make_resolver_entries(

@@ -267,7 +267,7 @@ def build_and_stash_input(
 
 
 def construction_kwargs(*, instance: Any = None, **base: Any) -> dict[str, Any]:
-    """Build a construction-hook kwargs dict, adding ``instance`` only when non-``None`` (spec-039 Md7).
+    """Build a construction-hook kwargs dict, adding ``instance`` only when non-``None`` (spec-039).
 
     The default construction-kwargs hooks share the ``{...base...}`` +
     ``if instance is not None: kwargs["instance"] = instance`` shape: the form

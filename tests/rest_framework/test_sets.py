@@ -1065,7 +1065,7 @@ def test_schema_hook_invalid_value_with_hostile_repr_is_typed():
 
 
 def test_subclass_redefining_serializer_validates_against_child_serializer():
-    """A subclass redefining ``Meta.serializer_class`` validates against the CHILD serializer, not an inherited parent snapshot (spec-039 Medium).
+    """A subclass redefining ``Meta.serializer_class`` validates against the CHILD serializer, not an inherited parent snapshot (spec-039).
 
     The metaclass assigns ``_mutation_meta`` AFTER ``_validate_meta`` runs, so during the
     child's validation ``cls._mutation_meta`` resolves up the MRO to the PARENT's
@@ -2089,7 +2089,7 @@ def test_validate_nested_fields_child_serializer_errors():
         def create(self, validated_data):
             pass
 
-    with pytest.raises(ConfigurationError, match="Explicit config error in child fields"):
+    with pytest.raises(ConfigurationError) as config_exc:
 
         class _Mut1(SerializerMutation):
             class Meta:
@@ -2097,13 +2097,29 @@ def test_validate_nested_fields_child_serializer_errors():
                 operation = "create"
                 nested_fields = {"child": NestedSerializerConfig()}
 
-    with pytest.raises(ConfigurationError, match="Could not read .fields from nested serializer"):
+    # The WHOLE message, never a substring of it: a nested ConfigurationError propagates
+    # UNWRAPPED, and the only way to see the difference is equality - if it were wrapped in
+    # the generic read failure instead, the child's text would still be found inside it.
+    assert str(config_exc.value) == "Explicit config error in child fields"
+
+    with pytest.raises(ConfigurationError) as exc:
 
         class _Mut2(SerializerMutation):
             class Meta:
                 serializer_class = Parent2
                 operation = "create"
                 nested_fields = {"child": NestedSerializerConfig()}
+
+    # The WHOLE message, never its prefix: the closing instruction sentence is the one
+    # text the determinism fingerprint, the input build, and this schema-time ownership
+    # walk all publish, so a prefix match would let one site's tail drift unseen.
+    assert str(exc.value) == (
+        "Could not read .fields from nested serializer 'BrokenExcChild' under no-arg "
+        "construction: RuntimeError: Unexpected runtime error in child fields. A nested "
+        "serializer opted in via Meta.nested_fields must expose a stable, "
+        "request-independent no-arg .fields (override get_serializer_for_schema() on the "
+        "mutation to return a stable field map)."
+    )
 
 
 def test_default_serializer_mutation_instance_hook_methods():

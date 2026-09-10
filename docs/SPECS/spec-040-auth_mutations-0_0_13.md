@@ -1969,7 +1969,7 @@ them** (the P1 lifecycle fix):
 - The **emit** artifacts follow the pre-bind phase: `LoginPayload` / `LogoutPayload`
   ride the **existing** `mutations.inputs` `before_bind=True` row (no new
   row — importing `auth/mutations.py` transitively imports `mutations/inputs.py`,
-  whose row self-registers at import per the [`spec-039`][spec-039] F10
+  whose row self-registers at import per the [`spec-039`][spec-039]
   owning-module invariant). The **only** net-new `before_bind=True` row is
   the `current_user` generated-alias namespace in `auth/queries.py` — a genuine
   emit ledger whose `clear_fn` is the one the

@@ -961,7 +961,7 @@ def pascalize_token(name: str) -> str:
     ``Foo_cbar``. Retained underscores are valid GraphQL name characters, and
     ``build_strawberry_input_class`` pins the finished name explicitly.
 
-    Promoted here from ``mutations/inputs.py`` (spec-039 P2.3 kept it sited there at
+    Promoted here from ``mutations/inputs.py`` (spec-039 kept it sited there at
     two consumers; at three - model + form + serializer - it graduates to the shared
     input-name machinery, kept visibly distinct from ``pascal_case``). The old
     ``mutations/inputs.py::_pascalize_token`` name remains as an import alias.
@@ -1199,7 +1199,7 @@ def guard_dropped_required(
     waived: Any = (),
     make_error: Callable[[list[str]], Exception],
 ) -> None:
-    """Raise if a create narrowing drops a still-required field not covered by ``waived`` (spec-039 Md1).
+    """Raise if a create narrowing drops a still-required field not covered by ``waived`` (spec-039).
 
     The set-arithmetic core the form + serializer create-required guards share:
     ``sorted(required - effective - waived)``; a non-empty dropped set raises the

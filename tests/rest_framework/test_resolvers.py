@@ -21,11 +21,14 @@ branch is earned LIVE; this file holds the genuinely-unreachable internals:
   `_resolve_globalid_strategy` monkeypatch (recorded strategy consumed, not the
   live setting);
 - the sync + async boundary and the `SyncMisuseError` async-`get_queryset`-from-sync
-  path.
+  path;
+- the G2 re-fetch PLAN OBJECT (`select_related` kept, `.only(...)` suppressed) - the
+  optimizer's stashed plan is introspection state no `/graphql` response carries, so
+  only its behavioral half (the emitted SQL) is earned live.
 
 **No create/update happy path, envelope, reverse-map, partial-update, visibility,
-write-auth, authorize-before-decode, Upload, request-context, or G2 test is
-duplicated here** - those are owned by the live suite.
+write-auth, authorize-before-decode, Upload, request-context, or G2 BEHAVIORAL test
+is duplicated here** - those are owned by the live suite.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from strawberry import relay
 
 from django_strawberry_framework import (
     DjangoMutationField,
+    DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
     SerializerMutation,
@@ -848,6 +852,72 @@ def test_merged_kwargs_override_different_request_object_is_configuration_error(
 
 
 @pytest.mark.django_db
+def test_merged_kwargs_override_echoing_the_same_request_object_is_tolerated():
+    """An override returning the framework's OWN `context["request"]` is permitted.
+
+    The guard rejects a DIFFERENT request object, not the presence of the key: a
+    hook assembling a DRF-style context around the request it was handed keeps the
+    framework's actor, so there is nothing to reject.
+    """
+
+    class EchoingRequestMutation(SerializerMutation):
+        class Meta:
+            serializer_class = _basic_item_serializer()
+            operation = "create"
+
+        def get_serializer_kwargs(
+            self,
+            info,
+            *,
+            data,
+            hook_context,
+        ):
+            kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
+            # The SAME object the framework resolved, echoed back.
+            kwargs["context"] = {"request": info.context.request}
+            return kwargs
+
+    class CategoryT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class ItemT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name", "category")
+            primary = True
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> int:
+            return 1
+
+    @strawberry.type
+    class Mutation:
+        write_item = DjangoMutationField(EchoingRequestMutation)
+
+    finalize_django_types()
+    DjangoSchema(query=Query, mutation=Mutation)
+    del CategoryT, ItemT
+
+    request = HttpRequest()
+    request.user = SimpleNamespace(username="u", is_authenticated=True)
+    info = SimpleNamespace(context=SimpleNamespace(request=request))
+    kwargs = serializer_resolvers._merged_serializer_kwargs(
+        EchoingRequestMutation,
+        info,
+        final_data={"name": "X"},
+        instance=None,
+        alias="default",
+        hook_context=_hook_ctx(),
+    )
+    assert kwargs["context"]["request"] is request
+
+
+@pytest.mark.django_db
 def test_merged_kwargs_bare_httprequest_info_context_fallback():
     """`request_from_info` resolves a bare `HttpRequest` `info.context` (the no-`.request` fallback)."""
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
@@ -1310,17 +1380,45 @@ def _agreement_specs_with_meta(meta, **overrides):
     return fake
 
 
-def test_agreement_guard_stops_when_mutation_meta_absent():
-    """No ``_mutation_meta`` means no requiredness or annotation axis to compare.
+def test_agreement_guard_rejects_a_missing_mutation_meta_snapshot():
+    """A spec carrying a requiredness contract with NO ``_mutation_meta`` fails loud.
 
-    The kind/source/writability half of the contract has already been enforced
-    above; the tail needs the mutation's operation and model to say anything at
-    all, so it stops instead of guessing an operation.
+    Whether the runtime field's requiredness agrees with the schema's is
+    undeterminable without the validated snapshot, and an undeterminable answer
+    leaves the permit path rather than being coerced onto it.
     """
     fake = _agreement_specs(required=True)
     assert not hasattr(fake, "_mutation_meta")
 
-    serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+    with pytest.raises(ConfigurationError, match="no validated Meta snapshot"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_rejects_a_none_mutation_meta_snapshot():
+    """A ``_mutation_meta`` present but ``None`` is the SAME undeterminable answer.
+
+    The abstract-base spelling reaches the tail through a different route than an
+    absent attribute; both leave the permit path through the one rejection.
+    """
+    fake = _agreement_specs_with_meta(None, required=True)
+    assert fake._mutation_meta is None
+
+    with pytest.raises(ConfigurationError, match="no validated Meta snapshot"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_rejects_a_missing_snapshot_on_the_annotation_axis():
+    """The rejection covers the annotation axis, not only requiredness.
+
+    A spec recording an ``annotation_repr`` with no requiredness still needs the
+    snapshot's model and operation to re-derive the runtime annotation, so it is
+    the same undeterminable answer.
+    """
+    fake = _agreement_specs(required=None, annotation_repr=repr(str))
+    assert not hasattr(fake, "_mutation_meta")
+
+    with pytest.raises(ConfigurationError, match="no validated Meta snapshot"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
 
 
 def test_agreement_guard_raises_on_requiredness_drift():
@@ -1331,7 +1429,7 @@ def test_agreement_guard_raises_on_requiredness_drift():
     omittable. The boundary catches the drift instead.
     """
     fake = _agreement_specs_with_meta(
-        SimpleNamespace(operation="create", model=library_models.Shelf),
+        SimpleNamespace(operation="create", model=library_models.Shelf, optional_fields=()),
         required=False,  # runtime ``Shelf.code`` is required.
     )
     with pytest.raises(ConfigurationError, match="required at runtime but optional"):
@@ -1346,7 +1444,7 @@ def test_agreement_guard_stops_when_no_annotation_recorded():
     not "compare against None".
     """
     fake = _agreement_specs_with_meta(
-        SimpleNamespace(operation="create", model=library_models.Shelf),
+        SimpleNamespace(operation="create", model=library_models.Shelf, optional_fields=()),
         required=True,  # matches the runtime field, so the check above passes.
         annotation_repr=None,
     )
@@ -1376,7 +1474,7 @@ def test_agreement_guard_wraps_an_unresolvable_runtime_field():
         mystery = _UnconvertibleField()
 
     fake = _agreement_specs_with_meta(
-        SimpleNamespace(operation="create", model=library_models.Shelf),
+        SimpleNamespace(operation="create", model=library_models.Shelf, optional_fields=()),
         input_attr="mystery",
         graphql_name="mystery",
         target_name="mystery",
@@ -1480,6 +1578,97 @@ def test_agreement_guard_rejects_injected_scalar_annotation_drift():
     )
     with pytest.raises(ConfigurationError, match="annotation"):
         serializer_resolvers._assert_schema_runtime_agreement(fake, RuntimeSer(data={}))
+
+
+# ===========================================================================
+# G2 re-fetch plan shape - the plan-state half of a live-tier contract
+# ===========================================================================
+# The behavioral half (the emitted SQL names the undeferred columns) is earned
+# live in `examples/fakeshop/test_query/test_products_api.py`. The plan OBJECT
+# the optimizer stashed is not reachable from a real query, so it is pinned here.
+
+
+def _build_serializer_g2_schema():
+    """Declare Item/Category Relay primaries + a create `SerializerMutation`, optimizer on."""
+
+    class CategoryT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class ItemT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name", "category")
+            primary = True
+
+    class _AllowAll:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            op,
+            data,
+            instance=None,
+        ):
+            return True
+
+    class WriteItem(SerializerMutation):
+        class Meta:
+            serializer_class = _basic_item_serializer()
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> int:
+            return 1
+
+    @strawberry.type
+    class Mutation:
+        write_item = DjangoMutationField(WriteItem)
+
+    finalize_django_types()
+    optimizer = DjangoOptimizerExtension()
+    schema = DjangoSchema(query=Query, mutation=Mutation, extensions=[lambda: optimizer])
+    del ItemT
+    return schema, CategoryT
+
+
+@pytest.mark.django_db
+def test_serializer_refetch_keeps_select_related_suppresses_only():
+    """The serializer re-fetch plan KEEPS `select_related` and applies NO `.only(...)`.
+
+    A relation-selecting response plans the relation through `select_related`, and
+    the `.only(...)` projection is suppressed because the operation is a MUTATION -
+    the re-fetch rides the same G2 path the form flavor does. `select_related` is
+    load-bearing here, not decoration: `DST_OPTIMIZER_PLAN` is last-wins
+    introspection data, so it is what proves the captured plan IS the re-fetch plan.
+    """
+    schema, CategoryT = _build_serializer_g2_schema()
+    category = product_models.Category.objects.create(name="G2Cat")
+    request = HttpRequest()
+    request.user = SimpleNamespace(username="u", is_authenticated=True)
+    ctx = SimpleNamespace(request=request)
+
+    result = schema.execute_sync(
+        "mutation($d: BasicItemSerializerInput!){ writeItem(data:$d){ "
+        "node{ name category{ name } } errors{ field } } }",
+        variable_values={
+            "d": {"name": "G2Widget", "categoryId": global_id_for(CategoryT, category.pk)},
+        },
+        context_value=ctx,
+    )
+    assert result.errors is None, result.errors
+    assert result.data["writeItem"]["errors"] == []
+
+    plan = ctx.dst_optimizer_plan
+    # The relation selection (`category { name }`) is planned via select_related.
+    assert plan.select_related == ("category",)
+    # No `.only(...)` projection under a MUTATION (the G2 gate suppresses it).
+    assert plan.only_fields == ()
 
 
 # ===========================================================================

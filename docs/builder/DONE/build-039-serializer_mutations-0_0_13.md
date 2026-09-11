@@ -8,15 +8,19 @@ Date created: 2026-09-04
 Build rule: one slice at a time. Plan first, build second, review third, reconcile fourth.
 DRY rule: every slice must justify shared/duplicated patterns before merging.
 
-**The ten per-cycle `bld-039-*` artifacts this file cites were deleted when the cycle
-closed.** Only this file and the build plan were kept. Every citation below to
-`bld-039-slice-0-rationale_extraction.md`, `bld-039-audit-1-converter_and_inputs.md`,
-`bld-039-audit-2-sets_and_bind.md`, `bld-039-audit-3-resolvers_and_live.md`,
-`bld-039-audit-4-decisions_rev6_dod.md`, `bld-039-slice-2a-contract_fold_in.md`,
-`bld-039-slice-2b-label_strip_and_citers.md`, `bld-039-slice-2c-rev6_retirement.md`,
-`bld-039-slice-3-code_gaps.md` or `bld-039-integration.md` - including its raw `:NN` line
-numbers - resolves against commit `d401343c`, which is the last commit that carried them:
-`git show d401343c:docs/builder/<name>`.
+**Every per-cycle `bld-039-*` artifact this file cites was deleted when the cycle closed,
+and this plan is the only survivor.** The final test-run gate's durable content is folded
+into `## Final test-run gate (folded in from the retired final report)` below. Every
+citation below - including the raw `:NN` line numbers, which per-cycle scratch is allowed
+- resolves against the last commit that carried its target, and the two differ:
+
+- the ten slice artifacts (`bld-039-slice-0-rationale_extraction.md`,
+  `bld-039-audit-1-converter_and_inputs.md`, `bld-039-audit-2-sets_and_bind.md`,
+  `bld-039-audit-3-resolvers_and_live.md`, `bld-039-audit-4-decisions_rev6_dod.md`,
+  `bld-039-slice-2a-contract_fold_in.md`, `bld-039-slice-2b-label_strip_and_citers.md`,
+  `bld-039-slice-2c-rev6_retirement.md`, `bld-039-slice-3-code_gaps.md`,
+  `bld-039-integration.md`) -> `git show d401343c:docs/builder/<name>`;
+- `bld-039-final.md`, deleted one commit later -> `git show 9ac1b134:docs/builder/bld-039-final.md`.
 
 ## What this cycle is
 
@@ -230,6 +234,71 @@ Every spec contract row is graded exactly one of:
 
 A row graded anything but BUILT-CONFORMANT with no cited evidence is not a grade.
 
+## Final test-run gate (folded in from the retired final report)
+
+`final-accepted`, 2026-09-10. Every command in `docs/builder/BUILD.md`
+`## Final test-run gate` passed against the working tree: the full sweep at
+`7651 passed, 40 skipped`, both Django consistency checks, all three read-only
+lint/format/diff checks, and floor verification. Zero failures, so the gate's
+attribution obligation had an empty population. Three things are folded here because the
+gate report was the only record of them; everything else it carried is in this plan's
+`## Audit rollup`, on the board, or discharged.
+
+### Floor verification actually ran, and this is its result
+
+This plan's `## Floor-verification scope` declares the obligation; nothing else in the
+repository records that it was met. Slice 3 and the integration pass ran it three times,
+and the gate re-ran both declared scopes in a venv it first proved was a venv
+(`pyvenv.cfg` read, `sys.prefix` vs `sys.base_prefix` compared) rather than trusting a
+scratch path:
+
+```text
+CPython 3.10.19 | django 5.2.16 | strawberry-graphql 0.316.0 | djangorestframework 3.18.1
+django-filter 26.1 | pytest 9.1.1 | pytest-django 4.14.0 | pytest-xdist 3.8.0
+
+tests/rest_framework/test_resolvers.py + test_dry_import_ratchet.py + the live G2 row
+  -> 194 passed          (Slice 3's own run recorded 193; the +1 is the ratchet row its
+                          pass 2 added, confirmed by --collect-only -> 21 tests collected)
+tests/rest_framework/                     -> 498 passed
+```
+
+`djangorestframework` being present is the load-bearing precondition: absent it, every
+`rest_framework` module skips and a green floor run proves nothing.
+
+**The scratch path two of those runs name is already gone.** `<scratchpad>/dsf-floor`
+still holds `bin/` and `lib/` but has lost its `pyvenv.cfg`. That does not impeach the
+recorded runs - a decayed venv fails loudly at first import - but it is why a floor record
+naming only a scratch path cannot be audited later, and it is the confirming datum behind
+the corpus-ratchet item homed on `TODO-ALPHA-056-0.0.17`.
+
+### The cycle's headline is a reading, not a measurement
+
+`## Audit rollup` states "nothing planned was skipped in the code" as a result. The
+qualifier belongs with it. The **row count** of 318 is re-derivable from each audit's own
+grade summary, and one audit enumerates its row ids so its 50 can be counted member by
+member. The **grade on each row** is a reviewer reading a spec sentence against source and
+citing a `path::QualifiedName`. Nothing mechanical graded 318 rows and nothing can - "does
+`HEAD` do what this sentence says" is not a measurement. The claim is as good as four
+audits' readings, which is the strongest thing available here, and it is not a proof.
+
+Two riders a re-auditor needs. First, **the obvious instrument for checking the 318 is
+wrong**: a naive table-cell census over the four audits returns **273**, because one audit
+grades in prose rather than table cells (yielding 6 rows against its real 50) and the
+census double-counts each artifact's grading-vocabulary legend. Use each artifact's own
+grade summary. Second, **`PARTIAL` carried more measurement than the other grades** - the
+three `PARTIAL` rows meant "behavior built, contract not pinned by a distinguishing test",
+a claim about a test rather than about behavior, and all three were closed in Slice 3 with
+failability proofs.
+
+### The four audit cohorts never received a Worker 1 final-verification pass
+
+`## Checklist` ticks all four Slice-1 boxes, and `## Audit rollup` records all four as
+`review-accepted`. `docs/builder/ARTIFACT.md` makes `final-accepted` the signal Worker 0
+marks a box on. This was deliberate - they were read-only passes writing one artifact each
+and no source - but a reader of the checklist alone would not know that no final
+verification ever ran over the audits whose grades the headline rests on. Recorded, not
+re-opened: re-running four read-only audits would buy nothing.
+
 ## Artifact list
 
 - `docs/builder/bld-039-slice-0-rationale_extraction.md`
@@ -242,7 +311,7 @@ A row graded anything but BUILT-CONFORMANT with no cited evidence is not a grade
 - `docs/builder/bld-039-slice-2c-rev6_retirement.md`
 - `docs/builder/bld-039-slice-3-code_gaps.md`
 - `docs/builder/bld-039-integration.md`
-- `docs/builder/bld-039-final.md`
+- `docs/builder/bld-039-final.md` - retired; its durable content is folded in below
 
 ## Checklist
 
@@ -256,7 +325,7 @@ A row graded anything but BUILT-CONFORMANT with no cited evidence is not a grade
 - [x] Slice 2c: retire the `rev6` round vocabulary (deferred out of 2b, same rule, own anchor risk) -> `docs/builder/bld-039-slice-2c-rev6_retirement.md`
 - [x] Slice 3: close every DROPPED row in code -> `docs/builder/bld-039-slice-3-code_gaps.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-039-integration.md`
-- [x] Final test-run gate -> `docs/builder/bld-039-final.md`
+- [x] Final test-run gate -> `## Final test-run gate (folded in from the retired final report)`
 
 ## Slice 2 split, and why
 

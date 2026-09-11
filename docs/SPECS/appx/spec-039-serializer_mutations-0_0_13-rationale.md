@@ -27,7 +27,7 @@ land in the spec, stated directly and without chronology.
 ## Provenance of this record
 
 Created by Slice 0 of the `039` residual-reconciliation cycle, whose plan is
-[`docs/builder/build-039-serializer_mutations-0_0_13.md`][build-039]. The per-cycle
+[`docs/builder/DONE/build-039-serializer_mutations-0_0_13.md`][build-039]. The per-cycle
 artifact recording the move itself closed with the cycle and is readable at
 `git show d401343c:docs/builder/bld-039-slice-0-rationale_extraction.md`. `spec-039`
 shipped in `0.0.13` with a [`-terms.csv`][spec-039-terms] companion and no `-rationale.md`
@@ -1741,7 +1741,7 @@ Unlike the entries above this heading, these were measured against `HEAD`.
 [spec-039]: ../spec-039-serializer_mutations-0_0_13.md
 
 <!-- docs/builder/ -->
-[build-039]: ../../builder/build-039-serializer_mutations-0_0_13.md
+[build-039]: ../../builder/DONE/build-039-serializer_mutations-0_0_13.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

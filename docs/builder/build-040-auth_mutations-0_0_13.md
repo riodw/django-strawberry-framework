@@ -132,13 +132,24 @@ Any code-gap cohort spawned out of an audit slice appends to that slice's own ar
 `## Build report (Worker 2, pass <N>)` / `## Review (Worker 3, pass <N>)` pair), rather than
 creating a new artifact file — the gap belongs to the contract the audit slice owns.
 
-**Retired at closeout.** Every artifact listed above except `docs/builder/bld-040-final.md` was
-deleted from the tree once the cycle closed and committed; this plan and the final gate are the two
-survivors. Each retired artifact is retrievable at `git show ff5f8c95:docs/builder/<name>` — one
-commit id serves all of them, since all eight were introduced in `ff5f8c95` and died together. Every
-`docs/builder/bld-040-…` filename in this plan, including the `-> path` tails in the checklist below
-and the cohort table's writable-file lists, is a retrieval key in that sense rather than a live path.
-`docs/builder/bld-040-final.md` carries its own note on what `### Slice 7` superseded in it.
+**Retired at closeout. This plan is the cycle's only surviving file.** Every artifact listed above
+was deleted from the tree once the cycle closed and committed, so every `docs/builder/bld-040-…`
+filename in this plan — including the `-> path` tails in the checklist below and the cohort table's
+writable-file lists — is a retrieval key rather than a live path.
+
+**Two retrieval pointers, because the artifacts died in two different commits and one id would be a
+false pointer for one of them:**
+
+- The eight per-slice and integration artifacts: `git show ff5f8c95:docs/builder/<name>`. All eight
+  were introduced in `ff5f8c95` and died together in `6c19791e`.
+- `docs/builder/bld-040-final.md`: `git show 6c19791e:docs/builder/bld-040-final.md`. It outlived
+  the other eight by one commit and was amended in `6c19791e` before being deleted, so `ff5f8c95`
+  holds a **stale** copy of it — the one without the Slice 7 supersession note.
+
+Everything the final gate held that lived nowhere else is folded into this plan's `### Final gate`
+and `### Slice 7` entries: the two `spec-050` node ids with their diagnoses, the test-side node-id
+delta including the name of the one retired row, and DoD item 6's discharged non-coverage half with
+its three sites. Its deferred-work catalog is superseded by `### Slice 7` below.
 
 ## Checklist
 
@@ -573,6 +584,24 @@ Both reproduce alone under `-n0`, so neither is selection pollution. This cycle'
 rows, 0 failed, in the same sweep. Escalated to the maintainer, not routed and not repaired; no
 `stash` / `checkout` / `restore` / `worktree` ran at any point in the cycle.
 
+**The two rows, named, with what each reports** (folded in from the retired final gate, which was
+the only record of them; re-confirmed still failing 2026-09-11 after this cycle's two commits):
+
+- `examples/fakeshop/test_query/test_list_field_api.py::test_branches_omitted_and_null_arguments_match_the_legacy_reference`
+  fails at its own `assert sql == legacy_sql` on the `shipped omitted` label: the `DjangoListField`
+  path emits `SELECT "library_branch"."id", "library_branch"."name"` where the test-local legacy
+  oracle emits the same with `"library_branch"."city"` appended — an `only()`-projection difference
+  on the list-field path.
+- `…::test_holder_branches_combined_legacy_branch_matches_the_legacy_reference` fails with
+  `django.urls.exceptions.NoReverseMatch: 'djdt' is not a registered namespace`, raised out of that
+  test module's own `_post_sync` helper at `:90` — a debug-toolbar URLconf the test's local
+  `urlconf = 'test_list_field_api'` does not carry.
+
+**Needs routing, and it is not this cycle's to route.** The `spec-050` session's own
+`docs/builder/bld-final.md` names both node ids under `P2-5` as rows **it wrote**, not as failures,
+and carries **0** occurrences of `NoReverseMatch` — so that session may not know they are red. The
+diagnosis above existed only in this cycle's final gate.
+
 Floor verification: `none` **confirmed rather than accepted** — AST identity with docstrings stripped
 proves all three package files executable-token identical to HEAD, behind two controls, one of them
 the same instrument returning `DIVERGES` on the other session's files. No floor venv was built for a
@@ -588,6 +617,24 @@ The gate's own catalog work hit the census trap twice more and recovered both ti
 population: the subprocess idiom first measured 7 files (`tests/base/test_init.py` builds argv into
 a local, invisible to the regex; the bare `sys.executable` token recovers it at 8), and the bug-hunt
 provenance sweep first returned 0 because the spelling is `(hunt 0_0_14)`.
+
+**Test-side delta, folded in from the retired final gate** (the only record of the retired row's
+name, which no longer exists anywhere in the tree). Measured by AST over module-level `test_*`
+functions, `git show HEAD:<path>` against the worktree: `tests/auth/test_mutations.py` **97 → 101**
+— added `test_sessionless_login_…` / `test_sessionless_logout_raises_the_configuration_error_naming_both_middlewares`,
+`test_register_mutation_rejects_a_protected_required_field_at_the_factory_call`,
+`test_an_unplanned_relation_under_login_node_is_strictness_visible`,
+`test_finalize_in_an_auth_free_process_never_imports_the_auth_subsystem`; **retired**
+`test_sessionless_request_surfaces_djangos_own_error`. `tests/auth/test_queries.py` **21 → 22** —
+added `test_an_unplanned_relation_under_me_is_strictness_visible`. Six new functions and one
+retired, which is **seven** node ids once the finalize row's `[finalize]` / `[schema]`
+parametrization is counted.
+
+**DoD item 6's non-coverage half is discharged, with its sites** (also folded in): the clause "the
+three deliberate non-reuse points carry their source comment" now holds —
+`django_strawberry_framework/auth/mutations.py` carries `D-N1` at `:616`, `D-N2` at `:1109` and
+Slice 6's `D-N3` at `:1197`, where the pre-cycle count was two of three. Only the
+`fail_under = 100` clause remains, and that is the maintainer's gate by construction.
 
 **Handover:** 7 tracked files (1,084 / 970) plus the rationale companion, this plan, and the eight
 `bld-040-*` artifacts as new tracked material. `mutations/sets.py` and `mutations/resolvers.py` are

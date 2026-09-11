@@ -36,10 +36,11 @@ Created by Slice 1 of the `040` retrospective reconciliation cycle, whose plan i
 [`docs/builder/build-040-auth_mutations-0_0_13.md`][build-040] and whose record of the
 move itself is the per-cycle artifact
 `docs/builder/bld-040-slice-1-rationale_extraction.md`. That artifact and the cycle's
-other per-slice artifacts were retired from the tree once the cycle closed; each is
-retrievable at `git show ff5f8c95:docs/builder/<name>`. Only the plan and
-`docs/builder/bld-040-final.md` survive as files, so every `docs/builder/bld-040-…`
-name below is a retrieval key rather than a live path.
+other per-cycle artifacts were retired from the tree once the cycle closed; each is
+retrievable at `git show ff5f8c95:docs/builder/<name>`, except the final gate, whose
+last version is `git show 6c19791e:docs/builder/bld-040-final.md`. The plan is the
+cycle's only surviving file, so every `docs/builder/bld-040-…` name below is a
+retrieval key rather than a live path.
 `spec-040` shipped in `0.0.13` with a [`-terms.csv`][spec-040-terms] companion and no
 `-rationale.md` sibling — the one archived spec of its generation missing one, since
 `docs/SPECS/appx/` carries rationale files for `036`, `037`, `038`, `039` and

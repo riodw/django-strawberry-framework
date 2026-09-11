@@ -166,3 +166,14 @@ def test_patch_delegates_synchronous_iterables():
     result = strawberry.Schema(query=Query).execute_sync("{ values }")
     assert result.errors is None
     assert result.data == {"values": ["resolved"]}
+
+
+def test_captured_upstream_method_returns_none_without_an_owner():
+    """A missing owner class yields no captured method rather than an attribute error.
+
+    ``_captured_upstream_method`` is called with whatever
+    ``graphql.execution.execute`` exposes; a graphql-core build that does not
+    ship ``ExecutionContext`` hands the helper ``None``, and the reinstall path
+    has to treat that as "nothing captured".
+    """
+    assert patches._captured_upstream_method(None, "complete_list_value") is None

@@ -70,40 +70,43 @@ def _record_applied_normalization(
     info: Any,
     cls: type,
     input_value: Any,
-    data: Any,
+    data: list[tuple[str, Ordering | None]],
 ) -> None:
     """Publish one successful normalization on the current request context."""
     stash_on_context(
         getattr(info, "context", None),
         _APPLIED_ORDER_NORMALIZATION_KEY,
-        (cls, id(input_value), data),
+        (cls, input_value, data),
     )
 
 
-def _to_inert_order_data(data: Any) -> Any:
-    """Convert normalized order data into inert built-in primitives.
+def _validate_normalized_terms(cls: type, data: Any) -> list[tuple[str, Ordering | None]]:
+    """Enforce the OrderSet._normalize_input return contract at the pipeline boundary.
 
-    Guarantees that subsequent equality checks and representations operate
-    purely on built-in primitives (str, None, tuple), shielding the framework
-    from hostile consumer __eq__ and __repr__ implementations.
+    Guarantees that normalized order data is a list of 2-tuples of (field_path: str,
+    direction: Ordering | None). Rejects non-conforming returns immediately with an
+    actionable ConfigurationError naming _normalize_input. Because valid terms are
+    composed solely of Python strings, None, and Ordering enums, subsequent purity
+    checks and walks operate on trusted primitives with deterministic equality and
+    no hostile consumer __eq__ or __repr__ hooks.
     """
-    if not isinstance(data, (list, tuple)):
-        return _safe_arg_repr(data)
-    inert_terms: list[Any] = []
+    if not isinstance(data, list):
+        raise ConfigurationError(
+            f"OrderSet {cls.__qualname__}._normalize_input returned invalid data "
+            f"{_safe_arg_repr(data)}; expected a list of (field_path, direction) tuples.",
+        )
     for term in data:
-        if isinstance(term, tuple) and len(term) == 2:
-            path, direction = term
-            inert_path = path if isinstance(path, str) else _safe_arg_repr(path)
-            if direction is None:
-                inert_dir = None
-            elif isinstance(direction, Ordering):
-                inert_dir = direction.name
-            else:
-                inert_dir = _safe_arg_repr(direction)
-            inert_terms.append((inert_path, inert_dir))
-        else:
-            inert_terms.append(_safe_arg_repr(term))
-    return tuple(inert_terms)
+        if (
+            not isinstance(term, tuple)
+            or len(term) != 2
+            or not isinstance(term[0], str)
+            or (term[1] is not None and not isinstance(term[1], Ordering))
+        ):
+            raise ConfigurationError(
+                f"OrderSet {cls.__qualname__}._normalize_input returned invalid term "
+                f"{_safe_arg_repr(term)}; expected a (field_path: str, direction: Ordering | None) tuple.",
+            )
+    return data
 
 
 class OrderSetMetaclass(type):
@@ -373,35 +376,35 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         Checks purity by comparing against the normalized record produced by public
         apply when present (two calls total: one in apply, one in this check), or across
         two independent normalizations when no record is available (three calls total when
-        public apply ran against an unstashable context). The record is request-scoped and
-        consumed before checking. Any disagreement raises an actionable
-        :class:`ConfigurationError` naming :meth:`_normalize_input`.
+        public apply ran against an unstashable context). The record is request-scoped,
+        held with a strong input reference, and consumed before checking. If concurrent
+        requests share a context or an async override awaits after delegating, consumption
+        or overwriting gracefully falls back to the double-read path.
+
+        Any disagreement raises an actionable :class:`ConfigurationError` naming
+        :meth:`_normalize_input`.
         """
         context = getattr(info, "context", None)
         applied_info = get_context_value(context, _APPLIED_ORDER_NORMALIZATION_KEY)
         clear_context_key(context, _APPLIED_ORDER_NORMALIZATION_KEY)
         applied_data = None
         if isinstance(applied_info, tuple) and len(applied_info) == 3:
-            applied_cls, applied_input_id, recorded_data = applied_info
-            if applied_cls is cls and applied_input_id == id(input_value):
+            applied_cls, applied_input, recorded_data = applied_info
+            if applied_cls is cls and applied_input is input_value:
                 applied_data = recorded_data
 
-        data_check = cls._normalize_input(input_value)
+        data_check = _validate_normalized_terms(cls, cls._normalize_input(input_value))
 
         if applied_data is not None:
-            inert_applied = _to_inert_order_data(applied_data)
-            inert_check = _to_inert_order_data(data_check)
-            if inert_applied != inert_check:
+            if applied_data != data_check:
                 raise ConfigurationError(
                     f"{cls.__name__}._normalize_input is not pure; returned different results "
                     f"for the same input ({_safe_arg_repr(applied_data)} != {_safe_arg_repr(data_check)}).",
                 )
             data_to_walk = applied_data
         else:
-            data_check2 = cls._normalize_input(input_value)
-            inert_check1 = _to_inert_order_data(data_check)
-            inert_check2 = _to_inert_order_data(data_check2)
-            if inert_check1 != inert_check2:
+            data_check2 = _validate_normalized_terms(cls, cls._normalize_input(input_value))
+            if data_check != data_check2:
                 raise ConfigurationError(
                     f"{cls.__name__}._normalize_input is not pure; returned different results "
                     f"for the same input ({_safe_arg_repr(data_check)} != {_safe_arg_repr(data_check2)}).",
@@ -570,7 +573,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         that do no I/O, so the sync and async colorings differ ONLY in the
         permission-check coloring they run before this.
         """
-        data = cls._normalize_input(input_value)
+        data = _validate_normalized_terms(cls, cls._normalize_input(input_value))
         if not data:
             _record_applied_normalization(info, cls, input_value, data)
             return queryset

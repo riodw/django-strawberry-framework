@@ -15,6 +15,7 @@ dispatch (active-input-only / double-dispatch / dedup contract).
 from __future__ import annotations
 
 import asyncio
+import gc
 from collections import OrderedDict
 from types import SimpleNamespace
 
@@ -32,6 +33,7 @@ from django_strawberry_framework.orders.inputs import (
     _field_specs,
     _materialized_names,
 )
+from django_strawberry_framework.orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
 
 # ---------------------------------------------------------------------------
 # Metaclass collection / override / binding
@@ -1364,8 +1366,8 @@ def test_input_has_active_terms_purity():
         def _normalize_input(cls, input_value):
             cls._counter += 1
             if cls._counter % 2 == 1:
-                return [{"title": Ordering.ASC}]
-            return [{"title": Ordering.DESC}]
+                return [("title", Ordering.ASC)]
+            return [("title", Ordering.DESC)]
 
     with pytest.raises(
         ConfigurationError,
@@ -1389,7 +1391,7 @@ def test_input_has_active_terms_purity_structure_disagreement():
             cls._counter += 1
             if cls._counter % 2 == 1:
                 return []
-            return [{"title": Ordering.ASC}]
+            return [("title", Ordering.ASC)]
 
     with pytest.raises(
         ConfigurationError,
@@ -1538,6 +1540,79 @@ def test_applied_normalization_is_consumed_and_never_leaks_to_a_later_request():
     assert TrackedOrder.normalize_count == 6
 
 
+def test_applied_normalization_record_pins_the_input_object_not_its_address():
+    """The record holds the input OBJECT, so a freed address cannot forge a match.
+
+    Keying the record by ``id(input_value)`` alone records an address without
+    holding anything at it: once the client's input is collected, a later
+    allocation can land on the same address and be mistaken for the recorded
+    one. The purity check would then compare a record produced for a DIFFERENT
+    input against a fresh normalization and raise "not pure" against an
+    ``_normalize_input`` that is perfectly deterministic. Holding the input
+    itself makes the identity unforgeable: while the record is live, nothing
+    else can occupy it.
+    """
+
+    class TrackedOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [("title", Ordering.ASC)]
+
+    context = {"request": HttpRequest()}
+    info = SimpleNamespace(context=context)
+    order_input = [{"title": "ASC"}]
+
+    TrackedOrder.apply_sync(order_input, Book.objects.all(), info)
+
+    recorded_cls, recorded_input, recorded_data = context[_APPLIED_ORDER_NORMALIZATION_KEY]
+    assert recorded_cls is TrackedOrder
+    assert recorded_input is order_input
+    assert recorded_data == [("title", Ordering.ASC)]
+
+    # Dropping every other reference cannot free the recorded input, so no later
+    # allocation can reuse its identity while the record stands.
+    del order_input
+    gc.collect()
+    decoys = [[{"title": "ASC"}] for _ in range(256)]
+    assert id(recorded_input) not in {id(decoy) for decoy in decoys}
+
+    # A decoy therefore falls through to the standalone double-normalization path
+    # instead of matching the standing record.
+    assert TrackedOrder._input_has_active_terms(decoys[0], info) is True
+
+
+def test_applied_normalization_checks_input_identity():
+    """Context normalization record requires exact input_value object identity."""
+
+    class TrackedOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return [("title", Ordering.ASC)]
+
+    orig_input = [{"title": "ASC"}]
+    different_input_same_content = [{"title": "ASC"}]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    TrackedOrder.apply_sync(orig_input, Book.objects.all(), info)
+    assert TrackedOrder.normalize_count == 1
+
+    # Calling with a different input instance does not match the record
+    assert TrackedOrder._input_has_active_terms(different_input_same_content, info) is True
+    # 1 from apply + 2 from standalone double-normalization = 3
+    assert TrackedOrder.normalize_count == 3
+
+
 def test_input_has_active_terms_sequence_controls_sync():
     """Load-bearing A/B/B and A/A/B/A normalization sequence controls under sync apply."""
     return_a = [("title", Ordering.ASC)]
@@ -1649,7 +1724,7 @@ def test_input_has_active_terms_sequence_controls_async():
 
 
 def test_input_has_active_terms_hostile_eq_and_repr():
-    """Hostile __eq__ and __repr__ in normalized terms do not escape as unhandled exceptions."""
+    """Hostile non-primitive terms returned by _normalize_input raise ConfigurationError."""
 
     class HostileEqTerm:
         def __init__(self, val):
@@ -1665,7 +1740,7 @@ def test_input_has_active_terms_hostile_eq_and_repr():
         def __repr__(self):
             raise RuntimeError("hostile __repr__ called")
 
-    # Hostile __eq__ during matching inert comparison
+    # Hostile non-str path rejected during boundary validation
     class HostileEqOrder(OrderSet):
         class Meta:
             model = Book
@@ -1675,27 +1750,25 @@ def test_input_has_active_terms_hostile_eq_and_repr():
         def _normalize_input(cls, input_value):
             return [("title", Ordering.ASC), (HostileEqTerm("custom"), None)]
 
-    # Conversion to inert built-in primitives prevents HostileEqTerm.__eq__ from ever running
-    assert HostileEqOrder._input_has_active_terms([{"title": "ASC"}]) is True
+    with pytest.raises(
+        ConfigurationError,
+        match=r"HostileEqOrder\._normalize_input returned invalid term",
+    ):
+        HostileEqOrder._input_has_active_terms([{"title": "ASC"}])
 
-    # Hostile __repr__ during disagreement error formatting
+    # Hostile __repr__ during invalid term error formatting
     class HostileReprOrder(OrderSet):
         class Meta:
             model = Book
             fields = ["title"]
 
-        calls = 0
-
         @classmethod
         def _normalize_input(cls, input_value):
-            cls.calls += 1
-            if cls.calls % 2 == 1:
-                return [("title", Ordering.ASC)]
             return [("title", HostileReprTerm("boom"))]
 
     with pytest.raises(ConfigurationError) as exc_info:
         HostileReprOrder._input_has_active_terms([{"title": "ASC"}])
-    assert "is not pure" in str(exc_info.value)
+    assert "returned invalid term" in str(exc_info.value)
     assert "<unprintable" in str(exc_info.value)
 
 
@@ -1729,9 +1802,9 @@ def test_input_has_active_terms_public_apply_override_independence():
 @pytest.mark.parametrize(
     ("first_return", "second_return"),
     [
-        ([{"title": Ordering.ASC}], [{"title": Ordering.DESC}]),
-        ([], [{"title": Ordering.ASC}]),
-        ([{"title": Ordering.ASC}], []),
+        ([("title", Ordering.ASC)], [("title", Ordering.DESC)]),
+        ([], [("title", Ordering.ASC)]),
+        ([("title", Ordering.ASC)], []),
     ],
 )
 def test_input_has_active_terms_purity_violation(first_return, second_return):
@@ -1756,3 +1829,52 @@ def test_input_has_active_terms_purity_violation(first_return, second_return):
         match=r"_normalize_input.*is not pure; returned different results",
     ):
         ImpureOrder._input_has_active_terms([{"title": "dummy"}])
+
+
+def test_orderset_normalize_input_validation_contract():
+    """_validate_normalized_terms enforces the declared return contract at the pipeline boundary."""
+
+    class NonListOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return {"title": Ordering.ASC}
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"NonListOrder\._normalize_input returned invalid data",
+    ):
+        NonListOrder._input_has_active_terms([{"title": "ASC"}])
+
+    class NonTupleTermOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [["title", Ordering.ASC]]
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"NonTupleTermOrder\._normalize_input returned invalid term",
+    ):
+        NonTupleTermOrder._input_has_active_terms([{"title": "ASC"}])
+
+    class InvalidDirectionOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [("title", "ASC")]
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"InvalidDirectionOrder\._normalize_input returned invalid term",
+    ):
+        InvalidDirectionOrder._input_has_active_terms([{"title": "ASC"}])

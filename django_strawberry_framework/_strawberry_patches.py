@@ -261,8 +261,8 @@ kilobytes) overflows there. Retire the multipart delegates once Strawberry valid
 every file path is a string before traversal, and bounds the document depth it
 will copy (or catches the same structural errors at its HTTP boundary).
 
-Three lifecycles, and one that left
------------------------------------
+Three lifecycles
+----------------
 
 Read the retirement question per concern, because this module carries three
 independent upstream *bugs* that do not retire together:
@@ -279,23 +279,22 @@ independent upstream *bugs* that do not retire together:
    validates malformed ``map`` containers and paths before the upload
    utility traverses them.
 
-There used to be a third entry: the strict UTF-8 wire contract, which is
-**not** retirable with either, because upstream will never "fix" behavior
-that is not a bug (RFC 8259 auto-detection over raw ``bytes``) - the
-package deliberately narrows it. Keeping a permanent policy in a module
-whose other three concerns are scheduled for deletion made "delete this
-module when 1, 2, and 3 land" a security regression waiting to happen, so the
-policy moved to ``views.py::_RequestBodyBoundaryMixin.parse_json`` (see
-"Where the strict UTF-8 wire contract lives" above). **This module can now
-be deleted outright once 1, 2, and 3 all retire**, and that is the only
-reason the deletion is safe.
+The strict UTF-8 wire contract is deliberately excluded from this module
+because it is **not** retirable with upstream bugs. Upstream will not change
+valid RFC 8259 auto-detection over raw ``bytes``; rather, the package
+deliberately narrows wire decoding. Keeping a permanent policy in a module
+whose other concerns are scheduled for retirement would risk a security regression
+if the module were retired en bloc. The UTF-8 policy therefore lives in
+``views.py::_RequestBodyBoundaryMixin.parse_json`` (see "Where the strict UTF-8
+wire contract lives" above). **This module can be deleted outright once 1, 2,
+and 3 all retire**.
 
 Re-checking whether upstream fixed this
 ---------------------------------------
 
 You do not need to redo the research from scratch. Three ways to tell
 whether the three *upstream-bug* parts are still required (the wire
-contract is not an upstream question at all, and no longer lives here -
+contract is not an upstream question at all and is owned by ``views.py`` -
 see "Three lifecycles" above):
 
 1. End-to-end, for **gap 2 only**. Set ``DJANGO_STRAWBERRY_FRAMEWORK =

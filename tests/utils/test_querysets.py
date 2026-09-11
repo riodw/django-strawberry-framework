@@ -70,7 +70,9 @@ from django_strawberry_framework.utils.querysets import (
     _query_container_defect,
     _query_genuineness_defect,
     _reconstructed_value,
+    _routing_hints_equal,
     _safe_class_name,
+    _safe_routing_repr,
     _seal_or_defect,
     _sealed_prefetch_related_lookups,
     _SealPolicy,
@@ -4929,16 +4931,16 @@ def test_seal_require_unevaluated():
     assert defect is None
     assert sealed is not None
 
-    # When cache is populated: ("unevaluated", "the result cache is populated")
+    # When cache is populated: ("evaluated", "the result cache is populated")
     qs_eval = Category.objects.all()
     qs_eval._result_cache = []
     sealed, defect = _seal_or_defect(qs_eval, Category, None, policy_uneval)
     assert sealed is None
-    assert defect == ("unevaluated", "the result cache is populated")
+    assert defect == ("evaluated", "the result cache is populated")
 
 
 def test_visibility_defect_messages():
-    """Visibility helpers format actionable error messages for 'unevaluated' and 'combined' defects."""
+    """Visibility helpers format actionable error messages for 'evaluated' and 'combined' defects."""
 
     class BookType:
         pass
@@ -4948,7 +4950,7 @@ def test_visibility_defect_messages():
             BookType,
             Category,
             None,
-            ("unevaluated", "the result cache is populated"),
+            ("evaluated", "the result cache is populated"),
             None,
         ),
     )
@@ -5092,7 +5094,7 @@ def test_validate_post_orderset_result_rejects_evaluated():
     eval_qs._result_cache = []
     with pytest.raises(
         ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got unevaluated defect",
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got evaluated defect",
     ):
         _validate_post_orderset_result(DummyType, source_qs, eval_qs, "MyOrderSet.apply_sync")
 
@@ -5290,11 +5292,115 @@ def test_validate_post_orderset_result_routing_hints_none_vs_empty():
 
     with pytest.raises(
         ConfigurationError,
-        match=r"expected db='default', hints=None, got db='default', hints=\{\}",
+        match=r"expected db=None, hints=None, got db=None, hints=\{\}",
     ):
         _validate_post_orderset_result(
             DummyType,
             source_qs,
             cand_qs,
+            "MyOrderSet.apply_sync",
+        )
+
+
+def test_routing_hints_equal_and_repr_reject_a_non_dict_hints_mapping():
+    """A ``dict`` SUBCLASS is not a ``dict`` for routing comparison, and renders safely.
+
+    The two helpers are exercised directly because the seal's ``untrusted`` proof
+    rejects a non-``dict`` ``_hints`` slot before the routing compare can see it;
+    the arms still have to hold, because they are the contract every future
+    caller of the pair inherits. A subclass may override ``__eq__``, ``__len__``,
+    ``keys`` or ``__getitem__``, so the compare admits only exact ``dict``
+    containers and the formatter falls back to ``_safe_arg_repr`` rather than
+    walking the mapping.
+    """
+
+    class HintsSubclass(dict):
+        def __eq__(self, other):
+            raise AssertionError("Hostile subclass __eq__ invoked")
+
+        def __repr__(self):
+            raise AssertionError("Hostile subclass __repr__ invoked")
+
+        __hash__ = None
+
+    hostile = HintsSubclass({"tag": "a"})
+    assert _routing_hints_equal(hostile, {"tag": "a"}) is False
+    assert _routing_hints_equal({"tag": "a"}, hostile) is False
+    assert "HintsSubclass" in _safe_routing_repr(hostile)
+
+
+def test_routing_hints_equal_rejects_a_renamed_key_at_equal_length():
+    """Same-size hint dicts with different KEYS are unequal.
+
+    The length check passes, so the per-key membership test is the only thing
+    standing between a renamed routing hint and a silent accept.
+    """
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    source_qs._hints = {"instance": "a"}
+
+    cand_qs = Category.objects.all()
+    cand_qs._hints = {"other": "a"}
+
+    with pytest.raises(
+        ConfigurationError,
+        match="changed database routing intent",
+    ):
+        _validate_post_orderset_result(DummyType, source_qs, cand_qs, "MyOrderSet.apply_sync")
+
+
+def test_routing_hints_equal_accepts_equal_primitives_that_are_not_identical():
+    """Equal-but-distinct builtin primitives compare equal without consumer dispatch.
+
+    Identity is the fast path; a hint value rebuilt at runtime (a joined string
+    rather than an interned literal) is still the same routing intent, so the
+    primitive equality arm has to accept it instead of failing closed.
+    """
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    source_qs._hints = {"instance": "shard-a"}
+
+    cand_qs = Category.objects.all()
+    # A runtime-built (uninterned) equal string, so identity cannot carry the compare.
+    cand_qs._hints = {"instance": "shard-a!"[:-1]}
+    assert cand_qs._hints["instance"] is not source_qs._hints["instance"]
+
+    sealed = _validate_post_orderset_result(
+        DummyType,
+        source_qs,
+        cand_qs,
+        "MyOrderSet.apply_sync",
+    )
+    assert sealed is not None
+
+
+def test_validate_post_orderset_result_source_without_instance_dict():
+    """A source whose ``__dict__`` cannot be read fails closed, naming the method.
+
+    Routing intent is read straight off the source's instance dictionary, so a
+    ``__slots__`` object (or any queryset look-alike without one) leaves the
+    check undeterminable, and undeterminable leaves the permit path.
+    """
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    class Slotted:
+        __slots__ = ()
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync could not verify the source QuerySet's database routing intent\.",
+    ):
+        _validate_post_orderset_result(
+            DummyType,
+            Slotted(),
+            Category.objects.all(),
             "MyOrderSet.apply_sync",
         )

@@ -8,7 +8,7 @@ Cycle artifacts: [`bld-slice-1-argument_normalization.md`][bld-s1],
 [`bld-slice-4-live_acceptance.md`][bld-s4],
 [`bld-slice-5-documentation_fold_in.md`][bld-s5],
 [`bld-integration.md`][bld-int].
-Status: superseded — remediation applied; full-coverage and sharded verification pending
+Status: final-accepted — gate re-run 2026-09-10 green (default, sharded, coverage, floor)
 
 ## Artifact shape: one Worker 1 pass
 
@@ -217,11 +217,48 @@ introduced none of them, and the `7601 passed` line above is wrong rather than s
 | `tests/test_list_field.py::test_list_field_post_orderset_validator_arms` | Post-OrderSet rejection wording. |
 | `tests/test_list_field.py::test_list_field_constructor_validation_precedence` | Asserts `got -1.`; `validate_collection_bound` renders `got int -1.` through `describe_value`. |
 | `tests/test_list_field.py::test_list_arguments_immutability_and_slots` | `super(type, obj)` raises inside the frozen `slots=True` dataclass `__setattr__`, so the immutability assertion never reaches its `FrozenInstanceError`. |
-| `examples/fakeshop/test_query/test_list_field_api.py::test_holder_materialized_and_nullable_none_fields` | A materialized (non-queryset) source with `orderBy` raises `queryset_required`, which is the specified behavior; the live expectation disagrees with Decision 8. |
+| `examples/fakeshop/test_query/test_list_field_api.py::test_holder_materialized_and_nullable_none_fields` | A materialized (non-queryset) source with `orderBy` raises `queryset_required`, which is the specified behavior; the live expectation asserted Python snake_case `branches_materialized` instead of wire `branchesMaterialized`. |
 
 The second row is a package defect rather than a test defect: the purity comparison must not
 depend on object identity. The rest are assertion expectations that never matched the behavior
 they pin. Both classes must be resolved before this gate can be re-run and accepted.
+
+## Gate re-run — 2026-09-10
+
+Both classes above are resolved: `_to_inert_order_data` is deleted and `_normalize_input`'s
+declared return contract is enforced at every call site (`orders/sets.py::_validate_normalized_terms`),
+the six assertion defects are corrected, and `test_list_arguments_immutability_and_slots` is
+`test_list_arguments_immutability` (the record drops `slots=True`; the class body records why).
+The two runtime findings from the second review also land here and are each pinned by a test
+proven to fail without its fix: the order-normalization record is cleared by the argument
+pipeline on every exit (`list_field.py::_execute_queryset_pipeline_sync` / `_async` `finally`),
+and the record holds the input object rather than its `id()`. Every figure below was measured
+on this worktree in [`docs/builder/BUILD.md`][build-md] `## Final test-run gate` order; the two
+obligations the supersession named are rows 1b and 1c.
+
+| # | Command | Result | Verdict |
+| --- | --- | --- | --- |
+| 1a | `uv run pytest` (default; `addopts` coverage on) | `7654 passed, 40 skipped in 183.64s`; `TOTAL 17601 0 100%`; `Required test coverage of 100.0% reached.` | **PASS** |
+| 1b | `FAKESHOP_SHARDED=1 uv run pytest` | `7668 passed, 37 skipped in 174.88s`; `TOTAL 17601 0 100%`; the three sharded rows un-skipped and passed | **PASS** |
+| 1c | `fail_under = 100` | reached on both invocations above | **PASS** |
+| 2a | `uv run python examples/fakeshop/manage.py check` | `System check identified no issues (0 silenced).`, exit **0** | **PASS** |
+| 2b | `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` | `No changes detected`, exit **0** | **PASS** |
+| 3a | `uv run ruff format --check .` | `445 files already formatted`, exit **0** | **PASS** |
+| 3b | `uv run ruff check .` | `All checks passed!`, exit **0** | **PASS** |
+| 3c | `git diff --check` | clean, exit **0** | **PASS** |
+| 3d | `scripts/check_citations.py --check` / `check_kanban_anchors.py` / `build_kanban_md.py --check` / `build_kanban_html.py --check` | `975 citations resolve`; `76 card anchors unique`; both renders up to date | **PASS** |
+| 4 | Floor verification | isolated venv under the session scratchpad (Py **3.10.19**, `django` **5.2.16**, `strawberry-graphql` **0.316.0**, `graphql-core` 3.2.12, `channels` 4.3.2, `asgiref` 3.12.1); focused scope from section 4 plus `tests/test_graphql_core_patches.py`: `1046 passed in 129.29s`, exit **0**; shared `.venv` read back as `django 6.1` / `strawberry-graphql 0.324.0`, unmutated | **PASS** |
+
+The board carries one new item on `TODO-ALPHA-053-0.0.15` naming the three spec-050 glossary
+anchors its Slice 5 flip must move from `planned for 0.0.15` to shipped, so that flip has a
+named target rather than the generic every-card sentence. The `## Deferred work catalog` above
+is otherwise unchanged: no deferred items.
+
+### Gate verdict
+
+Every command in the gate passed on the remediated worktree, including the two invocations the
+supersession recorded as pending. Card 050 is accepted at this artifact; the `0.0.15` version
+quintet and glossary flips ride `TODO-ALPHA-053-0.0.15`'s joint cut as before.
 
 <!-- LINK DEFINITIONS -->
 

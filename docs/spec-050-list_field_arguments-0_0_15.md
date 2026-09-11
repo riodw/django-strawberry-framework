@@ -89,7 +89,7 @@ the release wording.
         then the one raw-list slice.
   - [ ] The result of a public `OrderSet.apply_*` override is validated as an unevaluated,
         unsliced, non-projection, non-combined model queryset before the final window; the
-        seal gains the new `unevaluated` option, reuses the shipped `reject_combined` one,
+        seal gains the new `require_unevaluated` option, reuses the shipped `reject_combined` one,
         and both new-to-this-boundary codes gain arms at the two visibility message sites.
   - [ ] Nonzero offset requires a materially active `orderBy` or still-effective model
         `Meta.ordering` on the post-visibility queryset; no pk tiebreaker and no `DISTINCT`
@@ -590,8 +590,8 @@ Risks so implementation review cannot mistake it for an accidental omission.
 ### Decision 3 — one validation record computes both window and errors
 
 A private immutable normalized-arguments record holds `offset`, `limit`,
-`effective_ceiling`, the order input, and whether that input was supplied. Material
-order activity comes from the `OrderSet`-owned
+the order input, whether that input was supplied, and whether any argument was supplied.
+Material order activity comes from the `OrderSet`-owned
 `_input_has_active_terms(input_value) -> bool` helper, not a list-field input walker. One
 list-argument normalizer runs after `info` is available and before any queryset slicing. It
 treats `None` and `strawberry.UNSET` as omission, rejects `bool` explicitly despite Python's
@@ -599,11 +599,11 @@ treats `None` and `strawberry.UNSET` as omission, rejects `bool` explicitly desp
 `offset` before `limit`, matching the synthesized signature and SDL order, so a direct call
 with both values invalid has one deterministic first failure.
 
-The record answers four separate questions with four separate fields, and no consumer of one
+The record answers distinct questions with distinct fields, and no consumer of one
 may read another as a proxy for it. `any_argument_supplied` is true when any of the three
 arrived non-null; it selects the argument-bearing pipeline and nothing else, which is also
-what turns on reject-combined source admissibility. The `window` fields (`offset`, `limit`,
-`effective_ceiling`) say which rows are returned, and `offset: 0` with an omitted limit
+what turns on reject-combined source admissibility. The `window` fields (`offset`, `limit`)
+say which rows are returned, and `offset: 0` with an omitted limit
 produces the same window as omission - which is why Decision 9's fast path is a MODE decision
 and never a window comparison. `order_by_supplied` says whether an order argument arrived at
 all, and it, never material activity, drives the `queryset_required` source check, because an
@@ -695,8 +695,8 @@ see the [rationale][rationale-d4].*
 
 For a request carrying any non-null list argument, the color-specific queryset pipeline is:
 
-1. Derive the active wire names and validate/normalize `offset` / `limit` from `info` before
-   invoking a consumer resolver.
+1. Validate and normalize `offset` / `limit` from `info` before invoking a consumer resolver
+   (active wire names are resolved lazily only if constructing an error).
 2. Invoke the default or consumer resolver and normalize a `Manager` to a `QuerySet`.
    Preserve the existing guards: a sync resolver returning an awaitable is disposed and
    rejected, while an async resolver is awaited once and a residual awaitable is disposed
@@ -724,7 +724,7 @@ For a request carrying any non-null list argument, the color-specific queryset p
    states outright in its own docstring. Selecting `reject_combined` for list-field
    visibility makes `combined` reachable at both sites for the first time, so this card owes
    a `combined` arm at each of them and a correction to that docstring's reachability
-   sentence, exactly as the new `unevaluated` code below owes its own arms. Without them the
+   sentence, exactly as the new `evaluated` code below owes its own arms. Without them the
    rejection still fails closed - `_defect_message` dispatches exhaustively and an unrendered
    code names itself as a framework defect - but the schema author is told a code is
    unhandled instead of being told their source is a `union` / `intersection` / `difference`.
@@ -750,21 +750,21 @@ For a request carrying any non-null list argument, the color-specific queryset p
    `_deferred_filter` cannot be safely baked and fails closed as `untrusted`. A sync-path
    awaitable is likewise disposed and rejected under the existing one-await policy. Like
    `reject_combined`, the require-unevaluated option is enforced inside
-   [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets] and is a new
-   defect rather than a reuse of an existing code: the seal is a rebuild boundary that never
-   copies `_result_cache`, so today an evaluated candidate is silently normalized into a fresh
-   unevaluated queryset - an override that ran its own SQL and returned rows would be turned
-   into a second identical query instead of rejected. Both options default off, so no shipped
-   seal verdict changes.
+   [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets] and emits the
+   `evaluated` defect rather than a reuse of an existing code: the seal is a rebuild boundary
+   that never copies `_result_cache`, so today an evaluated candidate is silently normalized into
+   a fresh unevaluated queryset - an override that ran its own SQL and returned rows would be
+   turned into a second identical query instead of rejected. Both options default off, so no
+   shipped seal verdict changes.
 
    A new code owes two things the shipped codes already have. First, a fixed position in the
    seal's documented canonical ordering, which today runs `type`, `table`, `untrusted`,
-   `sliced`, `combined`, `projection`, `alias`. `unevaluated` is taken immediately before
+   `sliced`, `combined`, `projection`, `alias`. `evaluated` is taken immediately before
    `sliced` so the trust-family proofs still run first and the two execution-state rejections
    sit together. Decision 13's routing check is the third new code and takes the position
    immediately after `untrusted`, so every trust-family proof still runs first and no
    reconstructed queryset is returned before routing intent is proven, making the shipped
-   order `type`, `table`, `untrusted`, `routing`, `unevaluated`, `sliced`, `combined`,
+   order `type`, `table`, `untrusted`, `routing`, `evaluated`, `sliced`, `combined`,
    `projection`, `alias`. Second, its own arm at both message-building
    sites,
    [`django_strawberry_framework/utils/querysets.py::_visibility_result_error`][querysets] and
@@ -1163,8 +1163,17 @@ The future migration guide records:
 | Nested [`apply_window_pagination`][upstream-strawberry-pagination] | A synthesized nested `DjangoConnectionField`; raw nested offset windows are not shipped. |
 
 The note also calls out the order precondition and recommends a unique final order term.
-Card [`TODO-BETA-071-0.1.8`][kanban], not this flow, owns the eventual guide text; this spec
-pins its required content without editing the card body or future guide now.
+Unlike upstream strawberry-django, `orderBy` is rejected on non-querysets, nonzero offset
+strictly requires active ordering, and pagination arguments are flat rather than wrapped
+in a pagination input object. Two graphene-django differences change response data rather
+than SDL and must be stated as such: `DjangoListField.list_resolver` there forwards the
+field's arguments into the consumer resolver (`resolve_x(self, info, **kwargs)` receives
+`offset`), while here a consumer resolver never receives a list argument (Decision 1); and
+there a resolver returning `None` is replaced by the model's default manager, while here
+`None` stays `None`, and `orderBy` or a positive `offset` over it is rejected as
+`queryset_required` / `order_required` (Decision 8). Card [`TODO-BETA-071-0.1.8`][kanban],
+not this flow, owns the eventual guide text; this spec pins its required content without
+editing the card body or future guide now.
 
 ### Decision 12 — the version bump belongs to the `0.0.15` joint cut
 

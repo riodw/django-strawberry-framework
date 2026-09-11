@@ -67,10 +67,12 @@ from django_strawberry_framework.exceptions import (
     DjangoStrawberryFrameworkError,
 )
 from django_strawberry_framework.list_field import (
+    _cleanup_rejected_async_iterable,
     _field_label,
     _ListArguments,
     _normalize_list_arguments,
     _orderset_class_for_target,
+    _require_orderset_class_for_target,
     _resolve_argument_wire_name,
     _resolver_root_and_info,
     _synthesized_list_signature,
@@ -2831,6 +2833,7 @@ def test_list_field_direct_call_schema_name_fallback_and_definition_lookup():
     class ArgDef:
         name = "order_by"
         python_name = "order_by"
+        graphql_name = None
 
     def mock_get_arg_def(name):
         return ArgDef()
@@ -2898,11 +2901,11 @@ def test_list_field_record_independence():
     assert rec_order_empty.order_by_supplied is True
     assert rec_order_empty.order_by == []
 
-    from django_strawberry_framework.list_field import _handle_non_queryset_rejections_sync
+    from django_strawberry_framework.list_field import _build_non_queryset_rejection_error
 
-    with pytest.raises(ListArgumentError) as exc_info:
-        _handle_non_queryset_rejections_sync(rec_order_empty, info)
-    assert exc_info.value.reason == "queryset_required"
+    rejection = _build_non_queryset_rejection_error(rec_order_empty, info)
+    assert isinstance(rejection, ListArgumentError)
+    assert rejection.reason == "queryset_required"
 
 
 def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch):
@@ -3506,21 +3509,21 @@ def test_list_field_constructor_validation_precedence():
     # Negative bound raises collection bound error even if target_type is invalid
     with pytest.raises(
         ConfigurationError,
-        match=r"DjangoListField max_rows must be a positive integer, got -1\.",
+        match=r"DjangoListField max_rows must be a positive integer; got int -1\.",
     ):
         DjangoListField(object, max_rows=-1)
 
     # Zero bound raises collection bound error even if target_type is invalid
     with pytest.raises(
         ConfigurationError,
-        match=r"DjangoListField max_rows must be a positive integer, got 0\.",
+        match=r"DjangoListField max_rows must be a positive integer; got int 0\.",
     ):
         DjangoListField(object, max_rows=0)
 
     # Valid bound proceeds to target_type validation
     with pytest.raises(
         ConfigurationError,
-        match=r"DjangoListField target_type must be a DjangoType subclass, got <class 'object'>",
+        match=r"DjangoListField requires a DjangoType subclass; got object\.",
     ):
         DjangoListField(object, max_rows=10)
 
@@ -3579,8 +3582,8 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch():
     assert sealed is not None
 
 
-def test_list_arguments_immutability_and_slots():
-    """_ListArguments is an immutable slotted dataclass."""
+def test_list_arguments_immutability():
+    """_ListArguments is an immutable frozen dataclass."""
     import dataclasses
 
     args = _ListArguments(
@@ -3594,7 +3597,7 @@ def test_list_arguments_immutability_and_slots():
         args.offset = 5
     with pytest.raises(dataclasses.FrozenInstanceError):
         args.limit = 20
-    with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         args.extra_attribute = "disallowed"
 
 
@@ -3614,3 +3617,259 @@ def test_is_model_default_ordering_active_exact_bool_identity():
 
     query_mock.default_ordering = True
     assert _is_model_default_ordering_active(qs_mock) is True
+
+
+def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition():
+    """Every arm that cannot name the wire argument falls back to the default name.
+
+    ``_resolve_argument_wire_name`` runs only while building an error, so a
+    context that cannot answer "what is this argument called on the wire?" must
+    still produce the error rather than replacing it with its own failure. Three
+    such contexts reach the same fallback: no argument-definition resolver, no
+    definition for the parameter, and a schema config with no name converter.
+    """
+    # ``info.get_argument_definition`` present but None (no resolver installed).
+    info_none_resolver = SimpleNamespace(schema=None, get_argument_definition=None)
+    assert _resolve_argument_wire_name(info_none_resolver, "order_by") == "orderBy"
+
+    # A resolver that has no definition for the parameter.
+    info_no_argdef = SimpleNamespace(
+        schema=None,
+        get_argument_definition=lambda name: None,
+    )
+    assert _resolve_argument_wire_name(info_no_argdef, "limit") == "limit"
+
+    # A definition, but a schema config carrying no ``name_converter``.
+    class ConverterlessConfig:
+        pass
+
+    class ConverterlessSchema:
+        config = ConverterlessConfig()
+
+    info_no_converter = SimpleNamespace(
+        schema=ConverterlessSchema(),
+        get_argument_definition=lambda name: SimpleNamespace(python_name=name),
+    )
+    assert _resolve_argument_wire_name(info_no_converter, "offset") == "offset"
+
+
+def test_list_field_wire_name_resolution_wraps_a_failing_name_converter_read():
+    """A config whose ``name_converter`` read RAISES is a configuration error, not a fallback.
+
+    An absent converter is a shape the framework tolerates; a converter attribute
+    that blows up is a broken schema, and swallowing it would hide the breakage
+    behind a default argument name in every subsequent error message.
+    """
+
+    class ExplodingConfig:
+        @property
+        def name_converter(self):
+            raise RuntimeError("simulated converter attribute failure")
+
+    class ExplodingSchema:
+        config = ExplodingConfig()
+
+    info = SimpleNamespace(
+        schema=ExplodingSchema(),
+        get_argument_definition=lambda name: SimpleNamespace(python_name=name),
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match="Failed to read the name converter for argument 'order_by'",
+    ):
+        _resolve_argument_wire_name(info, "order_by")
+
+
+@pytest.mark.asyncio
+async def test_cleanup_rejected_async_iterable_notes_an_iterator_acquisition_failure() -> None:
+    """When ``aiter()`` itself fails, the rejection carries the reason as a note.
+
+    The primary error is the argument rejection the caller is about to raise; a
+    cleanup that cannot even acquire the iterator must not replace it, so the
+    acquisition failure is attached to it instead.
+    """
+
+    class UnacquirableAsyncIterable:
+        def __aiter__(self):
+            raise RuntimeError("aiter exploded")
+
+    primary = ListArgumentError("books", "orderBy", reason="queryset_required")
+    await _cleanup_rejected_async_iterable(UnacquirableAsyncIterable(), primary)
+    assert any("Iterator acquisition failed" in note for note in primary.__notes__)
+    assert any("aiter exploded" in note for note in primary.__notes__)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_rejected_async_iterable_survives_an_unannotatable_error() -> None:
+    """An error that refuses note attachment still leaves the primary error intact.
+
+    Note attachment is best-effort bookkeeping. An exception whose attribute
+    writes raise would otherwise turn a clean argument rejection into an
+    unrelated ``RuntimeError`` from the cleanup path.
+    """
+
+    class UnacquirableAsyncIterable:
+        def __aiter__(self):
+            raise RuntimeError("aiter exploded")
+
+    class NoteHostileError(Exception):
+        def __setattr__(self, name, value):
+            raise RuntimeError("notes refused")
+
+    primary = NoteHostileError("primary")
+    await _cleanup_rejected_async_iterable(UnacquirableAsyncIterable(), primary)
+    assert not hasattr(primary, "__notes__")
+
+
+def test_require_orderset_class_for_target_rejects_a_target_without_one():
+    """Ordering a target that declares no ``orderset_class`` is a configuration error.
+
+    Both colorings of the ordering step route through this one requirement, so
+    the message names the target rather than failing later with an attribute
+    error inside the ordering call.
+    """
+
+    class Orderless:
+        __django_strawberry_definition__ = SimpleNamespace(orderset_class=None)
+
+    assert _orderset_class_for_target(Orderless) is None
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField target Orderless has no orderset_class configured\.",
+    ):
+        _require_orderset_class_for_target(Orderless)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_djangolistfield_async_pipeline_windows_without_an_order_argument() -> None:
+    """The async argument pipeline runs with a window but NO ``orderBy``.
+
+    ``limit`` alone leaves the argument-bearing pipeline on its no-ordering arm:
+    the visibility result is carried through unchanged and the target's
+    ``orderset_class`` is looked up only so the offset guard can name it. Without
+    this the async coloring is only ever exercised with an order argument
+    present.
+    """
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories(limit: 1) { id name } }")
+    assert result.errors is None, result.errors
+    assert len(result.data["allCategories"]) == 1
+
+
+@pytest.mark.django_db
+def test_djangolistfield_clears_the_order_normalization_record_when_nothing_consumes_it():
+    """An ``orderBy`` with no positive offset leaves no record behind.
+
+    ``OrderSet.apply_*`` publishes one normalization on ``info.context`` for the
+    non-zero-offset guard to consume, and that guard returns before reading it
+    whenever ``offset`` is absent or zero - the ordinary ordered request. The
+    pipeline therefore clears the key on its way out: a surviving record is a
+    strong reference to the client's input held for the rest of the request, and
+    a later purity check on the same context would read a record it did not
+    produce.
+
+    Package-tier rather than live because the assertion is on the context object
+    itself, which a ``/graphql`` HTTP response carries no handle to.
+    """
+    from django_strawberry_framework.orders import OrderSet
+    from django_strawberry_framework.orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
+
+    services.seed_data(1)
+
+    class CategoryOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = CategoryOrder
+
+    @strawberry.type
+    class Query:
+        cats: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    for query in (
+        "{ cats(orderBy: [{name: ASC}]) { id name } }",
+        "{ cats(orderBy: [{name: ASC}], offset: 0) { id name } }",
+    ):
+        context: dict = {"request": RequestFactory().get("/")}
+        result = schema.execute_sync(query, context_value=context)
+        assert result.errors is None, result.errors
+        assert _APPLIED_ORDER_NORMALIZATION_KEY not in context
+
+
+@pytest.mark.django_db
+def test_djangolistfield_clears_the_order_normalization_record_when_the_seal_rejects():
+    """A rejected ordering result clears the record the ordering already published.
+
+    The post-``OrderSet`` seal runs after ``apply_sync`` has stashed its
+    normalization, so the rejection path is the one exit that leaves a record
+    with the guard never reached. Clearing it belongs in the pipeline's
+    ``finally``, not after the guard, or the failing request poisons the context
+    for everything downstream of it.
+    """
+    from django_strawberry_framework.orders import OrderSet
+    from django_strawberry_framework.orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
+
+    services.seed_data(1)
+
+    class EvaluatedReturningOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        def apply_sync(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            # Publishes the normalization record, then returns a candidate the
+            # seal rejects.
+            super().apply_sync(input_value, queryset, info)
+            evaluated = Category.objects.all()
+            evaluated._result_cache = []
+            return evaluated
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            orderset_class = EvaluatedReturningOrder
+
+    @strawberry.type
+    class Query:
+        cats: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    context: dict = {"request": RequestFactory().get("/")}
+    result = schema.execute_sync(
+        "{ cats(orderBy: [{name: ASC}]) { id name } }",
+        context_value=context,
+    )
+    assert result.errors is not None
+    assert "got evaluated defect" in str(result.errors[0])
+    assert _APPLIED_ORDER_NORMALIZATION_KEY not in context

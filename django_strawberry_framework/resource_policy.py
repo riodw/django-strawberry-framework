@@ -508,7 +508,10 @@ def bounded_rows(
     ``LIMIT`` / ``OFFSET`` and is never evaluated unbounded; a value that is
     already a materialized sequence (a consumer resolver's return, or Django's
     prefetch cache) is truncated in Python, which cannot un-fetch those rows but
-    does stop the response from serializing them.
+    does stop the response from serializing them. Non-row collections follow standard
+    Python slice semantics: sequences like ``str`` or ``bytes`` are sliced directly,
+    while mappings (e.g. ``dict``) fall back via ``itertools.islice`` to return a
+    sliced list of keys.
 
     A raw list is the one collection shape Relay pagination does not bound, so
     this is the only thing between a client and the whole table. It is
@@ -614,7 +617,9 @@ async def bounded_rows_async(
     discards exactly ``offset`` items, collects at most ``window`` items
     (where ``window`` is prevalidated ``requested_limit``, defaulting to the
     effective limit), and closes the iterator early without over-requesting
-    subsequent items.
+    subsequent items. Synchronous iterables fall back to ``bounded_rows``,
+    preserving standard Python slice semantics (including character/byte slicing
+    for ``str``/``bytes`` and key-slicing fallback for mappings).
 
     When the prefix ends early, the iterator is closed. A cleanup failure is
     raised when iteration itself succeeded; when iteration already failed, the

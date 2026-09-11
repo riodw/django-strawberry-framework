@@ -2867,7 +2867,7 @@ def _validate_post_orderset_result(
                 "type",
                 "table",
                 "untrusted",
-                "unevaluated",
+                "evaluated",
                 "sliced",
                 "combined",
                 "projection",
@@ -2892,7 +2892,7 @@ def _seal_or_defect(
     The single sealing primitive both boundary sites run. Returns
     ``(sealed_queryset, None)`` on success, or ``(None, (code, detail))`` on the
     first defect. Codes run ``type`` -> ``table`` -> ``untrusted`` -> ``routing``
-    -> ``unevaluated`` -> ``sliced`` -> ``combined`` -> ``projection`` -> ``alias``
+    -> ``evaluated`` -> ``sliced`` -> ``combined`` -> ``projection`` -> ``alias``
     (the one canonical ordering
     every site shares; a new code takes a FIXED position in it, and owes an arm
     at every message-building site that can reach it), except that the outer
@@ -3133,7 +3133,7 @@ def _seal_or_defect(
     if prefetch_defect is not None:
         return None, prefetch_defect
     if policy.require_unevaluated and state.get("_result_cache") is not None:
-        return None, ("unevaluated", "the result cache is populated")
+        return None, ("evaluated", "the result cache is populated")
     if policy.reject_sliced and rebuilt_query.is_sliced:
         return None, ("sliced", f"rows {rebuilt_query.low_mark}:{rebuilt_query.high_mark}")
     # ``combinator`` is a plain ``str | None`` slot on the proven-genuine
@@ -3297,7 +3297,7 @@ def _visibility_result_error(
                     f"filter cannot be faithfully rebuilt. Return a queryset backed by a plain "
                     f"django.db.models.sql.Query over model or .values() rows."
                 ),
-                "unevaluated": (
+                "evaluated": (
                     f"{name}.get_queryset returned an evaluated queryset ({detail}); "
                     f"the visibility contract composes further filters and ordering onto an "
                     f"unevaluated lazy query. Return an unevaluated QuerySet."
@@ -3408,7 +3408,7 @@ def _prepared_visibility_source(
                         f"unresolved deferred filter cannot be faithfully rebuilt. Pass a "
                         f"queryset backed by a plain django.db.models.sql.Query."
                     ),
-                    "unevaluated": (
+                    "evaluated": (
                         f"apply_type_visibility for {name} requires an unevaluated "
                         f"QuerySet; got an evaluated queryset ({detail}). Pass an unevaluated "
                         f"QuerySet."

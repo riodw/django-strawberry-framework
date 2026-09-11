@@ -490,7 +490,7 @@ def test_holder_materialized_and_nullable_none_fields():
     # Non-null orderBy rejects queryset_required
     p_mat_ord = _post_sync(schema, "{ branchesMaterialized(orderBy: []) { name } }")
     assert p_mat_ord["errors"][0]["extensions"]["reason"] == "queryset_required"
-    assert "on branches_materialized" in p_mat_ord["errors"][0]["message"]
+    assert "on branchesMaterialized" in p_mat_ord["errors"][0]["message"]
 
     # Nullable None list: limit and offset 0 return null
     p_none = _post_sync(schema, "{ branchesNullableNone(limit: 2) { name } }")

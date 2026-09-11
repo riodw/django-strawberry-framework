@@ -37,6 +37,7 @@ from .resource_policy import (
 )
 from .types import DjangoType
 from .types.base import _is_relay_shaped
+from .utils.context import clear_context_key
 from .utils.directives import validated_field_directives
 from .utils.querysets import (
     _LIST_ARGUMENT_VISIBILITY_POLICY,
@@ -56,6 +57,16 @@ from .utils.querysets import (
 from .utils.typing import is_async_callable, schema_config_from_info
 
 __all__ = ("DjangoListField", "ListArgumentError")
+
+_KNOWN_LIST_ARGUMENT_REASONS: frozenset[str] = frozenset(
+    {
+        "negative",
+        "non_integer",
+        "order_required",
+        "over_ceiling",
+        "queryset_required",
+    },
+)
 
 
 def _validate_djangotype_target(
@@ -176,13 +187,7 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
         ceiling: int | None = None,
         order_argument: str | None = None,
     ) -> None:
-        if reason not in {
-            "negative",
-            "non_integer",
-            "order_required",
-            "over_ceiling",
-            "queryset_required",
-        }:
+        if reason not in _KNOWN_LIST_ARGUMENT_REASONS:
             raise ValueError(f"Unknown ListArgumentError reason {reason!r}.")
         self.field = field
         self.argument = argument
@@ -303,7 +308,11 @@ def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
     return fallback
 
 
-@dataclass(frozen=True, slots=True)
+# ``slots=True`` is deliberately absent: combined with ``frozen=True`` the
+# dataclass-generated ``__setattr__`` closes over the pre-slots class, so an
+# undeclared attribute raises ``TypeError`` from ``super()`` instead of the
+# ``FrozenInstanceError`` every other write path raises.
+@dataclass(frozen=True)
 class _ListArguments:
     offset: int | None
     limit: int | None
@@ -322,6 +331,15 @@ def _normalize_list_arguments(
     limit: Any = None,
     order_by: Any = strawberry.UNSET,
 ) -> _ListArguments:
+    """Normalize and validate pagination arguments against effective resource policy ceilings.
+
+    Delegation guarantee:
+        While offset and limit are validated here (integer type, non-negative, and limit
+        within the effective ceiling), order_by structure and semantics are delegated to
+        the target DjangoType's OrderSet (or to Strawberry's schema-level input validation
+        when executed over GraphQL). Direct callers supplying non-null order_by to a target
+        without an OrderSet are caught by _orderset_class_for_target at pipeline execution time.
+    """
     offset_supplied = offset is not None and offset is not strawberry.UNSET
     limit_supplied = limit is not None and limit is not strawberry.UNSET
     order_by_supplied = order_by is not None and order_by is not strawberry.UNSET
@@ -539,6 +557,31 @@ def _resolver_root_and_info(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tu
     return root, info
 
 
+def _argument_record(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    max_rows: int | None,
+    trusted_max_rows: bool,
+    offset: Any = None,
+    limit: Any = None,
+    order_by: Any = strawberry.UNSET,
+) -> tuple[Any, Info, _ListArguments]:
+    """Extract root, info, and normalize list arguments for any resolver invocation."""
+    root, info = _resolver_root_and_info(args, kwargs)
+    field_name = _field_label(info)
+    args_record = _normalize_list_arguments(
+        field_name,
+        info,
+        max_rows,
+        trusted_max_rows,
+        offset=offset,
+        limit=limit,
+        order_by=order_by,
+    )
+    return root, info, args_record
+
+
 def _build_non_queryset_rejection_error(
     args_record: _ListArguments,
     info: Info,
@@ -581,15 +624,13 @@ async def _handle_non_queryset_rejections_async(
         raise err
 
 
-def _handle_non_queryset_rejections_sync(
-    args_record: _ListArguments,
-    info: Info,
-    *,
-    target_type: type | None = None,
-) -> None:
-    err = _build_non_queryset_rejection_error(args_record, info, target_type=target_type)
-    if err is not None:
-        raise err
+def _require_orderset_class_for_target(target_type: type) -> type:
+    orderset_class = _orderset_class_for_target(target_type)
+    if orderset_class is None:
+        raise ConfigurationError(
+            f"DjangoListField target {_safe_class_name(target_type)} has no orderset_class configured.",
+        )
+    return orderset_class
 
 
 def _apply_orderset_sync(
@@ -598,11 +639,7 @@ def _apply_orderset_sync(
     order_by: Any,
     info: Info,
 ) -> tuple[models.QuerySet, type | None]:
-    orderset_class = _orderset_class_for_target(target_type)
-    if orderset_class is None:
-        raise ConfigurationError(
-            f"DjangoListField target {_safe_class_name(target_type)} has no orderset_class configured.",
-        )
+    orderset_class = _require_orderset_class_for_target(target_type)
     candidate = orderset_class.apply_sync(order_by, queryset, info)
     if inspect.isawaitable(candidate):
         _dispose_sync_awaitable(candidate)
@@ -625,11 +662,7 @@ async def _apply_orderset_async(
     order_by: Any,
     info: Info,
 ) -> tuple[models.QuerySet, type | None]:
-    orderset_class = _orderset_class_for_target(target_type)
-    if orderset_class is None:
-        raise ConfigurationError(
-            f"DjangoListField target {_safe_class_name(target_type)} has no orderset_class configured.",
-        )
+    orderset_class = _require_orderset_class_for_target(target_type)
     candidate_awaitable = orderset_class.apply_async(order_by, queryset, info)
     if not inspect.isawaitable(candidate_awaitable):
         raise ConfigurationError(
@@ -658,6 +691,14 @@ def _check_nonzero_offset_guard(
     orderset_class: type | None,
     info: Info,
 ) -> None:
+    """Validate that non-zero offset pagination is backed by a deterministic ordering.
+
+    Rejects non-zero offset requests if neither active OrderSet terms nor model default
+    ordering is in effect. Note on EmptyQuerySet: Django's EmptyQuerySet vacuously reports
+    ordered=True (Category.objects.none().ordered is True). An empty queryset with offset > 0
+    and no active orderset or model ordering is accepted by the queryset.ordered check only
+    because it represents an empty result window where row ordering is vacuously preserved.
+    """
     if args_record.offset is None or args_record.offset <= 0:
         return
     has_active_order = False
@@ -705,18 +746,25 @@ def _execute_queryset_pipeline_sync(
         policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
     )
     orderset_class = None
-    if args_record.order_by_supplied:
-        post_order_qs, orderset_class = _apply_orderset_sync(
-            target_type,
-            post_vis_qs,
-            args_record.order_by,
-            info,
-        )
-    else:
-        post_order_qs = post_vis_qs
-        orderset_class = _orderset_class_for_target(target_type)
+    try:
+        if args_record.order_by_supplied:
+            post_order_qs, orderset_class = _apply_orderset_sync(
+                target_type,
+                post_vis_qs,
+                args_record.order_by,
+                info,
+            )
+        else:
+            post_order_qs = post_vis_qs
+            orderset_class = _orderset_class_for_target(target_type)
 
-    _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
+        _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
+    finally:
+        # Deferred: ``orders`` stays out of the package-root import graph.
+        from .orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
+
+        clear_context_key(getattr(info, "context", None), _APPLIED_ORDER_NORMALIZATION_KEY)
+
     bounded = bounded_rows(
         post_order_qs,
         info,
@@ -748,18 +796,25 @@ async def _execute_queryset_pipeline_async(
         policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
     )
     orderset_class = None
-    if args_record.order_by_supplied:
-        post_order_qs, orderset_class = await _apply_orderset_async(
-            target_type,
-            post_vis_qs,
-            args_record.order_by,
-            info,
-        )
-    else:
-        post_order_qs = post_vis_qs
-        orderset_class = _orderset_class_for_target(target_type)
+    try:
+        if args_record.order_by_supplied:
+            post_order_qs, orderset_class = await _apply_orderset_async(
+                target_type,
+                post_vis_qs,
+                args_record.order_by,
+                info,
+            )
+        else:
+            post_order_qs = post_vis_qs
+            orderset_class = _orderset_class_for_target(target_type)
 
-    _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
+        _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
+    finally:
+        # Deferred: ``orders`` stays out of the package-root import graph.
+        from .orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
+
+        clear_context_key(getattr(info, "context", None), _APPLIED_ORDER_NORMALIZATION_KEY)
+
     bounded = bounded_rows(
         post_order_qs,
         info,
@@ -859,13 +914,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
             order_by: Any = strawberry.UNSET,
             **kwargs: Any,
         ) -> Any:
-            _, info = _resolver_root_and_info(args, kwargs)
-            field_name = _field_label(info)
-            args_record = _normalize_list_arguments(
-                field_name,
-                info,
-                max_rows,
-                trusted_max_rows,
+            _, info, args_record = _argument_record(
+                args,
+                kwargs,
+                max_rows=max_rows,
+                trusted_max_rows=trusted_max_rows,
                 offset=offset,
                 limit=limit,
                 order_by=order_by,
@@ -924,13 +977,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 order_by: Any = strawberry.UNSET,
                 **kwargs: Any,
             ) -> Any:
-                root, info = _resolver_root_and_info(args, kwargs)
-                field_name = _field_label(info)
-                args_record = _normalize_list_arguments(
-                    field_name,
-                    info,
-                    max_rows,
-                    trusted_max_rows,
+                root, info, args_record = _argument_record(
+                    args,
+                    kwargs,
+                    max_rows=max_rows,
+                    trusted_max_rows=trusted_max_rows,
                     offset=offset,
                     limit=limit,
                     order_by=order_by,
@@ -950,20 +1001,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         max_rows,
                         trusted_max_rows,
                     )
-                await _handle_non_queryset_rejections_async(
-                    source,
-                    args_record,
-                    info,
-                    target_type=target_type,
-                )
-                return await bounded_rows_async(
-                    source,
-                    info,
-                    max_rows,
-                    trusted=trusted_max_rows,
-                    offset=args_record.offset,
-                    requested_limit=args_record.limit,
-                )
+                return await _resolve_async_iterable(source, info, args_record)
         else:
 
             def _wrap(
@@ -973,13 +1011,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 order_by: Any = strawberry.UNSET,
                 **kwargs: Any,
             ) -> Any:
-                root, info = _resolver_root_and_info(args, kwargs)
-                field_name = _field_label(info)
-                args_record = _normalize_list_arguments(
-                    field_name,
-                    info,
-                    max_rows,
-                    trusted_max_rows,
+                root, info, args_record = _argument_record(
+                    args,
+                    kwargs,
+                    max_rows=max_rows,
+                    trusted_max_rows=trusted_max_rows,
                     offset=offset,
                     limit=limit,
                     order_by=order_by,
@@ -1010,11 +1046,13 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         trusted_max_rows,
                         is_async_context=in_async_context(),
                     )
-                _handle_non_queryset_rejections_sync(
+                rejection = _build_non_queryset_rejection_error(
                     args_record,
                     info,
                     target_type=target_type,
                 )
+                if rejection is not None:
+                    raise rejection
                 return bounded_rows(
                     source,
                     info,

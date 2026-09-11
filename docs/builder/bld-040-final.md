@@ -221,10 +221,35 @@ across the two runs, `md5` compared rather than asserted.
 
 ---
 
+## Retired artifacts, and what Slice 7 superseded in this file
+
+**Every `docs/builder/bld-040-…` name in this file except this one is a retrieval key, not a live
+path.** The cycle's per-slice artifacts and the integration artifact were deleted from the tree once
+the cycle closed; each is retrievable at `git show ff5f8c95:docs/builder/<name>`. The plan,
+`docs/builder/build-040-auth_mutations-0_0_13.md`, survives in the tree and carries the slice log.
+
+**This file predates Slice 7 and its `### Deferred work catalog` is stale in three places.** Slice 7
+ran after this gate, under a maintainer fence amendment, and the plan's `### Slice 7` log entry is
+the authoritative record:
+
+- **Entry 4 is discharged.** The two `(hunt 0_0_14)` block-header comments in
+  `tests/auth/test_sessions.py` were removed; that file now carries **0** occurrences of `hunt` and
+  **0** of `Revision`.
+- **Entries 1 and 2 are homed**, not open: the inline subprocess-isolation idiom on
+  `TODO-ALPHA-053-0.0.15` (`Scope`, order 64) and the stale `docs/GLOSSARY.md` auth entry on
+  `TODO-ALPHA-056-0.0.17` (`Scope`, order 91). Entry 1's figure is also corrected there — the
+  population is **9 occurrences in 8 files but 8 call sites**, since `tests/test_scalars.py:319` is
+  a docstring mention.
+- **Entry 3 is misclassified below and must not be acted on as written.** The five
+  `spec-042 Revision N` citations in `tests/middleware/test_debug_toolbar.py` are **not** stranded:
+  `docs/SPECS/spec-042-debug_toolbar-0_0_14.md` still carries `Revision 5` ×9, `Revision 7` ×2 and
+  `Revision 8` ×1 and has no rationale companion, so all five resolve today. They strand only when
+  spec-042's own residual cycle extracts its revision history, which is where they belong.
+
 ## `### Deferred work catalog`
 
 Worker 1 is this catalog's only author. Its input is
-[`bld-040-integration.md`][bld-040-integration] `### 6`, **12 entries in two blocks**. Every figure
+`bld-040-integration.md` `### 6`, **12 entries in two blocks**. Every figure
 below was **re-measured at this gate with its population named**, not copied — two inherited figures
 in this cycle were already corrected once by exactly that discipline, and one entry sits in a file
 the concurrent session is editing right now.
@@ -399,7 +424,7 @@ parametrization is counted.
 ## The exact file list to commit
 
 Attribution is by **diff content** throughout, and it uses the **corrected** attribution from
-[`bld-040-integration.md`][bld-040-integration] `### 7` — **not** the superseded
+`bld-040-integration.md` `### 7` — **not** the superseded
 `### Confirming the fence held` paragraph, which misfiled two of these files (deferred entry 11).
 
 ### This cycle's — tracked, modified: 7 files
@@ -419,7 +444,7 @@ Attribution is by **diff content** throughout, and it uses the **corrected** att
 **Totals, measured: 7 files, 1,084 insertions / 970 deletions.**
 
 > **A fifth unmeasured stated count, found by this gate.**
-> [`bld-040-integration.md`][bld-040-integration] `### 7` heads that same table
+> `bld-040-integration.md` `### 7` heads that same table
 > "**Tracked, modified — 7 files, 391 insertions / 94 deletions**". The per-file rows below it are
 > correct and sum to **1,084 / 970**; `391 / 94` is the sum of the **six non-spec rows**
 > (11+6+7+275+86+6 and 4+6+7+64+7+6), with the 693 / 876 spec row omitted while the sentence still
@@ -519,7 +544,6 @@ The failing `spec-050` rows are **escalated to the maintainer**, not routed and 
 
 <!-- docs/builder/ -->
 [artifact-md]: ARTIFACT.md
-[bld-040-integration]: bld-040-integration.md
 [build-040]: build-040-auth_mutations-0_0_13.md
 [build-md]: BUILD.md
 [worker-1]: worker-1.md

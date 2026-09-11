@@ -35,7 +35,11 @@ restructuring to take an addition.
 Created by Slice 1 of the `040` retrospective reconciliation cycle, whose plan is
 [`docs/builder/build-040-auth_mutations-0_0_13.md`][build-040] and whose record of the
 move itself is the per-cycle artifact
-[`docs/builder/bld-040-slice-1-rationale_extraction.md`][bld-040-slice-1].
+`docs/builder/bld-040-slice-1-rationale_extraction.md`. That artifact and the cycle's
+other per-slice artifacts were retired from the tree once the cycle closed; each is
+retrievable at `git show ff5f8c95:docs/builder/<name>`. Only the plan and
+`docs/builder/bld-040-final.md` survive as files, so every `docs/builder/bld-040-…`
+name below is a retrieval key rather than a live path.
 `spec-040` shipped in `0.0.13` with a [`-terms.csv`][spec-040-terms] companion and no
 `-rationale.md` sibling — the one archived spec of its generation missing one, since
 `docs/SPECS/appx/` carries rationale files for `036`, `037`, `038`, `039` and
@@ -1454,9 +1458,9 @@ underwent` is keyed to its Decision. Every entry below is the *why* of an edit a
 reconciliation slice of the `040` retrospective cycle made to a spec section that
 belongs to no single Decision; the spec itself carries only the corrected contract.
 Each bullet names its slice or pass, and the per-cycle record of each is
-[`docs/builder/bld-040-slice-4-audit_obligations_edges_tests.md`][bld-040-slice-4],
-[`docs/builder/bld-040-slice-5-later_spec_reconciliation.md`][bld-040-slice-5] and
-[`docs/builder/bld-040-integration.md`][bld-040-integration].
+`docs/builder/bld-040-slice-4-audit_obligations_edges_tests.md`,
+`docs/builder/bld-040-slice-5-later_spec_reconciliation.md` and
+`docs/builder/bld-040-integration.md`.
 
 ### [`## Key glossary references`][spec-040-glossary-refs]
 
@@ -1668,7 +1672,7 @@ Each bullet names its slice or pass, and the per-cycle record of each is
 - **Post-ship (Slice 4, this cycle) — three required rows the plan never asked for, each
   a boundary the shipped suite does not pin.** Recorded in full, with the assertion shape
   and the tree each belongs in, in
-  [`bld-040-slice-4-audit_obligations_edges_tests.md`][bld-040-slice-4]; the spec now
+  `bld-040-slice-4-audit_obligations_edges_tests.md`; the spec now
   states them as contract so the gap has a durable home rather than dying with this
   cycle's artifact. In short: (a) the finalizer's `loaded_attr` reach — the existing
   subprocess row exercises only `registry.clear()` and its docstring claims a finalize
@@ -1750,7 +1754,7 @@ Each bullet names its slice or pass, and the per-cycle record of each is
   cycle has found: the spec is right and the tree is short, so weakening the spec to say
   "two" would be exactly the fix-the-test-not-the-code shortcut [`AGENTS.md`][agents]
   forbids. Recorded for the code-fix cohort in
-  [`bld-040-slice-4-audit_obligations_edges_tests.md`][bld-040-slice-4] instead.
+  `bld-040-slice-4-audit_obligations_edges_tests.md` instead.
   **Discharged:** Slice 6 wrote the `D-N3` comment at
   `auth/mutations.py::_synthesize_register_rider`, so item 6's clause is now true and
   the observation above is dated rather than live.
@@ -1921,10 +1925,6 @@ Findings and provenance that belong to no single Decision.
 [spec-046]: ../spec-046-transport_security-0_0_14.md
 
 <!-- docs/builder/ -->
-[bld-040-integration]: ../../builder/bld-040-integration.md
-[bld-040-slice-1]: ../../builder/bld-040-slice-1-rationale_extraction.md
-[bld-040-slice-4]: ../../builder/bld-040-slice-4-audit_obligations_edges_tests.md
-[bld-040-slice-5]: ../../builder/bld-040-slice-5-later_spec_reconciliation.md
 [build-040]: ../../builder/build-040-auth_mutations-0_0_13.md
 [build-md]: ../../builder/BUILD.md
 

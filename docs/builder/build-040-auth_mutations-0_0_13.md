@@ -132,6 +132,14 @@ Any code-gap cohort spawned out of an audit slice appends to that slice's own ar
 `## Build report (Worker 2, pass <N>)` / `## Review (Worker 3, pass <N>)` pair), rather than
 creating a new artifact file — the gap belongs to the contract the audit slice owns.
 
+**Retired at closeout.** Every artifact listed above except `docs/builder/bld-040-final.md` was
+deleted from the tree once the cycle closed and committed; this plan and the final gate are the two
+survivors. Each retired artifact is retrievable at `git show ff5f8c95:docs/builder/<name>` — one
+commit id serves all of them, since all eight were introduced in `ff5f8c95` and died together. Every
+`docs/builder/bld-040-…` filename in this plan, including the `-> path` tails in the checklist below
+and the cohort table's writable-file lists, is a retrieval key in that sense rather than a live path.
+`docs/builder/bld-040-final.md` carries its own note on what `### Slice 7` superseded in it.
+
 ## Checklist
 
 - [x] Slice 1: Spec rationale extraction into `docs/SPECS/appx/spec-040-auth_mutations-0_0_13-rationale.md` -> `docs/builder/bld-040-slice-1-rationale_extraction.md`

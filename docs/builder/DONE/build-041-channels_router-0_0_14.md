@@ -190,10 +190,28 @@ No `.py` file is writable by any cohort, because the verification sweep found no
 Should review surface one, the cycle stops and re-partitions rather than letting a worker write
 outside this list.
 
+## Retired at closeout — this plan is the cycle's only surviving file
+
+Every artifact this cycle produced was deleted once the work was committed, so each
+`docs/builder/bld-041-…` filename below is a **retrieval key, not a live path**. All three were
+introduced in the same commit, `623639dc`, which is the one retrieval id:
+
+- `git show 623639dc:docs/builder/bld-041-slice-1-rationale_and_spec_reconciliation.md`
+- `git show 623639dc:docs/builder/bld-041-slice-2-deferral_homing.md`
+- `git show 623639dc:docs/builder/bld-041-final.md` — note this is the copy **before** the
+  closeout pass repointed its references away from the two slice artifacts, so it is the fuller
+  one; the amended copy that followed was never committed.
+
+Everything those three held that lived nowhere else is folded into `## Final gate, folded in`
+below, or moved onto the board. Nothing else survived them by design.
+
 ## Artifact list
 
-- `docs/builder/bld-041-slice-1-rationale_and_spec_reconciliation.md`
-- `docs/builder/bld-041-final.md`
+All three retired at cycle close, retrieval keys above:
+
+- Slice 1 — rationale extraction and spec reconciliation.
+- Slice 2 — deferral homing and the cross-surface range claim.
+- The final gate — folded into `## Final gate, folded in` below.
 
 ## Worker sequence for Slice 1 (deviation from `## Per-slice dispatch`, recorded)
 
@@ -225,15 +243,63 @@ checks that CAN see this cycle's output:
 
 ## Checklist
 
-- [x] Slice 1: rationale extraction + spec reconciliation → `docs/builder/bld-041-slice-1-rationale_and_spec_reconciliation.md`
-- [x] Final gate → `docs/builder/bld-041-final.md`
-- [x] Slice 2: deferral homing + the cross-surface range claim →
-      `docs/builder/bld-041-slice-2-deferral_homing.md`
+- [x] Slice 1: rationale extraction + spec reconciliation (artifact retired at close)
+- [x] Final gate (artifact retired at close; folded into `## Final gate, folded in`)
+- [x] Slice 2: deferral homing + the cross-surface range claim (artifact retired at
+      close)
 
 Slice 2 was dispatched after the final gate, on a writable set the maintainer widened to
 include the fakeshop board and glossary databases. It discharges three of the four items in
-`bld-041-final.md` `## Deferred work catalog` — two by correcting the surfaces slice 1 could
+the final gate's `## Deferred work catalog` — two by correcting the surfaces slice 1 could
 not reach, one by homing a decision and two card-id populations on the board — and corrects
 two count errors that catalog carried. `pyproject.toml` stayed out of scope throughout; its
 one site is homed, not edited. No `.py` file changed in either slice, so no Worker 2 pass and
 no `pytest` run, per the deviations this plan already records.
+
+## Final gate, folded in from the retired `bld-041-final.md`
+
+Gate scope is `## Final gate scope` above; this is what the run produced.
+
+| Instrument | What it actually read | Result |
+| --- | --- | --- |
+| `ruff format --check .` | every `.py` in the tree, this cycle's and the concurrent cycle's alike | 445 files already formatted, exit 0 |
+| `ruff check .` | same | All checks passed, exit 0 |
+| `git diff --check` | whitespace in the unstaged diff, whole tree | clean |
+| `scripts/check_citations.py` | first-party `.py` and `KANBAN.md` **only** | OK, 981 citations at the gate; 983 after the closeout board edits |
+| `scripts/check_spec_glossary.py --spec <the spec>` | the spec plus its `-terms.csv` (30 rows) | OK, all 30 terms resolve |
+| `scripts/check_kanban_anchors.py` | the board DB | OK, 76 card anchors, no glossary collision |
+| all four generators `--check` | working tree vs the DBs they render from | all fresh |
+| `uvx pre-commit run --files <cycle paths>` | those paths, explicitly | all hooks Passed on the first run |
+
+**What the greens do not establish, and it matters for the next pass.**
+`check_citations.py` reads `.py` and `KANBAN.md`; it is **blind to every markdown file this cycle
+wrote**, so its green means only that no existing `path::Symbol` citation elsewhere was broken.
+The pair's own citations were verified separately, by AST resolution of all 46 occurrences.
+`check_spec_glossary.py` compares term and anchor only — that caveat now sits on the alpha
+documentation-debt card's `notes`-column ruling, because it is not specific to this cycle. Two
+gates agreeing is not corroboration when neither can see the other's failure mode.
+
+**Staged-anchor sweep.** `grep -rEn 'TODO\(spec-041|TODO-(ALPHA|BETA|STABLE)-041'` over `.py` and
+`.md`: **0 in `.py`**. No source file carries a staged anchor for this spec or card, so nothing
+shipped left one behind and nothing names a still-open slice. Every hit was prose describing an
+anchor rather than a live one. The count moved between Worker 0's run and the gate's because the
+artifacts being written were themselves inside the corpus — a census run over a corpus it is being
+written into reports a different number each time it is recorded.
+
+**Floor verification: scope `none`, deliberately.** No slice touched executable code, so no
+Django / Strawberry / channels integration seam was opened and no floor run was owed. No floor
+claim in this cycle rests on an unrun gate, and the shared `.venv` was never installed into,
+downgraded, or otherwise mutated. The floor read from `docs/builder/BUILD.md` and never from
+memory: Django 5.2.16 on Python 3.10 with strawberry-graphql 0.316.0. The shared `.venv` is not
+the floor; it read `channels 4.3.2`, `daphne 4.2.2`, `django 6.1`, `strawberry-graphql 0.324.0`,
+and that reading is load-bearing for the dependency finding now on the boundary-hardening card.
+
+**Hot-path budget: scope `none`**, for the same reason — no serialization point, no lock, no extra
+pass over a result set, no per-item work, because no executable code changed.
+
+**Deferred work catalog: superseded, all four items homed on the board.** The dependency decision
+and its parallel sites went to the boundary-hardening / DRY-squeeze card, which owns the
+dependency-group and extras surface; the two card-id populations and the `-terms.csv` `notes`
+ruling went to the alpha documentation-debt card. The catalog itself carried two count errors,
+both corrected before it was retired: a phrase count reported as a claim count, and an inverted
+statement of which `pyproject.toml` row the classifier comment belongs to.

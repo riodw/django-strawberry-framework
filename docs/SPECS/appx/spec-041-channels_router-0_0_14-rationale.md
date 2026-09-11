@@ -33,8 +33,9 @@ spec, not copied: it exists here and nowhere else.
   revision* changed a decision before any code existed. A *supersession* is a later card taking
   a decision's subject away from this one. A *post-ship correction* is the shipped code having
   moved while the spec's prose did not. `## Post-ship corrections` carries the third kind for
-  the whole spec, keyed by the finding numbers `docs/builder/build-041-channels_router-0_0_14.md`
-  assigned them, and each decision entry cross-links the ones that touch it.
+  the whole spec, keyed by the finding numbers
+  `docs/builder/DONE/build-041-channels_router-0_0_14.md` assigned them, and each decision entry
+  cross-links the ones that touch it.
 - **Where a change record and the spec disagree, the spec is the contract** and the change
   record is why it moved. A claim the decision may no longer make is named in the record rather
   than deleted silently.

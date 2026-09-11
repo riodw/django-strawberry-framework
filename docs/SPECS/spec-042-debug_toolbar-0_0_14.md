@@ -445,9 +445,12 @@ in-process fakeshop request tests.
         added to `[dependency-groups].dev` in [`pyproject.toml`][pyproject] and
         `uv.lock` regenerated together (`uv lock`), so the declared and locked
         dev environments never diverge. The floor is **`7.0.0` everywhere — one
-        floor for the whole advertised Django range**: [`pyproject.toml`][pyproject]
-        advertises `Framework :: Django :: 6.0`, and `7.0.0` is the first
-        `django-debug-toolbar` release carrying the Django 6.0 classifier
+        floor, single-valued across every naming site**:
+        [`pyproject.toml`][pyproject] advertises `Framework :: Django :: 5.2` /
+        `6.0` / `6.1`, and `7.0.0` is the first `django-debug-toolbar`
+        release carrying the Django 6.0 classifier, so the floor's Django
+        coverage reaches 6.0 and stops short of the `6.1` the package also
+        advertises
         (PyPI metadata: `6.0.0`, 2025-07-25, classifies Django 4.2–5.2 only;
         `7.0.0` classifies 5.2 + 6.0 with `django>=5.2` and `python>=3.10` —
         both compatible with the package's own floors), so upstream's
@@ -1060,7 +1063,8 @@ Consumer-visible behavior:
   floor)."` — the exact wording mirrors the DRF / channels hints so the three
   soft dependencies fail identically. The hint is public API in practice — it
   is the error a deploying consumer follows — so it names the **one** floor
-  that covers the package's whole advertised Django range (through 6.0)
+  the package verified, whose Django coverage reaches 6.0 and stops short of
+  the `6.1` [`pyproject.toml`][pyproject] also advertises
   ([Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape)).
   `require_debug_toolbar()` runs first and imports **only the top-level
   `debug_toolbar` package** (`require_optional_module("debug_toolbar", …)`), so
@@ -1359,12 +1363,13 @@ lazy-symbol][glossary-pep-562-lazy-export] variant:
    literal** — and deliberately above upstream's `>=6.0.0`: per
    [PyPI metadata][debug-toolbar-pypi],
    `django-debug-toolbar` `6.0.0` (2025-07-25) classifies Django 4.2–5.2 only,
-   while `7.0.0` is the **first checked release whose metadata covers the
-   package's advertised Django 6.0 range** — it carries the
-   `Framework :: Django :: 6.0` classifier, with `django>=5.2` and
-   `python>=3.10` — exactly matching the package's own floors
+   while `7.0.0` is the **first checked release carrying the
+   `Framework :: Django :: 6.0` classifier** — with `django>=5.2` and
+   `python>=3.10`, exactly matching the package's own floors
    ([`pyproject.toml`][pyproject]: `Django>=5.2`, `requires-python >=3.10`,
-   classifiers 5.2 + 6.0). The [`spec-041`][spec-041] single-floor rule applies
+   classifiers 5.2 / 6.0 / 6.1). The floor's Django coverage therefore
+   reaches 6.0 and stops there: `7.0.0` does not classify the `6.1` the
+   package also advertises. The [`spec-041`][spec-041] single-floor rule applies
    verbatim: the install hint is the error message a deploying consumer
    follows, so it must not guide a Django 6.0 user into an unsupported toolbar.
    The worker records the pytest command for the maintainer rather than running
@@ -2503,8 +2508,9 @@ joint `0.0.14` cut:
 - [ ] **`django-debug-toolbar>=7.0.0`** (or the floor the Slice-1 gate proves,
       moving all naming sites together) is in `[dependency-groups].dev` with
       `uv.lock` regenerated in the same commit; the dev-group specifier, the
-      hint string, and the re-typed test literal agree on the **single** floor
-      covering the advertised Django range through 6.0.
+      hint string, and the re-typed test literal agree on the **single** floor,
+      whose Django coverage reaches 6.0 and stops short of the `6.1`
+      [`pyproject.toml`][pyproject] also advertises.
 - [ ] The Strawberry view-class gate ran: `strawberry.django.views.BaseView`
       confirmed importable at `strawberry-graphql==0.262.0` in an isolated
       throwaway venv (never the shared `.venv`), or the project's Strawberry

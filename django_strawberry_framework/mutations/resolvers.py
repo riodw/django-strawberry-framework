@@ -857,10 +857,10 @@ def _model_decode_step(
     attr) **with their provided-marker preserved** - the captured names are folded
     back into the ``provided`` set below, so the excluded column still
     participates in ``full_clean`` validation (naively popping it pre-walk would
-    mark it unprovided and silently drop it from the exclude calculation - the
-    spec-040 Revision-7 marker fix). Bind writes the kind (register's
-    ``build_input`` stashes ``password`` as ``EXCLUDED``); a mutation whose specs
-    include any ``EXCLUDED`` kind returns the extended tuple
+    mark it unprovided and silently drop it from the exclude calculation). Bind
+    writes the kind (register's ``build_input`` stashes ``password`` as
+    ``EXCLUDED``); a mutation whose specs include any ``EXCLUDED`` kind returns
+    the extended tuple
     ``(target, m2m_assignments, exclude, excluded_values)``. The default
     no-exclusion bind keeps the exact historical three-tuple, so the model
     flavor's ``_model_write_step`` contract is byte-unchanged.
@@ -1257,8 +1257,8 @@ def payload_cls_for(mutation_cls: type) -> type:
 
     Promoted (underscore-dropped) so the form pipeline reuses it BY CALL rather than
     re-spelling it: both form flavors materialize their ``<Name>Payload`` into
-    ``mutations.inputs`` too (the ``ModelForm`` via the ``036`` ``_bind_mutation``,
-    the plain via ``_bind_form_mutation``), so this one ``getattr`` serves the model,
+    ``mutations.inputs`` too (the ``ModelForm`` via the ``036`` ``bind_mutations``,
+    the plain via ``bind_form_mutations``), so this one ``getattr`` serves the model,
     ``ModelForm``, and plain-form pipelines alike (spec-038).
     """
     from . import inputs

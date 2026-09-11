@@ -231,7 +231,7 @@ def test_weak_password_register_envelope_keys_to_password_not_all():
 
     ``validate_password`` raises a LIST-style ``ValidationError`` the generic
     mapper would key to the ``"__all__"`` sentinel; the register write step keys
-    it to ``password`` directly (spec-040 Revision 5) - asserted explicitly here
+    it to ``password`` directly (spec-040 Decision 6) - asserted explicitly here
     against two of fakeshop's configured validators (common + entirely-numeric).
     """
     create_users(1)
@@ -399,11 +399,11 @@ def test_anonymous_me_is_null_not_an_error():
 def test_complete_reload_preserves_the_auth_surface(reload_all_project_app_schemas):
     """A ``registry.clear()`` + full reload rebuilds ``login`` / ``logout`` / ``me``.
 
-    Pins the ``"apps.accounts.schema"`` ``_PROJECT_APP_SCHEMA_MODULES`` row
-    (spec-040 Revision 7 #3): without it a post-clear rebuild raises the
-    ``LazyType`` ``KeyError`` on the auth payload / ``UserType`` lazy refs or
-    silently drops the auth surface. The reload runs a second time INSIDE the
-    test (on top of the autouse fixture's) and the surface still answers live.
+    Pins the ``"apps.accounts.schema"`` ``_PROJECT_APP_SCHEMA_MODULES`` row:
+    without it a post-clear rebuild raises the ``LazyType`` ``KeyError`` on the
+    auth payload / ``UserType`` lazy refs or silently drops the auth surface. The
+    reload runs a second time INSIDE the test (on top of the autouse fixture's)
+    and the surface still answers live.
     """
     create_users(1)
     reload_all_project_app_schemas()

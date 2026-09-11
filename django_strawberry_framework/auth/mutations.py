@@ -21,10 +21,10 @@ finalizer cannot drain declarations before this module's bind reads them). The *
 the pre-bind seam: ``LoginPayload`` / ``LogoutPayload`` ride the existing
 ``mutations.inputs`` row (imported transitively here), and the ``current_user``
 alias namespace rides ``auth/queries.py``'s own row. The ledger is ALSO the
-holders' / rider's same-args cache and conflict state (the Revision-7 reload
-finding): draining it drains the cache, so a post-``registry.clear()``
-re-declaration with different ``permission_classes`` mints a fresh holder /
-rider instead of tripping a stale conflict raise.
+holders' / rider's same-args cache and conflict state: draining it drains the
+cache, so a post-``registry.clear()`` re-declaration with different
+``permission_classes`` mints a fresh holder / rider instead of tripping a stale
+conflict raise.
 """
 
 from __future__ import annotations
@@ -1194,6 +1194,13 @@ def _synthesize_register_rider(permission_classes: list[Any]) -> type:
         class Meta:
             model = user_model
             operation = "create"
+            # The narrowing wires NO relation-visibility helper of its own (D-N3): the
+            # stock user model's narrowed ``Meta.fields`` carries no relation input at
+            # all, and a custom model whose ``REQUIRED_FIELDS`` names a forward FK gets
+            # the standard ``<field>_id`` input through the shared decode's own relation
+            # handling - so the rider inherits whatever the shared path does and adds
+            # nothing, which is what keeps registration from acquiring a second,
+            # auth-local visibility rule.
             fields = register_fields
             permission_classes = rider_permission_classes
 

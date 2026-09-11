@@ -23,7 +23,10 @@ import inspect
 import itertools
 import json
 import logging
+import subprocess
+import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -41,7 +44,7 @@ from django.contrib.auth import (
     signals as auth_signals,
 )
 from django.contrib.auth.backends import ModelBackend
-from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth.models import AnonymousUser, Group
 from django.contrib.sessions.backends.base import UpdateError
 from django.contrib.sessions.backends.db import SessionStore as DBSessionStore
 from django.contrib.sessions.middleware import SessionMiddleware
@@ -74,6 +77,7 @@ from django_strawberry_framework.mutations import inputs as mutation_inputs
 from django_strawberry_framework.mutations.inputs import _materialized_names
 from django_strawberry_framework.mutations.resolvers import _model_decode_step
 from django_strawberry_framework.mutations.sets import _mutation_registry
+from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.registry import (
     iter_subsystem_clears,
     registry,
@@ -153,6 +157,27 @@ def _declare_user_type(fields=("id", "username", "email")):
     )
 
 
+def _declare_group_type():
+    """Register a Relay-backed ``DjangoType`` over ``Group``, the user's M2M target.
+
+    Declared beside ``_declare_user_type`` rather than shared with
+    ``tests/auth/test_queries.py``: the two modules already carry their own
+    ``_declare_user_type`` copies so each file's registrations stay readable
+    inside the per-test cleared registry.
+    """
+    return type(
+        "GroupT",
+        (DjangoType, relay.Node),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": Group, "fields": ("id", "name")},
+            ),
+        },
+    )
+
+
 @strawberry.type
 class _Query:
     @strawberry.field
@@ -160,11 +185,17 @@ class _Query:
         return 1
 
 
-def _finalize_schema(mutation_type: type, *, query_type: type = _Query) -> strawberry.Schema:
+def _finalize_schema(
+    mutation_type: type,
+    *,
+    query_type: type = _Query,
+    optimizer=None,
+) -> strawberry.Schema:
     """Finalize and return this suite's probe schema, with response-boundary masking OFF.
 
     Every schema in this file exists to prove that the AUTH pipeline does not
-    swallow an upstream failure: Django's own sessionless ``AttributeError``, a
+    swallow an upstream failure: the package's own sessionless
+    ``ConfigurationError`` (``auth/sessions.py::require_session``), a
     session-cycle or logout-flush error, the cleanup exception chained onto it, the
     concurrent-deletion ``UpdateError``, and the ``SyncMisuseError`` an async
     permission hook earns. Each of those is a plain Python exception, so the
@@ -173,23 +204,36 @@ def _finalize_schema(mutation_type: type, *, query_type: type = _Query) -> straw
     (``error_policy={"enabled": False}``) rather than claiming these in-process
     schemas run a debug deployment; masking is pinned on its own in
     ``tests/test_error_policy.py`` and the live tier.
+
+    ``optimizer`` installs a caller-constructed ``DjangoOptimizerExtension`` -
+    strictness is a CONSTRUCTION argument, so a strictness-armed schema can only
+    be obtained by building one here.
     """
     finalize_django_types()
+    extensions = [lambda: optimizer] if optimizer is not None else []
     return DjangoSchema(
         query=query_type,
         mutation=mutation_type,
         error_policy={"enabled": False},
+        extensions=extensions,
     )
 
 
-def _login_logout_schema(*, declare=_declare_user_type, query_type=_Query, **login_kwargs):
+def _login_logout_schema(
+    *,
+    declare=_declare_user_type,
+    query_type=_Query,
+    optimizer=None,
+    **login_kwargs,
+):
     """Declare the user type + a login/logout Mutation; return the finalized schema.
 
     ``declare`` is the per-call user-type declaration callable (default the plain
     identity-trio type; a ``last_login``-exposing variant swaps it in). ``query_type``
     seams a richer Query in - e.g. one carrying ``me`` for the router tests - and must
     be built by the caller so its auth field factories run inside the per-test cleared
-    registry. ``login_kwargs`` flow to ``login_mutation``.
+    registry. ``optimizer`` threads a caller-built ``DjangoOptimizerExtension``
+    through to ``_finalize_schema``. ``login_kwargs`` flow to ``login_mutation``.
     """
     declare()
 
@@ -198,7 +242,7 @@ def _login_logout_schema(*, declare=_declare_user_type, query_type=_Query, **log
         login = login_mutation(**login_kwargs)
         logout = logout_mutation()
 
-    return _finalize_schema(Mutation, query_type=query_type)
+    return _finalize_schema(Mutation, query_type=query_type, optimizer=optimizer)
 
 
 def _channels_adapter(scope_type="http", *, store=None, user=None):
@@ -218,6 +262,34 @@ def _channels_adapter(scope_type="http", *, store=None, user=None):
             "session": store if store is not None else DBSessionStore(),
             "user": user if user is not None else AnonymousUser(),
         },
+    )
+
+
+def _auth_free_subprocess(body: str) -> None:
+    """Run ``body`` in a fresh Django-configured process that has not imported ``auth``.
+
+    The prologue puts ``examples/fakeshop`` on ``sys.path``, points
+    ``DJANGO_SETTINGS_MODULE`` at its settings and calls ``django.setup()``;
+    ``body`` is appended to it verbatim. A separate process is what makes a
+    ``sys.modules`` assertion deterministic - inside the test worker the auth
+    module is long since imported by this file's own imports.
+    """
+    fakeshop = Path(__file__).resolve().parents[2] / "examples" / "fakeshop"
+    prologue = (
+        "import django; "
+        "import os; "
+        f"import sys; sys.path.insert(0, {str(fakeshop)!r}); "
+        "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); "
+        "django.setup(); "
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", prologue + body],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"subprocess failed: stdout={result.stdout!r}, stderr={result.stderr!r}"
     )
 
 
@@ -340,40 +412,82 @@ def test_auth_permission_holder_head_is_sealed():
 def test_registry_clear_does_not_import_the_auth_subsystem():
     """``registry.clear()`` in an auth-free process never imports ``auth.mutations``.
 
-    The structural opt-in (spec-040 Decision 3) covers BOTH consumer-reachable
-    paths: the finalizer's bind is guarded on ``sys.modules``, and a clear
-    callback only exists on the registry once its owner module has been
-    imported and self-registered - so clearing can never import an unloaded
-    subsystem as a side effect. Subprocess-based so the assertion is
-    deterministic regardless of what this worker already imported.
+    Half of the structural opt-in (spec-040 Decision 3): a clear callback only
+    exists on the registry once its owner module has been imported and
+    self-registered, so clearing can never import an unloaded subsystem as a side
+    effect. The finalizer's own guarded bind is the other half and is pinned by
+    ``::test_finalize_in_an_auth_free_process_never_imports_the_auth_subsystem``,
+    which actually finalizes; this row does not.
     """
-    import subprocess
-    import sys
-    from pathlib import Path
+    _auth_free_subprocess(
+        "import django_strawberry_framework.registry as r; "
+        "r.registry.clear(); "
+        "assert 'django_strawberry_framework.auth.mutations' not in sys.modules",
+    )
 
-    fakeshop = Path(__file__).resolve().parents[2] / "examples" / "fakeshop"
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import django; "
-                "import os; "
-                f"import sys; sys.path.insert(0, {str(fakeshop)!r}); "
-                "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); "
-                "django.setup(); "
-                "import django_strawberry_framework.registry as r; "
-                "r.registry.clear(); "
-                "assert 'django_strawberry_framework.auth.mutations' not in sys.modules"
-            ),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (
-        f"subprocess failed: stdout={result.stdout!r}, stderr={result.stderr!r}"
-    )
+
+_FINALIZE_DRIVER_BODY = """
+from django.contrib.auth.models import Group
+from django_strawberry_framework import DjangoType, finalize_django_types
+
+type(
+    "GroupT",
+    (DjangoType,),
+    {"Meta": type("Meta", (), {"model": Group, "fields": ("id", "name"), "primary": True})},
+)
+finalize_django_types()
+"""
+
+_SCHEMA_DRIVER_BODY = """
+import strawberry
+from django.contrib.auth.models import Group
+from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
+
+type(
+    "GroupT",
+    (DjangoType,),
+    {"Meta": type("Meta", (), {"model": Group, "fields": ("id", "name"), "primary": True})},
+)
+
+
+@strawberry.type
+class Q:
+    @strawberry.field
+    def ping(self) -> int:
+        return 1
+
+
+finalize_django_types()
+DjangoSchema(query=Q)
+"""
+
+_AUTH_UNIMPORTED_ASSERT = """
+assert "django_strawberry_framework.auth.mutations" not in sys.modules, sorted(
+    m for m in sys.modules if "auth" in m
+)
+"""
+
+
+@pytest.mark.parametrize(
+    "driver",
+    [_FINALIZE_DRIVER_BODY, _SCHEMA_DRIVER_BODY],
+    ids=["finalize", "schema"],
+)
+def test_finalize_in_an_auth_free_process_never_imports_the_auth_subsystem(driver):
+    """Phase 2.5's auth bind reaches ``auth.mutations`` only when it is ALREADY loaded.
+
+    The other half of the structural opt-in (spec-040 Decision 3): the finalizer
+    looks the bind up through ``utils/imports.py::loaded_attr``, which returns
+    ``None`` for an unloaded module, so a consumer that never imports ``auth``
+    never pays for it. Two drivers reach that one lookup: a bare
+    ``finalize_django_types()``, and a full ``DjangoSchema`` build, which
+    finalizes first and then adds schema construction on top - a superset, not a
+    second entry point, since ``DjangoSchema`` does not finalize on its own. The
+    second driver is here because the whole consumer build must stay auth-free,
+    not because the two can fail apart. A plain function-local import in the
+    finalizer would load the subsystem under either one.
+    """
+    _auth_free_subprocess(driver + _AUTH_UNIMPORTED_ASSERT)
 
 
 def test_factory_after_finalize_raises_the_standing_configuration_error():
@@ -634,7 +748,7 @@ def test_reload_idempotence_cycle_rebuilds_the_full_auth_surface():
 def test_register_arm_error_survives_a_reload_cycle():
     """After clear + re-declare, the SECOND finalize still fires the auth-specific arm.
 
-    Pins the every-call auth-ledger re-record (spec-040 Revision 4): were the
+    Pins the every-call auth-ledger re-record (spec-040 Decision 8): were the
     auth-ledger record written once behind the cache guard, the drained ledger
     would leave ``bind_auth_mutations()`` blind to ``register`` on the second
     finalize and the generic ``_resolve_primary_type`` message would regress in.
@@ -805,9 +919,33 @@ async def test_async_register_never_persists_the_plaintext():
     assert stored.check_password("pw-9x-strong")
 
 
+def _assert_sessionless_configuration_error(res):
+    """Assert the shipped ``require_session`` refusal, not Django's raw ``AttributeError``.
+
+    The distinguishing set both sessionless rows share: the error is the package's
+    own ``ConfigurationError`` and its message names BOTH installable stacks. A bare
+    ``"session"`` substring holds under either implementation, so it is asserted
+    alongside the two names rather than in place of them.
+    """
+    assert res.errors is not None
+    assert isinstance(res.errors[0].original_error, ConfigurationError)
+    message = res.errors[0].message
+    assert "SessionMiddleware" in message
+    assert "AuthMiddlewareStack" in message
+    assert "session" in message.lower()
+
+
 @pytest.mark.django_db
-def test_sessionless_request_surfaces_djangos_own_error():
-    """No session stack -> Django's error propagates (no bespoke probe, no swallow)."""
+def test_sessionless_login_raises_the_configuration_error_naming_both_middlewares():
+    """No session stack -> the package's own ``ConfigurationError``, naming the fix.
+
+    ``auth/sessions.py::require_session`` probes for the session BEFORE any
+    session mutation, so a misconfigured deployment gets a package error naming
+    both installable stacks instead of Django's raw ``AttributeError`` from deep
+    inside ``login()``. Both the class and the two middleware names are asserted:
+    a bare ``"session"`` substring holds under either implementation and so
+    distinguishes nothing.
+    """
     schema = _login_logout_schema()
     user_model = get_user_model()
     user_model.objects.create_user(username="probe", password="pw-9x-strong")
@@ -818,8 +956,22 @@ def test_sessionless_request_surfaces_djangos_own_error():
         variable_values={"p": "pw-9x-strong"},
         context_value=request,
     )
-    assert res.errors is not None
-    assert "session" in res.errors[0].message.lower()
+    _assert_sessionless_configuration_error(res)
+
+
+@pytest.mark.django_db
+def test_sessionless_logout_raises_the_configuration_error_naming_both_middlewares():
+    """Logout runs the same probe, for its rejection side effect alone.
+
+    ``::_transport_prologue`` is shared: logout discards the session object it
+    returns but still runs ``require_session``, so a sessionless logout rejects
+    exactly as a sessionless login does rather than silently reporting ``ok``.
+    """
+    schema = _login_logout_schema()
+    request = RequestFactory().post("/graphql/")  # deliberately no SessionMiddleware
+    request.user = AnonymousUser()
+    res = schema.execute_sync(_LOGOUT_Q, context_value=request)
+    _assert_sessionless_configuration_error(res)
 
 
 @pytest.mark.django_db
@@ -871,6 +1023,34 @@ async def test_async_permission_hook_rejected_inside_the_sync_worker_too():
     assert res.errors is not None
     assert "AsyncGate.has_permission returned a coroutine" in res.errors[0].message
     assert isinstance(res.errors[0].original_error, SyncMisuseError)
+
+
+@pytest.mark.django_db
+def test_an_unplanned_relation_under_login_node_is_strictness_visible():
+    """``login``'s payload object is a raw instance, so a relation under it is unplanned.
+
+    ``::_login_result_payload`` returns the authenticated actor directly - no
+    optimizer plan rides the mutation payload - so selecting a relation under
+    ``login { node { ... } }`` resolves per-parent. Under a strictness-armed
+    optimizer that is the ``OptimizerError``, which is what makes the deep
+    selection VISIBLE rather than silently N+1. Strictness is a construction
+    argument, so only a locally built schema can arm it.
+    """
+    _declare_group_type()
+    schema = _login_logout_schema(
+        declare=lambda: _declare_user_type(fields=("id", "username", "groups")),
+        optimizer=DjangoOptimizerExtension(strictness="raise"),
+    )
+    user = get_user_model().objects.create_user(username="probe", password="pw-9x-strong")
+    user.groups.add(Group.objects.create(name="g1"))
+    res = schema.execute_sync(
+        'mutation { login(username: "probe", password: "pw-9x-strong") '
+        "{ node { groupsConnection { edges { node { name } } } } errors { field } } }",
+        context_value=_session_request(),
+    )
+    assert res.errors is not None
+    assert "Unplanned N+1: groups" in res.errors[0].message
+    assert res.errors[0].path == ["login", "node", "groupsConnection"]
 
 
 # ---------------------------------------------------------------------------
@@ -1014,6 +1194,36 @@ def test_gate_introspecting_the_mutation_object_raises_on_the_model_less_fields(
 # Register rider internals
 # ---------------------------------------------------------------------------
 
+# The reject message ``::derive_register_fields`` raises, named once so a reword of
+# the production string is a one-site sweep inside this file.
+_PROTECTED_FIELD_REJECT = (
+    r"register_mutation\(\) cannot auto-expose protected user field\(s\) "
+    r"\['is_staff'\].*PrivilegeRequiredUser"
+)
+
+
+def _privilege_required_user():
+    """Return a freshly declared user model whose ``REQUIRED_FIELDS`` exposes ``is_staff``.
+
+    A factory rather than one shared class: each call needs its own
+    ``_unique_app_label()`` so Django's app registry does not warn about a
+    re-registered model, and
+    the class name is load-bearing - ``_PROTECTED_FIELD_REJECT`` matches on it.
+    """
+
+    class PrivilegeRequiredUser(djmodels.Model):
+        username = djmodels.CharField(max_length=150)
+        password = djmodels.CharField(max_length=128)
+        is_staff = djmodels.BooleanField(default=False)
+
+        USERNAME_FIELD = "username"
+        REQUIRED_FIELDS = ("is_staff",)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    return PrivilegeRequiredUser
+
 
 def test_derive_register_fields_default_user_model():
     assert derive_register_fields(User) == ("username", "email", "password")
@@ -1040,26 +1250,26 @@ def test_derive_register_fields_custom_username_and_required_fields():
 
 def test_derive_register_fields_rejects_privilege_fields():
     """A custom model cannot turn ``is_staff`` into public registration input."""
+    model = _privilege_required_user()
+    with pytest.raises(ConfigurationError, match=_PROTECTED_FIELD_REJECT):
+        derive_register_fields(model)
 
-    class PrivilegeRequiredUser(djmodels.Model):
-        username = djmodels.CharField(max_length=150)
-        password = djmodels.CharField(max_length=128)
-        is_staff = djmodels.BooleanField(default=False)
 
-        USERNAME_FIELD = "username"
-        REQUIRED_FIELDS = ("is_staff",)
+def test_register_mutation_rejects_a_protected_required_field_at_the_factory_call(monkeypatch):
+    """The protected-field reject fires at ``register_mutation()``, not only in the helper.
 
-        class Meta:
-            app_label = _unique_app_label()
+    ``derive_register_fields`` is reached from the rider synthesis, so the
+    consumer-facing factory call is where a privilege-exposing ``REQUIRED_FIELDS``
+    is actually refused - before any bind, any input materialization, or any
+    finalize. Pinned at the factory as well as at the helper because the two can
+    regress independently: a synthesis that stopped calling the helper would
+    leave the helper-level row green.
+    """
 
-    with pytest.raises(
-        ConfigurationError,
-        match=(
-            r"register_mutation\(\) cannot auto-expose protected user field\(s\) "
-            r"\['is_staff'\].*PrivilegeRequiredUser"
-        ),
-    ):
-        derive_register_fields(PrivilegeRequiredUser)
+    user_model = _privilege_required_user()
+    monkeypatch.setattr(auth_mutations, "get_user_model", lambda: user_model)
+    with pytest.raises(ConfigurationError, match=_PROTECTED_FIELD_REJECT):
+        register_mutation()
 
 
 def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields():
@@ -2299,8 +2509,9 @@ def test_sync_django_http_login_leaves_session_modified_for_the_cookie():
 # `user_logged_out` receiver and a real SessionStore subclass whose `delete` raises)
 # on BOTH the Django HTTP and Channels paths. The Django HTTP authenticated/anonymous
 # round trip lives in the live `examples/fakeshop/test_query/test_auth_api.py`.
-
-_CH_LOGOUT = "mutation{ logout{ ok errors{ field } } }"
+#
+# The logout document these rows send is `_LOGOUT_Q`, the same one the Django HTTP
+# rows send: the transports differ, the document does not.
 
 
 class _FlushRecordingStore(DBSessionStore):
@@ -2596,7 +2807,7 @@ async def test_channels_http_logout_invalidates_cookie_and_durable_session():
     key = _cookie_key(cookie)
     assert await database_sync_to_async(_session_row_exists)(key)
 
-    resp = await _ch_post(router, _CH_LOGOUT, cookie=cookie)
+    resp = await _ch_post(router, _LOGOUT_Q, cookie=cookie)
     assert resp["status"] == 200
     body = json.loads(resp["body"])
     assert body.get("errors") is None, body
@@ -2618,7 +2829,7 @@ async def test_channels_http_anonymous_logout_is_false_but_flushes_residue():
     router = _channels_router(_auth_router_schema())
     anon_key = await database_sync_to_async(_seed_session)(cart=["item-1"])
     cookie = f"{settings.SESSION_COOKIE_NAME}={anon_key}"
-    resp = await _ch_post(router, _CH_LOGOUT, cookie=cookie)
+    resp = await _ch_post(router, _LOGOUT_Q, cookie=cookie)
     body = json.loads(resp["body"])
     assert body.get("errors") is None, body
     assert body["data"]["logout"] == {"ok": False, "errors": []}
@@ -2677,7 +2888,7 @@ async def test_websocket_server_side_logout_invalidates_and_survives_reconnect()
     communicator = await _ws_open(router, cookie=cookie)
     try:
         assert (await _ws_run(communicator, _CH_ME, "1"))["me"] == {"username": "staff_1"}
-        assert (await _ws_run(communicator, _CH_LOGOUT, "2"))["logout"] == {
+        assert (await _ws_run(communicator, _LOGOUT_Q, "2"))["logout"] == {
             "ok": True,
             "errors": [],
         }

@@ -1231,14 +1231,14 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
         """Build + materialize the operation's generated input class (the bind hook seam).
 
-        The overridable input-materialization seam ``_bind_mutation`` calls at
+        The overridable input-materialization seam ``bind_write_declarations`` calls at
         phase 2.5. The **model default** delegates to ``_materialize_input_for``
         (today's exact model behavior: the model-column ``<Model>Input`` /
         ``<Model>PartialInput`` built from the editable columns, or ``None`` for a
-        ``delete``), then stashes ``_input_field_specs`` + ``_model_fields_by_attr``
-        for the decode; the form flavors override it to build the form-derived input
-        from ``forms/inputs.py`` instead (spec-038 Decision 13). Returning ``None``
-        means "no input for this operation" (the model ``delete`` case).
+        ``delete``), then stashes ``_input_field_specs`` + ``_model_fields_by_attr`` for
+        the decode; the form flavors override it to build the form-derived input from
+        ``forms/inputs.py`` instead (spec-038 Decision 13). Returning ``None`` means "no
+        input for this operation" (the model ``delete`` case).
         """
         input_cls = _materialize_input_for(cls.__name__, meta, primary_type)
         if input_cls is not None:
@@ -1646,9 +1646,9 @@ def bind_mutation_outputs(
     reads after finalize (``_primary_type`` / ``_input_class`` /
     ``_payload_type_name``):
 
-    - model-backed (``_bind_mutation``): ``object_type`` is the resolved
+    - model-backed (``bind_mutations``): ``object_type`` is the resolved
       primary ``DjangoType``; the payload carries ``payload_object_slot``;
-    - model-less (``_bind_form_mutation``): ``object_type`` is ``None`` and
+    - model-less (``bind_form_mutations``): ``object_type`` is ``None`` and
       the payload is the pinned ``{ ok errors }`` shape.
 
     Auth's login/logout holders use a fixed payload *name* (``"Login"`` /

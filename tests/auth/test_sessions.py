@@ -462,7 +462,7 @@ def test_no_process_global_lock_registry_in_the_sessions_module():
 
 
 # ---------------------------------------------------------------------------
-# Exception containment: hostile scope / session / lock (hunt 0_0_14)
+# Exception containment: hostile scope / session / lock
 # ---------------------------------------------------------------------------
 
 
@@ -717,7 +717,7 @@ async def test_scope_lock_acquire_cancelled_error_propagates():
 
 
 # ---------------------------------------------------------------------------
-# Revision guards: hostile __class__ and hostile transport.value (hunt 0_0_14 rev)
+# Exception containment: hostile __class__ and hostile transport.value
 # ---------------------------------------------------------------------------
 
 

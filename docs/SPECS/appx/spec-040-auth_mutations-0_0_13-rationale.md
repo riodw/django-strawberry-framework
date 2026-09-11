@@ -33,7 +33,7 @@ restructuring to take an addition.
 ## Provenance of this record
 
 Created by Slice 1 of the `040` retrospective reconciliation cycle, whose plan is
-[`docs/builder/build-040-auth_mutations-0_0_13.md`][build-040] and whose record of the
+[`docs/builder/DONE/build-040-auth_mutations-0_0_13.md`][build-040] and whose record of the
 move itself is the per-cycle artifact
 `docs/builder/bld-040-slice-1-rationale_extraction.md`. That artifact and the cycle's
 other per-cycle artifacts were retired from the tree once the cycle closed; each is
@@ -1926,7 +1926,7 @@ Findings and provenance that belong to no single Decision.
 [spec-046]: ../spec-046-transport_security-0_0_14.md
 
 <!-- docs/builder/ -->
-[build-040]: ../../builder/build-040-auth_mutations-0_0_13.md
+[build-040]: ../../builder/DONE/build-040-auth_mutations-0_0_13.md
 [build-md]: ../../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->

@@ -1,7 +1,7 @@
 # Package build plan: auth_mutations / 0.0.13 (040) — retrospective reconciliation cycle
 
 Spec source: `docs/SPECS/spec-040-auth_mutations-0_0_13.md` (archived; shipped in `0.0.13`)
-Rationale companion (to be created): `docs/SPECS/appx/spec-040-auth_mutations-0_0_13-rationale.md`
+Rationale companion (created by Slice 1): `docs/SPECS/appx/spec-040-auth_mutations-0_0_13-rationale.md`
 Terms companion (existing): `docs/SPECS/appx/spec-040-auth_mutations-0_0_13-terms.csv`
 Target release: `0.0.13` (shipped; this cycle ships no version change)
 Date created: 2026-09-10
@@ -16,6 +16,18 @@ resolver path (`django_strawberry_framework/auth/mutations.py` resolver bodies,
 own artifact and owes a before/after number.
 Floor-verification scope: none by default. A slice that lands a code fix touching the Django
 session / auth / Channels seam re-declares its own focused floor scope and names the owning pass.
+
+**This file is the cycle's only surviving artifact**, archived at
+`docs/builder/DONE/build-040-auth_mutations-0_0_13.md`. Everything the per-slice artifacts, the
+integration pass and the final gate held that lived nowhere else is folded into the slice log below;
+the retrieval pointers for all nine retired files are in `## Artifact list`.
+
+**Do not confuse this plan with the ORIGINAL `0.0.13` build plan**, which occupied the same
+`docs/builder/` path in 2026 and was deleted at the next cycle's pre-flight artifact reset. That one
+survives only in git history at the release commit, `git show
+3a294082:docs/builder/build-040-auth_mutations-0_0_13.md`, and the spec's
+`## Definition of done` note points readers there. Two different files, one path; the `DONE/` prefix
+is what separates them now.
 
 ## What this cycle is
 

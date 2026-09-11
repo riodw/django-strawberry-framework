@@ -27,9 +27,9 @@ land in the spec, stated directly and without chronology.
 ## Provenance of this record
 
 Created by Slice 0 of the `039` residual-reconciliation cycle, whose plan is
-[`docs/builder/build-039-serializer_mutations-0_0_13.md`][build-039] and whose record of
-the move itself is the per-cycle artifact
-[`docs/builder/bld-039-slice-0-rationale_extraction.md`][bld-039-slice-0]. `spec-039`
+[`docs/builder/build-039-serializer_mutations-0_0_13.md`][build-039]. The per-cycle
+artifact recording the move itself closed with the cycle and is readable at
+`git show d401343c:docs/builder/bld-039-slice-0-rationale_extraction.md`. `spec-039`
 shipped in `0.0.13` with a [`-terms.csv`][spec-039-terms] companion and no `-rationale.md`
 sibling; this file closes that gap. Nothing in it is new reasoning: every passage below
 was cut from the spec in the same pass that created this file, except the framing
@@ -1741,7 +1741,6 @@ Unlike the entries above this heading, these were measured against `HEAD`.
 [spec-039]: ../spec-039-serializer_mutations-0_0_13.md
 
 <!-- docs/builder/ -->
-[bld-039-slice-0]: ../../builder/bld-039-slice-0-rationale_extraction.md
 [build-039]: ../../builder/build-039-serializer_mutations-0_0_13.md
 [build-md]: ../../builder/BUILD.md
 

@@ -6,6 +6,16 @@ Build plan: [`docs/builder/build-039-serializer_mutations-0_0_13.md`][build-039]
 
 Status: final-accepted
 
+**The ten per-cycle `bld-039-*` artifacts this file cites were deleted when the cycle
+closed.** Only this file and the build plan were kept. Every citation below to
+`bld-039-slice-0-rationale_extraction.md`, `bld-039-audit-1-converter_and_inputs.md`,
+`bld-039-audit-2-sets_and_bind.md`, `bld-039-audit-3-resolvers_and_live.md`,
+`bld-039-audit-4-decisions_rev6_dod.md`, `bld-039-slice-2a-contract_fold_in.md`,
+`bld-039-slice-2b-label_strip_and_citers.md`, `bld-039-slice-2c-rev6_retirement.md`,
+`bld-039-slice-3-code_gaps.md` or `bld-039-integration.md` - including its raw `:NN` line
+numbers - resolves against commit `d401343c`, which is the last commit that carried them:
+`git show d401343c:docs/builder/<name>`.
+
 ## Artifact shape: one Worker 1 pass
 
 This is the final test-run gate of `docs/builder/BUILD.md` `## Final test-run gate`. It runs

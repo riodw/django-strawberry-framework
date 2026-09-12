@@ -102,7 +102,7 @@ def _schema_for(node_type: type) -> strawberry.Schema:
     without ``totalCount``) the node type's ``Meta.connection`` selects,
     through the real Strawberry relay slicing / ``info`` path.
     """
-    connection_type = _connection_type_for(node_type)
+    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
 
     def items_resolver() -> Iterable[node_type]:
         return Category.objects.all().order_by("pk")
@@ -146,7 +146,7 @@ def test_first_and_last_raises_graphql_error():
 def test_first_and_last_guard_on_generated_subclass():
     """The generated ``<TypeName>Connection`` shares the ``first`` + ``last`` guard."""
     node_type = _make_node_type("GuardCountNode", total_count=True)
-    connection_type = _connection_type_for(node_type)
+    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
 
     with pytest.raises(GraphQLError, match="mutually exclusive"):
         connection_type.resolve_connection([], info=object(), first=1, last=1)
@@ -172,8 +172,8 @@ def test_connection_type_for_caches_per_target():
     """``_connection_type_for`` returns one cached class object per node type."""
     node_type = _make_node_type("CacheNode", total_count=True)
 
-    first = _connection_type_for(node_type)
-    second = _connection_type_for(node_type)
+    first = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
+    second = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     assert first is second
 
 
@@ -181,7 +181,7 @@ def test_connection_type_for_generates_named_subclass_when_opted_in():
     """A ``total_count``-enabled type yields ``<TypeName>Connection`` declaring ``total_count``."""
     node_type = _make_node_type("OptedNode", total_count=True)
 
-    connection_type = _connection_type_for(node_type)
+    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     assert connection_type.__name__ == "OptedNodeConnection"
     assert "total_count" in connection_type.__annotations__
     assert issubclass(connection_type, DjangoConnection)
@@ -220,8 +220,8 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     category_node = _dup_named_node("PublicCategory", Category)
     item_node = _dup_named_node("PublicItem", Item)
 
-    cat_conn = _connection_type_for(category_node)
-    item_conn = _connection_type_for(item_node)
+    cat_conn = _connection_type_for(category_node, category_node.__django_strawberry_definition__)
+    item_conn = _connection_type_for(item_node, item_node.__django_strawberry_definition__)
 
     # Distinct classes, each named from its ``graphql_type_name`` (Meta.name) -
     # not a single colliding ``NodeTypeConnection``.
@@ -269,7 +269,7 @@ def test_connection_type_for_returns_concrete_subclass_without_opt_in():
     """
     node_type = _make_node_type("BareNode", total_count=None)
 
-    connection_type = _connection_type_for(node_type)
+    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     assert issubclass(connection_type, DjangoConnection)
     assert connection_type is not DjangoConnection
     assert connection_type.__name__ == "BareNodeConnection"
@@ -280,7 +280,10 @@ def test_connection_type_for_returns_concrete_subclass_when_total_count_false():
     """``connection = {"total_count": False}`` yields the concrete subclass, no ``totalCount`` variant."""
     node_type = _make_node_type("FalseNode", total_count=False)
 
-    connection_type = _connection_type_for(node_type)
+    connection_type = _connection_type_for(
+        node_type,
+        node_type.__django_strawberry_definition__,
+    )
     assert issubclass(connection_type, DjangoConnection)
     assert connection_type is not DjangoConnection
     assert connection_type.__name__ == "FalseNodeConnection"
@@ -494,7 +497,7 @@ def _field_schema(
     ``config`` overrides the default ``strawberry_config()`` (e.g. a
     ``relay_max_results`` passthrough); ``None`` keeps the default.
     """
-    conn_type = _connection_type_for(node_type)
+    conn_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     query_cls = strawberry.type(
         type(
             "Query",
@@ -523,7 +526,7 @@ def _capture_info(node_type: type):
     is insufficient. A hand-written ``relay.connection`` resolver stashes the
     ``Info`` it is handed during a throwaway query.
     """
-    conn_type = _connection_type_for(node_type)
+    conn_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     captured: dict = {}
 
     def capture(root, info: strawberry.types.Info) -> Iterable[node_type]:
@@ -635,7 +638,10 @@ def test_connection_type_for_generates_total_count_for_direct_relay_inheritance(
             connection = {"total_count": True}
 
     assert relay.Node not in DirectCountNode.__django_strawberry_definition__.interfaces
-    connection_type = _connection_type_for(DirectCountNode)
+    connection_type = _connection_type_for(
+        DirectCountNode,
+        DirectCountNode.__django_strawberry_definition__,
+    )
     assert connection_type.__name__ == "DirectCountConnection"
     assert "total_count" in connection_type.__annotations__
 
@@ -998,6 +1004,7 @@ def test_default_ordering_applied_when_unordered():
         node_type,
         Category.objects.all(),
         info,
+        definition=node_type.__django_strawberry_definition__,
         filter_input=None,
         order_by_input=None,
     )
@@ -1020,6 +1027,7 @@ def test_default_ordering_preserves_supplied_orderby():
         node_type,
         Category.objects.order_by("name"),
         info,
+        definition=node_type.__django_strawberry_definition__,
         filter_input=None,
         order_by_input=None,
     )
@@ -1044,6 +1052,7 @@ def test_default_ordering_preserves_meta_ordering():
         node_type,
         Category.objects.order_by("-name"),
         info,
+        definition=node_type.__django_strawberry_definition__,
         filter_input=None,
         order_by_input=None,
     )
@@ -1567,7 +1576,12 @@ def test_finalize_queryset_appends_pk_tiebreaker_to_non_unique_ordering():
     the optimizer cooperation point short-circuits with no optimizer installed.
     """
     node = _node_over(Item, "P1ItemNode")
-    result = _finalize_queryset(node, Item.objects.order_by("name"), SimpleNamespace())
+    result = _finalize_queryset(
+        node,
+        Item.objects.order_by("name"),
+        SimpleNamespace(),
+        definition=node.__django_strawberry_definition__,
+    )
     assert tuple(result.query.order_by) == ("name", "id")
 
 
@@ -1575,10 +1589,20 @@ def test_finalize_queryset_skips_pk_when_terminal_already_unique():
     """An ordering already ending in a UNIQUE column is left alone (no double pk)."""
     node = _node_over(Category, "P1CatNode")
     # Category.name is unique=True -> already a deterministic total order.
-    by_name = _finalize_queryset(node, Category.objects.order_by("name"), SimpleNamespace())
+    by_name = _finalize_queryset(
+        node,
+        Category.objects.order_by("name"),
+        SimpleNamespace(),
+        definition=node.__django_strawberry_definition__,
+    )
     assert tuple(by_name.query.order_by) == ("name",)
     # Ordering by the pk itself is not doubled into ``("id", "id")``.
-    by_pk = _finalize_queryset(node, Category.objects.order_by("id"), SimpleNamespace())
+    by_pk = _finalize_queryset(
+        node,
+        Category.objects.order_by("id"),
+        SimpleNamespace(),
+        definition=node.__django_strawberry_definition__,
+    )
     assert tuple(by_pk.query.order_by) == ("id",)
 
 
@@ -1596,7 +1620,12 @@ def test_finalize_queryset_preserves_meta_ordering_and_appends_pk():
     qs = Status.objects.all()
     assert qs.ordered is True
     assert tuple(qs.query.order_by) == ()  # order comes implicitly from Meta.ordering
-    result = _finalize_queryset(node, qs, SimpleNamespace())
+    result = _finalize_queryset(
+        node,
+        qs,
+        SimpleNamespace(),
+        definition=node.__django_strawberry_definition__,
+    )
     assert tuple(result.query.order_by) == ("order", "id")
 
 
@@ -1660,7 +1689,14 @@ def test_pipeline_async_coerces_manager_source_and_finalizes():
     node_type = _make_sidecar_node_type("AsyncManagerNode")
     info = _capture_info(node_type)
     qs = asyncio.run(
-        _pipeline_async(node_type, Category.objects, info, filter_input=None, order_by_input=None),
+        _pipeline_async(
+            node_type,
+            Category.objects,
+            info,
+            definition=node_type.__django_strawberry_definition__,
+            filter_input=None,
+            order_by_input=None,
+        ),
     )
     assert qs.ordered
     assert qs.query.order_by == (Category._meta.pk.attname,)
@@ -1698,7 +1734,8 @@ async def test_connection_async_pipeline_applies_filter_and_order():
 
 def test_clear_connection_type_cache_empties_the_cache():
     """``clear_connection_type_cache`` drops the generated-connection-class cache."""
-    _connection_type_for(_make_node_type("P3bDirectNode", total_count=True))
+    node_type = _make_node_type("P3bDirectNode", total_count=True)
+    _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     assert _connection_type_cache
     clear_connection_type_cache()
     assert not _connection_type_cache
@@ -1706,7 +1743,8 @@ def test_clear_connection_type_cache_empties_the_cache():
 
 def test_registry_clear_also_clears_connection_type_cache():
     """``registry.clear()`` resets the connection-type cache too."""
-    _connection_type_for(_make_node_type("P3bRegistryNode", total_count=True))
+    node_type = _make_node_type("P3bRegistryNode", total_count=True)
+    _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     assert _connection_type_cache
     registry.clear()
     assert not _connection_type_cache
@@ -2188,7 +2226,7 @@ def test_finalize_queryset_hostile_order_by_is_graphql_error():
 
     qs = HostileQS(model=Category)
     with pytest.raises(GraphQLError, match="ordering could not be read"):
-        _finalize_queryset(node, qs, info)  # type: ignore[arg-type]
+        _finalize_queryset(node, qs, info, definition=node.__django_strawberry_definition__)  # type: ignore[arg-type]
 
 
 def test_window_rows_are_annotated_hostile_iter_returns_false():
@@ -2292,11 +2330,16 @@ def test_finalize_queryset_hostile_effective_order_is_graphql_error(monkeypatch)
         _raise,
     )
     with pytest.raises(GraphQLError, match="ordering could not be resolved"):
-        _finalize_queryset(node, qs, info)
+        _finalize_queryset(node, qs, info, definition=node.__django_strawberry_definition__)
 
 
-def test_finalize_queryset_hostile_meta_ordering_is_graphql_error(monkeypatch):
-    """``target_model._meta.ordering`` hostile is ``GraphQLError``."""
+def test_finalize_queryset_hostile_meta_ordering_is_graphql_error():
+    """``target_model._meta.ordering`` hostile is ``GraphQLError``.
+
+    The hostile model arrives on the CAPTURED definition, which is where the
+    finalize tail reads it from - there is no module-level model lookup left to
+    substitute.
+    """
     from django_strawberry_framework.connection import _finalize_queryset
 
     node = _make_sidecar_node_type("FinalizeMetaHostileNode")
@@ -2317,14 +2360,16 @@ def test_finalize_queryset_hostile_meta_ordering_is_graphql_error(monkeypatch):
     class HostileModel:
         _meta = HostileMeta()
 
-    import django_strawberry_framework.connection as conn_mod
-
-    monkeypatch.setattr(conn_mod, "model_for", lambda _: HostileModel)
     with pytest.raises(GraphQLError, match="ordering could not be"):
-        _finalize_queryset(node, qs, info)
+        _finalize_queryset(
+            node,
+            qs,
+            info,
+            definition=SimpleNamespace(model=HostileModel, cursor_field=None),
+        )
 
 
-def test_finalize_queryset_hostile_effective_ordering_is_graphql_error(monkeypatch):
+def test_finalize_queryset_hostile_effective_ordering_is_graphql_error():
     """``effective = explicit or tuple(ordering)`` hostile is ``GraphQLError`` (cursor_field path)."""
     # Create a cursor-field type so effective_connection_order returns cursor_field without reading meta
     from apps.products.models import Category as ProdCategory
@@ -2368,16 +2413,16 @@ def test_finalize_queryset_hostile_effective_ordering_is_graphql_error(monkeypat
         # Need pk for deterministic_order fallback if called, but cursor path won't call it
         _meta.pk = ProdCategory._meta.pk
 
-    import django_strawberry_framework.connection as conn_mod
-
-    # Patch model_for to return hostile for the effective line, but keep cursor_field path
-    # effective_connection_order will return cursor_field without reading meta, so we need to ensure it doesn't raise
-    # It will return ("id",) for cursor_field, so ordered = ("id",), effective line will try tuple(meta.ordering) and raise
-    monkeypatch.setattr(conn_mod, "model_for", lambda _: HostileModel)
-    # Also need to ensure the node type still has cursor_field via definition
-    # The definition's model is ProdCategory, but model_for returns hostile - cursor_field still from node
+    # The definition carries the hostile model AND the declared cursor_field, so
+    # ``effective_connection_order`` answers from the cursor field without reading
+    # meta, and the effective line below is the first read of the hostile ordering.
     with pytest.raises(GraphQLError, match="model ordering could not be read"):
-        _finalize_queryset(cursor_node, qs, info)
+        _finalize_queryset(
+            cursor_node,
+            qs,
+            info,
+            definition=SimpleNamespace(model=HostileModel, cursor_field=("id",)),
+        )
 
 
 def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
@@ -2417,7 +2462,12 @@ def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
     qs2 = HostileQS(model=Item)
     qs2.query.order_by = ("name",)  # type: ignore[attr-defined]
     with pytest.raises(GraphQLError, match="ordering could not be applied"):
-        _finalize_queryset(node_item, qs2, info)
+        _finalize_queryset(
+            node_item,
+            qs2,
+            info,
+            definition=node_item.__django_strawberry_definition__,
+        )
 
 
 def test_consume_window_hostile_pagination_is_graphql_error():
@@ -2426,7 +2476,7 @@ def test_consume_window_hostile_pagination_is_graphql_error():
 
     node = _make_sidecar_node_type("WindowHostileNode")
     finalize_django_types()
-    conn_type = _connection_type_for(node)
+    conn_type = _connection_type_for(node, node.__django_strawberry_definition__)
     # Create a window marker with one annotated row
     from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
@@ -2451,3 +2501,253 @@ def test_consume_window_hostile_pagination_is_graphql_error():
     )
     with pytest.raises(GraphQLError, match="non-negative"):
         conn_type.resolve_connection(window, info=info, first=-1)
+
+
+# =============================================================================
+# The captured definition: one read at construction, none at runtime
+# =============================================================================
+
+
+def _counting_node_type(
+    name,
+    *,
+    model,
+    decoy_slot,
+    reads,
+    orderset=None,
+    filterset=None,
+):
+    """Build a Relay-Node ``DjangoType`` whose definition reads are counted and swappable.
+
+    ``decoy_slot`` is a one-key dict: while it holds ``None`` the real definition
+    is returned, and once a decoy is placed in it every later read answers with
+    that instead - so a residual read is both counted and consequential rather
+    than merely tallied.
+    """
+
+    class CountingMeta(type(DjangoType)):
+        def __getattribute__(cls, attr):
+            if attr == "__django_strawberry_definition__" and reads["armed"]:
+                reads["names"].append(attr)
+                if decoy_slot["decoy"] is not None:
+                    return decoy_slot["decoy"]
+            return super().__getattribute__(attr)
+
+    meta_attrs = {
+        "model": model,
+        "fields": ("id", "name"),
+        "interfaces": (relay.Node,),
+        "name": name,
+        "primary": False,
+    }
+    if filterset is not None:
+        meta_attrs["filterset_class"] = filterset
+    if orderset is not None:
+        meta_attrs["orderset_class"] = orderset
+    return CountingMeta(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
+
+
+def _item_node_type(name: str) -> type:
+    """Build a Relay-Node ``DjangoType`` over ``Item`` to serve as a decoy definition."""
+    return type(
+        name,
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": Item,
+                    "fields": ("id", "name"),
+                    "interfaces": (relay.Node,),
+                    "name": name,
+                    "primary": False,
+                },
+            ),
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_a_root_connection_reads_the_target_definition_once_on_a_cold_cache():
+    """One construction read; nothing at schema build, nothing at request.
+
+    The generated connection class and its name, the ``totalCount`` shape, the
+    published ``filter:`` / ``orderBy:`` arguments, the default seed, both
+    visibility seals, the cursor vocabulary and the resolve-time total order all
+    come from that one object. The target answers with a decoy over a DIFFERENT
+    MODEL from the moment the accepted read is taken, so a residual read would
+    move the query to another table rather than merely raise a counter.
+    """
+    services.seed_data(3)
+    reads = {"armed": False, "names": []}
+    decoy_slot = {"decoy": None}
+    node = _counting_node_type(
+        "ColdCacheCountedNode",
+        model=Category,
+        decoy_slot=decoy_slot,
+        reads=reads,
+    )
+    decoy = _item_node_type("ColdCacheDecoyNode")
+    finalize_django_types()
+    clear_connection_type_cache()
+
+    reads["armed"] = True
+    field = DjangoConnectionField(node)
+    assert reads["names"] == ["__django_strawberry_definition__"]
+    conn_type = _connection_type_cache[node]
+    decoy_slot["decoy"] = decoy.__django_strawberry_definition__
+
+    query_cls = strawberry.type(
+        type(
+            "ColdCacheQuery",
+            (),
+            {"__annotations__": {"rows": conn_type}, "rows": field},
+        ),
+    )
+    schema = strawberry.Schema(query=query_cls, config=strawberry_config())
+    assert reads["names"] == ["__django_strawberry_definition__"]
+
+    result = schema.execute_sync(
+        "{ rows { edges { node { id name } } } }",
+        context_value={"request": HttpRequest()},
+    )
+    assert result.errors is None, result.errors
+    assert reads["names"] == ["__django_strawberry_definition__"]
+    returned = {edge["node"]["name"] for edge in result.data["rows"]["edges"]}
+    assert returned
+    assert returned <= set(Category.objects.values_list("name", flat=True))
+
+
+@pytest.mark.django_db
+def test_a_root_connection_on_a_warm_cache_reads_the_definition_once_too():
+    """A second field over the same target still takes exactly its own one read.
+
+    The generated connection class is cached on target identity, so the warm
+    path generates nothing - and must not spend a read discovering that.
+    """
+    reads = {"armed": False, "names": []}
+    decoy_slot = {"decoy": None}
+    node = _counting_node_type(
+        "WarmCacheCountedNode",
+        model=Category,
+        decoy_slot=decoy_slot,
+        reads=reads,
+    )
+    finalize_django_types()
+    clear_connection_type_cache()
+
+    reads["armed"] = True
+    first = DjangoConnectionField(node)
+    cold_reads = list(reads["names"])
+    reads["names"].clear()
+    second = DjangoConnectionField(node)
+    assert cold_reads == ["__django_strawberry_definition__"]
+    assert reads["names"] == ["__django_strawberry_definition__"]
+    assert first is not second
+
+
+@pytest.mark.django_db
+def test_a_synthesized_relation_connection_is_built_from_the_registrys_definition():
+    """Phase 2.5 resolves the target's definition once, from the registry.
+
+    The synthesized field asks the registry rather than the target class - not
+    for its connection class, not for its sidecar arguments, not for the model
+    its pipeline seeds and seals against - so a stateful target has nothing to
+    answer when the generated ``<field>Connection`` is built or resolved. The
+    one read counted during finalization is the finalizer's OWN Relay
+    composite-pk gate over every Relay type, which is not this field.
+    """
+    services.seed_data(3)
+    reads = {"armed": False, "names": []}
+    decoy_slot = {"decoy": None}
+
+    class RelationParentNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+            name = "RelationParentNode"
+            relation_shapes = {"items": "connection"}
+            primary = True
+
+    _counting_node_type("RelationChildNode", model=Item, decoy_slot=decoy_slot, reads=reads)
+    decoy = type(
+        "RelationChildDecoyNode",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": Category,
+                    "fields": ("id", "name"),
+                    "interfaces": (relay.Node,),
+                    "name": "RelationChildDecoyNode",
+                    "primary": False,
+                },
+            ),
+        },
+    )
+
+    reads["armed"] = True
+    finalize_django_types()
+    assert reads["names"] == ["__django_strawberry_definition__"]
+    reads["names"].clear()
+    decoy_slot["decoy"] = decoy.__django_strawberry_definition__
+
+    parent_conn = _connection_type_for(
+        RelationParentNode,
+        RelationParentNode.__django_strawberry_definition__,
+    )
+    query_cls = strawberry.type(
+        type(
+            "RelationQuery",
+            (),
+            {
+                "__annotations__": {"parents": parent_conn},
+                "parents": DjangoConnectionField(RelationParentNode),
+            },
+        ),
+    )
+    schema = strawberry.Schema(query=query_cls, config=strawberry_config())
+    result = schema.execute_sync(
+        "{ parents { edges { node { name itemsConnection { edges { node { name } } } } } } }",
+        context_value={"request": HttpRequest()},
+    )
+    assert result.errors is None, result.errors
+    assert reads["names"] == []
+    nested = {
+        edge["node"]["name"]
+        for parent in result.data["parents"]["edges"]
+        for edge in parent["node"]["itemsConnection"]["edges"]
+    }
+    assert nested
+    assert nested <= set(Item.objects.values_list("name", flat=True))
+
+
+@pytest.mark.django_db
+def test_a_relay_target_with_no_registered_definition_fails_the_synthesized_connection():
+    """A registered Relay primary carrying no definition is a framework defect, named as one.
+
+    The synthesized relation connection is built from the registry's definition,
+    so the one state that cannot produce one - a primary registered without it -
+    fails loudly rather than silently degrading the declared shape to a list.
+    """
+
+    @strawberry.type
+    class BareNode(relay.Node):
+        id: relay.NodeID[int]
+
+    class BareParentNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+            name = "BareParentNode"
+            relation_shapes = {"items": "connection"}
+            primary = False
+
+    registry.register(Item, BareNode, primary=True)
+    with pytest.raises(ConfigurationError, match="carries no registered DjangoTypeDefinition"):
+        finalize_django_types()

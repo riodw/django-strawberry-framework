@@ -78,6 +78,7 @@ __all__ = (
     "resolve_resource_policy",
     "stash_resource_policy",
     "validate_collection_bound",
+    "validate_trusted_flag",
 )
 
 
@@ -681,18 +682,44 @@ def validate_collection_bound(declared: Any, *, field: str) -> None:
     _require_positive_int(declared, field)
 
 
+def validate_trusted_flag(declared: Any, *, field: str) -> None:
+    """Reject a trusted-declaration opt-in that is not exactly ``True`` or ``False``.
+
+    The opt-in that lets a field-declared maximum outrank the request's own
+    ``ResourcePolicy`` is a security decision, so the value that makes it is an
+    exact ``bool`` and the check fires at the line that constructs the field -
+    a misspelled ``trusted_max_rows="false"`` fails where it was written rather
+    than silently widening every request the field serves. ``effective_bound``
+    independently admits only ``True``, so a caller that bypasses this
+    constructor-site check still cannot widen by accident.
+    """
+    if type(declared) is not bool:
+        raise ConfigurationError(
+            f"{field} must be exactly True or False; got {describe_value(declared)}.",
+        )
+
+
 def effective_bound(policy_value: int, declared: int | None, *, trusted: bool = False) -> int:
     """Combine a request bound with a field's own declared maximum.
 
     The narrowing rule at a field: ``None`` means "the field declares nothing,
     the request policy governs"; a declared value narrows to the tighter of the
-    two. ``trusted=True`` is the explicit widening opt-in - the call site is
-    stating that this field's maximum is a deliberate declaration that outranks
-    the policy, which is exactly the trusted-declaration carve-out and is never
-    the default.
+    two. Only the literal ``True`` widens - the call site is stating that this
+    field's maximum is a deliberate declaration that outranks the policy, which
+    is exactly the trusted-declaration carve-out and is never the default.
+
+    ``trusted is True``, not ``if trusted:``. This is the one primitive in the
+    package whose answer can be WIDER than the request policy, so the condition
+    that reaches it admits exactly the one value that means it: a truthy string,
+    a non-empty container, or any object whose ``__bool__`` answers ``True``
+    narrows like every other non-opt-in caller. The field factories validate the
+    flag's type at their own construction line as well
+    (:func:`validate_trusted_flag`); the rule is repeated here because this
+    primitive must stay safe for an internal caller that has no factory in front
+    of it.
     """
     if declared is None:
         return policy_value
-    if trusted:
+    if trusted is True:
         return declared
     return min(policy_value, declared)

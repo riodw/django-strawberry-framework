@@ -32,10 +32,11 @@ from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item, Property
-from django.db import models
+from django.db import models, router
 from django.db.models import FilteredRelation, Prefetch, Q
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce, Trunc
+from django.test import override_settings
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -76,6 +77,7 @@ from django_strawberry_framework.utils.querysets import (
     _seal_or_defect,
     _sealed_prefetch_related_lookups,
     _SealPolicy,
+    _snapshot_routing_intent,
     _type_is_genuinely_django,
     _validate_post_orderset_result,
     _visibility_result_error,
@@ -5028,7 +5030,7 @@ def test_validate_post_orderset_result_valid():
     valid_candidate = Category.objects.all().order_by("name")
     sealed = _validate_post_orderset_result(
         DummyType,
-        source_qs,
+        _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
         valid_candidate,
         "MyOrderSet.apply_sync",
     )
@@ -5046,7 +5048,12 @@ def test_validate_post_orderset_result_rejects_non_queryset():
         ConfigurationError,
         match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got type defect",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, [1, 2, 3], "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            [1, 2, 3],
+            "MyOrderSet.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_none():
@@ -5060,7 +5067,12 @@ def test_validate_post_orderset_result_rejects_none():
         ConfigurationError,
         match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got type defect",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, None, "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            None,
+            "MyOrderSet.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_wrong_model():
@@ -5077,7 +5089,7 @@ def test_validate_post_orderset_result_rejects_wrong_model():
     ):
         _validate_post_orderset_result(
             DummyType,
-            source_qs,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
             wrong_model_qs,
             "MyOrderSet.apply_sync",
         )
@@ -5096,7 +5108,12 @@ def test_validate_post_orderset_result_rejects_evaluated():
         ConfigurationError,
         match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got evaluated defect",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, eval_qs, "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            eval_qs,
+            "MyOrderSet.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_sliced():
@@ -5111,7 +5128,12 @@ def test_validate_post_orderset_result_rejects_sliced():
         ConfigurationError,
         match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got sliced defect",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, sliced_qs, "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            sliced_qs,
+            "MyOrderSet.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_combined():
@@ -5126,7 +5148,12 @@ def test_validate_post_orderset_result_rejects_combined():
         ConfigurationError,
         match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got combined defect",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, comb_qs, "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            comb_qs,
+            "MyOrderSet.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_projection():
@@ -5141,7 +5168,12 @@ def test_validate_post_orderset_result_rejects_projection():
         ConfigurationError,
         match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got projection defect",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, values_qs, "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            values_qs,
+            "MyOrderSet.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_db_routing_mismatch():
@@ -5156,7 +5188,12 @@ def test_validate_post_orderset_result_rejects_db_routing_mismatch():
         ConfigurationError,
         match="changed database routing intent",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, diff_db_qs, "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            diff_db_qs,
+            "MyOrderSet.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
@@ -5174,7 +5211,7 @@ def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
     ):
         _validate_post_orderset_result(
             DummyType,
-            source_qs,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
             diff_hints_qs,
             "MyOrderSet.apply_sync",
         )
@@ -5201,7 +5238,7 @@ def test_validate_post_orderset_result_contains_an_unreadable_instance_dictionar
     with pytest.raises(ConfigurationError, match="untrusted defect"):
         _validate_post_orderset_result(
             DummyType,
-            source_qs,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
             candidate,
             "MyOrderSet.apply_sync",
         )
@@ -5223,7 +5260,7 @@ def test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute():
     # Should safely read _db and _hints via raw instance __dict__ without invoking HostileQuerySet.__getattribute__
     sealed = _validate_post_orderset_result(
         DummyType,
-        source_qs,
+        _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
         source_qs,
         "MyOrderSet.apply_sync",
     )
@@ -5255,7 +5292,7 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
     # Comparing identical non-primitive hints must not invoke __eq__
     sealed = _validate_post_orderset_result(
         DummyType,
-        source_qs,
+        _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
         cand_same,
         "MyOrderSet.apply_sync",
     )
@@ -5271,7 +5308,7 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
     ) as exc_info:
         _validate_post_orderset_result(
             DummyType,
-            source_qs,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
             cand_diff,
             "MyOrderSet.apply_sync",
         )
@@ -5296,7 +5333,7 @@ def test_validate_post_orderset_result_routing_hints_none_vs_empty():
     ):
         _validate_post_orderset_result(
             DummyType,
-            source_qs,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
             cand_qs,
             "MyOrderSet.apply_sync",
         )
@@ -5340,7 +5377,7 @@ def test_routing_hints_equal_rejects_a_renamed_key_at_equal_length():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    source_qs._hints = {"instance": "a"}
+    source_qs._hints = {"tenant": "a"}
 
     cand_qs = Category.objects.all()
     cand_qs._hints = {"other": "a"}
@@ -5349,47 +5386,251 @@ def test_routing_hints_equal_rejects_a_renamed_key_at_equal_length():
         ConfigurationError,
         match="changed database routing intent",
     ):
-        _validate_post_orderset_result(DummyType, source_qs, cand_qs, "MyOrderSet.apply_sync")
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+            cand_qs,
+            "MyOrderSet.apply_sync",
+        )
 
 
-def test_routing_hints_equal_accepts_equal_primitives_that_are_not_identical():
-    """Equal-but-distinct builtin primitives compare equal without consumer dispatch.
+def test_routing_hints_equal_rejects_equal_primitives_that_are_not_identical():
+    """An equal-but-distinct hint value is a routing change, not the same intent.
 
-    Identity is the fast path; a hint value rebuilt at runtime (a joined string
-    rather than an interned literal) is still the same routing intent, so the
-    primitive equality arm has to accept it instead of failing closed.
+    Django's ``ConnectionRouter`` passes hint values to consumer routers as the
+    objects they are, and a legal router may tell two equal tokens apart by
+    identity. Semantic equality therefore cannot prove equal routing without
+    running the router, so the compare admits only the SAME object the snapshot
+    holds and a runtime-rebuilt equal string fails closed.
     """
 
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    source_qs._hints = {"instance": "shard-a"}
+    source_qs._hints = {"tenant": "shard-a"}
+    expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
 
     cand_qs = Category.objects.all()
-    # A runtime-built (uninterned) equal string, so identity cannot carry the compare.
-    cand_qs._hints = {"instance": "shard-a!"[:-1]}
-    assert cand_qs._hints["instance"] is not source_qs._hints["instance"]
+    # A runtime-built (uninterned) equal string: equal by value, a different object.
+    cand_qs._hints = {"tenant": "shard-a!"[:-1]}
+    assert cand_qs._hints["tenant"] == source_qs._hints["tenant"]
+    assert cand_qs._hints["tenant"] is not source_qs._hints["tenant"]
 
-    sealed = _validate_post_orderset_result(
-        DummyType,
-        source_qs,
-        cand_qs,
-        "MyOrderSet.apply_sync",
+    assert _routing_hints_equal(cand_qs._hints, expected.hints) is False
+    with pytest.raises(ConfigurationError, match="changed database routing intent"):
+        _validate_post_orderset_result(DummyType, expected, cand_qs, "MyOrderSet.apply_sync")
+
+    # The same object under the same key is the same intent.
+    same_qs = Category.objects.all()
+    same_qs._hints = {"tenant": source_qs._hints["tenant"]}
+    assert (
+        _validate_post_orderset_result(DummyType, expected, same_qs, "MyOrderSet.apply_sync")
+        is not None
     )
-    assert sealed is not None
 
 
-def test_validate_post_orderset_result_source_without_instance_dict():
+def test_snapshot_routing_intent_is_frozen_before_consumer_code_can_mutate_the_source():
+    """The baseline is a COPY taken before the override runs, not a post-call read.
+
+    ``OrderSet.apply_*`` receives the very queryset object the seal later
+    compares against, so an override can rewrite ``_db`` or edit ``_hints`` in
+    place and return the same object. The snapshot copies the hints dictionary
+    and holds the alias by value, so both in-place edits are rejected against
+    what the source carried when the override was handed it.
+    """
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    source_qs = Category.objects.all()
+    source_qs._hints = {"tenant": 1}
+    expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
+    assert (expected.db, expected.hints) == (None, {"tenant": 1})
+    assert expected.effective_alias == "default"
+    assert expected.hints is not source_qs._hints
+
+    # An in-place hints edit on the source leaves the snapshot untouched and is rejected.
+    source_qs._hints["tenant"] = 2
+    assert expected.hints == {"tenant": 1}
+    with pytest.raises(ConfigurationError, match=r"expected db=None, hints=\{'tenant': 1\}"):
+        _validate_post_orderset_result(DummyType, expected, source_qs, "MyOrderSet.apply_sync")
+
+    # An in-place alias rewrite on the same object is rejected the same way.
+    source_qs._hints = {"tenant": 1}
+    source_qs._hints["tenant"] = expected.hints["tenant"]
+    source_qs._db = "other"
+    with pytest.raises(ConfigurationError, match="expected db=None, .* got db='other'"):
+        _validate_post_orderset_result(DummyType, expected, source_qs, "MyOrderSet.apply_sync")
+
+
+class _NestedAliasRouter:
+    """A legal router whose answer depends on state INSIDE a hint value.
+
+    ``ConnectionRouter`` hands hint values to a router untouched, so reading
+    into one is ordinary router code - a standard ``instance`` hint is itself a
+    mutable object. It is also why preserving a hint's identity proves nothing
+    about the connection a later read would pick.
+    """
+
+    calls: list[str] = []
+
+    def db_for_read(self, model, **hints):
+        _NestedAliasRouter.calls.append("read")
+        token = hints.get("tenant")
+        return token["alias"] if type(token) is dict else None
+
+    def db_for_write(self, model, **hints):
+        _NestedAliasRouter.calls.append("write")
+        return self.db_for_read(model, **hints)
+
+
+@override_settings(DATABASE_ROUTERS=[_NestedAliasRouter()])
+def test_routing_intent_pins_the_alias_resolved_before_a_hint_could_be_mutated():
+    """A hint mutated behind a preserved identity cannot re-route the sealed result.
+
+    The seal's identity comparison proves the candidate carries the SAME hint
+    objects the source did; it cannot prove those objects still mean the same
+    thing, because a router is free to read mutable state inside one. The
+    effective alias is therefore resolved at snapshot time - before the public
+    ``apply_*`` call can touch anything - and the accepted result is pinned to
+    it, so the attestation is about the connection rather than about hint
+    contents.
+    """
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+    token = {"alias": "default"}
+    source_qs = Category.objects.all()
+    source_qs._hints = {"tenant": token}
+
+    _NestedAliasRouter.calls.clear()
+    intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
+    assert intent.effective_alias == "default"
+    # Exactly one router answer, taken at the snapshot. Timing is the contract:
+    # a refactor that resolved the alias after the override ran would read the
+    # mutated token instead.
+    assert _NestedAliasRouter.calls == ["read"]
+
+    # The override mutates INSIDE the hint value it was handed and returns a
+    # queryset carrying that very object, so every identity check still holds.
+    token["alias"] = "other"
+    candidate = Category.objects.all()
+    candidate._hints = {"tenant": token}
+    assert candidate._hints["tenant"] is source_qs._hints["tenant"]
+
+    sealed = _validate_post_orderset_result(DummyType, intent, candidate, "MyOrderSet.apply_sync")
+    # Validation asks the router nothing; the pin is the frozen answer.
+    assert _NestedAliasRouter.calls == ["read"]
+    assert sealed._db == "default"
+    assert sealed.db == "default"
+    # Without the pin, the mutated token routes the read somewhere else.
+    assert router.db_for_read(Category, **candidate._hints) == "other"
+
+
+@override_settings(DATABASE_ROUTERS=[_NestedAliasRouter()])
+def test_routing_intent_resolves_a_write_marked_source_through_the_write_router():
+    """The resolution mirrors ``QuerySet.db``: a write-marked source asks ``db_for_write``.
+
+    ``_for_write`` is carried forward by the seal, so resolving the read alias
+    for a source Django would route as a write would pin the wrong connection.
+    """
+    source_qs = Category.objects.all()
+    source_qs._hints = {"tenant": {"alias": "default"}}
+    source_qs._for_write = True
+
+    _NestedAliasRouter.calls.clear()
+    intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
+    assert _NestedAliasRouter.calls == ["write", "read"]
+    assert intent.effective_alias == "default"
+
+
+def test_routing_intent_on_an_explicitly_routed_source_needs_no_router():
+    """An explicit ``.using(...)`` alias IS the effective alias; no router is consulted."""
+    source_qs = Category.objects.using("default")
+
+    intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
+    assert (intent.db, intent.effective_alias) == ("default", "default")
+
+
+class _RaisingRouter:
+    def db_for_read(self, model, **hints):
+        raise RuntimeError("router exploded")
+
+
+@override_settings(DATABASE_ROUTERS=[_RaisingRouter()])
+def test_routing_intent_fails_closed_when_the_router_raises():
+    """An unanswerable route is an unprovable one, so the ordering call is rejected."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"MyOrderSet\.apply_sync could not resolve the source QuerySet's effective "
+        r"database alias; the database router raised",
+    ):
+        _snapshot_routing_intent(Category.objects.all(), "MyOrderSet.apply_sync")
+
+
+class _NonStringAliasRouter:
+    def db_for_read(self, model, **hints):
+        return 17
+
+
+@override_settings(DATABASE_ROUTERS=[_NonStringAliasRouter()])
+def test_routing_intent_fails_closed_on_a_non_string_router_answer():
+    """A non-string alias cannot pin a connection, so it is rejected rather than carried."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"the database router answered .*17.* for Category; an alias must be a string",
+    ):
+        _snapshot_routing_intent(Category.objects.all(), "MyOrderSet.apply_sync")
+
+
+def test_routing_intent_fails_closed_when_the_source_carries_no_model():
+    """No model means no router question to ask, so the alias is undeterminable.
+
+    Reachable only off the sealed path this seam normally runs on; the message
+    names the method so the rejection stays actionable either way.
+    """
+
+    class ModellessSource:
+        def __init__(self):
+            self._db = None
+            self._hints = {}
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"its model is NoneType, so no router answer can be obtained for it",
+    ):
+        _snapshot_routing_intent(ModellessSource(), "MyOrderSet.apply_sync")
+
+
+def test_snapshot_routing_intent_keeps_a_non_dict_hints_slot_by_reference():
+    """A non-``dict`` hints slot is not copied; the seal's ``untrusted`` proof owns it.
+
+    Copying it would mean calling consumer code on a value the seal has not yet
+    vetted. The snapshot hands it through untouched so the candidate compare
+    fails closed on the exact-``dict`` requirement instead.
+    """
+
+    class HintsSubclass(dict):
+        def __iter__(self):
+            raise AssertionError("Hostile subclass __iter__ invoked")
+
+    source_qs = Category.objects.all()
+    hostile = HintsSubclass()
+    source_qs._hints = hostile
+    expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
+    assert expected.hints is hostile
+    assert _routing_hints_equal({}, expected.hints) is False
+
+
+def test_snapshot_routing_intent_source_without_instance_dict():
     """A source whose ``__dict__`` cannot be read fails closed, naming the method.
 
     Routing intent is read straight off the source's instance dictionary, so a
     ``__slots__`` object (or any queryset look-alike without one) leaves the
     check undeterminable, and undeterminable leaves the permit path.
     """
-
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     class Slotted:
         __slots__ = ()
@@ -5398,9 +5639,4 @@ def test_validate_post_orderset_result_source_without_instance_dict():
         ConfigurationError,
         match=r"MyOrderSet\.apply_sync could not verify the source QuerySet's database routing intent\.",
     ):
-        _validate_post_orderset_result(
-            DummyType,
-            Slotted(),
-            Category.objects.all(),
-            "MyOrderSet.apply_sync",
-        )
+        _snapshot_routing_intent(Slotted(), "MyOrderSet.apply_sync")

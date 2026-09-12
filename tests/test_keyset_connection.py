@@ -71,7 +71,9 @@ def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra):
 
 def _issue_state(issue_type):
     finalize_django_types()
-    return _keyset_connection_context(_connection_type_for(issue_type))
+    return _keyset_connection_context(
+        _connection_type_for(issue_type, issue_type.__django_strawberry_definition__),
+    )
 
 
 # =============================================================================
@@ -82,7 +84,7 @@ def _issue_state(issue_type):
 def test_keyset_connection_context_resolves_and_caches():
     issue_type = _make_issue_type()
     finalize_django_types()
-    connection_type = _connection_type_for(issue_type)
+    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
     state = _keyset_connection_context(connection_type)
     assert state is not None
     assert state.cursor_field == ISSUE_ORDER
@@ -94,7 +96,7 @@ def test_keyset_connection_context_resolves_and_caches():
 def test_keyset_connection_context_is_none_for_offset_types():
     plain_type = make_django_type("PlainIssueNode", Issue, ("id", "number"))
     finalize_django_types()
-    connection_type = _connection_type_for(plain_type)
+    connection_type = _connection_type_for(plain_type, plain_type.__django_strawberry_definition__)
     assert _keyset_connection_context(connection_type) is None
     # The negative result is cached too (the ``False`` sentinel round-trip).
     assert _keyset_connection_context(connection_type) is None
@@ -292,7 +294,7 @@ async def test_keyset_connection_async_deferred_cursor_column_is_loaded():
 def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
     issue_type = _make_issue_type("KeysetBackwardWindowNode")
     finalize_django_types()
-    connection_type = _connection_type_for(issue_type)
+    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
     periodical = Periodical.objects.create(name="P")
     for number in (1, 2, 3):
         Issue.objects.create(periodical=periodical, number=number, title=f"i{number}")
@@ -321,7 +323,7 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
 def test_counted_keyset_window_without_seek_count_falls_back():
     issue_type = _make_issue_type("KeysetCountDriftNode")
     state = _issue_state(issue_type)
-    connection_type = _connection_type_for(issue_type)
+    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
     row = SimpleNamespace(
         id=1,
         number=1,
@@ -658,7 +660,7 @@ def test_resolve_keyset_connection_with_strawberry_unset(isolate_global_registry
         meta_extra={"cursor_field": ("number", "id"), "primary": True},
     )
     finalize_django_types()
-    conn_cls = _connection_type_for(issue_type)
+    conn_cls = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
     state = _keyset_connection_context(conn_cls)
 
     info = SimpleNamespace(

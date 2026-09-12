@@ -1,282 +1,361 @@
-# Review 2: spec-050 implementation at `4c483b6b` (adversarial, upstream-referenced)
+# Adversarial implementation re-review: spec 050
 
-Scope: `django_strawberry_framework/list_field.py`, `orders/sets.py`, `utils/querysets.py`
-(seal, post-OrderSet validator, async adapter), `resource_policy.py` (bounding helpers),
-`optimizer/extension.py` (adapter unwrap/rewrap), `_graphql_core_patches.py`, the spec and
-rationale, the three test tiers, and the two upstream checkouts named in AGENTS.md L2. Every
-behavioral claim below was either executed (probe scripts in the session scratchpad, the seven
-recorded failing tests re-run individually) or is cited to a symbol.
+Date: 2026-09-11
 
-**Verdict: not Done-ready.** The contract is implemented and the pipeline order, ceilings,
-error payloads, and async completion behave as specified under live execution. The suite is
-red (seven failures, six of them wrong assertions and one a package defect), the sharded and
-coverage gates have not run, one runtime mechanism leaks state on the common path (H1), the
-purity check is identity-dependent (H2), and the spec disagrees with the code in two places
-(H3). One row of the gate record I wrote in the previous round misattributes a failure and
-must be corrected (B1, row 7).
+## Verdict
 
-## Blocking
+**Not accepted yet.** The latest remediation closes the earlier routing, integer-subclass,
+mutable-capture, wire-name, and live-coverage defects, but two foundational invariants are still
+false in executable code:
 
-### B1. Seven failing tests; causes re-derived by running each one
+1. the target definition is not a read-once construction value across either list or connection
+   execution; and
+2. the normalization-purity handoff loses the normalization that actually drove ordering when a
+   valid public `apply_async` override delegates in a child task (and it has the same single-slot
+   weakness under nested ordering calls).
 
-| Test | Actual failure | Class |
+There are also three narrower corrections: `trusted_max_rows` is truthy rather than exact-boolean,
+the combined-query legacy oracle still compares parsed outcomes rather than response bytes, and the
+capture-scope optimization overclaims its no-`OrderSet` direct-call path. The final build record
+currently states that the first two are fixed, so the recorded gate cannot be treated as current.
+
+This pass reviewed the full [specification][spec-050], the current production diff, package and live
+tests, [AGENTS.md][agents], [GOAL.md][goal], the [live-test guide][live-readme], the Graphene-Django
+and Strawberry-Django reference implementations, and the django-graphene-filters cookbook schema.
+No pytest invocation was run because [AGENTS.md][agents] permits it only when explicitly requested.
+The behavioral evidence below came from focused, non-pytest construction/execution probes. The
+working tree also changed concurrently during this pass; no concurrent file was reverted or folded
+into a finding without tracing it to the named production symbol.
+
+## Findings
+
+### P1-1 — the “definition exactly once” invariant is still false during construction and execution
+
+The spec says the list field reads its target definition exactly once at construction, and that the
+connection factory captures the same returned definition for its signature and pipelines. The list
+factory now does capture the validator's result, but only `orderset_class` is threaded. Every default
+execution immediately returns to the target attribute through
+[`utils/querysets.py::initial_queryset`][querysets] ->
+[`utils/querysets.py::model_for`][querysets], and both visibility seals independently call
+`model_for` again.
+
+A default `DjangoListField` probe kept a metaclass counter armed for the real schema execution. The
+request succeeded, but it recorded:
+
+```text
+runtime_definition_reads 3
+```
+
+Those reads are the seed model, the visibility source model, and the visibility result model. The
+new package test `tests/test_list_field.py::test_list_field_reads_the_target_definition_once_and_dispatches_through_it`
+does not detect this: it disarms the counter immediately after `DjangoListField(CountedType)` and
+before schema construction or query execution.
+
+Connections are further from the stated invariant. A cold-cache construction probe recorded three
+definition reads before any request:
+
+```text
+definition_reads 3
+```
+
+The call chain is the shared validator, [`connection.py::_connection_type_for`][connection], and
+[`connection.py::_generate_connection_class`][connection]. Runtime then rereads through the default
+`initial_queryset`, two visibility seals, and
+[`connection.py::_finalize_queryset`][connection], where both `model_for(target_type)` and a direct
+definition lookup for `cursor_field` remain. The synthesized-relation path already owns
+`target_definition` in [`types/finalizer.py::finalize_django_types`][finalizer], but discards it when
+calling `_connection_type_for` and then rereads again inside
+[`connection.py::_build_relation_connection_resolver`][connection].
+
+This is not merely a counter mismatch. A stateful metaclass can publish `orderBy`, `filter`,
+`totalCount`, connection naming, or cursor behavior from one definition while a later read seeds or
+seals a different model. That is the exact schema/runtime divergence threat Decision 1 says the
+capture prevents.
+
+**Root-cause correction**
+
+- Treat the validator's returned `DjangoTypeDefinition` as the field's sole construction and
+  execution dependency.
+- Seed defaults with `base_queryset(definition.model)`, not `initial_queryset(target_type)`.
+- Give the colored visibility runners a captured-model/definition seam so their source and result
+  seals do not reread the class. Keep the generic public callers' existing type-keyed convenience,
+  but the field pipelines must use the captured value.
+- Thread the same definition into `_finalize_queryset`, `_connection_type_for`,
+  `_generate_connection_class`, `_build_total_count_connection`, and the synthesized relation
+  resolver. The finalizer must pass its already-resolved `target_definition` rather than asking the
+  target again.
+- Keep cache identity and connection shape derived from that captured definition; do not “fix” the
+  test by narrowing the wording to sidecars while model/cursor reads continue to drift.
+
+**Required proofs**
+
+- Keep the metaclass counter armed through factory construction, schema construction, and a real
+  request for default and consumer-resolver list fields.
+- Add the same proof for a root connection and a synthesized relation connection, with cold and warm
+  connection caches.
+- Make the metaclass return a decoy definition after the accepted read and prove that neither the
+  decoy model nor its sidecars/cursor are consulted at runtime.
+- Put consumer-observable rows through live HTTP; construction-count mechanics remain package-tier.
+
+### P1-2 — immutable `ContextVar` rebinding loses the applied normalization across child delegation
+
+[`orders/sets.py::_CaptureState`][orders-sets] correctly fixes the previous shared-mutable-object
+bug: an unrelated descendant can no longer overwrite the parent's binding. That isolation creates
+the opposite failure for a legitimate public override, however. A child task's rebinding cannot
+publish the normalization back into its parent context.
+
+The focused probe used the supported public override seam:
+
+```python
+class ChildDelegatingOrder(OrderSet):
+    @classmethod
+    async def apply_async(cls, input_value, queryset, info):
+        return await asyncio.create_task(super().apply_async(input_value, queryset, info))
+```
+
+Its `_normalize_input` produced A for the application and B/B for the two fallback checks. Inside
+the list field's capture scope, the observable result was:
+
+```text
+parent_record None
+outcome accepted active=True
+normalizations 3
+```
+
+The ordering was built from A in the child. The parent saw an empty capture, compared B with B, and
+accepted instead of raising the purity `ConfigurationError` promised by the spec's explicit A/B/B
+case. This is a normal `apply_async` override delegating to `super()`, not an unsupported call to a
+private helper.
+
+The single record can also be displaced in one context: an outer `OrderSet.apply_*` may delegate to
+the base, invoke another `OrderSet` before returning, and leave the nested class's record in the one
+slot. `_input_has_active_terms` consumes the mismatched record and falls back to B/B, again losing
+the terms that built the returned queryset. The current descendant test proves only that a child
+cannot overwrite a parent record after the parent performed the application; it does not execute
+the application itself in the child or nest another application between publication and check.
+
+**Root-cause correction**
+
+The handoff needs an explicit, invocation-scoped attestation transport. A rebinding-only
+`ContextVar` cannot simultaneously isolate descendants and return a descendant's application result
+to its parent. Viable designs include a synchronized append-only ledger of immutable records, with
+records tied to the active invocation/input and any disagreement rejected, or an unforgeable
+result-carried attestation that returns with the applied queryset. Either design must:
+
+- retain public `apply_sync` / `apply_async` dispatch;
+- never put framework state on `info.context`;
+- avoid a mutable last-writer-wins slot;
+- work through awaited child tasks, copied contexts, worker threads, and nested `OrderSet` calls;
+- fail closed if more than one applicable normalization disagrees; and
+- reset all invocation state on success and every exceptional exit.
+
+Simply restoring the old mutable `_CaptureState.record` is not acceptable; it reopens the overwrite
+race the latest patch correctly closed. Bypassing the public override with a private parallel apply
+entry point also contradicts the spec and the project's root-cause rule.
+
+**Required proofs**
+
+- Async holder-schema HTTP test: child-task delegation to `super().apply_async`, A/B/B, exact typed
+  rejection.
+- Sync/package test: base application followed by a nested different `OrderSet`, then A/B/B on the
+  outer class.
+- Retain the existing unrelated-child, sibling-task, copied-context, thread, nested-scope,
+  exception-reset, and ordinary pure A/A controls.
+- Prove that a pure child-delegating override still orders and pages correctly; a rejection-only
+  test would not prove the public override remains usable.
+
+### P2-1 — `trusted_max_rows` is not the explicit boolean opt-in the spec describes
+
+[`resource_policy.py::effective_bound`][resource-policy] uses `if trusted:` and
+[`list_field.py::DjangoListField`][list-field] performs no domain validation for
+`trusted_max_rows`. A focused call demonstrates the consequence:
+
+```text
+effective_bound(100, 105, trusted="false") -> 105
+```
+
+Thus a common configuration typo widens the request's row policy even though the caller did not
+provide the literal `True` repeatedly named by the spec and standing docs. This truthiness behavior
+predates card 050, but card 050 makes the widening directly usable through client `limit` and claims
+that it is an explicit trusted opt-in. That claim cannot be certified while arbitrary truthy values
+enable it.
+
+**Root-cause correction**
+
+- Validate `type(trusted_max_rows) is bool` at field construction and raise the package's typed
+  configuration error at the declaration site.
+- Harden `effective_bound` itself so only `trusted is True` can widen; the policy primitive must not
+  remain unsafe for another internal caller that omits the factory validation.
+- Add exact-bool tests for false/true and invalid truthy/falsy values. This is construction-time
+  configuration, so package-tier placement is correct.
+
+### P2-2 — the combined legacy oracle still does not prove response-byte parity
+
+`examples/fakeshop/test_query/test_list_field_api.py::test_branches_omitted_and_null_arguments_match_the_legacy_reference`
+now correctly mounts the same `branches` field name in two schemas and compares raw
+`HttpResponse.content`. The combined-source sibling does not. In
+`test_holder_branches_combined_legacy_branch_matches_the_legacy_reference`, both responses are
+reduced through `_parity_outcome(response.json(), "branches")`; only parsed rows or normalized error
+messages are compared.
+
+That misses envelope ordering, locations, paths, extensions, and serialization differences. It also
+contradicts the [final build record][bld-final], which says both named tests compare raw bytes, and
+the Definition of Done's all-omitted/all-null byte claim.
+
+**Correction**
+
+- Compare `response.content` with the legacy response bytes for both omitted and all-null current
+  requests, while retaining SQL, marks, and visibility-count assertions.
+- If a genuinely unstable error field prevents byte equality, make that response deterministic or
+  narrow the specification and build claim explicitly. Do not silently substitute a semantic
+  projection for a byte-for-byte requirement.
+
+### P3-1 — the capture-scope optimization overclaims the no-`OrderSet` path
+
+[`list_field.py::_order_normalization_scope`][list-field] receives only `_ListArguments`. Therefore
+a direct call supplying `order_by` plus positive `offset` to a target with no `OrderSet` opens and
+sets the capture before `_require_orderset_class` raises. Its docstring says a target with no
+`OrderSet` “must not pay for the scope,” but the helper has no information with which to implement
+that condition. The wire cannot publish this argument shape, so this is a bounded direct-call and
+micro-overhead issue, not a data error.
+
+**Correction**
+
+Pass the captured `orderset_class` into `_order_normalization_scope` and require it to be non-`None`
+before opening the capture. Extend the existing scope test with the direct no-`OrderSet` shape.
+
+### P3-2 — build status and remediation claims are stale
+
+The [build plan][build-050] still says full-coverage and sharded verification are pending, while the
+[final build record][bld-final] says default and sharded tiers were rerun green after the fourth
+review and only the supported floor was not rerun. More importantly, that same final record claims
+that connection/synthesized-relation definition reads and both raw-byte legacy oracles were fixed;
+P1-1 and P2-2 reproduce the opposite.
+
+Reconcile the status only after production and test corrections. Preserve the historical command
+figures, but mark them as superseded by later code changes and new blocking findings. The final gate
+must not be called green until the current tree passes every required tier, including the floor.
+
+## Corrections verified in this pass
+
+The following changes are architecturally sound and should be preserved while fixing the findings:
+
+- **Routing intent is now connection-level.**
+  [`utils/querysets.py::_snapshot_routing_intent`][querysets] resolves the effective alias before
+  consumer ordering code, copies outer hints, and
+  [`utils/querysets.py::_validate_post_orderset_result`][querysets] seals the accepted result onto
+  that alias. Mutable nested hint state can no longer redirect the eventual read.
+- **Numeric inputs use exact integer boundaries.** `offset` and `limit` reject `bool` and hostile
+  `int` subclasses before comparison or formatting hooks run; guarded rendering also preserves the
+  typed error for an unprintably large exact integer.
+- **Wire names come from the executable schema.** The error path reads the already-published
+  `GraphQLField.args` key by Strawberry argument back-reference and does not rerun a consumer name
+  converter at request time.
+- **Unrelated descendant writes no longer mutate a parent binding.** Frozen `_CaptureState` plus
+  rebinding is the correct isolation half of the normalization problem; P1-2 requires a return
+  channel, not a return to shared mutation.
+- **Post-`OrderSet` results fail closed.** Evaluated, sliced, combined, projected, wrong-model,
+  untrusted, and routing-divergent results use the shared sealing boundary, and accepted results are
+  normalized into a framework-owned lazy queryset.
+- **The async completion adapter remains in the correct layer.** Querysets stay lazy through
+  optimization and complete by asynchronous iteration instead of synchronous ORM work on the event
+  loop.
+- **The ordinary omission oracle is now independent.** The shipped-list parity test uses a genuine
+  pre-card composition under the same GraphQL field name and compares raw response bytes.
+- **Documentation now states the trusted-row/offset asymmetry.** Trusted `max_rows` may widen the
+  returned-row limit, while offset remains bounded by request policy; P2-1 concerns the opt-in's
+  type boundary, not that asymmetry.
+
+## Architecture and upstream cross-check
+
+No new public-surface contradiction was found:
+
+- The consumer API remains DRF/Graphene-shaped: `Meta.orderset_class` owns `orderBy`; no stacked
+  Strawberry-Django decorators or list-specific consumer input class were introduced.
+- Graphene-Django's list field forwards arbitrary arguments and substitutes a default manager when
+  a resolver returns `None`. This framework deliberately consumes the synthesized arguments itself
+  and preserves its existing `None` semantics. The divergence is explicit and internally coherent.
+- Strawberry-Django's pagination helper uses a wrapper input and silently applies window/clamping
+  behavior. This framework deliberately keeps a flat `list[T]`, typed rejection, and one resource
+  bound. No accidental borrowing of its decorator-first API appears in the implementation.
+- The cookbook schema exposes its ordered/filterable roots through
+  `AdvancedDjangoFilterConnectionField`. The spec correctly treats that as evidence for the
+  connection sidecar pipeline and does not pretend the cookbook defines a raw-list pagination API.
+
+## AGENTS.md and live-test-guide assessment
+
+| Rule | Verdict | Evidence |
 | --- | --- | --- |
-| `tests/orders/test_sets.py::test_input_has_active_terms_hostile_eq_and_repr` | `_to_inert_order_data` renders a non-`str` path through `_safe_arg_repr`; the default `object.__repr__` embeds the address, so two normalizations of equal-shaped terms compare unequal and a false "not pure" `ConfigurationError` fires. Reproduced standalone: `('<__main__.T object at 0x...>', None)` differs across two calls. | **Package defect** (see H2) |
-| `tests/utils/test_querysets.py::test_validate_post_orderset_result_routing_hints_none_vs_empty` | Expects `db='default'`; an unrouted `Category.objects.all()` carries `_db is None` and the message correctly reads `db=None`. | Test expectation |
-| `tests/test_list_field.py::test_list_field_direct_call_schema_name_fallback_and_definition_lookup` | The stub `ArgDef` has no `graphql_name`; Strawberry's `NameConverter.from_argument` reads it, raises `AttributeError`, and `_resolve_argument_wire_name` wraps that in `ConfigurationError`, so the `pytest.raises(ListArgumentError)` never sees its error. | Test stub incomplete |
-| `tests/test_list_field.py::test_list_field_post_orderset_validator_arms` | Asserts `got evaluated defect`; the seal emits the spec-named code `unevaluated` (see M1 for the naming question). | Test expectation |
-| `tests/test_list_field.py::test_list_field_constructor_validation_precedence` | Asserts `got -1.` and `target_type must be a DjangoType subclass, got <class 'object'>`; actual wording is `; got int -1.` (`describe_value`) and `requires a DjangoType subclass; got object.` Both are pre-existing message shapes. | Test expectation |
-| `tests/test_list_field.py::test_list_arguments_immutability_and_slots` | First two assertions pass (`FrozenInstanceError` for `offset`/`limit`). The third, assigning an unknown attribute, raises `TypeError: super(type, obj): obj ... is not an instance or subtype of type` from the dataclass-generated `__setattr__`: with `slots=True` the frozen check's captured class is the pre-slots class, so `type(self) is cls` is false and the fallthrough `super(cls, self)` fails. Immutability holds; only the exception type differs. Seven other `frozen=True, slots=True` records in the package share the quirk. | Test expectation (or drop `slots=True`) |
-| `examples/fakeshop/test_query/test_list_field_api.py::test_holder_materialized_and_nullable_none_fields` | Asserts `"on branches_materialized" in message`; `_field_label` returns `info.field_name`, the GraphQL wire spelling `branchesMaterialized`. Every `reason` assertion in that test passes. | Test expectation |
+| DRF first, Strawberry second; public configuration through `Meta` | Pass | `orderBy` remains derived from `Meta.orderset_class`; no decorator-first consumer type API was added. |
+| Give the root-cause fix; no test-only workaround | **Blocked** | P1-1 and P1-2 require production dataflow changes. Narrower tests or weaker prose would not repair either invariant. |
+| Live-first coverage for wire-reachable behavior | Partial | Routing and malformed-result matrices are live. Child-delegated async ordering and the combined raw-byte oracle still need live HTTP proofs. |
+| Correct package/live test placement | Pass for reviewed additions | Construction and private mechanics remain in `tests/`; consumer-visible list behavior is in `examples/fakeshop/test_query/`. |
+| Fakeshop seed discipline | Pass | No new hand-rolled Category/Item/Property/Entry/User setup was introduced in the reviewed list-field acceptance rows. Library acceptance rows use their app-owned models as allowed. |
+| Tests accompany production behavior | Partial | The changed production seams have tests, but the current tests do not exercise the two reproduced failure shapes. |
+| No `pragma: no cover` as remediation | Pass | No new coverage suppression was used for card behavior. |
+| No pytest unless explicitly requested | Pass for this review | No pytest command was run. Recorded historical runs are not represented here as validation of the current tree. |
+| No release/version or changelog work before card 053 | Pass | The package version and changelog remain outside this card's implementation scope. |
+| Preserve concurrent work | Pass for this review | Concurrent dirty and newly changing files were not reverted, stashed, or overwritten. |
+| Standing-doc source references use symbol paths | Pass in this review | No raw source line-number references are used; file links follow the repository scaffold. |
 
-**Correction to the gate record.** `docs/builder/bld-final.md`'s failure table attributes the
-last row to "the live expectation disagrees with Decision 8". That is wrong: the test's
-`queryset_required` and `order_required` expectations all pass; it fails only on the
-python-name-vs-wire-name assertion. I wrote that row in the previous round from the summary
-line rather than the assertion, and it must be replaced with the cause above. Wire spelling is
-the right behavior: `argument` is already documented as the active wire spelling, and the
-field label must use the same vocabulary.
+## Required correction order and gate
 
-Recommended fixes, per rule 5 (root cause, never test-only when the code is wrong):
-`_to_inert_order_data` is a code fix (H2); the other six are assertion corrections, with the
-`slots=True` row a maintainer choice between widening the expected exception tuple and
-dropping `slots=True` from `_ListArguments` (a five-field record gains nothing from slots and
-loses `FrozenInstanceError` on unknown names).
-
-### B2. The card's final gate has not been run (carried from round 1)
-
-`docs/builder/build-050-list_field_arguments-0_0_15.md #"Final test-run gate"` is unticked and
-the sharded rows (`examples/fakeshop/test_query/test_multi_db.py::test_post_orderset_routing_mismatch_rejected_on_sharded_db`
-and its hints sibling) have not been executed under `FAKESHOP_SHARDED=1`. The spec DoD rows for
-`fail_under = 100` and the CI-matrix run remain open. Nothing below changes that; B1 must land
-first.
-
-## High
-
-### H1. The order-normalization record leaks on the common path and is keyed by a reusable `id()`
-
-`orders/sets.py::_record_applied_normalization` stashes `(cls, id(input_value), data)` on
-`info.context`, and `orders/sets.py::OrderSet._input_has_active_terms` is the only consumer.
-That consumer runs only from `list_field.py::_check_nonzero_offset_guard`, which returns before
-calling it whenever `offset` is `None` or `0`. So every `orderBy`-bearing request without a
-positive offset, the ordinary case, leaves the record on the request context. Reproduced: after
-`_execute_queryset_pipeline_sync` with `offset=None, order_by=[...]`, `get_context_value(ctx,
-_APPLIED_ORDER_NORMALIZATION_KEY)` returns the tuple; after `offset=1` it is `None`. The record
-also survives when `_validate_post_orderset_result` rejects the candidate, because the stash
-happens inside `_apply_orderings` before the seal runs.
-
-Consequences:
-
-- The docstring's "request-scoped and consumed before checking" is false on the dominant path.
-- The key is `id(input_value)` with no strong reference to the input. Within one request (or
-  any consumer-supplied long-lived context object; `schema.execute(..., context_value=ctx)` in
-  tests and scripts is common), a later alias whose input object reuses the freed id and whose
-  OrderSet is the same class compares its fresh normalization against the stale record and
-  raises a false "not pure" `ConfigurationError`. Low probability, but it is exactly the
-  self-inflicted failure class the purity check exists to catch in consumers.
-- Under async execution, two aliases on one context can interleave between stash and consume
-  only if a consumer `apply_async` override awaits after delegating; the fallback is the
-  two-call path, so this is a perf loss rather than a correctness loss. Worth stating in the
-  docstring since the "two calls total" contract in `test_input_has_active_terms_independent_query_and_double_normalization`
-  does not hold there.
-
-Root-cause options, in order of preference:
-
-1. Remove the context record. Have `_input_has_active_terms(cls, input_value)` normalize once
-   and walk; enforce the `_normalize_input` return contract instead of policing purity (see
-   H2). The double-normalization purity check guards an override of an underscore-private
-   method; the same guard can be a type check on the returned terms, which needs no request
-   state, no identity, and no cleanup. This changes Decision 3's "answered only after public
-   apply succeeds" sentence and the call-count tests, so it is a maintainer ruling.
-2. If the record stays: store `input_value` itself (strong reference, compare with `is`), and
-   have the argument pipeline clear the key in a `finally` around `_apply_orderset_*` plus the
-   guard so no path leaves it behind. `utils/context.py::restored_context_keys` already exists
-   for exactly this round trip.
-
-### H2. The purity comparison depends on object identity and formats consumer objects
-
-`orders/sets.py::_to_inert_order_data` claims to shield the comparison from hostile `__eq__` /
-`__repr__`, but for any non-`str` path or non-`Ordering` direction it falls back to
-`_safe_arg_repr`, and the default `object.__repr__` includes the id. Two independent
-normalizations therefore never compare equal, which is the B1 row-1 failure. Two more holes in
-the same vicinity:
-
-- `orders/sets.py::OrderSet.get_flat_orders` builds `f"{prefix}{field_path}"`, so a consumer
-  path object with a raising `__format__` / `__str__` escapes as a raw exception from the
-  pipeline (the hostile test never reaches it only because the purity check fires first).
-- `_resolve_order_expressions` already rejects a non-`Ordering` direction with a typed error;
-  a non-`str` path has no equivalent gate and reaches `classify_path`.
-
-Root cause: `_normalize_input` has a declared return type, `list[tuple[str, Ordering | None]]`,
-and nothing enforces it. Enforce it once at the boundary (`_apply_orderings` and
-`_input_has_active_terms`): a term that is not a 2-tuple of `str` and `Ordering | None` raises
-`ConfigurationError` naming `_normalize_input`. With the terms proven primitive, the comparison
-is a plain tuple equality and `_to_inert_order_data` can be deleted. The hostile-`__eq__` test
-then expects the typed rejection rather than `True`, which is the honest contract: a
-`_normalize_input` returning arbitrary objects is a defect, not an input to be laundered.
-
-### H3. Spec text disagrees with the shipped code in two places
-
-- `docs/spec-050-list_field_arguments-0_0_15.md #"holds `offset`, `limit`,"` and the "window
-  fields" sentence in Decision 3 both say the record carries `effective_ceiling`. The field was
-  removed from `_ListArguments` in the review response (correctly; it was dead state). The
-  spec is the contract and must describe the five-field record that ships.
-- Decision 5 step 1, `#"Derive the active wire names and validate/normalize"`, says wire names
-  are derived up front; Decision 3 and the code resolve them lazily on the error path only, and
-  a test pins zero converter calls on success. Reword step 1 to "validate/normalize `offset` /
-  `limit` from `info`" so the two decisions agree.
-
-START.md "Five homes per contract": two disagreeing homes is a defect regardless of which one
-is right.
-
-## Medium
-
-### M1. The `unevaluated` defect code names the requirement, not the state
-
-Every sibling code names the defective state: `sliced`, `combined`, `projection`, `untrusted`,
-`routing`. `unevaluated` names the requirement that was violated, so the rendered message reads
-"got unevaluated defect (the result cache is populated)", which contradicts itself to a schema
-author, and the slice-3 test author expected `evaluated`. The spec chose the spelling, so this
-is a ruling: rename to `evaluated` in the seal, both visibility arms, `_validate_post_orderset_result`,
-the spec's canonical-order sentence, and the tests, or keep it and fix the test. Renaming is the
-consistent choice and touches no consumer surface (the code never reaches a wire payload).
-
-### M2. Three identical argument-normalization blocks and a duplicated async tail in `list_field.py`
-
-`_default`, the async `_wrap`, and the sync `_wrap` each spell the same 8-line
-`_normalize_list_arguments(field_name, info, max_rows, trusted_max_rows, offset=, limit=,
-order_by=)` call after the same `_resolver_root_and_info` / `_field_label` pair. The async
-`_wrap`'s non-queryset tail is byte-for-byte the body of `_resolve_async_iterable`, which the
-sync `_wrap` already calls. `_apply_orderset_sync` and `_apply_orderset_async` duplicate the
-"has no orderset_class configured" rejection. `_handle_non_queryset_rejections_sync` is a
-one-line wrapper around `_build_non_queryset_rejection_error`. One `_argument_record(info,
-args, kwargs, ...)` helper and reusing `_resolve_async_iterable` removes roughly 40 lines
-without changing a branch.
-
-### M3. Migration divergences from both upstreams need to be stated where consumers will read them
-
-Verified against the checkouts:
-
-- `graphene_django/fields.py::DjangoListField.list_resolver` forwards `**args` into the
-  consumer resolver and substitutes `default_manager` when the resolver returns `None`. This
-  package forwards nothing (Decision 1) and keeps `None` as `None`, then rejects `orderBy` /
-  positive `offset` over it (Decision 8). A graphene migrant with `resolve_x(self, info,
-  **kwargs)` returning `None` gets a different response under every argument.
-- `strawberry_django/fields/field.py::StrawberryDjangoField.get_result` strips only the
-  pagination/order/filter kwargs the consumer resolver does not accept
-  (`_need_remove_argument`); a resolver that declares `pagination` receives it. Here it never
-  does.
-- `strawberry_django/pagination.py::StrawberryDjangoPagination.get_queryset` injects
-  `order_by("pk")` whenever `not queryset.ordered`; `_resolve_limit` treats a negative limit as
-  unbounded unless `PAGINATION_MAX_LIMIT` silently clamps it. Both are refused here.
-
-The rationale's Borrowing section records the refusals; the consumer-facing migration note the
-card owes (Decision 11) must carry the `None`-fallback and argument-forwarding differences
-explicitly, since they change response data, not just SDL.
-
-### M4. `_normalize_list_arguments` accepts any `order_by` value
-
-`object()` passes the normalizer with `order_by_supplied=True` (probe). GraphQL coercion makes
-this unreachable through a schema, so it is a direct-call gap only, but the failure then
-surfaces from `orders/inputs.py::normalize_input_value` / `iter_active_fields` with whatever
-those raise for a non-list, non-dataclass value rather than from the argument owner. Either
-reject a non-`list`/`tuple` order input with `ListArgumentError(reason="non_integer")`'s
-sibling wording, or state in the normalizer docstring that `order_by` shape is delegated to
-`OrderSet` and is a schema-coercion guarantee.
-
-## Low
-
-- L1. `bounded_rows` with `offset`/`requested_limit` extends two pre-existing shapes without
-  comment: a `str`/`bytes` source returns a `str` slice (`bounded_rows("abc", offset=1,
-  requested_limit=1)` is `"b"`), and a mapping pages over its keys. Neither is new, but the
-  docstring now says "skipped and returned items" as if every source were a row sequence.
-- L2. `list_field.py::ListArgumentError.__init__` validates `reason` against an inline set
-  literal; `_DEFAULT_WIRE_NAMES` is a module constant. Hoist the reason set beside it so a
-  future reason lands in one place.
-- L3. `_strawberry_patches.py #"There used to be a third entry"`: standing docstring narrating
-  module history ("used to be"), the provenance form START.md bans. Pre-existing, not
-  introduced by this card; flag only because the paragraph was edited in this round.
-- L4. Glossary anchors for the adapter, `ListArgumentError`, and the offset precondition read
-  `planned for 0.0.15` while the code ships. That is the joint-cut convention (card 053 flips
-  them); confirm 053's checklist names these three anchors so they do not stay "planned"
-  after the cut.
-- L5. `_check_nonzero_offset_guard`'s explicit branch uses `queryset.ordered`, which is
-  vacuously `True` for an `EmptyQuerySet`. The spec accepts this deliberately; noting that
-  `strawberry_django` relies on the same property and therefore has the same quirk.
-
-## Upstream comparison (what was checked, what holds)
-
-| Concern | graphene-django | strawberry-graphql-django | This package | Reading |
-| --- | --- | --- | --- | --- |
-| Argument shape | flat `offset: Int` on every connection | `pagination: OffsetPaginationInput {offset, limit}` | flat `offset` / `limit` on the list field only | Matches card; connections untouched |
-| Omitted limit | none on `DjangoListField`; `max_limit` on connections | `PAGINATION_DEFAULT_LIMIT`, `None` = unbounded | policy `max_list_rows` always | Stronger; spec Decision 4 |
-| Negative / over-max limit | assert-based rejection on connections | negative = unbounded; `PAGINATION_MAX_LIMIT` silently clamps | typed `ListArgumentError` both directions | Matches spec; no clamp |
-| Unordered offset | accepted on connections | injects `order_by("pk")` when `not qs.ordered` | `order_required` unless `orderBy` active or model default still effective | Matches Decision 6 |
-| Consumer resolver args | forwards `**args` | strips only what the resolver cannot accept | never forwards | Matches Decision 1; migration note owed (M3) |
-| `None` from resolver | falls back to default manager | n/a | stays `None`; arguments still validated | Matches Decision 8; migration note owed (M3) |
-| Async completion | n/a | `sync_to_async` + materialize in resolver (`default_qs_hook`) | lazy queryset through `_AsyncQuerySetRows`; optimizer unwraps/rewraps | Matches Decision 5; three exits pinned in `tests/optimizer/test_extension.py` |
-| Nested offset paging | n/a | window functions (`apply_window_pagination`) | connections only | Non-goal held |
-| Order term sequence | n/a | re-reads `info._raw_info.field_nodes` to recover input order | list-of-inputs, order explicit | Cleaner than upstream |
-
-## AGENTS.md compliance
-
-| Rule | Status | Evidence |
-| --- | --- | --- |
-| 3 Meta-first surface | Pass | `Meta.orderset_class` drives `orderBy`; no consumer decorator introduced |
-| 5 Root-cause fixes, no test-only fixes | **Open** | B1 row 1 needs a code fix (H2); rows 2-7 are assertion corrections and must not be "fixed" by loosening the production messages |
-| 7 Test placement | Pass | new `tests/test_graphql_core_patches.py` is a package test; `tests/base/` untouched beyond `test_conf.py` |
-| 10 Live-first | Pass | argument matrix, ordering, visibility, async completion live in `test_query/`; package tier holds helper mechanics and unconstructable states |
-| 12 `fail_under = 100` | **Open** | not measured this cycle (B2) |
-| 14 Tests in same change | Pass | every new arm in `list_field.py` / `querysets.py` has a pinning test in the same commits |
-| 15 No pytest after edits | Pass (review run) | seven targeted tests re-run to attribute failures; no edits made |
-| 17 Line length / ASCII | Pass | `ruff` and `source-layout` passed at commit |
-| 20 No pre-emptive settings | Pass | offset ceiling derives from `max_list_rows`; `graphql_core` key lands with its patch |
-| 21 No CHANGELOG | Pass | untouched |
-| 26 Staged-slice anchors | Pass | no `TODO(spec-050 ...)` remains in the reviewed package files |
-| 27 Symbol-path citations | Pass | code comments and this file cite `path::Symbol` / `path #"substring"` |
-| 28 Reference-style links | Pass | scaffold present below |
-| 32 / 33 Commit and branch discipline | Pass | `4c483b6b` on `main`, no footer, no branch |
-| 34 Concurrent files | Pass | spec-039 files left dirty and unstaged |
-
-## Verified as matching the spec (no action)
-
-- Pipeline order and SQL: `orderBy + offset: 1` with no limit emits one `ORDER BY ... LIMIT
-  100 OFFSET 1` after the visibility `WHERE`; the manager-resolver field emits the same shape
-  with `LIMIT 1 OFFSET 1` (probe).
-- `orderBy: []` and `orderBy: [{ name: null }]` with `offset: 1` on `Branch` (no
-  `Meta.ordering`) both return `order_required` (probe).
-- Anonymous `orderBy: [{ city: ASC }], offset: 1` succeeds; the `name` gate is not touched.
-- `offset: 2147483647` returns `over_ceiling` with `ceiling: 100`; introspection shows all
-  three arguments with `defaultValue: null` (probe).
-- `limit: 0` with an active order performs zero row queries (live test).
-- `bounded_rows` arithmetic: list beyond length yields `[]`; iterator honours `islice(start,
-  stop)`; zero window never constructs `islice` (probe, tests).
-- The routing check lives inside `_seal_or_defect`, renders `db=None` correctly, and has arms
-  at all three message sites; the sharded live rows exist and assert `expected db='shard_b'`.
-- `_graphql_core_patches.py` is gated by its own key, validates upstream shape, and
-  `test_captured_upstream_still_returns_a_residual_awaitable` fails the suite when upstream
-  fixes the bug.
-- `DjangoOptimizerExtension._optimize` rewraps on all three exits.
-- `apps.py` applies four modules; `UPSTREAM_PATCH_DEPENDENCIES` carries `graphql_core`.
+1. Make the captured `DjangoTypeDefinition` the sole field-construction and execution dependency
+   across list, connection, and synthesized-relation paths.
+2. Replace the single-slot ambient normalization handoff with an invocation-scoped attestation that
+   survives valid child/nested delegation without permitting last-writer overwrite.
+3. Enforce an exact boolean trusted-row opt-in.
+4. Strengthen the combined legacy oracle to raw bytes and correct the capture-scope predicate.
+5. Reconcile the build artifacts with what is actually implemented.
+6. Then run formatting, lint, structural/link checks, the default and sharded full suites with 100%
+   package coverage, and the supported-floor verification. Any production change after a recorded
+   green run invalidates that run for final acceptance.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[agents]: ../AGENTS.md
+[goal]: ../GOAL.md
+[kanban]: ../KANBAN.md
 
 <!-- docs/ -->
+[docs-readme]: README.md
+[glossary]: GLOSSARY.md
+[spec-050]: spec-050-list_field_arguments-0_0_15.md
 
 <!-- docs/SPECS/ -->
 
 <!-- docs/builder/ -->
+[bld-final]: builder/bld-final.md
+[build-050]: builder/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
+[connection]: ../django_strawberry_framework/connection.py
+[finalizer]: ../django_strawberry_framework/types/finalizer.py
+[list-field]: ../django_strawberry_framework/list_field.py
+[orders-sets]: ../django_strawberry_framework/orders/sets.py
+[querysets]: ../django_strawberry_framework/utils/querysets.py
+[resource-policy]: ../django_strawberry_framework/resource_policy.py
 
 <!-- tests/ -->
+[test-connection]: ../tests/test_connection.py
+[test-list-field]: ../tests/test_list_field.py
+[test-orders-sets]: ../tests/orders/test_sets.py
+[test-querysets]: ../tests/utils/test_querysets.py
 
 <!-- examples/ -->
+[live-async]: ../examples/fakeshop/test_query/test_list_field_async_api.py
+[live-multi-db]: ../examples/fakeshop/test_query/test_multi_db.py
+[live-readme]: ../examples/fakeshop/test_query/README.md
+[live-sync]: ../examples/fakeshop/test_query/test_list_field_api.py
 
 <!-- scripts/ -->
+[check-commas]: ../scripts/check_trailing_commas.py
 
 <!-- .venv/ -->
+[strawberry-schema-converter]: ../.venv/lib/python3.14/site-packages/strawberry/schema/schema_converter.py
 
 <!-- External -->
+[cookbook-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+[upstream-graphene-fields]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py
+[upstream-strawberry-pagination]: ../../strawberry-django-main/strawberry_django/pagination.py

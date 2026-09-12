@@ -23,7 +23,12 @@ On top of that skeleton the module carries:
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
+import threading
 from collections import OrderedDict
+from collections.abc import Iterator
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db import models
@@ -40,7 +45,6 @@ from ..sets_mixins import (
     require_re_readable_field_declaration,
     should_cache_expansion,
 )
-from ..utils.context import clear_context_key, get_context_value, stash_on_context
 from ..utils.input_values import SetInputTraversal
 from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
 from ..utils.querysets import run_in_one_sync_boundary
@@ -63,21 +67,159 @@ from .inputs import (
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
 
-_APPLIED_ORDER_NORMALIZATION_KEY = "_dst_applied_order_normalization"
+_NormalizedTerms = tuple[tuple[str, "Ordering | None"], ...]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _AppliedNormalization:
+    """One immutable attestation that a public ``apply_*`` normalized an input.
+
+    ``orderset_class`` and ``input_value`` identify WHICH application this
+    attests to (both compared by identity, never by equality - a consumer
+    ``__eq__`` has no say in whether an attestation applies); ``terms`` is the
+    already-validated tuple of primitives that application ordered by.
+    """
+
+    orderset_class: type
+    input_value: Any
+    terms: _NormalizedTerms
+
+
+class _NormalizationLedger:
+    """One list-field resolution's append-only record of applied normalizations.
+
+    The transport between the public ``OrderSet.apply_*`` that ordered the
+    queryset and the offset guard that must know which terms it ordered by. It
+    is an append-only LEDGER rather than a slot because the two requirements
+    pull in opposite directions: the guard has to receive an application that
+    happened in a child task, a copied context, or a ``sync_to_async`` worker
+    thread, while an unrelated application in any of those must not be able to
+    displace the one the guard is waiting for. A slot can satisfy only one of
+    those at a time - a shared mutable one loses the parent's record to the
+    last writer, and a rebinding-only one loses a legitimate child's record to
+    context isolation.
+
+    So: every application appends, nothing ever overwrites, and the guard
+    CLAIMS only the entries whose class and input object are the ones it asked
+    about. A nested ``OrderSet`` applied between publication and check appends
+    under its own identity and is simply not claimed. Claiming is
+    once-per-(class, input): a second check in the same resolution finds the
+    pair already claimed and falls back to two independent normalizations,
+    which keeps an attestation standing for exactly the one application it
+    describes.
+
+    Entries whose class and input match but whose terms DISAGREE are a
+    ``_normalize_input`` that answered differently for the same input within
+    one resolution; the claim fails closed rather than picking one.
+
+    The lock is not decoration: ``asgiref``'s ``sync_to_async`` runs the
+    wrapped callable in a worker thread carrying a COPY of this context, so two
+    threads can genuinely reach one ledger.
+    """
+
+    __slots__ = ("_claimed", "_lock", "_records")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._records: list[_AppliedNormalization] = []
+        self._claimed: list[tuple[type, Any]] = []
+
+    def publish(self, record: _AppliedNormalization) -> None:
+        """Append one attestation. Never replaces or removes another."""
+        with self._lock:
+            self._records.append(record)
+
+    def claim(self, orderset_class: type, input_value: Any) -> _NormalizedTerms | None:
+        """Claim the terms attested for this exact class and input object.
+
+        Returns ``None`` when nothing applicable was published, or when this
+        pair was already claimed in this resolution. Raises when two applicable
+        attestations disagree.
+        """
+        with self._lock:
+            for claimed_class, claimed_input in self._claimed:
+                if claimed_class is orderset_class and claimed_input is input_value:
+                    return None
+            matched = [
+                record.terms
+                for record in self._records
+                if record.orderset_class is orderset_class and record.input_value is input_value
+            ]
+            if not matched:
+                return None
+            self._claimed.append((orderset_class, input_value))
+        first = matched[0]
+        for other in matched[1:]:
+            if other != first:
+                raise ConfigurationError(
+                    f"{orderset_class.__name__}._normalize_input is not pure; two "
+                    f"applications of the same input in one resolution returned different "
+                    f"results ({_safe_arg_repr(list(first))} != {_safe_arg_repr(list(other))}).",
+                )
+        return first
+
+    def close(self) -> None:
+        """Drop every attestation and claim when the resolution ends.
+
+        The scope resets its binding on both exits, but a child task or worker
+        thread may still hold this object through a context it copied earlier;
+        emptying it means no invocation state outlives the invocation.
+        """
+        with self._lock:
+            self._records.clear()
+            self._claimed.clear()
+
+
+_ORDER_NORMALIZATION_CAPTURE: ContextVar[_NormalizationLedger | None] = ContextVar(
+    "django_strawberry_framework_order_normalization_capture",
+    default=None,
+)
+
+
+@contextlib.contextmanager
+def capture_applied_order_normalization() -> Iterator[None]:
+    """Open the invocation-scoped ledger public ``apply_*`` attests into.
+
+    The list field wraps public ordering and its offset guard in one scope so
+    the guard can reuse the terms the ``OrderSet`` already validated, instead of
+    normalizing the client input a second time. The scope is a ``ContextVar``,
+    never ``info.context``: a public ``OrderSet.apply_*`` call on a connection or
+    in a hand-written resolver runs outside any scope and leaves no state
+    anywhere, the consumer's context object is never written or cleared, and a
+    concurrent resolution that opened its own scope has its own ledger.
+
+    The binding is reset AND the ledger emptied in ``finally``, so neither a
+    rejected request nor a child task that outlived the resolution can carry a
+    record into the next one.
+
+    The scope yields nothing: the ledger is reached only through the
+    ``ContextVar``, so no caller can retain a handle to it by taking the
+    context manager's value.
+    """
+    ledger = _NormalizationLedger()
+    token = _ORDER_NORMALIZATION_CAPTURE.set(ledger)
+    try:
+        yield
+    finally:
+        _ORDER_NORMALIZATION_CAPTURE.reset(token)
+        ledger.close()
 
 
 def _record_applied_normalization(
-    info: Any,
     cls: type,
     input_value: Any,
     data: list[tuple[str, Ordering | None]],
 ) -> None:
-    """Publish one successful normalization on the current request context."""
-    stash_on_context(
-        getattr(info, "context", None),
-        _APPLIED_ORDER_NORMALIZATION_KEY,
-        (cls, input_value, data),
-    )
+    """Attest one successful normalization into the active ledger, if any.
+
+    Appends; it can never displace another application's attestation, so a
+    delegating override that applies in a child task publishes to the ledger
+    its parent will claim from, while an unrelated application in that same
+    child appends under its own identity and is never claimed.
+    """
+    ledger = _ORDER_NORMALIZATION_CAPTURE.get()
+    if ledger is not None:
+        ledger.publish(_AppliedNormalization(cls, input_value, tuple(data)))
 
 
 def _validate_normalized_terms(cls: type, data: Any) -> list[tuple[str, Ordering | None]]:
@@ -85,22 +227,26 @@ def _validate_normalized_terms(cls: type, data: Any) -> list[tuple[str, Ordering
 
     Guarantees that normalized order data is a list of 2-tuples of (field_path: str,
     direction: Ordering | None). Rejects non-conforming returns immediately with an
-    actionable ConfigurationError naming _normalize_input. Because valid terms are
-    composed solely of Python strings, None, and Ordering enums, subsequent purity
-    checks and walks operate on trusted primitives with deterministic equality and
-    no hostile consumer __eq__ or __repr__ hooks.
+    actionable ConfigurationError naming _normalize_input. Every shape is pinned by
+    EXACT type, not ``isinstance``: a ``list`` subclass would run consumer
+    ``__iter__`` in this very loop, a ``tuple`` subclass consumer ``__len__`` /
+    ``__getitem__``, and a ``str`` subclass consumer ``__eq__`` in the purity
+    compare or ``__format__`` in ``get_flat_orders``. The outer container is
+    rejected before it is iterated and a term before its members are read, so
+    everything downstream operates on trusted primitives with deterministic
+    equality and no consumer hook left to fire.
     """
-    if not isinstance(data, list):
+    if type(data) is not list:
         raise ConfigurationError(
             f"OrderSet {cls.__qualname__}._normalize_input returned invalid data "
             f"{_safe_arg_repr(data)}; expected a list of (field_path, direction) tuples.",
         )
     for term in data:
         if (
-            not isinstance(term, tuple)
+            type(term) is not tuple
             or len(term) != 2
-            or not isinstance(term[0], str)
-            or (term[1] is not None and not isinstance(term[1], Ordering))
+            or type(term[0]) is not str
+            or (term[1] is not None and type(term[1]) is not Ordering)
         ):
             raise ConfigurationError(
                 f"OrderSet {cls.__qualname__}._normalize_input returned invalid term "
@@ -370,38 +516,44 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # ------------------------------------------------------------------
 
     @classmethod
-    def _input_has_active_terms(cls, input_value: Any, info: Any = None) -> bool:
+    def _input_has_active_terms(cls, input_value: Any) -> bool:
         """Return True if input_value contains at least one non-null ordering direction.
 
-        Checks purity by comparing against the normalized record produced by public
-        apply when present (two calls total: one in apply, one in this check), or across
-        two independent normalizations when no record is available (three calls total when
-        public apply ran against an unstashable context). The record is request-scoped,
-        held with a strong input reference, and consumed before checking. If concurrent
-        requests share a context or an async override awaits after delegating, consumption
-        or overwriting gracefully falls back to the double-read path.
+        Checks purity against the normalization the ``OrderSet`` actually ordered
+        by: the active :func:`capture_applied_order_normalization` ledger is
+        asked for an attestation naming this class and this exact input object
+        (two normalizations total, one in apply and one here). Where the ledger
+        holds none - an override that never delegates to the base
+        implementation, or a call outside any scope - the check falls back to
+        two independent normalizations and compares those (three calls total).
+        Attestations are claimed once per class-and-input pair, so a second
+        check within one resolution also takes the two-normalization path rather
+        than reusing an attestation for an application it does not describe.
+
+        Because the ledger is append-only, an attestation published from a child
+        task, a copied context, or a worker thread - the shapes a legitimate
+        ``apply_async`` override delegating to ``super()`` produces - reaches
+        this check, while an unrelated application in any of those appends under
+        its own identity and is never claimed here.
 
         Any disagreement raises an actionable :class:`ConfigurationError` naming
         :meth:`_normalize_input`.
         """
-        context = getattr(info, "context", None)
-        applied_info = get_context_value(context, _APPLIED_ORDER_NORMALIZATION_KEY)
-        clear_context_key(context, _APPLIED_ORDER_NORMALIZATION_KEY)
-        applied_data = None
-        if isinstance(applied_info, tuple) and len(applied_info) == 3:
-            applied_cls, applied_input, recorded_data = applied_info
-            if applied_cls is cls and applied_input is input_value:
-                applied_data = recorded_data
+        applied_data: _NormalizedTerms | None = None
+        ledger = _ORDER_NORMALIZATION_CAPTURE.get()
+        if ledger is not None:
+            applied_data = ledger.claim(cls, input_value)
 
         data_check = _validate_normalized_terms(cls, cls._normalize_input(input_value))
 
         if applied_data is not None:
-            if applied_data != data_check:
+            if applied_data != tuple(data_check):
+                first_repr = _safe_arg_repr(list(applied_data))
                 raise ConfigurationError(
                     f"{cls.__name__}._normalize_input is not pure; returned different results "
-                    f"for the same input ({_safe_arg_repr(applied_data)} != {_safe_arg_repr(data_check)}).",
+                    f"for the same input ({first_repr} != {_safe_arg_repr(data_check)}).",
                 )
-            data_to_walk = applied_data
+            data_to_walk = list(applied_data)
         else:
             data_check2 = _validate_normalized_terms(cls, cls._normalize_input(input_value))
             if data_check != data_check2:
@@ -420,12 +572,14 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
         Purity obligation:
             This method must be a pure, deterministic function of ``input_value``.
-            An argument-bearing GraphQL request normalizes the input once during public
-            apply (``apply_sync`` or ``apply_async``) and once during the active-term check
-            when its request context accepted the one-shot record. If the context cannot
-            store that record, the check performs two independent reads (three calls total).
-            Any stateful or non-deterministic disagreement raises an actionable
-            :class:`ConfigurationError` naming this method.
+            An argument-bearing ``DjangoListField`` request normalizes the input once
+            during public apply (``apply_sync`` or ``apply_async``) and once during the
+            active-term check, which compares against the terms the base apply attested
+            into the list field's invocation-scoped ledger - including when the apply
+            ran in a child task or worker thread. An override that does not delegate to
+            the base apply attests nothing, so the check performs two independent reads
+            (three calls total). Any stateful or non-deterministic disagreement raises an
+            actionable :class:`ConfigurationError` naming this method.
         """
         return normalize_input_value(cls, input_value)
 
@@ -552,12 +706,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         return annotations, expressions
 
     @classmethod
-    def _apply_orderings(
-        cls,
-        input_value: Any,
-        queryset: models.QuerySet,
-        info: Any,
-    ) -> models.QuerySet:
+    def _apply_orderings(cls, input_value: Any, queryset: models.QuerySet) -> models.QuerySet:
         """Apply the normalized orderings to ``queryset`` - the un-colored tail.
 
         The shared body behind ``apply_sync`` / ``apply_async`` (the order-side
@@ -575,7 +724,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         data = _validate_normalized_terms(cls, cls._normalize_input(input_value))
         if not data:
-            _record_applied_normalization(info, cls, input_value, data)
+            _record_applied_normalization(cls, input_value, data)
             return queryset
         flat_orders = cls.get_flat_orders(data)
         annotations, expressions = cls._resolve_order_expressions(
@@ -583,12 +732,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             model=queryset.model,
         )
         if not expressions:
-            _record_applied_normalization(info, cls, input_value, data)
+            _record_applied_normalization(cls, input_value, data)
             return queryset
         if annotations:
             queryset = queryset.annotate(**annotations)
         queryset = queryset.order_by(*expressions)
-        _record_applied_normalization(info, cls, input_value, data)
+        _record_applied_normalization(cls, input_value, data)
         return queryset
 
     @classmethod
@@ -622,7 +771,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         request = cls._request_from_info(info)
         cls._run_permission_checks(input_value, request)
-        return cls._apply_orderings(input_value, queryset, info)
+        return cls._apply_orderings(input_value, queryset)
 
     @classmethod
     async def apply_async(
@@ -649,4 +798,4 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         request = cls._request_from_info(info)
         await run_in_one_sync_boundary(cls._run_permission_checks, input_value, request)
-        return cls._apply_orderings(input_value, queryset, info)
+        return cls._apply_orderings(input_value, queryset)

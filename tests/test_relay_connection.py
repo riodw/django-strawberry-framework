@@ -2296,7 +2296,7 @@ def test_outer_total_count_predicate_ignores_nested_total_count():
     finalize_django_types()
     from django_strawberry_framework import DjangoConnectionField
 
-    conn_type = _connection_type_for(genre_type)
+    conn_type = _connection_type_for(genre_type, genre_type.__django_strawberry_definition__)
     query_cls = strawberry.type(
         type(
             "Query",
@@ -2958,7 +2958,7 @@ def _windowed_book_connection_class(*, total_count=False):
         meta_extra={"connection": {"total_count": True}} if total_count else None,
     )
     finalize_django_types()
-    return _connection_type_for(book_type)
+    return _connection_type_for(book_type, book_type.__django_strawberry_definition__)
 
 
 @pytest.mark.django_db

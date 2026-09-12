@@ -14,10 +14,11 @@ where they matter. What is left here is the surface a request cannot express:
   build-time contract between a field and the schema policy;
 - context threading against the frozen / dict / object context shapes, and the
   fail-closed default a missing stash produces;
-- the walker's degenerate inputs - a malformed document, an unknown fragment, a
-  cyclic fragment set, an operation the request did not name, an untyped
-  container, an upload that cannot report its size - which a valid request
-  cannot produce but a hostile or unusual one can;
+- the walker's degenerate inputs - an unknown fragment, a cyclic fragment set,
+  an operation the request did not name, an untyped container, an upload that
+  cannot report its size - which a valid request cannot produce but a hostile or
+  unusual one can (a malformed document IS expressible over the wire, so the
+  swallow-the-lexer-error pair lives in the live suite);
 - the value walker's IDENTITY contracts, which need constructed object graphs a
   JSON body cannot express: a container referenced twice charged twice, two
   distinct-but-equal containers both charged, and cycles closing onto a parent
@@ -71,6 +72,7 @@ from django_strawberry_framework.resource_policy import (
     resolve_resource_policy,
     stash_resource_policy,
     validate_collection_bound,
+    validate_trusted_flag,
 )
 from django_strawberry_framework.schema import _with_resource_policy_extension
 
@@ -285,6 +287,66 @@ def test_effective_bound_takes_the_tighter_of_the_two_unless_trusted():
     assert effective_bound(100, 5) == 5
     assert effective_bound(5, 100) == 5
     assert effective_bound(5, 100, trusted=True) == 100
+
+
+@pytest.mark.parametrize(
+    "trusted",
+    [
+        "false",
+        "True",
+        1,
+        [0],
+        object(),
+    ],
+)
+def test_only_the_literal_true_widens_a_declared_bound_past_the_request_policy(trusted):
+    """A merely TRUTHY opt-in narrows like every other caller.
+
+    This is the one primitive whose answer may exceed the request's own
+    ``ResourcePolicy``, so the value that reaches the widening branch is exactly
+    ``True``. A misspelled flag - the string ``"false"``, a stray ``1``, any
+    object with a truthy ``__bool__`` - takes the narrowing branch instead of
+    silently raising every request's row ceiling.
+    """
+    assert effective_bound(5, 100, trusted=trusted) == 5
+
+
+@pytest.mark.parametrize(
+    "trusted",
+    [
+        0,
+        "",
+        None,
+        [],
+    ],
+)
+def test_a_falsy_non_bool_opt_in_also_narrows(trusted):
+    """The narrowing answer is the same for every non-``True`` value, truthy or not."""
+    assert effective_bound(5, 100, trusted=trusted) == 5
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "false",
+        "True",
+        1,
+        0,
+        None,
+        [],
+    ],
+)
+def test_a_trusted_flag_must_be_exactly_true_or_false(value):
+    with pytest.raises(
+        ConfigurationError,
+        match="probe trusted_max_rows must be exactly True or False",
+    ):
+        validate_trusted_flag(value, field="probe trusted_max_rows")
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_an_exact_boolean_trusted_flag_is_accepted(value):
+    assert validate_trusted_flag(value, field="probe trusted_max_rows") is None
 
 
 @pytest.mark.parametrize(

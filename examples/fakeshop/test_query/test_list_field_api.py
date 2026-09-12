@@ -1,4 +1,4 @@
-"""Live sync-HTTP contract for ``DjangoListField`` arguments (spec-050 Slice 4).
+"""Live sync-HTTP contract for ``DjangoListField`` arguments.
 
 This is the SYNC counterpart of ``test_list_field_async_api.py``. It covers the sync
 acceptance surface over live HTTP (``/graphql/`` for shipped schema fields and
@@ -22,14 +22,21 @@ from django.db import connection, models
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
-from graphql_client import graphql_payload
+from graphql_client import graphql_payload, post_graphql
 from strawberry.schema.name_converter import NameConverter
 
+import django_strawberry_framework.list_field as list_field_module
 from django_strawberry_framework import (
+    DjangoConnection,
+    DjangoConnectionField,
     DjangoListField,
     strawberry_config,
 )
+from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.orders import Ordering
+from django_strawberry_framework.resource_policy import bounded_rows
 from django_strawberry_framework.schema import DjangoSchema
+from django_strawberry_framework.utils.querysets import apply_type_visibility_sync
 from django_strawberry_framework.views import DjangoGraphQLView
 
 _ERROR_POLICY_PASS_THROUGH = {
@@ -37,13 +44,14 @@ _ERROR_POLICY_PASS_THROUGH = {
     "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
 }
 
-_CURRENT: dict[str, object | None] = {"schema": None}
+_CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
 
 
 def _graphql_view(request):
     schema = _CURRENT["schema"]
     assert schema is not None
-    return DjangoGraphQLView.as_view(schema=schema)(request)
+    view_class = _CURRENT["view_class"] or DjangoGraphQLView
+    return view_class.as_view(schema=schema)(request)
 
 
 urlpatterns = [
@@ -63,22 +71,30 @@ def _staff_client() -> Client:
     return client
 
 
-def _post_sync(
+def _post_sync_response(
     schema: DjangoSchema | strawberry.Schema,
     query: str,
     *,
     variables: dict[str, Any] | None = None,
     client: Client | None = None,
     extra_settings: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    view_class: type[DjangoGraphQLView] | None = None,
+):
+    """Post to the test mount and return the RAW ``HttpResponse``.
+
+    The parsed-payload sibling below is what most cases want; the raw response is
+    for the one claim a parsed dictionary cannot carry - that two renderings are
+    the same bytes.
+    """
     _CURRENT["schema"] = schema
+    _CURRENT["view_class"] = view_class
     override_dict: dict[str, Any] = {"ROOT_URLCONF": __name__}
     if extra_settings:
         override_dict.update(extra_settings)
     try:
         with override_settings(**override_dict):
             clear_url_caches()
-            return graphql_payload(
+            return post_graphql(
                 query,
                 client=client,
                 variables=variables,
@@ -86,7 +102,29 @@ def _post_sync(
             )
     finally:
         _CURRENT["schema"] = None
+        _CURRENT["view_class"] = None
         clear_url_caches()
+
+
+def _post_sync(
+    schema: DjangoSchema | strawberry.Schema,
+    query: str,
+    *,
+    variables: dict[str, Any] | None = None,
+    client: Client | None = None,
+    extra_settings: dict[str, Any] | None = None,
+    view_class: type[DjangoGraphQLView] | None = None,
+) -> dict[str, Any]:
+    response = _post_sync_response(
+        schema,
+        query,
+        variables=variables,
+        client=client,
+        extra_settings=extra_settings,
+        view_class=view_class,
+    )
+    assert response.status_code == 200
+    return response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +148,10 @@ def test_shipped_branches_introspection_arguments():
               ofType {
                 kind
                 name
+                ofType {
+                  kind
+                  name
+                }
               }
             }
           }
@@ -158,15 +200,25 @@ def test_shipped_branches_introspection_arguments():
         assert order_type["ofType"]["kind"] == "NON_NULL"
         assert order_type["ofType"]["ofType"]["name"] == "BranchOrderInputType"
 
-    # Non-null list return type: NON_NULL -> LIST -> NON_NULL -> BranchType
+    # Non-null list return type: the consumer's bare ``list[BranchType]``
+    # annotation renders all four levels NON_NULL -> LIST -> NON_NULL -> OBJECT,
+    # so neither the list nor an item may ever be null.
     ret_default = fields["allLibraryBranchesViaListField"]["type"]
     assert ret_default["kind"] == "NON_NULL"
     assert ret_default["ofType"]["kind"] == "LIST"
+    assert ret_default["ofType"]["ofType"]["kind"] == "NON_NULL"
+    assert ret_default["ofType"]["ofType"]["ofType"]["kind"] == "OBJECT"
+    assert ret_default["ofType"]["ofType"]["ofType"]["name"] == "BranchType"
 
-    # Nullable list return type: LIST -> NON_NULL -> BranchType
+    # Nullable list return type: LIST -> NON_NULL -> OBJECT. Only the OUTER
+    # nullability differs from the default sibling above, which is what makes
+    # that sibling's four levels a statement about the annotation rather than
+    # about ``DjangoListField`` rendering one fixed shape.
     ret_nullable = fields["allLibraryBranchesViaListFieldNullable"]["type"]
     assert ret_nullable["kind"] == "LIST"
     assert ret_nullable["ofType"]["kind"] == "NON_NULL"
+    assert ret_nullable["ofType"]["ofType"]["kind"] == "OBJECT"
+    assert ret_nullable["ofType"]["ofType"]["name"] == "BranchType"
 
 
 # ---------------------------------------------------------------------------
@@ -708,59 +760,181 @@ def test_holder_branches_combined_seals(monkeypatch):
             }
             """,
         )
-    # Post-orderset validation rejects with ConfigurationError
+    # Post-orderset validation rejects with the exact ``combined`` defect.
     assert "errors" in p_hook
     assert p_hook["data"] is None
-    assert "combined" in p_hook["errors"][0]["message"].lower()
+    assert p_hook["errors"][0]["message"].startswith(_BRANCH_ORDER_SHAPE_PREFIX)
+    assert "got combined defect" in p_hook["errors"][0]["message"]
+
+
+_BRANCH_ORDER_SHAPE_PREFIX = (
+    "BranchOrder.apply_sync must return an unevaluated, unsliced, uncombined "
+    "QuerySet of Branch rows; got "
+)
 
 
 @pytest.mark.django_db
-def test_holder_branches_post_orderset_evaluated_projection_and_wrong_model(monkeypatch):
+def test_holder_branches_post_orderset_malformed_result_matrix(monkeypatch):
+    """Every malformed ``apply_sync`` result the seal can reach live names its exact defect.
+
+    Each row runs a real ``/graphql/`` request against the shipped field with the
+    override in place, asserts the exact rejection it must produce rather than the
+    sentence the rows share, and captures SQL so a row that must not execute proves
+    it did not.
+    """
     library_models.Branch.objects.create(name="A", city="Boston")
+    query = "{ allLibraryBranchesViaListField(orderBy: [{ city: ASC }]) { name } }"
 
-    # 1. Evaluated return (list instead of QuerySet)
-    monkeypatch.setattr(
-        BranchOrder,
-        "apply_sync",
-        classmethod(lambda cls, order_input, queryset, info: list(queryset)),
+    def _run(override):
+        monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(override))
+        with (
+            override_settings(**_ERROR_POLICY_PASS_THROUGH),
+            CaptureQueriesContext(connection) as ctx,
+        ):
+            payload = graphql_payload(query)
+        assert payload["data"] is None
+        branch_sql = [
+            q["sql"] for q in ctx.captured_queries if "library_branch" in q["sql"].lower()
+        ]
+        return payload["errors"][0]["message"], branch_sql
+
+    # 1. Evaluated: the override executed the query and returned the SAME, now-cached
+    #    queryset. The seal names ``evaluated`` and the framework issued no second query.
+    def _evaluated(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        list(queryset)
+        return queryset
+
+    message, branch_sql = _run(_evaluated)
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "evaluated defect")
+    assert len(branch_sql) == 1
+
+    # 2. A materialized list is not a QuerySet at all: a ``type`` defect, distinct from row 1.
+    message, branch_sql = _run(lambda cls, order_input, queryset, info: list(queryset))
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "type defect")
+    assert len(branch_sql) == 1
+
+    # 3. ``None`` is the other non-queryset shape.
+    message, branch_sql = _run(lambda cls, order_input, queryset, info: None)
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "type defect")
+    assert branch_sql == []
+
+    # 4. Projection.
+    message, branch_sql = _run(lambda cls, order_input, queryset, info: queryset.values("name"))
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "projection defect")
+    assert branch_sql == []
+
+    # 5. Wrong model.
+    message, branch_sql = _run(
+        lambda cls, order_input, queryset, info: library_models.Book.objects.all(),
     )
-    with override_settings(**_ERROR_POLICY_PASS_THROUGH):
-        p_eval = graphql_payload(
-            "{ allLibraryBranchesViaListField(orderBy: [{ city: ASC }]) { name } }",
-        )
-    assert "errors" in p_eval
-    assert p_eval["data"] is None
-    assert "must return an unevaluated" in p_eval["errors"][0]["message"]
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "table defect")
+    assert branch_sql == []
 
-    # 2. Projection return (values instead of model instances)
-    monkeypatch.setattr(
-        BranchOrder,
-        "apply_sync",
-        classmethod(lambda cls, order_input, queryset, info: queryset.values("name")),
+    # 6. Sliced after ordering: the window is the framework's to take, once.
+    message, branch_sql = _run(
+        lambda cls, order_input, queryset, info: queryset.order_by("name")[:1],
     )
-    with override_settings(**_ERROR_POLICY_PASS_THROUGH):
-        p_proj = graphql_payload(
-            "{ allLibraryBranchesViaListField(orderBy: [{ city: ASC }]) { name } }",
-        )
-    assert "errors" in p_proj
-    assert p_proj["data"] is None
-    assert "projection defect" in p_proj["errors"][0]["message"]
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "sliced defect")
+    assert branch_sql == []
 
-    # 3. Wrong-model return (Book queryset instead of Branch)
-    monkeypatch.setattr(
-        BranchOrder,
-        "apply_sync",
-        classmethod(
-            lambda cls, order_input, queryset, info: library_models.Book.objects.all(),
+    # 7. Combined.
+    message, branch_sql = _run(
+        lambda cls, order_input, queryset, info: queryset.filter(name="A").union(
+            queryset.filter(name="B"),
         ),
     )
-    with override_settings(**_ERROR_POLICY_PASS_THROUGH):
-        p_model = graphql_payload(
-            "{ allLibraryBranchesViaListField(orderBy: [{ city: ASC }]) { name } }",
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "combined defect")
+    assert branch_sql == []
+
+    # 8. A sync override returning an awaitable violates the sync protocol; the
+    #    awaitable is disposed rather than left un-awaited.
+    async def _later(queryset):
+        return queryset
+
+    message, branch_sql = _run(lambda cls, order_input, queryset, info: _later(queryset))
+    assert message.startswith(
+        "BranchOrder.apply_sync returned an awaitable in a sync resolver context.",
+    )
+    assert branch_sql == []
+
+    # 9. Routing rewritten IN PLACE on the queryset the override was handed, then
+    #    returned as-is: compared against the pre-call snapshot, not the mutated object.
+    def _in_place_routing(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        queryset._hints = {"tenant": 2}
+        return queryset
+
+    message, branch_sql = _run(_in_place_routing)
+    assert message.startswith("BranchOrder.apply_sync changed database routing intent")
+    assert "expected db=None, hints={}" in message
+    assert "got db=None, hints={'tenant': 2}" in message
+    assert branch_sql == []
+
+    # 10. A queryset SUBCLASS carrying an unresolved deferred filter: a predicate
+    #     not yet baked into the query, which the seal cannot faithfully rebuild.
+    #     Django leaves one only on an EXACT plain queryset, so a subclass holding
+    #     one is not that artifact and fails closed as ``untrusted``.
+    class _DeferredFilterQuerySet(models.QuerySet):
+        pass
+
+    def _untrusted(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        candidate = _DeferredFilterQuerySet(model=library_models.Branch)
+        candidate._deferred_filter = (False, (), {"name": "A"})
+        return candidate
+
+    message, branch_sql = _run(_untrusted)
+    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "untrusted defect")
+    assert "carries an unresolved deferred filter" in message
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_holder_branches_hostile_normalized_term_is_rejected_before_it_can_run(monkeypatch):
+    """A ``_normalize_input`` override returning a ``str`` SUBCLASS term is a configuration error.
+
+    The term never reaches the purity compare or the flat-order walk, so its
+    ``__eq__`` / ``__format__`` hooks never fire; the request reports the
+    boundary's actionable error instead of the hook's own failure.
+    """
+    library_models.Branch.objects.create(name="A", city="Boston")
+
+    class _HostileStr(str):
+        def __eq__(self, other):
+            raise RuntimeError("hostile equality ran")
+
+        __hash__ = str.__hash__
+
+        def __format__(self, spec):
+            raise RuntimeError("hostile format ran")
+
+    monkeypatch.setattr(
+        BranchOrder,
+        "_normalize_input",
+        classmethod(lambda cls, input_value: [(_HostileStr("city"), Ordering.ASC)]),
+    )
+    with override_settings(**_ERROR_POLICY_PASS_THROUGH), CaptureQueriesContext(connection) as ctx:
+        payload = graphql_payload(
+            "{ allLibraryBranchesViaListField(orderBy: [{ city: ASC }], offset: 1) { name } }",
         )
-    assert "errors" in p_model
-    assert p_model["data"] is None
-    assert "table defect" in p_model["errors"][0]["message"]
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert "BranchOrder._normalize_input returned invalid term" in message
+    assert "hostile" not in message
+    assert [q for q in ctx.captured_queries if "library_branch" in q["sql"].lower()] == []
 
 
 @pytest.mark.django_db
@@ -827,6 +1001,41 @@ def test_holder_naming_converters():
 
     p_up_err = _post_sync(upper_schema, "{ BRANCHES(OFFSET: -1) { NAME } }")
     assert p_up_err["errors"][0]["extensions"]["argument"] == "OFFSET"
+
+    # 3. The rejection reports the PUBLISHED name and runs the converter no more than
+    #    a successful request does: Strawberry maps arguments through the converter
+    #    on every execution, and the framework's error path adds nothing to that.
+    class _CountingConverter(NameConverter):
+        calls = 0
+
+        def from_argument(self, argument):
+            type(self).calls += 1
+            return super().from_argument(argument).upper()
+
+    @strawberry.type
+    class _CountingQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+
+    counting_schema = DjangoSchema(
+        query=_CountingQuery,
+        config=strawberry_config(name_converter=_CountingConverter()),
+    )
+    p_intro = _post_sync(
+        counting_schema,
+        "query { __schema { queryType { fields { name args { name } } } } }",
+    )
+    published = {a["name"] for a in p_intro["data"]["__schema"]["queryType"]["fields"][0]["args"]}
+    assert published == {"OFFSET", "LIMIT", "ORDERBY"}
+
+    before = _CountingConverter.calls
+    p_ok = _post_sync(counting_schema, "{ branches(LIMIT: 1) { name } }")
+    assert "errors" not in p_ok, p_ok
+    per_success = _CountingConverter.calls - before
+
+    before = _CountingConverter.calls
+    p_rejected = _post_sync(counting_schema, "{ branches(OFFSET: -1) { name } }")
+    assert p_rejected["errors"][0]["extensions"]["argument"] == "OFFSET"
+    assert _CountingConverter.calls - before == per_success
 
 
 @pytest.mark.django_db
@@ -918,49 +1127,270 @@ def test_holder_target_without_orderset_or_model_ordering():
     assert "'orderBy'" not in p_err["errors"][0]["message"]
 
 
-@pytest.mark.django_db
-def test_shipped_branches_omitted_and_null_argument_sql_parity():
-    library_models.Branch.objects.create(name="Alpha", city="Boston")
-    library_models.Branch.objects.create(name="Bravo", city="Boston")
-    library_models.Branch.objects.create(name="Charlie", city="Boston")
+_PARITY_CAPTURE: dict[str, Any] = {}
 
-    with CaptureQueriesContext(connection) as omitted_ctx:
-        omitted = graphql_payload("{ allLibraryBranchesViaListField { id name } }")
-    with CaptureQueriesContext(connection) as null_ctx:
-        explicit_null = graphql_payload(
-            """
-            query {
-              allLibraryBranchesViaListField(
-                offset: null
-                limit: null
-                orderBy: null
-              ) {
-                id
-                name
-              }
-            }
-            """,
+
+def _query_marks(queryset: models.QuerySet) -> tuple[str, int, int | None]:
+    return str(queryset.query), queryset.query.low_mark, queryset.query.high_mark
+
+
+def _legacy_reference_resolver(source_factory):
+    """The pre-card list pipeline, composed from shipped public primitives only.
+
+    Visibility through ``apply_type_visibility_sync`` and ONE ``bounded_rows`` call
+    with no client window - exactly what a no-argument list resolution did before
+    the argument surface existed. A test oracle, never a second pagination
+    implementation: it records the final queryset's SQL and marks before returning.
+    """
+
+    def resolver(root, info: strawberry.Info) -> list[library_schema.BranchType]:
+        queryset = apply_type_visibility_sync(library_schema.BranchType, source_factory(), info)
+        bounded = bounded_rows(queryset, info, None)
+        _PARITY_CAPTURE["legacy_marks"] = _query_marks(bounded)
+        return bounded
+
+    return resolver
+
+
+def _build_current_parity_schema(source_factory) -> DjangoSchema:
+    """The card's field, published under the GraphQL name ``branches``."""
+
+    @strawberry.type
+    class _CurrentParityQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=lambda root, info: source_factory(),
         )
 
-    assert "errors" not in omitted, omitted
-    assert "errors" not in explicit_null, explicit_null
-    omitted_sql = [
-        query["sql"]
-        for query in omitted_ctx.captured_queries
-        if "library_branch" in query["sql"].lower()
-    ]
-    null_sql = [
-        query["sql"]
-        for query in null_ctx.captured_queries
-        if "library_branch" in query["sql"].lower()
-    ]
-    assert len(omitted_sql) == 1
-    assert omitted_sql == null_sql
-    assert omitted["data"] == explicit_null["data"]
+    optimizer = DjangoOptimizerExtension()
+    return DjangoSchema(
+        query=_CurrentParityQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+
+
+def _build_legacy_parity_schema(source_factory) -> DjangoSchema:
+    """The pre-card reference resolver, published under the SAME GraphQL name.
+
+    Two schemas rather than two fields in one: the response-byte claim is about
+    a request envelope that cannot tell the two apart, and a differently named
+    field would make the bytes differ for a reason that has nothing to do with
+    the pipeline. Both parity schemas carry the optimizer extension the project
+    schema carries, because column planning is what the SQL comparison would
+    otherwise trip over - and the pre-card pipeline shipped with it too.
+    """
+
+    @strawberry.type
+    class _LegacyParityQuery:
+        branches: list[library_schema.BranchType] = strawberry.field(
+            resolver=_legacy_reference_resolver(source_factory),
+        )
+
+    optimizer = DjangoOptimizerExtension()
+    return DjangoSchema(
+        query=_LegacyParityQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+
+
+def _install_parity_probes(monkeypatch) -> dict[str, int]:
+    """Count ``BranchType.get_queryset`` calls and record the current field's final marks."""
+    counters = {"visibility": 0}
+    original_get_queryset = library_schema.BranchType.get_queryset
+
+    def _tracking_get_queryset(cls, queryset, info, **kwargs):
+        counters["visibility"] += 1
+        return original_get_queryset(queryset, info, **kwargs)
+
+    monkeypatch.setattr(
+        library_schema.BranchType,
+        "get_queryset",
+        classmethod(_tracking_get_queryset),
+    )
+    original_bounded_rows = list_field_module.bounded_rows
+
+    def _recording_bounded_rows(result, info, declared=None, **kwargs):
+        bounded = original_bounded_rows(result, info, declared, **kwargs)
+        _PARITY_CAPTURE["current_marks"] = _query_marks(bounded)
+        return bounded
+
+    monkeypatch.setattr(list_field_module, "bounded_rows", _recording_bounded_rows)
+    return counters
+
+
+def _parity_run(
+    query: str,
+    counters: dict[str, int],
+    *,
+    schema=None,
+    client=None,
+    extra_settings: dict[str, Any] | None = None,
+):
+    """Execute one live request, returning ``(response, branch_sql, visibility_calls)``.
+
+    The raw ``HttpResponse`` is returned, not just its parsed body: the oracle's
+    strongest claim is that the response BYTES are unchanged, and parsed
+    dictionaries compare equal across renderings that are not.
+    """
+    counters["visibility"] = 0
+    with CaptureQueriesContext(connection) as ctx:
+        if schema is None:
+            response = post_graphql(query, client=client)
+        else:
+            response = _post_sync_response(
+                schema,
+                query,
+                client=client,
+                extra_settings=extra_settings,
+            )
+    assert response.status_code == 200
+    branch_sql = [q["sql"] for q in ctx.captured_queries if "library_branch" in q["sql"].lower()]
+    return response, branch_sql, counters["visibility"]
+
+
+@pytest.mark.django_db
+def test_branches_omitted_and_null_arguments_match_the_legacy_reference(monkeypatch):
+    """Omitted and all-null arguments reproduce the PRE-CARD pipeline, not merely each other.
+
+    The oracle is a test-local legacy schema publishing the same ``branches``
+    field name, composed from the shipped primitives the old pipeline used, so
+    the same request envelope reaches both and the raw response BYTES can be
+    compared. The all-null form is compared against the legacy OMITTED response
+    because that is precisely the claim: the two spellings are the same request.
+    Behind the bytes, ``library_branch`` SQL, the final queryset's
+    ``str(query)`` / ``low_mark`` / ``high_mark``, and the visibility-hook count
+    must match too. The shipped field publishes its own name, so its rows are
+    compared semantically against the same oracle.
+    """
+    for name in ("Alpha", "Bravo", "Charlie"):
+        library_models.Branch.objects.create(name=name, city="Boston")
+    library_models.Branch.objects.create(name="Hidden", city="restricted")
+    counters = _install_parity_probes(monkeypatch)
+    source_factory = library_models.Branch.objects.all
+    legacy_schema = _build_legacy_parity_schema(source_factory)
+    current_schema = _build_current_parity_schema(source_factory)
+
+    omitted = "{ branches { id name } }"
+    all_null = "{ branches(offset: null, limit: null, orderBy: null) { id name } }"
+
+    legacy_response, legacy_sql, legacy_visibility = _parity_run(
+        omitted,
+        counters,
+        schema=legacy_schema,
+    )
+    legacy = legacy_response.json()
+    assert "errors" not in legacy, legacy
+    legacy_rows = legacy["data"]["branches"]
+    assert [row["name"] for row in legacy_rows] == ["Alpha", "Bravo", "Charlie"]
+    assert len(legacy_sql) == 1
+    assert legacy_visibility == 1
+    legacy_marks = _PARITY_CAPTURE["legacy_marks"]
+    assert legacy_marks[1] == 0
+    assert legacy_marks[2] is not None
+
+    # The two envelopes the card promises are unchanged, byte for byte.
+    for label, query in (("omitted", omitted), ("all-null", all_null)):
+        _PARITY_CAPTURE.pop("current_marks", None)
+        response, sql, visibility = _parity_run(query, counters, schema=current_schema)
+        assert response.content == legacy_response.content, label
+        assert sql == legacy_sql, label
+        assert visibility == legacy_visibility, label
+        assert _PARITY_CAPTURE["current_marks"] == legacy_marks, label
+
+    # The shipped field publishes its own name, so its rows are compared to the
+    # same oracle semantically; the pipeline claims are identical.
+    shipped_queries = {
+        "shipped omitted": "{ allLibraryBranchesViaListField { id name } }",
+        "shipped all-null": (
+            "{ allLibraryBranchesViaListField(offset: null, limit: null, orderBy: null) "
+            "{ id name } }"
+        ),
+    }
+    for label, query in shipped_queries.items():
+        _PARITY_CAPTURE.pop("current_marks", None)
+        response, sql, visibility = _parity_run(query, counters)
+        payload = response.json()
+        assert "errors" not in payload, (label, payload)
+        assert payload["data"]["allLibraryBranchesViaListField"] == legacy_rows, label
+        assert sql == legacy_sql, label
+        assert visibility == legacy_visibility, label
+        assert _PARITY_CAPTURE["current_marks"] == legacy_marks, label
+
+
+@pytest.mark.django_db
+def test_holder_branches_combined_legacy_branch_matches_the_legacy_reference(monkeypatch):
+    """The combined-source legacy branch is held to the pre-card oracle, not to "no new error".
+
+    A union source under omitted / all-null arguments takes the legacy policy path,
+    which is exactly where argument mode diverges (any non-null argument rejects at
+    the source seal). Both schemas publish the same ``branches`` field name over the
+    same source factory, so the oracle is the legacy response's RAW BYTES - whatever
+    the pre-card composition produces, rows or a pre-existing error, with its
+    envelope ordering, locations, path and extensions intact - plus its
+    ``library_branch`` SQL, final marks, and visibility-hook count. A semantic
+    projection would pass while the envelope drifted. The staff client bypasses ``BranchType.get_queryset``'s
+    ``exclude`` so the combined queryset is not refused by Django before the seal.
+    """
+    client = _staff_client()
+    library_models.Branch.objects.create(name="A", city="Boston")
+    library_models.Branch.objects.create(name="B", city="Boston")
+    counters = _install_parity_probes(monkeypatch)
+
+    def _combined_source():
+        return library_models.Branch.objects.filter(name="A").union(
+            library_models.Branch.objects.filter(name="B"),
+        )
+
+    legacy_schema = _build_legacy_parity_schema(_combined_source)
+    current_schema = _build_current_parity_schema(_combined_source)
+
+    legacy_response, legacy_sql, legacy_visibility = _parity_run(
+        "{ branches { name } }",
+        counters,
+        schema=legacy_schema,
+        client=client,
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    legacy_payload = legacy_response.json()
+    assert legacy_visibility == 1
+    legacy_marks = _PARITY_CAPTURE["legacy_marks"]
+    assert "UNION" in legacy_marks[0].upper()
+    if "errors" not in legacy_payload:
+        assert sorted(row["name"] for row in legacy_payload["data"]["branches"]) == ["A", "B"]
+        assert len(legacy_sql) == 1
+
+    for query in ("{ branches { name } }", "{ branches(offset: null, limit: null) { name } }"):
+        _PARITY_CAPTURE.pop("current_marks", None)
+        response, sql, visibility = _parity_run(
+            query,
+            counters,
+            schema=current_schema,
+            client=client,
+            extra_settings=_ERROR_POLICY_PASS_THROUGH,
+        )
+        assert response.content == legacy_response.content, query
+        assert sql == legacy_sql
+        assert visibility == legacy_visibility
+        assert _PARITY_CAPTURE["current_marks"] == legacy_marks
+
+    # Argument mode is where the two branches part: any non-null argument rejects the
+    # combined source at the seal before visibility runs.
+    counters["visibility"] = 0
+    p_active = _post_sync(
+        current_schema,
+        "{ branches(limit: 1) { name } }",
+        client=client,
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    assert p_active["data"] is None
+    assert "combined" in p_active["errors"][0]["message"].lower()
+    assert counters["visibility"] == 0
 
 
 # ---------------------------------------------------------------------------
-# 21-25. Offset alone, legacy baseline, aliases, nullability, subclass
+# 21-25. Offset alone, aliases, nullability, subclass, context isolation
 # ---------------------------------------------------------------------------
 
 
@@ -995,46 +1425,6 @@ def test_shipped_branches_offset_alone_bounds():
     sql = sql_candidates[0].upper()
     assert "OFFSET 2" in sql
     assert "LIMIT 100" in sql
-
-
-def _baseline_branches_combined_legacy(
-    schema: DjangoSchema,
-    client: Client | None = None,
-) -> tuple[dict, int]:
-    """Execute raw omitted-argument query against combined schema and return payload + query count."""
-    with CaptureQueriesContext(connection) as ctx:
-        res = _post_sync(schema, "{ branchesCombined { name } }", client=client)
-    return res, len(ctx.captured_queries)
-
-
-@pytest.mark.django_db
-def test_holder_branches_combined_legacy_baseline():
-    client = _staff_client()
-    library_models.Branch.objects.create(name="A", city="Boston")
-    library_models.Branch.objects.create(name="B", city="Boston")
-
-    @strawberry.type
-    class _CombinedQuery:
-        branches_combined: list[library_schema.BranchType] = DjangoListField(
-            library_schema.BranchType,
-            resolver=lambda root, info: library_models.Branch.objects.filter(name="A").union(
-                library_models.Branch.objects.filter(name="B"),
-            ),
-        )
-
-    schema = DjangoSchema(query=_CombinedQuery, config=strawberry_config())
-
-    baseline_payload, baseline_queries = _baseline_branches_combined_legacy(schema, client=client)
-
-    # All-null explicit argument request
-    with CaptureQueriesContext(connection) as ctx:
-        null_payload = _post_sync(
-            schema,
-            "{ branchesCombined(offset: null, limit: null) { name } }",
-            client=client,
-        )
-    assert null_payload == baseline_payload
-    assert len(ctx.captured_queries) == baseline_queries
 
 
 @pytest.mark.django_db
@@ -1136,3 +1526,116 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch):
     payload = graphql_payload(query, client=client)
     assert "errors" not in payload, payload
     assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
+
+
+# ---------------------------------------------------------------------------
+# 26. Ordering never writes the consumer context
+# ---------------------------------------------------------------------------
+
+_CONTEXT_CAPTURE: dict[str, Any] = {}
+
+
+class _CapturingContextView(DjangoGraphQLView):
+    """Pre-populates a consumer attribute on the context and hands the object to the test."""
+
+    def get_context(self, request, response):
+        context = super().get_context(request, response)
+        context.consumer_marker = _CONTEXT_CAPTURE["marker"]
+        _CONTEXT_CAPTURE["context"] = context
+        return context
+
+
+class _FrozenContext:
+    """A context that refuses every attribute write or delete after construction."""
+
+    def __init__(self, request, response):
+        object.__setattr__(self, "request", request)
+        object.__setattr__(self, "response", response)
+
+    def __setattr__(self, name, value):
+        raise AttributeError(f"frozen context refuses write to {name!r}")
+
+    def __delattr__(self, name):
+        raise AttributeError(f"frozen context refuses delete of {name!r}")
+
+
+class _FrozenContextView(DjangoGraphQLView):
+    def get_context(self, request, response):
+        return _FrozenContext(request, response)
+
+
+def _build_context_schema() -> DjangoSchema:
+    @strawberry.type
+    class _ContextQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+        genres: DjangoConnection[library_schema.GenreType] = DjangoConnectionField(
+            library_schema.GenreType,
+        )
+
+    return DjangoSchema(query=_ContextQuery, config=strawberry_config())
+
+
+_ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str], ...] = (
+    # (control without ordering, the same field with public ordering applied)
+    (
+        "{ branches(limit: 1) { name } }",
+        "{ branches(orderBy: [{ city: ASC }], offset: 1, limit: 1) { name } }",
+    ),
+    (
+        "{ genres { edges { node { name } } } }",
+        "{ genres(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+    ),
+)
+
+
+@pytest.mark.django_db
+def test_holder_ordering_leaves_the_consumer_context_exactly_as_found():
+    """An ordered list or connection adds nothing to ``info.context`` a control request does not.
+
+    The order-normalization handoff is task-local, so the context object holds the
+    same attribute set after an ordered request as after the same field without
+    ordering, and a consumer attribute set before execution survives by identity.
+    """
+    client = _staff_client()
+    for name in ("Alpha", "Bravo"):
+        library_models.Branch.objects.create(name=name, city="Boston")
+    library_models.Genre.objects.create(name="Fiction")
+    schema = _build_context_schema()
+
+    for control_query, ordered_query in _ORDERED_CONTEXT_REQUESTS:
+        observed: dict[str, Any] = {}
+        for label, query in (("control", control_query), ("ordered", ordered_query)):
+            marker = object()
+            _CONTEXT_CAPTURE.clear()
+            _CONTEXT_CAPTURE["marker"] = marker
+            payload = _post_sync(schema, query, client=client, view_class=_CapturingContextView)
+            assert "errors" not in payload, (label, payload)
+            context = _CONTEXT_CAPTURE["context"]
+            assert context.consumer_marker is marker
+            observed[label] = set(vars(context))
+        assert observed["ordered"] == observed["control"], observed
+
+
+@pytest.mark.django_db
+def test_holder_ordering_succeeds_on_a_context_that_forbids_writes():
+    """A context refusing every write still serves ordered lists and connections.
+
+    Nothing in public ordering, the offset guard, or the post-order seal asks the
+    consumer context to accept a value or to give one up.
+    """
+    client = _staff_client()
+    for name in ("Alpha", "Bravo"):
+        library_models.Branch.objects.create(name=name, city="Boston")
+    library_models.Genre.objects.create(name="Fiction")
+    schema = _build_context_schema()
+
+    for _control_query, ordered_query in _ORDERED_CONTEXT_REQUESTS:
+        payload = _post_sync(schema, ordered_query, client=client, view_class=_FrozenContextView)
+        assert "errors" not in payload, payload
+    p_list = _post_sync(
+        schema,
+        "{ branches(orderBy: [{ name: ASC }], offset: 1, limit: 1) { name } }",
+        client=client,
+        view_class=_FrozenContextView,
+    )
+    assert p_list["data"]["branches"] == [{"name": "Bravo"}]

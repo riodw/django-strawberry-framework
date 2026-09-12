@@ -163,7 +163,9 @@ editing.
    - **Diagnostic benchmark:**
      - `test_list_field_post_apply_seal_benchmark`: benchmark post-apply seal over complex annotated
        query, to-many aggregate order, and prefetch metadata, recording timing baseline for
-       Decision 5 diagnostic record.
+       Decision 5 diagnostic record. (The measurement below is the record; the test itself was
+       dropped in `4c483b6b` because a threshold-less benchmark cannot fail, and the spec's
+       package tier now states the measurement is recorded here rather than retained as a test.)
 
 3. **Discharge `# TODO(spec-050 slice 3)` in [`tests/test_resource_policy.py`][test-resource-policy]**
    (lines 815-850):
@@ -255,8 +257,13 @@ land together.
 
 - **Measurement:** Post-apply seal wall-clock benchmark over complex annotated query, to-many
   aggregate order, and prefetch metadata (1,000 iterations; target <= 100µs per iteration) recorded
-  as diagnostic baseline for Decision 5; exactly 0 `NameConverter` calls on successful argument
-  requests.
+  as diagnostic baseline for Decision 5. Re-measured against the current code
+  (`_validate_post_orderset_result` over a `Branch` queryset carrying `Count("shelves")`,
+  `order_by("shelves__code", "name")`, and a `Prefetch("shelves", ...)`, 50 warm-up iterations then
+  1,000 measured): **36.4 - 36.8 µs/iteration** across three runs, well inside the budget. The
+  argument-naming claim is a call-count DELTA, not an absolute zero: Strawberry's own
+  `convert_arguments` runs `NameConverter.from_argument` on every execution, so a rejected request
+  must cost exactly what a successful one costs and no more.
 
 ### Floor verification scope
 
@@ -353,7 +360,7 @@ land together.
 - `tests/test_list_field.py::test_is_model_default_ordering_active_edge_states` — pins model default ordering detection edge cases.
 - `tests/test_list_field.py::test_is_model_default_ordering_active_reverse_and_empty_queryset` — pins reverse ordering and empty queryset detection.
 - `tests/test_list_field.py::test_list_field_window_low_high_marks` — pins queryset low and high mark mutations during windowing.
-- `tests/test_list_field.py::test_list_field_post_apply_seal_benchmark` — pins diagnostic performance baseline for post-apply sealing.
+- `tests/test_list_field.py::test_list_field_post_apply_seal_benchmark` — recorded the diagnostic performance baseline for post-apply sealing during this slice; not in the tree since `4c483b6b` (a threshold-less benchmark cannot fail). The figure under `### Hot-path budget` is the surviving record, re-measured against the current seal.
 
 ### Validation run
 
@@ -792,11 +799,15 @@ Every `<fill in ...>` above is a judgement no tool can make and MUST be replaced
 
 ### Hot-path budget
 
-- **Post-apply seal wall-clock benchmark (`test_list_field_post_apply_seal_benchmark`):**
+- **Post-apply seal wall-clock benchmark (measured once in this slice by
+  `test_list_field_post_apply_seal_benchmark`, since removed in `4c483b6b`):**
   - Iterations: 1,000 iterations over complex annotated queryset with prefetch and ordering.
-  - Measured: 22.07 µs per iteration (target <= 100 µs; test assertion threshold < 50,000 µs).
+  - Measured against the seal as it now stands: 36.4 - 36.8 µs per iteration across three runs
+    (target <= 100 µs). This figure is the Decision 5 record; no test retains it.
 - **Wire-name conversion:**
-  - Tested: exactly 0 `NameConverter` calls on successful argument requests (`test_resolve_argument_wire_name_zero_calls_on_valid_normalization`).
+  - Tested as a call-count DELTA: a rejected request costs exactly what a successful one costs.
+    Strawberry's own `convert_arguments` runs `NameConverter.from_argument` on every execution, so
+    an absolute zero is unmeasurable through a real request; the framework adds none of its own.
 
 ### Floor verification
 
@@ -869,7 +880,7 @@ Not applicable; slice did not modify docs/release/KANBAN/archive surfaces.
 - Comprehensive unit contract coverage discharging all `# TODO(spec-050 slice 3)` anchors across `tests/test_list_field.py`, `tests/test_resource_policy.py`, `tests/orders/test_sets.py`, and `tests/base/test_init.py`.
 - 25 failability proof boundaries recorded in `docs/builder/temp-tests/slice-3/proofs.json`, all having >= 2 failing rows upon mutation (0 weakly-pinned boundaries).
 - Independent failability re-run of the mandatory floor subset (all 9 boundaries with <= 3 failing rows plus Boundary 17 security/routing boundary) executed via `scripts/prove_failability.py` with 100% agreement, 0 errors, and byte-verified clean restorations.
-- Hot-path budget compliance: post-apply seal benchmark measured 22.07 µs (well within <= 100 µs target); exactly 0 `NameConverter` calls on successful argument normalization.
+- Hot-path budget compliance: post-apply seal benchmark measures 36.4 - 36.8 µs against the current seal (well within the <= 100 µs target); a rejected request adds no `NameConverter` call beyond what a successful one costs.
 - Static review inspection via `scripts/review_inspect.py` completed cleanly with no structural or abstraction defects.
 
 ### Temp test verification
@@ -915,8 +926,8 @@ argument normalization, order set integration, and window execution:
 - Pinned single `check_deadline` invocation before row fetching.
 - Pinned `_is_model_default_ordering_active` edge states (group_by, extra_order_by, random terms,
   unreadable query state, reverse ordering, empty queryset, to-many duplicates).
-- Pinned SQL query parity (`str(qs.query)`), low/high mark window mutations, and recorded
-  post-apply seal diagnostic benchmark (22.07 µs/iter).
+- Pinned SQL query parity (`str(qs.query)`), low/high mark window mutations, and recorded the
+  post-apply seal diagnostic benchmark (current figure under `### Hot-path budget`).
 - Pinned `bounded_rows` and `bounded_rows_async` window parameter matrices, async positive offset
   arithmetic, unsliceable iterable exact consumption, and declined sync cleanup contract
   (truncated sync generator stays suspended and resumable).

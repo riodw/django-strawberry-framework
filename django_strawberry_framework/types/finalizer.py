@@ -710,6 +710,22 @@ def _synthesize_relation_connections() -> None:
             shape = shapes.get(name, DEFAULT_RELATION_SHAPE)
             if shape == "list":
                 continue
+            # ONE definition read for the whole synthesized field, taken from
+            # the REGISTRY rather than from the target class: the connection
+            # class this field publishes, the sidecar arguments its signature
+            # carries, and the model its pipeline seeds and seals against all
+            # come from that one object, and a stateful target metaclass is
+            # never asked. A registered Relay target always has a registered
+            # definition; its absence is a framework defect, not a consumer
+            # error, so the miss fails loudly rather than degrading the shape.
+            target_definition = registry.get_definition(target_type)
+            if target_definition is None:
+                raise ConfigurationError(
+                    f"{_safe_class_name(type_cls)}.{name} resolves to registered type "
+                    f"{_safe_class_name(target_type)}, which carries no registered "
+                    f"DjangoTypeDefinition; the synthesized relation connection cannot be "
+                    f"built without one.",
+                )
             generated = f"{name}_connection"
             attached = type_cls.__dict__.get(generated)
             if getattr(attached, _SYNTHESIZED_RELATION_CONNECTION_MARKER, False):
@@ -750,7 +766,7 @@ def _synthesize_relation_connections() -> None:
             annotations_snapshot = dict(annotations)
             list_resolver = type_cls.__dict__.get(name, _MISSING_CLASS_MEMBER)
             field_obj = relay.connection(
-                _connection_type_for(target_type),
+                _connection_type_for(target_type, target_definition),
                 # The resolver reads rows off the instance, so it gets the
                 # ACCESSOR (``get_accessor_name()``); ``name`` (the related
                 # query name) stays the GraphQL vocabulary for the generated
@@ -774,6 +790,9 @@ def _synthesize_relation_connections() -> None:
                     # type's strictness key honest: its connection is never
                     # window-planned (Decision 3) and stays correctly flagged.
                     type_cls,
+                    # The target's ONE definition, resolved above - the
+                    # resolver never re-reads it off the class.
+                    target_definition,
                 ),
             )
             setattr(field_obj, _SYNTHESIZED_RELATION_CONNECTION_MARKER, True)

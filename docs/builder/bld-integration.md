@@ -16,8 +16,9 @@ test, and documentation tiers, and found zero cross-slice regressions or unresol
 defects.
 
 **Hot-path declaration: none.** This pass introduces no runtime code. Across the card, the
-hot-path budgets established in Slices 1-3 were verified: 0 runtime `NameConverter` calls
-on valid requests, post-apply seal benchmark measured 22.07 µs/iter (target <= 100 µs), and
+hot-path budgets established in Slices 1-3 were verified: a rejected request adds no runtime
+`NameConverter` call beyond a successful one, the post-apply seal benchmark measures
+36.4 - 36.8 µs/iter against the current seal (target <= 100 µs), and
 sub-microsecond `_AsyncQuerySetRows` adapter unwrap/rewrap overhead in the optimizer
 extension.
 

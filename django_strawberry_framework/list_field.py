@@ -7,15 +7,17 @@ Target release: ``0.0.7``.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import strawberry
 from django.db import models
 from django.db.models.functions import Random
 from graphql import GraphQLError
+from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
@@ -34,19 +36,20 @@ from .resource_policy import (
     effective_bound,
     policy_from_info,
     validate_collection_bound,
+    validate_trusted_flag,
 )
 from .types import DjangoType
 from .types.base import _is_relay_shaped
-from .utils.context import clear_context_key
 from .utils.directives import validated_field_directives
 from .utils.querysets import (
     _LIST_ARGUMENT_VISIBILITY_POLICY,
     SyncMisuseError,
     _dispose_sync_awaitable,
+    _snapshot_routing_intent,
     _validate_post_orderset_result,
     apply_type_visibility_async,
     apply_type_visibility_sync,
-    initial_queryset,
+    base_queryset,
     is_async_only_iterable,
     prepared_resolver_source,
     reject_async_iterable_in_sync_context,
@@ -54,7 +57,10 @@ from .utils.querysets import (
     reject_residual_async_source,
     wrap_async_queryset_adapter,
 )
-from .utils.typing import is_async_callable, schema_config_from_info
+from .utils.typing import is_async_callable
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from .types.definition import DjangoTypeDefinition
 
 __all__ = ("DjangoListField", "ListArgumentError")
 
@@ -74,7 +80,7 @@ def _validate_djangotype_target(
     resolver: Callable | None,
     *,
     field: str,
-) -> None:
+) -> DjangoTypeDefinition:
     """Run the four shared DjangoType-target constructor guards for a field factory.
 
     Shared by ``DjangoListField`` and ``DjangoConnectionField`` (and any future
@@ -147,7 +153,7 @@ def _validate_relay_djangotype_target(
     *,
     field: str,
     relay_error_message: str,
-) -> None:
+) -> DjangoTypeDefinition:
     """Run the four shared DjangoType-target guards plus the Relay-Node-shaped fifth.
 
     The Relay-shaped target guard shared by ``DjangoConnectionField`` and
@@ -159,7 +165,8 @@ def _validate_relay_djangotype_target(
     Meta-declared ``relay.Node`` is in ``definition.interfaces`` before Phase
     2.5 injects it into ``__bases__``) OR direct ``relay.Node`` inheritance.
     The caller supplies the full ``relay_error_message`` so each factory keeps
-    its own wording.
+    its own wording, and the same single definition read is returned onward so a
+    factory can build its whole field from it without a second read.
     """
     # The definition comes back from the base validator's ONE contained read;
     # re-reading the attribute directly here would let a stateful metaclass
@@ -167,6 +174,7 @@ def _validate_relay_djangotype_target(
     definition = _validate_djangotype_target(target_type, resolver, field=field)
     if not _is_relay_shaped(target_type, definition.interfaces):
         raise ConfigurationError(relay_error_message)
+    return definition
 
 
 class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
@@ -176,6 +184,13 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
     as an execution error with structured extensions) and
     ``DjangoStrawberryFrameworkError`` (so consumers can catch it alongside any
     other framework error).
+
+    Every numeric value interpolated into the wording renders through
+    ``_safe_arg_repr``. For the ordinary ``int`` the boundary admits that is
+    byte-identical to the value itself; what it closes is the direct call
+    carrying an integer with more digits than CPython will convert to a string,
+    which would raise ``ValueError`` from the f-string assembled at the raise
+    site and replace this typed rejection with an unrelated exception.
     """
 
     def __init__(
@@ -205,13 +220,13 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
             self.value = value
             msg = (
                 f"Invalid argument {argument!r} on {field}: expected a non-negative "
-                f"integer, got {value}."
+                f"integer, got {_safe_arg_repr(value)}."
             )
         elif reason == "over_ceiling":
             self.value = value
             msg = (
-                f"Invalid argument {argument!r} on {field}: value {value} exceeds "
-                f"the maximum allowed ceiling of {ceiling}."
+                f"Invalid argument {argument!r} on {field}: value {_safe_arg_repr(value)} "
+                f"exceeds the maximum allowed ceiling of {ceiling}."
             )
         elif reason == "order_required":
             self.value = value
@@ -220,8 +235,8 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
             else:
                 ordering_phrase = "via model 'Meta.ordering'"
             msg = (
-                f"Invalid argument {argument!r} on {field}: non-zero offset ({value}) "
-                f"requires an active ordering {ordering_phrase}."
+                f"Invalid argument {argument!r} on {field}: non-zero offset "
+                f"({_safe_arg_repr(value)}) requires an active ordering {ordering_phrase}."
             )
         elif reason == "queryset_required":
             self.value = value
@@ -260,11 +275,55 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
 _DEFAULT_WIRE_NAMES: dict[str, str] = {"offset": "offset", "limit": "limit", "order_by": "orderBy"}
 
 
+def _published_wire_name(info: Any, arg_def: Any, parameter_name: str) -> str | None:
+    """Read the wire name the executable schema PUBLISHED for ``arg_def``.
+
+    Strawberry fixes every argument's GraphQL name once, while it builds the
+    schema: ``GraphQLCoreConverter.from_field`` keys the ``GraphQLField.args``
+    map by the converter's answer and ``from_argument`` stores the
+    ``StrawberryArgument`` under ``DEFINITION_BACKREF`` in each entry's
+    ``extensions``. That map is the only name a client could have sent, so the
+    error path reads it back instead of running the schema's shared
+    ``NameConverter`` a second time at request time - a converter is consumer
+    code, may be stateful, and is not the framework's to invoke concurrently.
+    Returns ``None`` when ``info`` carries no executable-schema metadata (a
+    direct-call stub), so the caller can fall back to the default spelling.
+    """
+    try:
+        raw_info = info._raw_info
+        parent_type = raw_info.parent_type
+        field_name = raw_info.field_name
+    except AttributeError:
+        return None
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Failed to read the schema field for argument {parameter_name!r}: {exc}",
+        ) from exc
+    try:
+        published_args = parent_type.fields[field_name].args
+        for wire_name, graphql_argument in published_args.items():
+            extensions = graphql_argument.extensions or {}
+            if extensions.get(GraphQLCoreConverter.DEFINITION_BACKREF) is arg_def:
+                return wire_name
+    except Exception as exc:
+        raise ConfigurationError(
+            f"Failed to read the published arguments for {parameter_name!r} on "
+            f"{_field_label(info)}: {exc}",
+        ) from exc
+    raise ConfigurationError(
+        f"Argument {parameter_name!r} on {_field_label(info)} has a definition but no "
+        "published wire name in the executable schema.",
+    )
+
+
 def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
     """Resolve the active GraphQL wire name for an internal parameter name.
 
     Only invoked on error paths (e.g. inside ``ListArgumentError`` instantiation or
-    normalizer error branches) so successful requests perform zero name conversions.
+    normalizer error branches) so successful requests perform zero name lookups.
+    The name comes from the executable schema's published argument map
+    (:func:`_published_wire_name`); the schema's ``NameConverter`` is never
+    invoked at request time.
     """
     fallback = _DEFAULT_WIRE_NAMES.get(parameter_name, parameter_name)
     try:
@@ -289,23 +348,10 @@ def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
         raise ConfigurationError(
             f"Failed to read the definition for argument {parameter_name!r}: {exc}",
         ) from exc
-    if arg_def is not None:
-        config = schema_config_from_info(info)
-        try:
-            name_converter = config.name_converter
-        except AttributeError:
-            return fallback
-        except Exception as exc:
-            raise ConfigurationError(
-                f"Failed to read the name converter for argument {parameter_name!r}: {exc}",
-            ) from exc
-        try:
-            return name_converter.from_argument(arg_def)
-        except Exception as exc:
-            raise ConfigurationError(
-                f"Failed to resolve wire name for argument {parameter_name!r}: {exc}",
-            ) from exc
-    return fallback
+    if arg_def is None:
+        return fallback
+    published = _published_wire_name(info, arg_def, parameter_name)
+    return fallback if published is None else published
 
 
 # ``slots=True`` is deliberately absent: combined with ``frozen=True`` the
@@ -333,12 +379,22 @@ def _normalize_list_arguments(
 ) -> _ListArguments:
     """Normalize and validate pagination arguments against effective resource policy ceilings.
 
+    ``offset`` and ``limit`` must each be an EXACT ``int``. GraphQL's own ``Int``
+    coercion always supplies one, so the exactness costs a wire request nothing;
+    what it closes is the direct call the spec also promises to keep typed. An
+    ``int`` SUBCLASS would otherwise reach the range comparisons and the error
+    rendering below, running its ``__lt__`` / ``__gt__`` / ``__format__`` inside
+    the argument boundary and replacing the typed rejection with whatever that
+    consumer hook raised. Everything that is not exactly an ``int`` -- ``bool``
+    included, which is a subclass -- takes the ``non_integer`` arm and renders
+    through ``describe_value``.
+
     Delegation guarantee:
         While offset and limit are validated here (integer type, non-negative, and limit
         within the effective ceiling), order_by structure and semantics are delegated to
         the target DjangoType's OrderSet (or to Strawberry's schema-level input validation
         when executed over GraphQL). Direct callers supplying non-null order_by to a target
-        without an OrderSet are caught by _orderset_class_for_target at pipeline execution time.
+        without an OrderSet are caught by _require_orderset_class at pipeline execution time.
     """
     offset_supplied = offset is not None and offset is not strawberry.UNSET
     limit_supplied = limit is not None and limit is not strawberry.UNSET
@@ -362,7 +418,7 @@ def _normalize_list_arguments(
     offset_ceiling = policy.max_list_rows
 
     if norm_offset is not None:
-        if isinstance(norm_offset, bool) or not isinstance(norm_offset, int):
+        if type(norm_offset) is not int:
             raise ListArgumentError(
                 field_name,
                 _resolve_argument_wire_name(info, "offset"),
@@ -391,7 +447,7 @@ def _normalize_list_arguments(
             max_rows,
             trusted=trusted_max_rows,
         )
-        if isinstance(norm_limit, bool) or not isinstance(norm_limit, int):
+        if type(norm_limit) is not int:
             raise ListArgumentError(
                 field_name,
                 _resolve_argument_wire_name(info, "limit"),
@@ -423,15 +479,22 @@ def _normalize_list_arguments(
     )
 
 
-def _synthesized_list_signature(target_type: type) -> tuple[inspect.Signature, dict[str, Any]]:
+def _synthesized_list_signature(
+    orderset_class: type | None,
+) -> tuple[inspect.Signature, dict[str, Any]]:
     """Build the resolver ``__signature__`` and ``__annotations__`` for DjangoListField.
 
-    Carries ``offset`` and ``limit`` arguments, plus conditional ``order_by`` if the
-    target type declares ``Meta.orderset_class``. The return annotation is left empty
+    Carries ``offset`` and ``limit`` arguments, plus conditional ``order_by`` when
+    the field captured an ``OrderSet`` for its target. The return annotation is left empty
     (``inspect.Signature.empty``) and omitted from annotations so the outer class attribute
     annotation retains sole ownership of outer nullability (``list[T]`` vs ``list[T] | None``).
+
+    ``orderset_class`` is the field's ONE selected class, read from the single
+    definition the target validator returned; the SDL published here and the
+    class the resolver dispatches through are therefore the same object by
+    construction, and a stateful target metaclass has no second read to answer
+    differently.
     """
-    orderset_class = _orderset_class_for_target(target_type)
     params: list[inspect.Parameter] = [
         inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
         inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
@@ -517,12 +580,51 @@ async def _cleanup_rejected_async_iterable(iterable: Any, primary_error: BaseExc
     )
 
 
-def _orderset_class_for_target(target_type: type) -> type | None:
+def _model_from_definition(definition: Any) -> type[models.Model]:
+    """Read the target's Django model off its ONE definition read.
+
+    Called exactly once per field, at construction. The value seeds the default
+    resolver and pins both visibility seals, so the table the field queries and
+    the table those seals validate against are the same object by construction -
+    a stateful target metaclass has no second read through which to substitute
+    another model between the seed and the seal.
+
+    Fails LOUDLY for the same reason the sidecar read does: a definition whose
+    model cannot be read is a field that cannot be built, and a soft answer
+    would defer the failure to a request against an unknown table.
+    """
     try:
-        definition = target_type.__django_strawberry_definition__
-        return None if definition is None else definition.orderset_class
-    except Exception:
-        return None
+        model = definition.model
+    except Exception as exc:
+        raise ConfigurationError(
+            f"DjangoListField could not read the model from the definition of "
+            f"{_safe_class_name(getattr(definition, 'origin', definition))}: {exc}",
+        ) from exc
+    if not (isinstance(model, type) and issubclass(model, models.Model)):
+        raise ConfigurationError(
+            f"DjangoListField target "
+            f"{_safe_class_name(getattr(definition, 'origin', definition))} has a definition "
+            f"whose model is not a Django model; got {_safe_arg_repr(model)}.",
+        )
+    return model
+
+
+def _orderset_class_from_definition(definition: Any) -> type | None:
+    """Read the target's declared ``Meta.orderset_class`` off its ONE definition read.
+
+    Called exactly once per field, at construction, from the definition
+    ``_validate_djangotype_target`` returned. The read fails LOUDLY: a target
+    whose sidecar declaration cannot be read is a broken field, and answering
+    ``None`` would publish a schema without ``orderBy`` for a target that
+    declares one - a silent SDL change at the line that wrote the field.
+    """
+    try:
+        return definition.orderset_class
+    except Exception as exc:
+        raise ConfigurationError(
+            f"DjangoListField could not read Meta.orderset_class from the definition of "
+            f"{_safe_class_name(getattr(definition, 'origin', definition))}: {exc}",
+        ) from exc
 
 
 def _field_label(info: Any) -> str:
@@ -586,7 +688,7 @@ def _build_non_queryset_rejection_error(
     args_record: _ListArguments,
     info: Info,
     *,
-    target_type: type | None = None,
+    orderset_class: type | None = None,
 ) -> ListArgumentError | None:
     field_name = _field_label(info)
     if args_record.order_by_supplied:
@@ -596,10 +698,7 @@ def _build_non_queryset_rejection_error(
             reason="queryset_required",
         )
     if args_record.offset is not None and args_record.offset > 0:
-        has_orderset = False
-        if target_type is not None:
-            has_orderset = _orderset_class_for_target(target_type) is not None
-        order_arg = _resolve_argument_wire_name(info, "order_by") if has_orderset else ""
+        order_arg = _resolve_argument_wire_name(info, "order_by") if orderset_class else ""
         return ListArgumentError(
             field_name,
             _resolve_argument_wire_name(info, "offset"),
@@ -615,17 +714,40 @@ async def _handle_non_queryset_rejections_async(
     args_record: _ListArguments,
     info: Info,
     *,
-    target_type: type | None = None,
+    orderset_class: type | None = None,
 ) -> None:
-    err = _build_non_queryset_rejection_error(args_record, info, target_type=target_type)
+    """Reject a non-queryset source, closing an async-only one on EVERY rejecting exit.
+
+    Decision 8 promises a rejected async-only source is never advanced and is
+    closed when possible, with the primary error keeping precedence. Building
+    the rejection can itself fail (malformed schema metadata behind the wire
+    name lookup), and that exit owes the same close: the source is being
+    rejected either way, so the failure becomes the primary error the cleanup
+    utility attaches its notes to.
+    """
+    try:
+        err = _build_non_queryset_rejection_error(
+            args_record,
+            info,
+            orderset_class=orderset_class,
+        )
+    except BaseException as primary:
+        if is_async_only_iterable(source):
+            await _cleanup_rejected_async_iterable(source, primary)
+        raise
     if err is not None:
         if is_async_only_iterable(source):
             await _cleanup_rejected_async_iterable(source, err)
         raise err
 
 
-def _require_orderset_class_for_target(target_type: type) -> type:
-    orderset_class = _orderset_class_for_target(target_type)
+def _require_orderset_class(target_type: type, orderset_class: type | None) -> type:
+    """Return the field's captured ``OrderSet``, or reject an ordering call without one.
+
+    Reachable only through a direct call that supplies ``order_by`` to a field
+    whose target declares no ``Meta.orderset_class``; over the wire the argument
+    is simply not published.
+    """
     if orderset_class is None:
         raise ConfigurationError(
             f"DjangoListField target {_safe_class_name(target_type)} has no orderset_class configured.",
@@ -635,54 +757,66 @@ def _require_orderset_class_for_target(target_type: type) -> type:
 
 def _apply_orderset_sync(
     target_type: type,
+    orderset_class: type | None,
     queryset: models.QuerySet,
     order_by: Any,
     info: Info,
-) -> tuple[models.QuerySet, type | None]:
-    orderset_class = _require_orderset_class_for_target(target_type)
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    orderset_class = _require_orderset_class(target_type, orderset_class)
+    method_name = f"{orderset_class.__name__}.apply_sync"
+    # Frozen BEFORE the override receives the queryset: it can mutate the
+    # object it was handed, so a post-call read is not a baseline.
+    expected_routing = _snapshot_routing_intent(queryset, method_name)
     candidate = orderset_class.apply_sync(order_by, queryset, info)
     if inspect.isawaitable(candidate):
         _dispose_sync_awaitable(candidate)
         raise SyncMisuseError(
-            f"{orderset_class.__name__}.apply_sync returned an awaitable in a sync resolver context. "
+            f"{method_name} returned an awaitable in a sync resolver context. "
             f"Make apply_sync synchronous or execute the query asynchronously.",
         )
-    sealed = _validate_post_orderset_result(
+    return _validate_post_orderset_result(
         target_type,
-        queryset,
+        expected_routing,
         candidate,
-        f"{orderset_class.__name__}.apply_sync",
+        method_name,
+        model=model,
     )
-    return sealed, orderset_class
 
 
 async def _apply_orderset_async(
     target_type: type,
+    orderset_class: type | None,
     queryset: models.QuerySet,
     order_by: Any,
     info: Info,
-) -> tuple[models.QuerySet, type | None]:
-    orderset_class = _require_orderset_class_for_target(target_type)
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    orderset_class = _require_orderset_class(target_type, orderset_class)
+    method_name = f"{orderset_class.__name__}.apply_async"
+    expected_routing = _snapshot_routing_intent(queryset, method_name)
     candidate_awaitable = orderset_class.apply_async(order_by, queryset, info)
     if not inspect.isawaitable(candidate_awaitable):
         raise ConfigurationError(
-            f"{orderset_class.__name__}.apply_async returned a non-awaitable value "
+            f"{method_name} returned a non-awaitable value "
             f"({_safe_type_name(candidate_awaitable)}); expected an awaitable coroutine or Future.",
         )
     candidate = await candidate_awaitable
     if inspect.isawaitable(candidate):
         _dispose_sync_awaitable(candidate)
         raise ConfigurationError(
-            f"{orderset_class.__name__}.apply_async returned a residual awaitable value "
+            f"{method_name} returned a residual awaitable value "
             f"({_safe_type_name(candidate)}); expected a QuerySet.",
         )
-    sealed = _validate_post_orderset_result(
+    return _validate_post_orderset_result(
         target_type,
-        queryset,
+        expected_routing,
         candidate,
-        f"{orderset_class.__name__}.apply_async",
+        method_name,
+        model=model,
     )
-    return sealed, orderset_class
 
 
 def _check_nonzero_offset_guard(
@@ -705,7 +839,7 @@ def _check_nonzero_offset_guard(
     if (
         args_record.order_by_supplied
         and orderset_class is not None
-        and orderset_class._input_has_active_terms(args_record.order_by, info)
+        and orderset_class._input_has_active_terms(args_record.order_by)
         and queryset.ordered
         and _has_no_random_terms(queryset)
     ):
@@ -724,6 +858,41 @@ def _check_nonzero_offset_guard(
         )
 
 
+def _order_normalization_scope(
+    args_record: _ListArguments,
+    orderset_class: type | None,
+) -> contextlib.AbstractContextManager[None]:
+    """Return the capture scope this request actually needs, or an inert one.
+
+    The handoff exists for exactly one consumer: the non-zero-offset guard's
+    active-order check, which is the only caller of
+    ``OrderSet._input_has_active_terms``. It runs only when a positive ``offset``
+    arrives WITH an ``orderBy`` AND the field captured an ``OrderSet`` to
+    normalize through, so every other argument-bearing request - a ``limit``
+    alone, ``offset: 0``, positive offset riding model ``Meta.ordering`` - has
+    nothing to hand over and does not pay for the scope. One conditional
+    context, chosen here, keeps both colorings' pipelines identical in shape and
+    the cost on the path that uses it.
+
+    ``orderset_class`` is the field's captured sidecar, so the no-``OrderSet``
+    condition is decidable here rather than asserted: over the wire that target
+    publishes no ``orderBy`` at all, and the direct call that supplies one
+    reaches ``_require_orderset_class``'s rejection without having opened a
+    scope first.
+    """
+    if (
+        args_record.order_by_supplied
+        and orderset_class is not None
+        and args_record.offset is not None
+        and args_record.offset > 0
+    ):
+        # Deferred: ``orders`` stays out of the package-root import graph.
+        from .orders.sets import capture_applied_order_normalization
+
+        return capture_applied_order_normalization()
+    return contextlib.nullcontext()
+
+
 def _execute_queryset_pipeline_sync(
     target_type: type,
     source: models.QuerySet,
@@ -732,10 +901,12 @@ def _execute_queryset_pipeline_sync(
     max_rows: int | None,
     trusted_max_rows: bool,
     *,
+    model: type[models.Model],
+    orderset_class: type | None,
     is_async_context: bool,
 ) -> Any:
     if not args_record.any_argument_supplied:
-        post_vis_qs = apply_type_visibility_sync(target_type, source, info)
+        post_vis_qs = apply_type_visibility_sync(target_type, source, info, model=model)
         bounded = bounded_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
         return wrap_async_queryset_adapter(bounded) if is_async_context else bounded
 
@@ -743,27 +914,27 @@ def _execute_queryset_pipeline_sync(
         target_type,
         source,
         info,
+        model=model,
         policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
     )
-    orderset_class = None
-    try:
+    # One task-local capture scope spans public ordering and the offset guard,
+    # so the base ``OrderSet`` can hand its normalized terms to the guard without
+    # writing into the consumer's ``info.context`` - opened only when that
+    # handoff can happen.
+    with _order_normalization_scope(args_record, orderset_class):
         if args_record.order_by_supplied:
-            post_order_qs, orderset_class = _apply_orderset_sync(
+            post_order_qs = _apply_orderset_sync(
                 target_type,
+                orderset_class,
                 post_vis_qs,
                 args_record.order_by,
                 info,
+                model=model,
             )
         else:
             post_order_qs = post_vis_qs
-            orderset_class = _orderset_class_for_target(target_type)
 
         _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
-    finally:
-        # Deferred: ``orders`` stays out of the package-root import graph.
-        from .orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
-
-        clear_context_key(getattr(info, "context", None), _APPLIED_ORDER_NORMALIZATION_KEY)
 
     bounded = bounded_rows(
         post_order_qs,
@@ -783,9 +954,12 @@ async def _execute_queryset_pipeline_async(
     args_record: _ListArguments,
     max_rows: int | None,
     trusted_max_rows: bool,
+    *,
+    model: type[models.Model],
+    orderset_class: type | None,
 ) -> Any:
     if not args_record.any_argument_supplied:
-        post_vis_qs = await apply_type_visibility_async(target_type, source, info)
+        post_vis_qs = await apply_type_visibility_async(target_type, source, info, model=model)
         bounded = bounded_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
         return wrap_async_queryset_adapter(bounded)
 
@@ -793,27 +967,27 @@ async def _execute_queryset_pipeline_async(
         target_type,
         source,
         info,
+        model=model,
         policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
     )
-    orderset_class = None
-    try:
+    # One task-local capture scope spans public ordering and the offset guard,
+    # so the base ``OrderSet`` can hand its normalized terms to the guard without
+    # writing into the consumer's ``info.context`` - opened only when that
+    # handoff can happen.
+    with _order_normalization_scope(args_record, orderset_class):
         if args_record.order_by_supplied:
-            post_order_qs, orderset_class = await _apply_orderset_async(
+            post_order_qs = await _apply_orderset_async(
                 target_type,
+                orderset_class,
                 post_vis_qs,
                 args_record.order_by,
                 info,
+                model=model,
             )
         else:
             post_order_qs = post_vis_qs
-            orderset_class = _orderset_class_for_target(target_type)
 
         _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
-    finally:
-        # Deferred: ``orders`` stays out of the package-root import graph.
-        from .orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
-
-        clear_context_key(getattr(info, "context", None), _APPLIED_ORDER_NORMALIZATION_KEY)
 
     bounded = bounded_rows(
         post_order_qs,
@@ -892,7 +1066,14 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     """
     if max_rows is not None:
         validate_collection_bound(max_rows, field="DjangoListField max_rows")
-    _validate_djangotype_target(target_type, resolver, field="DjangoListField")
+    validate_trusted_flag(trusted_max_rows, field="DjangoListField trusted_max_rows")
+    # ONE definition read for the whole field: the validator's contained read is
+    # what the signature, the SDL, the default seed, both visibility seals, and
+    # every resolver dispatch below run on, so a stateful target metaclass has no
+    # second read to answer differently.
+    definition = _validate_djangotype_target(target_type, resolver, field="DjangoListField")
+    target_model = _model_from_definition(definition)
+    orderset_class = _orderset_class_from_definition(definition)
     directives = validated_field_directives("DjangoListField", directives)
 
     # Factory-site async commitment (Decision 3; spec-020 Decision 1
@@ -923,7 +1104,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 limit=limit,
                 order_by=order_by,
             )
-            qs = initial_queryset(target_type)
+            qs = base_queryset(target_model)
             if in_async_context():
                 return _execute_queryset_pipeline_async(
                     target_type,
@@ -932,6 +1113,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     args_record,
                     max_rows,
                     trusted_max_rows,
+                    model=target_model,
+                    orderset_class=orderset_class,
                 )
             return _execute_queryset_pipeline_sync(
                 target_type,
@@ -940,6 +1123,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 args_record,
                 max_rows,
                 trusted_max_rows,
+                model=target_model,
+                orderset_class=orderset_class,
                 is_async_context=False,
             )
 
@@ -957,7 +1142,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     source,
                     args_record,
                     info,
-                    target_type=target_type,
+                    orderset_class=orderset_class,
                 )
             return await bounded_rows_async(
                 source,
@@ -1000,6 +1185,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         args_record,
                         max_rows,
                         trusted_max_rows,
+                        model=target_model,
+                        orderset_class=orderset_class,
                     )
                 return await _resolve_async_iterable(source, info, args_record)
         else:
@@ -1044,12 +1231,14 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         args_record,
                         max_rows,
                         trusted_max_rows,
+                        model=target_model,
+                        orderset_class=orderset_class,
                         is_async_context=in_async_context(),
                     )
                 rejection = _build_non_queryset_rejection_error(
                     args_record,
                     info,
-                    target_type=target_type,
+                    orderset_class=orderset_class,
                 )
                 if rejection is not None:
                     raise rejection
@@ -1064,7 +1253,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
 
         wrapped = _wrap
 
-    signature, annotations = _synthesized_list_signature(target_type)
+    signature, annotations = _synthesized_list_signature(orderset_class)
     wrapped.__signature__ = signature
     wrapped.__annotations__ = annotations
 

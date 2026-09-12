@@ -15,7 +15,9 @@ dispatch (active-input-only / double-dispatch / dedup contract).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import gc
+import threading
 from collections import OrderedDict
 from types import SimpleNamespace
 
@@ -33,7 +35,11 @@ from django_strawberry_framework.orders.inputs import (
     _field_specs,
     _materialized_names,
 )
-from django_strawberry_framework.orders.sets import _APPLIED_ORDER_NORMALIZATION_KEY
+from django_strawberry_framework.orders.sets import (
+    _ORDER_NORMALIZATION_CAPTURE,
+    _validate_normalized_terms,
+    capture_applied_order_normalization,
+)
 
 # ---------------------------------------------------------------------------
 # Metaclass collection / override / binding
@@ -1236,45 +1242,6 @@ def test_resolve_order_expressions_handles_non_class_model_on_path_error():
         )
 
 
-@pytest.mark.django_db
-def test_orderset_apply_sync_annotates_multiple_to_many_orders():
-    """apply_sync generates distinct aggregate annotations for multiple to-many terms."""
-    from django.db.models import Min
-
-    class ShelfOrderMulti(OrderSet):
-        class Meta:
-            model = Shelf
-            fields = ["code"]
-
-    class BranchOrderMulti(OrderSet):
-        shelves = RelatedOrder(ShelfOrderMulti, field_name="shelves")
-
-        class Meta:
-            model = Branch
-            fields = ["name"]
-
-    factory = OrderArgumentsFactory(BranchOrderMulti)
-    BranchInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderMultiInputType"]
-
-    input_value = [
-        BranchInput(shelves=ShelfInput(code=Ordering.ASC)),
-        BranchInput(name=Ordering.DESC),
-    ]
-
-    b1 = Branch.objects.create(name="Beta", city="NY")
-    Shelf.objects.create(code="S2", branch=b1)
-    b2 = Branch.objects.create(name="Alpha", city="LA")
-    Shelf.objects.create(code="S1", branch=b2)
-
-    qs = BranchOrderMulti.apply_sync(input_value, Branch.objects.all(), _make_info())
-    assert any(isinstance(agg, Min) for agg in qs.query.annotations.values())
-    results = list(qs)
-    assert len(results) == 2
-    assert results[0].name == "Alpha"
-    assert results[1].name == "Beta"
-
-
 def test_orderset_clear_order_input_namespace_clears_subclass_caches():
     """clear_order_input_namespace clears _expanded_fields on base and subclass OrderSets."""
     from django_strawberry_framework.orders.inputs import clear_order_input_namespace
@@ -1455,8 +1422,29 @@ def test_input_has_active_terms_contract(input_value, expected):
     assert BookOrder._input_has_active_terms(resolved_input) is expected
 
 
+def _attestations(orderset_class=None):
+    """Return the attestations the active ledger holds, optionally for one class.
+
+    Reads the ledger's private record list because these are package tests of a
+    private transport; the production callers reach it only through
+    ``publish`` / ``claim``.
+    """
+    ledger = _ORDER_NORMALIZATION_CAPTURE.get()
+    if ledger is None:
+        return None
+    if orderset_class is None:
+        return list(ledger._records)
+    return [record for record in ledger._records if record.orderset_class is orderset_class]
+
+
+def _claimed_pairs():
+    """Return the ``(orderset_class, input_value)`` pairs the active ledger has issued."""
+    ledger = _ORDER_NORMALIZATION_CAPTURE.get()
+    return None if ledger is None else list(ledger._claimed)
+
+
 def test_input_has_active_terms_independent_query_and_double_normalization():
-    """Pin independent query and 2-call normalization count tracing across sync and async apply."""
+    """Pin the 2-call count inside a capture scope and the 3-call count outside one."""
 
     class TrackedOrder(OrderSet):
         class Meta:
@@ -1474,40 +1462,59 @@ def test_input_has_active_terms_independent_query_and_double_normalization():
     BookInput = factory.arguments
     active_input = [BookInput(title=Ordering.ASC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
+    qs = Book.objects.all()
 
-    # Standalone helper call without prior apply normalizes twice (purity check)
+    # Standalone helper call without prior apply normalizes twice (purity check).
     TrackedOrder.normalize_count = 0
     assert TrackedOrder._input_has_active_terms(active_input) is True
     assert TrackedOrder.normalize_count == 2
 
-    # Sync: public apply runs once -> 1 normalization; helper call re-verifies applied record -> 1 normalization
-    # Total for the request is exactly 2 calls (not 3)
+    # Inside the list field's scope: apply publishes once, the helper re-verifies once.
     TrackedOrder.normalize_count = 0
-    qs = Book.objects.all()
-    qs_ordered = TrackedOrder.apply_sync(active_input, qs, info)
-    assert TrackedOrder.normalize_count == 1
-    assert qs_ordered is not None
+    with capture_applied_order_normalization():
+        qs_ordered = TrackedOrder.apply_sync(active_input, qs, info)
+        assert TrackedOrder.normalize_count == 1
+        assert qs_ordered is not None
+        assert TrackedOrder._input_has_active_terms(active_input) is True
+    assert TrackedOrder.normalize_count == 2
 
-    has_active = TrackedOrder._input_has_active_terms(active_input, info)
-    assert has_active is True
-    assert TrackedOrder.normalize_count == 2  # 1 from apply_sync + 1 from _input_has_active_terms
-
-    # Async: public apply runs once -> 1 normalization; helper call re-verifies applied record -> 1 normalization
-    # Total for the request is exactly 2 calls (not 3)
+    # The async coloring, with the scope open in the SAME context the apply runs in -
+    # which is how the async pipeline opens it, immediately around its own awaits.
     TrackedOrder.normalize_count = 0
-    import asyncio
 
-    qs_ordered_async = asyncio.run(TrackedOrder.apply_async(active_input, qs, info))
-    assert TrackedOrder.normalize_count == 1
-    assert qs_ordered_async is not None
+    async def _scoped_async_resolution():
+        with capture_applied_order_normalization():
+            qs_ordered_async = await TrackedOrder.apply_async(active_input, qs, info)
+            assert TrackedOrder.normalize_count == 1
+            assert qs_ordered_async is not None
+            assert TrackedOrder._input_has_active_terms(active_input) is True
 
-    has_active_async = TrackedOrder._input_has_active_terms(active_input, info)
-    assert has_active_async is True
-    assert TrackedOrder.normalize_count == 2  # 1 from apply_async + 1 from _input_has_active_terms
+    asyncio.run(_scoped_async_resolution())
+    assert TrackedOrder.normalize_count == 2
+
+    # A scope opened OUTSIDE the task still receives the application: ``asyncio.run``
+    # runs the coroutine in a COPIED context, which carries this ledger, and the apply
+    # attests into it. The delegating shapes a public ``apply_async`` override is
+    # allowed to take all reduce to this one, so the helper re-verifies once rather
+    # than losing the terms the returned queryset was actually ordered by.
+    TrackedOrder.normalize_count = 0
+    with capture_applied_order_normalization():
+        asyncio.run(TrackedOrder.apply_async(active_input, qs, info))
+        assert len(_attestations(TrackedOrder)) == 1
+        assert TrackedOrder._input_has_active_terms(active_input) is True
+    assert TrackedOrder.normalize_count == 2
+
+    # Outside any scope a public apply publishes nothing, so the helper pays the
+    # full double normalization: a connection or hand-written resolver calling the
+    # public API behaves exactly as it did before the list field existed.
+    TrackedOrder.normalize_count = 0
+    TrackedOrder.apply_sync(active_input, qs, info)
+    assert TrackedOrder._input_has_active_terms(active_input) is True
+    assert TrackedOrder.normalize_count == 3
 
 
-def test_applied_normalization_is_consumed_and_never_leaks_to_a_later_request():
-    """A request-scoped normalization record is one-shot and isolated by context."""
+def test_applied_normalization_is_consumed_and_scoped_to_one_capture():
+    """A captured record is one-shot and never visible to another scope."""
 
     class TrackedOrder(OrderSet):
         class Meta:
@@ -1523,21 +1530,35 @@ def test_applied_normalization_is_consumed_and_never_leaks_to_a_later_request():
 
     first_input = [{"title": "ASC"}]
     second_input = [{"title": "ASC"}]
-    first_info = SimpleNamespace(context={"request": HttpRequest()})
-    second_info = SimpleNamespace(context={"request": HttpRequest()})
+    info = SimpleNamespace(context={"request": HttpRequest()})
 
-    TrackedOrder.apply_sync(first_input, Book.objects.all(), first_info)
-    assert TrackedOrder.normalize_count == 1
+    with capture_applied_order_normalization():
+        TrackedOrder.apply_sync(first_input, Book.objects.all(), info)
+        assert TrackedOrder.normalize_count == 1
+        assert len(_attestations(TrackedOrder)) == 1
 
-    # The untouched record on the first request cannot reduce the second request's
-    # standalone purity check from two normalizations to one.
-    assert TrackedOrder._input_has_active_terms(second_input, second_info) is True
-    assert TrackedOrder.normalize_count == 3
+    # An attestation left unclaimed in a closed scope cannot reduce a later scope's
+    # standalone purity check from two normalizations to one - the ledger went with
+    # its resolution.
+    with capture_applied_order_normalization():
+        assert _attestations(TrackedOrder) == []
+        assert TrackedOrder._input_has_active_terms(second_input) is True
+        assert TrackedOrder.normalize_count == 3
 
-    assert TrackedOrder._input_has_active_terms(first_input, first_info) is True
-    assert TrackedOrder.normalize_count == 4
-    assert TrackedOrder._input_has_active_terms(first_input, first_info) is True
-    assert TrackedOrder.normalize_count == 6
+    with capture_applied_order_normalization():
+        TrackedOrder.apply_sync(first_input, Book.objects.all(), info)
+        assert TrackedOrder.normalize_count == 4
+        assert TrackedOrder._input_has_active_terms(first_input) is True
+        assert TrackedOrder.normalize_count == 5
+        # Claimed once per class-and-input pair: the attestation still stands in the
+        # append-only ledger, but the second check on the same pair takes the
+        # double-read path rather than reusing it for an application it does not
+        # describe.
+        assert len(_attestations(TrackedOrder)) == 1
+        assert _claimed_pairs() == [(TrackedOrder, first_input)]
+        assert TrackedOrder._input_has_active_terms(first_input) is True
+        assert TrackedOrder.normalize_count == 7
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
 def test_applied_normalization_record_pins_the_input_object_not_its_address():
@@ -1562,31 +1583,33 @@ def test_applied_normalization_record_pins_the_input_object_not_its_address():
         def _normalize_input(cls, input_value):
             return [("title", Ordering.ASC)]
 
-    context = {"request": HttpRequest()}
-    info = SimpleNamespace(context=context)
+    info = SimpleNamespace(context={"request": HttpRequest()})
     order_input = [{"title": "ASC"}]
 
-    TrackedOrder.apply_sync(order_input, Book.objects.all(), info)
+    with capture_applied_order_normalization():
+        TrackedOrder.apply_sync(order_input, Book.objects.all(), info)
 
-    recorded_cls, recorded_input, recorded_data = context[_APPLIED_ORDER_NORMALIZATION_KEY]
-    assert recorded_cls is TrackedOrder
-    assert recorded_input is order_input
-    assert recorded_data == [("title", Ordering.ASC)]
+        (attestation,) = _attestations(TrackedOrder)
+        recorded_input = attestation.input_value
+        assert attestation.orderset_class is TrackedOrder
+        assert recorded_input is order_input
+        assert attestation.terms == (("title", Ordering.ASC),)
+        assert type(attestation.terms) is tuple
 
-    # Dropping every other reference cannot free the recorded input, so no later
-    # allocation can reuse its identity while the record stands.
-    del order_input
-    gc.collect()
-    decoys = [[{"title": "ASC"}] for _ in range(256)]
-    assert id(recorded_input) not in {id(decoy) for decoy in decoys}
+        # Dropping every other reference cannot free the recorded input, so no later
+        # allocation can reuse its identity while the record stands.
+        del order_input
+        gc.collect()
+        decoys = [[{"title": "ASC"}] for _ in range(256)]
+        assert id(recorded_input) not in {id(decoy) for decoy in decoys}
 
-    # A decoy therefore falls through to the standalone double-normalization path
-    # instead of matching the standing record.
-    assert TrackedOrder._input_has_active_terms(decoys[0], info) is True
+        # A decoy therefore falls through to the standalone double-normalization path
+        # instead of matching the standing record.
+        assert TrackedOrder._input_has_active_terms(decoys[0]) is True
 
 
 def test_applied_normalization_checks_input_identity():
-    """Context normalization record requires exact input_value object identity."""
+    """The captured record requires exact input_value object identity."""
 
     class TrackedOrder(OrderSet):
         class Meta:
@@ -1604,13 +1627,128 @@ def test_applied_normalization_checks_input_identity():
     different_input_same_content = [{"title": "ASC"}]
     info = SimpleNamespace(context={"request": HttpRequest()})
 
-    TrackedOrder.apply_sync(orig_input, Book.objects.all(), info)
-    assert TrackedOrder.normalize_count == 1
+    with capture_applied_order_normalization():
+        TrackedOrder.apply_sync(orig_input, Book.objects.all(), info)
+        assert TrackedOrder.normalize_count == 1
 
-    # Calling with a different input instance does not match the record
-    assert TrackedOrder._input_has_active_terms(different_input_same_content, info) is True
-    # 1 from apply + 2 from standalone double-normalization = 3
-    assert TrackedOrder.normalize_count == 3
+        # Calling with a different input instance does not match the record
+        assert TrackedOrder._input_has_active_terms(different_input_same_content) is True
+        # 1 from apply + 2 from standalone double-normalization = 3
+        assert TrackedOrder.normalize_count == 3
+
+
+def test_applied_normalization_checks_orderset_class_identity():
+    """A record published by one OrderSet class is not a record for another."""
+
+    class FirstOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [("title", Ordering.ASC)]
+
+    class SecondOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return [("title", Ordering.DESC)]
+
+    shared_input = [{"title": "ASC"}]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+    with capture_applied_order_normalization():
+        FirstOrder.apply_sync(shared_input, Book.objects.all(), info)
+        # Same input object, different class: no match, so the double read runs and
+        # the mismatched record is NOT mistaken for a purity violation.
+        assert SecondOrder._input_has_active_terms(shared_input) is True
+        assert SecondOrder.normalize_count == 2
+
+
+def test_public_apply_never_writes_the_consumer_context():
+    """``apply_sync`` / ``apply_async`` leave ``info.context`` exactly as they found it.
+
+    The normalization handoff is a task-local capture scope, so a public apply
+    on a connection or in a hand-written resolver stores nothing on the
+    consumer's context: an existing value is never overwritten or deleted, and a
+    mapping that forbids writes is never asked to accept one.
+    """
+
+    class GuardedContext(dict):
+        def __setitem__(self, key, value):
+            raise RuntimeError(f"guarded context written: {key}")
+
+        def __delitem__(self, key):
+            raise RuntimeError(f"guarded context cleared: {key}")
+
+    class TitleOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    marker = object()
+    plain = {"request": HttpRequest(), "consumer_marker": marker}
+    guarded = GuardedContext()
+    dict.__setitem__(guarded, "request", HttpRequest())
+    TitleInput = OrderArgumentsFactory(TitleOrder).arguments
+    order_input = [TitleInput(title=Ordering.ASC)]
+
+    for context in (plain, guarded):
+        info = SimpleNamespace(context=context)
+        ordered = TitleOrder.apply_sync(order_input, Book.objects.all(), info)
+        assert ordered.ordered is True
+        ordered_async = asyncio.run(TitleOrder.apply_async(order_input, Book.objects.all(), info))
+        assert ordered_async.ordered is True
+        # The active-term helper takes the same no-write path.
+        assert TitleOrder._input_has_active_terms(order_input) is True
+
+    assert set(plain) == {"request", "consumer_marker"}
+    assert plain["consumer_marker"] is marker
+    assert set(guarded) == {"request"}
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task():
+    """The scope token is reset on the way out, and concurrent tasks never share a record."""
+
+    class TitleOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    info = SimpleNamespace(context={"request": HttpRequest()})
+    TitleInput = OrderArgumentsFactory(TitleOrder).arguments
+
+    with pytest.raises(RuntimeError, match="body failed"):
+        with capture_applied_order_normalization():
+            assert _ORDER_NORMALIZATION_CAPTURE.get() is not None
+            raise RuntimeError("body failed")
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+    async def one_resolution(own_input):
+        with capture_applied_order_normalization():
+            await TitleOrder.apply_async(own_input, Book.objects.all(), info)
+            # Yield so the sibling task runs its own apply in between.
+            await asyncio.sleep(0)
+            (attestation,) = _attestations(TitleOrder)
+            assert attestation.orderset_class is TitleOrder
+            assert attestation.input_value is own_input
+            return TitleOrder._input_has_active_terms(own_input)
+
+    async def both():
+        return await asyncio.gather(
+            one_resolution([TitleInput(title=Ordering.ASC)]),
+            one_resolution([TitleInput(title=Ordering.DESC)]),
+        )
+
+    assert asyncio.run(both()) == [True, True]
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
 def test_input_has_active_terms_sequence_controls_sync():
@@ -1636,9 +1774,10 @@ def test_input_has_active_terms_sequence_controls_sync():
             return res
 
     abb_input = [{"title": "ASC"}]
-    AbbOrder.apply_sync(abb_input, qs, info)
-    with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
-        AbbOrder._input_has_active_terms(abb_input, info)
+    with capture_applied_order_normalization():
+        AbbOrder.apply_sync(abb_input, qs, info)
+        with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+            AbbOrder._input_has_active_terms(abb_input)
 
     # Sequence A/A/B/A: the hit consumes A/A; the next standalone check compares B/A.
     class AabOrder(OrderSet):
@@ -1661,16 +1800,15 @@ def test_input_has_active_terms_sequence_controls_sync():
             return res
 
     aab_input = [{"title": "ASC"}]
-    AabOrder.apply_sync(aab_input, qs, info)
-    assert AabOrder._input_has_active_terms(aab_input, info) is True
+    with capture_applied_order_normalization():
+        AabOrder.apply_sync(aab_input, qs, info)
+        assert AabOrder._input_has_active_terms(aab_input) is True
     with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
         AabOrder._input_has_active_terms([{"title": "ASC"}])
 
 
 def test_input_has_active_terms_sequence_controls_async():
     """Load-bearing A/B/B and A/A/B/A normalization sequence controls under async apply."""
-    import asyncio
-
     return_a = [("title", Ordering.ASC)]
     return_b = [("title", Ordering.DESC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
@@ -1692,9 +1830,14 @@ def test_input_has_active_terms_sequence_controls_async():
             return res
 
     abb_input = [{"title": "ASC"}]
-    asyncio.run(AbbOrder.apply_async(abb_input, qs, info))
-    with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
-        AbbOrder._input_has_active_terms(abb_input, info)
+
+    async def _abb_resolution():
+        with capture_applied_order_normalization():
+            await AbbOrder.apply_async(abb_input, qs, info)
+            with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+                AbbOrder._input_has_active_terms(abb_input)
+
+    asyncio.run(_abb_resolution())
 
     # Sequence A/A/B/A: the hit consumes A/A; the next standalone check compares B/A.
     class AabOrder(OrderSet):
@@ -1717,10 +1860,504 @@ def test_input_has_active_terms_sequence_controls_async():
             return res
 
     aab_input = [{"title": "ASC"}]
-    asyncio.run(AabOrder.apply_async(aab_input, qs, info))
-    assert AabOrder._input_has_active_terms(aab_input, info) is True
+
+    async def _aab_resolution():
+        with capture_applied_order_normalization():
+            await AabOrder.apply_async(aab_input, qs, info)
+            assert AabOrder._input_has_active_terms(aab_input) is True
+
+    asyncio.run(_aab_resolution())
     with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
         AabOrder._input_has_active_terms([{"title": "ASC"}])
+
+
+def test_a_child_task_application_reaches_the_parents_check():
+    """A delegating ``apply_async`` applies in a child task; the parent still sees the terms.
+
+    The supported public override seam is an ``apply_async`` that hands the work
+    to ``super()`` inside a task of its own. The ordering the client receives is
+    built there, so the offset guard's purity check must compare against THAT
+    normalization; a transport that only isolated descendants would hand the
+    guard an empty capture and let it re-derive different terms from an impure
+    normalizer without noticing. The append-only ledger travels into the copied
+    context, so the child's attestation is the one the parent claims.
+    """
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class ChildDelegatingOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return [("title", Ordering.ASC)]
+
+        @classmethod
+        async def apply_async(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            return await asyncio.create_task(super().apply_async(input_value, queryset, info))
+
+    order_input = [{"title": "ASC"}]
+
+    async def parent():
+        with capture_applied_order_normalization():
+            ordered = await ChildDelegatingOrder.apply_async(order_input, Book.objects.all(), info)
+            assert ordered.ordered is True
+            # Call 1 ran in the child task; its attestation is here.
+            (attestation,) = _attestations(ChildDelegatingOrder)
+            assert attestation.input_value is order_input
+            # So the guard re-verifies once (call 2) rather than twice.
+            assert ChildDelegatingOrder._input_has_active_terms(order_input) is True
+            assert ChildDelegatingOrder.normalize_count == 2
+
+    asyncio.run(parent())
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_a_child_delegated_impure_normalization_is_still_rejected():
+    """The A/B/B purity rejection survives delegation into a child task.
+
+    The ordering is built from A inside the child. Without the attestation
+    reaching the parent, the guard would compare B against B, agree, and accept
+    a page ordered by terms it never checked. With it, the parent claims A and
+    the B it derives disagrees - the typed rejection the contract promises.
+    """
+    return_a = [("title", Ordering.ASC)]
+    return_b = [("title", Ordering.DESC)]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class ChildDelegatingAbbOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        returns = [return_a, return_b, return_b]
+        idx = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            res = cls.returns[cls.idx]
+            cls.idx += 1
+            return res
+
+        @classmethod
+        async def apply_async(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            return await asyncio.create_task(super().apply_async(input_value, queryset, info))
+
+    order_input = [{"title": "ASC"}]
+
+    async def parent():
+        with capture_applied_order_normalization():
+            await ChildDelegatingAbbOrder.apply_async(order_input, Book.objects.all(), info)
+            with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+                ChildDelegatingAbbOrder._input_has_active_terms(order_input)
+
+    asyncio.run(parent())
+    assert ChildDelegatingAbbOrder.idx == 2
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_two_applications_of_one_input_that_disagree_fail_closed():
+    """Two applicable attestations that disagree are rejected, never silently picked from.
+
+    A descendant re-applying the SAME class and the SAME input object inside one
+    resolution attests a second time. If the two normalizations disagree, no rule
+    can say which one the returned queryset was ordered by, so the claim raises
+    rather than choosing.
+    """
+    return_a = [("title", Ordering.ASC)]
+    return_b = [("title", Ordering.DESC)]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class DoubleAppliedOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        returns = [return_a, return_b, return_b]
+        idx = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            res = cls.returns[cls.idx]
+            cls.idx += 1
+            return res
+
+    order_input = [{"title": "ASC"}]
+
+    async def parent():
+        with capture_applied_order_normalization():
+            await DoubleAppliedOrder.apply_async(order_input, Book.objects.all(), info)
+
+            async def child():
+                await DoubleAppliedOrder.apply_async(order_input, Book.objects.all(), info)
+
+            await asyncio.create_task(child())
+            assert len(_attestations(DoubleAppliedOrder)) == 2
+            with pytest.raises(
+                ConfigurationError,
+                match=r"two applications of the same input in one resolution",
+            ):
+                DoubleAppliedOrder._input_has_active_terms(order_input)
+
+    asyncio.run(parent())
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_two_applications_of_one_input_that_agree_are_claimed_once():
+    """Agreeing duplicate attestations resolve to their shared terms, not a rejection."""
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class PureDoubleOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return [("title", Ordering.ASC)]
+
+    order_input = [{"title": "ASC"}]
+
+    async def parent():
+        with capture_applied_order_normalization():
+            await PureDoubleOrder.apply_async(order_input, Book.objects.all(), info)
+
+            async def child():
+                await PureDoubleOrder.apply_async(order_input, Book.objects.all(), info)
+
+            await asyncio.create_task(child())
+            assert len(_attestations(PureDoubleOrder)) == 2
+            assert PureDoubleOrder._input_has_active_terms(order_input) is True
+            assert PureDoubleOrder.normalize_count == 3
+
+    asyncio.run(parent())
+
+
+def test_a_nested_orderset_between_apply_and_check_is_never_claimed():
+    """A different ``OrderSet`` applied mid-resolution cannot displace the outer record.
+
+    An outer ``apply_sync`` override that delegates to the base and then invokes
+    another ``OrderSet`` before returning leaves a second attestation standing in
+    the same ledger. A single-slot transport would hand the outer class's check
+    the nested class's terms - the guard then re-derives B, compares against the
+    nested record it was never entitled to, and the A/B/B sequence it exists to
+    catch is lost. Entries are claimed by class AND input identity, so the nested
+    one is simply not the outer one's.
+    """
+    return_a = [("title", Ordering.ASC)]
+    return_b = [("title", Ordering.DESC)]
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class NestedOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [("title", Ordering.DESC)]
+
+    nested_input = [{"title": "DESC"}]
+
+    class OuterAbbOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        returns = [return_a, return_b, return_b]
+        idx = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            res = cls.returns[cls.idx]
+            cls.idx += 1
+            return res
+
+        @classmethod
+        def apply_sync(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            ordered = super().apply_sync(input_value, queryset, info)
+            NestedOrder.apply_sync(nested_input, Book.objects.all(), info)
+            return ordered
+
+    order_input = [{"title": "ASC"}]
+
+    with capture_applied_order_normalization():
+        OuterAbbOrder.apply_sync(order_input, Book.objects.all(), info)
+        assert len(_attestations(OuterAbbOrder)) == 1
+        assert len(_attestations(NestedOrder)) == 1
+        with pytest.raises(ConfigurationError, match=r"_normalize_input is not pure"):
+            OuterAbbOrder._input_has_active_terms(order_input)
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_an_unrelated_descendant_application_is_never_claimed():
+    """A descendant applying a DIFFERENT input leaves the parent's own claim intact.
+
+    The isolation half of the contract: the ledger is shared so a delegating
+    child can publish INTO it, which means an unrelated application in a child
+    lands there too. It is filtered out by input identity, so the parent's check
+    still re-verifies once against its own terms rather than paying a second full
+    normalization or reading someone else's.
+    """
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class UnrelatedChildOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return [("title", Ordering.ASC)]
+
+    parent_input = [{"title": "ASC"}]
+    unrelated_input = [{"title": "ASC"}]
+
+    async def parent():
+        with capture_applied_order_normalization():
+            await UnrelatedChildOrder.apply_async(parent_input, Book.objects.all(), info)
+
+            async def child():
+                await UnrelatedChildOrder.apply_async(unrelated_input, Book.objects.all(), info)
+
+            await asyncio.create_task(child())
+            assert len(_attestations(UnrelatedChildOrder)) == 2
+            # Call 3 re-verifies the parent's own attestation; the child's is not it.
+            assert UnrelatedChildOrder._input_has_active_terms(parent_input) is True
+            assert UnrelatedChildOrder.normalize_count == 3
+            assert _claimed_pairs() == [(UnrelatedChildOrder, parent_input)]
+
+    asyncio.run(parent())
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_a_claim_anywhere_in_the_resolution_is_the_only_claim():
+    """Claiming is once per resolution, wherever it happens - never once per context.
+
+    A child's own active-term check claims the pair for the whole resolution, so
+    the parent's later check falls back to two independent normalizations. Two
+    contexts each consuming the same attestation would be two guards blessing one
+    application.
+    """
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class SharedRecordOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return [("title", Ordering.ASC)]
+
+    order_input = [{"title": "ASC"}]
+
+    async def parent():
+        with capture_applied_order_normalization():
+            # Call 1: the parent's apply attests.
+            await SharedRecordOrder.apply_async(order_input, Book.objects.all(), info)
+
+            async def child():
+                # Call 2: the child claims the attestation and re-verifies once.
+                return SharedRecordOrder._input_has_active_terms(order_input)
+
+            assert await asyncio.create_task(child()) is True
+            assert SharedRecordOrder.normalize_count == 2
+            assert _claimed_pairs() == [(SharedRecordOrder, order_input)]
+
+            # Calls 3 and 4: the pair is spent, so the parent's own check compares
+            # two fresh normalizations instead of re-reading a claimed attestation.
+            assert SharedRecordOrder._input_has_active_terms(order_input) is True
+            assert SharedRecordOrder.normalize_count == 4
+
+    asyncio.run(parent())
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from():
+    """A copied context carries the ledger, so a worker thread's apply attests into it.
+
+    ``contextvars.copy_context().run(...)`` is the shape ``sync_to_async`` and
+    every thread-pool handoff take, so an ``apply_*`` that offloads its work is a
+    legitimate override whose normalization must still reach the guard. Two
+    threads can therefore reach one ledger, which is why its appends and claims
+    are locked.
+    """
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class WorkerOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return super()._normalize_input(input_value)
+
+    WorkerInput = OrderArgumentsFactory(WorkerOrder).arguments
+    worker_input = [WorkerInput(title=Ordering.ASC)]
+
+    with capture_applied_order_normalization():
+        assert _attestations(WorkerOrder) == []
+        copied = contextvars.copy_context()
+
+        def publish_in_worker():
+            copied.run(WorkerOrder.apply_sync, worker_input, Book.objects.all(), info)
+
+        worker = threading.Thread(target=publish_in_worker)
+        worker.start()
+        worker.join()
+
+        # One ledger, reached from both threads: the worker's attestation is here.
+        assert copied[_ORDER_NORMALIZATION_CAPTURE] is _ORDER_NORMALIZATION_CAPTURE.get()
+        (attestation,) = _attestations(WorkerOrder)
+        assert attestation.input_value is worker_input
+        assert WorkerOrder._input_has_active_terms(worker_input) is True
+        assert WorkerOrder.normalize_count == 2
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_concurrent_threads_publishing_into_one_ledger_lose_nothing():
+    """Every attestation survives simultaneous appends from many worker threads."""
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class ConcurrentOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    ConcurrentInput = OrderArgumentsFactory(ConcurrentOrder).arguments
+    inputs = [[ConcurrentInput(title=Ordering.ASC)] for _ in range(24)]
+
+    with capture_applied_order_normalization():
+        copied = contextvars.copy_context()
+        start = threading.Barrier(len(inputs))
+
+        def apply_one(order_input):
+            start.wait()
+            copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
+
+        workers = [threading.Thread(target=apply_one, args=(value,)) for value in inputs]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
+        attested = _attestations(ConcurrentOrder)
+        assert len(attested) == len(inputs)
+        assert {id(record.input_value) for record in attested} == {id(value) for value in inputs}
+
+
+def test_validate_normalized_terms_rejects_hostile_container_and_string_subclasses():
+    """Every boundary shape is pinned by EXACT type, so no consumer hook can fire.
+
+    A ``list`` subclass would run its ``__iter__`` in the validation loop, a
+    ``tuple`` subclass its ``__len__`` / ``__getitem__`` while the term is read,
+    and a ``str`` subclass its ``__eq__`` in the purity compare or ``__format__``
+    in ``get_flat_orders``. Each is rejected before the member it would hook is
+    touched, as the promised ``ConfigurationError`` naming ``_normalize_input``.
+    """
+    fired: list[str] = []
+
+    class HostileList(list):
+        def __iter__(self):
+            fired.append("list.__iter__")
+            return super().__iter__()
+
+    class HostileTuple(tuple):
+        def __len__(self):
+            fired.append("tuple.__len__")
+            return super().__len__()
+
+        def __getitem__(self, index):
+            fired.append("tuple.__getitem__")
+            return super().__getitem__(index)
+
+    class HostileStr(str):
+        def __eq__(self, other):
+            fired.append("str.__eq__")
+            raise RuntimeError("hostile equality ran")
+
+        __hash__ = str.__hash__
+
+        def __format__(self, spec):
+            fired.append("str.__format__")
+            raise RuntimeError("hostile format ran")
+
+    class HostileOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"HostileOrder\._normalize_input returned invalid data",
+    ):
+        _validate_normalized_terms(HostileOrder, HostileList([("title", Ordering.ASC)]))
+    with pytest.raises(
+        ConfigurationError,
+        match=r"HostileOrder\._normalize_input returned invalid term",
+    ):
+        _validate_normalized_terms(HostileOrder, [HostileTuple(("title", Ordering.ASC))])
+    with pytest.raises(
+        ConfigurationError,
+        match=r"HostileOrder\._normalize_input returned invalid term",
+    ):
+        _validate_normalized_terms(HostileOrder, [(HostileStr("title"), Ordering.ASC)])
+    assert fired == []
+
+    # The same three shapes reach the boundary through a real override and the
+    # active-term helper, and the purity compare never runs consumer equality.
+    class HostileStrOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [(HostileStr("title"), Ordering.ASC)]
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"HostileStrOrder\._normalize_input returned invalid term",
+    ):
+        HostileStrOrder._input_has_active_terms([{"title": "ASC"}])
+    assert fired == []
+
+    # Exact builtins with the same content are accepted and returned as given.
+    good = [("title", Ordering.ASC), ("shelf__code", None)]
+    assert _validate_normalized_terms(HostileOrder, good) is good
 
 
 def test_input_has_active_terms_hostile_eq_and_repr():

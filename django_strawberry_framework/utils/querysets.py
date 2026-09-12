@@ -83,7 +83,7 @@ from decimal import Decimal
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.db import models
+from django.db import models, router
 from django.db.models import Prefetch, sql
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import RawSQL
@@ -2715,9 +2715,12 @@ class _SealPolicy:
       child, whose own gate degrades a sliced child to the fully-unplanned
       per-parent fallback instead of recomposing filters / ordering onto it.
     - ``reject_combined`` -- a ``union()`` / ``intersection()`` / ``difference()``
-      query is a defect. On only for the cascade, which narrows by
-      ``.filter(...)`` and re-projects to a single column, neither of which
-      Django supports after a combinator.
+      query is a defect. On for the cascade, which narrows by ``.filter(...)``
+      and re-projects to a single column, neither of which Django supports
+      after a combinator, and for both list-argument seals
+      (``_LIST_ARGUMENT_VISIBILITY_POLICY`` / ``_ORDERSET_RESULT_POLICY``),
+      which window the result with one ``[start:stop]`` slice a combined query
+      cannot take after ordering.
     - ``require_shared_alias`` -- the candidate's explicit ``_db`` must EQUAL the
       outer effective alias, INCLUDING when that alias is ``None``. Set solely
       for a ``Prefetch`` child, so one GraphQL resolution never spans two
@@ -2761,9 +2764,12 @@ _ORDERSET_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=
 def _routing_hints_equal(cand_hints: Any, orig_hints: Any) -> bool:
     """Return True if candidate and original routing hints match without consumer dispatch.
 
-    Preserves exact distinction between absent (None) and empty ({}) hints. Keys must
-    match exactly, and values must be identical objects or equal builtin primitives without
-    invoking arbitrary consumer __eq__ methods.
+    Preserves the exact distinction between absent (``None``) and empty (``{}``)
+    hints. Keys must match exactly and every value must be the SAME OBJECT the
+    snapshot holds: Django's ``ConnectionRouter`` hands hint values to consumer
+    routers untouched, and a router is free to tell two equal tokens apart by
+    identity, so semantic equality cannot prove equal routing without running
+    the router. Identity is the only comparison that proves it without dispatch.
     """
     if cand_hints is orig_hints:
         return True
@@ -2776,25 +2782,96 @@ def _routing_hints_equal(cand_hints: Any, orig_hints: Any) -> bool:
     for k, orig_v in orig_hints.items():
         if k not in cand_hints:
             return False
-        cand_v = cand_hints[k]
-        if cand_v is orig_v:
-            continue
-        if (
-            type(cand_v)
-            in (
-                str,
-                int,
-                float,
-                bool,
-                bytes,
-                type(None),
-            )
-            and type(cand_v) is type(orig_v)
-            and cand_v == orig_v
-        ):
-            continue
-        return False
+        if cand_hints[k] is not orig_v:
+            return False
     return True
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _RoutingIntent:
+    """The source queryset's routing, frozen before consumer ordering code receives it.
+
+    ``db`` and ``hints`` are the raw ``QuerySet`` state the post-``OrderSet``
+    seal compares a returned candidate against. ``effective_alias`` is the
+    connection that state RESOLVES to - the answer Django's
+    ``ConnectionRouter`` gave for this model and these hints at snapshot time -
+    and it is what the seal pins the accepted result onto.
+
+    The resolved alias is the load-bearing member. A hint VALUE is an arbitrary
+    consumer object handed to ``ConnectionRouter.db_for_read`` untouched, and a
+    legal router may read mutable state inside one (a standard ``instance``
+    hint is itself mutable), so preserving the hint dictionary - by identity or
+    otherwise - proves nothing about the connection a later read would pick.
+    Resolving the alias BEFORE the override can touch anything, and pinning the
+    accepted output to it, is what makes "the ordered result reads the source's
+    database" a mechanical guarantee rather than a promise about hint contents.
+    """
+
+    db: Any
+    hints: Any
+    effective_alias: str
+
+
+def _snapshot_routing_intent(queryset: Any, method_name: str) -> _RoutingIntent:
+    """Freeze a sealed source's routing BEFORE consumer code receives it.
+
+    The post-``OrderSet`` seal compares the returned candidate against this
+    baseline, and the baseline has to be taken before the public ``apply_*``
+    call: the override is handed the very same queryset object, so reading its
+    routing afterwards would read whatever the override left there. The hints
+    dictionary is copied (its values are kept by reference, which is what
+    :func:`_routing_hints_equal` compares), so an in-place ``_hints`` edit on
+    the source cannot rewrite the expectation either.
+
+    The effective alias is then RESOLVED here, through the same
+    ``ConnectionRouter`` method Django's own ``QuerySet.db`` property would use
+    (``db_for_write`` for a write-marked queryset, ``db_for_read`` otherwise),
+    and the seal pins the accepted result onto it. Django's router always
+    answers with a concrete alias, falling back to ``DEFAULT_DB_ALIAS``, so an
+    unrouted source resolves just as it would at execution - only earlier, while
+    the hint values still hold the state the source intended.
+
+    Reads come from the instance ``__dict__`` without attribute dispatch,
+    matching the seal; the model comes from that same state, because the source
+    reaching this seam is already a sealed framework-owned queryset whose
+    ``model`` the visibility boundary proved.
+    """
+    try:
+        state = object.__getattribute__(queryset, "__dict__")
+        db = state.get("_db")
+        hints = state.get("_hints")
+        model = state.get("model")
+        for_write = state.get("_for_write") is True
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{method_name} could not verify the source QuerySet's database routing intent.",
+        ) from exc
+    if type(hints) is dict:
+        hints = dict(hints)
+    if db is not None:
+        return _RoutingIntent(db=db, hints=hints, effective_alias=db)
+    if not (isinstance(model, type) and issubclass(model, models.Model)):
+        raise ConfigurationError(
+            f"{method_name} could not resolve the source QuerySet's effective database "
+            f"alias: its model is {_safe_type_name(model)}, so no router answer can be "
+            f"obtained for it.",
+        )
+    resolve = router.db_for_write if for_write else router.db_for_read
+    try:
+        alias = resolve(model, **(hints if type(hints) is dict else {}))
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{method_name} could not resolve the source QuerySet's effective database "
+            f"alias; the database router raised while answering for "
+            f"{_safe_class_name(model)}.",
+        ) from exc
+    if type(alias) is not str:
+        raise ConfigurationError(
+            f"{method_name} could not resolve the source QuerySet's effective database "
+            f"alias: the database router answered {_safe_arg_repr(alias)} for "
+            f"{_safe_class_name(model)}; an alias must be a string.",
+        )
+    return _RoutingIntent(db=None, hints=hints, effective_alias=alias)
 
 
 def _safe_routing_repr(value: Any) -> str:
@@ -2830,25 +2907,32 @@ def _safe_routing_repr(value: Any) -> str:
 
 def _validate_post_orderset_result(
     target_type: type,
-    pre_order_qs: models.QuerySet,
+    expected_routing: _RoutingIntent,
     post_order_candidate: Any,
     method_name: str,
+    *,
+    model: type[models.Model] | None = None,
 ) -> models.QuerySet:
-    """Validate and seal the result returned by OrderSet.apply_sync / apply_async."""
-    model = model_for(target_type)
-    try:
-        original_state = object.__getattribute__(pre_order_qs, "__dict__")
-    except BaseException as exc:
-        raise ConfigurationError(
-            f"{method_name} could not verify the source QuerySet's database routing intent.",
-        ) from exc
-    original_routing = (original_state.get("_db"), original_state.get("_hints"))
+    """Validate and seal the result returned by ``OrderSet.apply_sync`` / ``apply_async``.
+
+    ``expected_routing`` is the record :func:`_snapshot_routing_intent` froze
+    before the public method ran; the validator never reads the source queryset
+    itself, because by now the override has had it. The frozen effective alias
+    is passed in as the seal's required alias, so the accepted result is PINNED
+    to the connection the source resolved to and a hint object mutated behind a
+    preserved identity cannot re-route the eventual read.
+
+    ``model`` is the caller's captured model (``_captured_model``): the table
+    the ordered result is validated against is the one the field seeded and
+    sealed over, not an answer to a fresh request-time read of the target.
+    """
+    model = _captured_model(target_type, model)
     sealed, defect = _seal_or_defect(
         post_order_candidate,
         model,
-        None,
+        expected_routing.effective_alias,
         _ORDERSET_RESULT_POLICY,
-        expected_routing=original_routing,
+        expected_routing=expected_routing,
     )
     if defect is not None:
         model_name = _safe_class_name(model)
@@ -2885,7 +2969,7 @@ def _seal_or_defect(
     required_alias: str | None,
     policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
     *,
-    expected_routing: tuple[Any, Any] | None = None,
+    expected_routing: _RoutingIntent | None = None,
 ) -> tuple[models.QuerySet | None, tuple[str, str] | None]:
     """Rebuild a framework-owned plain ``QuerySet`` from ``candidate``'s validated state.
 
@@ -2972,12 +3056,13 @@ def _seal_or_defect(
       nothing recomposes: a ``Prefetch`` child (a legal sliced
       top-N-per-parent queryset) and the optimizer walker's nested-connection
       child, whose own gate degrades a sliced child instead of recomposing.
-    - ``combined`` -- when ``policy.reject_combined`` (the cascade alone): the
-      query carries a ``union()`` / ``intersection()`` / ``difference()``
-      combinator. The cascade narrows by ``.filter(...)`` and re-projects to the
-      edge's target column; Django supports neither after a combinator, and a
-      re-projection would only rewrite the OUTER select while each branch kept
-      its own column.
+    - ``combined`` -- when ``policy.reject_combined`` (the cascade and the two
+      list-argument seals): the query carries a ``union()`` / ``intersection()``
+      / ``difference()`` combinator. The cascade narrows by ``.filter(...)`` and
+      re-projects to the edge's target column; Django supports neither after a
+      combinator, and a re-projection would only rewrite the OUTER select while
+      each branch kept its own column. An argument-bearing list resolution
+      orders and then windows the result, which a combined query cannot take.
     - ``projection`` -- only when ``policy.require_model_rows`` (every surface
       except the cascade): the row iterable is not ``ModelIterable`` (a
       ``.values()`` / ``.values_list()`` projection whose rows are not model
@@ -3036,7 +3121,8 @@ def _seal_or_defect(
     if state_defect is not None:
         return None, state_defect
     if expected_routing is not None:
-        original_db, original_hints = expected_routing
+        original_db = expected_routing.db
+        original_hints = expected_routing.hints
         candidate_db = state.get("_db")
         candidate_hints = state.get("_hints")
         if candidate_db != original_db or not _routing_hints_equal(
@@ -3337,10 +3423,25 @@ def _visibility_result_error(
     )
 
 
+def _captured_model(type_cls: type, model: type[models.Model] | None) -> type[models.Model]:
+    """Return the caller's already-captured model, else read one for ``type_cls``.
+
+    The seam that lets a surface holding its target's ``DjangoTypeDefinition``
+    spend its ONE definition read at construction and hand the model down,
+    while every type-keyed caller keeps the convenience of naming only the
+    type. Both seals of one visibility call take the same value, so the source
+    seal and the result seal cannot be validated against two different models -
+    which is precisely what a second read of a stateful target's
+    ``__django_strawberry_definition__`` could arrange.
+    """
+    return model_for(type_cls) if model is None else model
+
+
 def _prepared_visibility_source(
     type_cls: type,
     queryset: Any,
     *,
+    model: type[models.Model] | None = None,
     render_error: Any = None,
     policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> tuple[models.QuerySet, str | None]:
@@ -3374,12 +3475,17 @@ def _prepared_visibility_source(
     to the call the consumer actually made. Surfaces without bespoke prose take
     the defaults below.
 
+    ``model`` is the caller's captured model (``_captured_model``): a field that
+    already holds its target's definition passes it so no request-time read of
+    ``__django_strawberry_definition__`` decides which table this seal validates
+    against. Omitted, the model is read from ``type_cls``.
+
     Resolver-source ``Manager`` coercion stays in ``normalize_query_source``;
     framework-created seeds are querysets by construction. Preparation composes
     lazy query state only; it executes zero SQL.
 
     """
-    model = model_for(type_cls)
+    model = _captured_model(type_cls, model)
     queryset, defect = _seal_or_defect(queryset, model, None, policy)
     if defect is not None:
         code, detail = defect
@@ -3459,6 +3565,7 @@ def _normalized_visibility_result(
     required_alias: str | None,
     render_error: Any = None,
     *,
+    model: type[models.Model] | None = None,
     policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> models.QuerySet:
     """Normalize a ``get_queryset`` hook result into a composable, correctly-routed queryset.
@@ -3487,8 +3594,13 @@ def _normalized_visibility_result(
     routed by construction. Normalization composes lazy query state only -
     filters, annotations, ordering, and values projection pass through unchanged
     (but subclass identity is deliberately dropped) - and executes zero SQL.
+
+    ``model`` is the caller's captured model (``_captured_model``), the SAME
+    value ``_prepared_visibility_source`` took for this call: the source seal
+    and the result seal of one resolution validate against one model, never two
+    answers to two reads.
     """
-    model = model_for(type_cls)
+    model = _captured_model(type_cls, model)
     if isinstance(result, models.Manager):
         result = _coerced_manager_queryset(result)
     sealed, defect = _seal_or_defect(result, model, required_alias, policy)
@@ -3503,6 +3615,7 @@ def apply_type_visibility_sync(
     info: Any,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
     *,
+    model: type[models.Model] | None = None,
     render_error: Any = None,
     policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> models.QuerySet:
@@ -3543,8 +3656,17 @@ def apply_type_visibility_sync(
     optimizer walker's nested-connection plan path passes
     ``_UNRECOMPOSED_CHILD_POLICY`` (``spec-045-visibility_boundary-0_0_14``
     Decision 5 degrade-to-unplanned).
+    ``model`` is the captured-model seam (``_captured_model``): the field
+    factories hand down the model off the ONE definition they read at
+    construction, so neither seal of this call re-reads
+    ``__django_strawberry_definition__``. Type-keyed callers omit it.
     """
-    queryset, required_alias = _prepared_visibility_source(type_cls, queryset, policy=policy)
+    queryset, required_alias = _prepared_visibility_source(
+        type_cls,
+        queryset,
+        model=model,
+        policy=policy,
+    )
     result = type_cls.get_queryset(queryset, info)
     result = reject_async_in_sync_context(
         result,
@@ -3563,6 +3685,7 @@ def apply_type_visibility_sync(
         result,
         required_alias,
         render_error,
+        model=model,
         policy=policy,
     )
 
@@ -3763,6 +3886,7 @@ async def apply_type_visibility_async(
     queryset: models.QuerySet,
     info: Any,
     *,
+    model: type[models.Model] | None = None,
     render_error: Any = None,
     policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
 ) -> models.QuerySet:
@@ -3787,9 +3911,17 @@ async def apply_type_visibility_async(
     contract on either colored path, and an option only one twin can reach IS
     the drift the shared boundary exists to prevent. ``SyncMisuseError`` stays
     reserved for sync boundaries: every defect here is a plain
-    ``ConfigurationError``.
+    ``ConfigurationError``. ``model`` is the sync runner's captured-model seam,
+    declared here for the same reason: a field whose async pipeline could not
+    hand down its captured model would re-read the target attribute on exactly
+    one of the two colorings.
     """
-    queryset, required_alias = _prepared_visibility_source(type_cls, queryset, policy=policy)
+    queryset, required_alias = _prepared_visibility_source(
+        type_cls,
+        queryset,
+        model=model,
+        policy=policy,
+    )
     result = type_cls.get_queryset(queryset, info)
     if inspect.isawaitable(result):
         result = await result
@@ -3808,6 +3940,7 @@ async def apply_type_visibility_async(
         result,
         required_alias,
         render_error,
+        model=model,
         policy=policy,
     )
 

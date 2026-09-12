@@ -438,6 +438,16 @@ trusted skip declaration: a field may deliberately return more than the request 
 may not force the database to discard an arbitrarily large prefix. That asymmetry keeps the
 existing opt-in unchanged while bounding the new cost this card introduces.
 
+Because this card makes that widening directly reachable through a client `limit`, the opt-in
+is held to the literal `True` the wording has always named. `resource_policy.py::effective_bound`
+widens on `trusted is True`, never on a truthy value: it is the one primitive in the package
+whose answer may exceed the request's own policy, so a stray `1`, a misspelled `"false"`, or any
+object with a truthy `__bool__` narrows like every other non-opt-in caller.
+`resource_policy.py::validate_trusted_flag` additionally rejects a non-`bool` at the line that
+CONSTRUCTS the field, so a typo fails where it was written rather than as a silently raised
+ceiling on every request the field serves; the primitive keeps its own check because it must
+stay safe for an internal caller with no factory in front of it.
+
 Runtime package rejections use one internal type:
 
 ```python
@@ -505,12 +515,14 @@ boundary's existing `ConfigurationError`, not a second list-field classification
 `argument` always uses the active schema's GraphQL wire spelling. The wrapper starts from the
 Python parameter name (`offset`, `limit`, or `order_by`), obtains its Strawberry argument
 definition from
-[`strawberry/types/info.py::Info.get_argument_definition`][strawberry-info], and passes that
-definition through
-[`strawberry/schema/name_converter.py::NameConverter.from_argument`][strawberry-name-converter]
-on the active schema config. A direct helper call without a real schema falls back to the
-default spelling (`offset`, `limit`, or `orderBy`) and tests identify that fallback
-explicitly. The wire message names the
+[`strawberry/types/info.py::Info.get_argument_definition`][strawberry-info], and reads the
+name the executable schema PUBLISHED for that definition: the field's `GraphQLField.args` map
+is keyed by the converter's answer at build time and each entry carries its
+`StrawberryArgument` under
+[`strawberry/schema/schema_converter.py::GraphQLCoreConverter.DEFINITION_BACKREF`][strawberry-schema-converter],
+so the key whose back-reference IS the definition is the argument's wire name. A direct helper
+call without executable-schema metadata falls back to the default spelling (`offset`, `limit`,
+or `orderBy`) and tests identify that fallback explicitly. The wire message names the
 field, argument, requested value when the payload carries one, and the accepted contract. A
 string, boolean, out-of-range integer, non-integral/non-finite float variable, or float
 literal never reaches this constructor: GraphQL declares both numeric arguments as `Int`, so
@@ -550,9 +562,40 @@ continue to implement `resolver(root, info)`. *Alternatives rejected: see the
 [rationale][rationale-d1] (forwarding arguments to consumer resolvers, inspecting consumer
 signatures).*
 
+The field reads its target's definition EXACTLY ONCE, at construction, and that one object is
+the field's SOLE construction and execution dependency. The shared target validator
+(`list_field.py::_validate_djangotype_target`) performs the one contained read and returns it;
+the factory captures the target's model
+(`list_field.py::_model_from_definition`) and its `Meta.orderset_class`
+(`list_field.py::_orderset_class_from_definition`) off it, and those two values are what the
+default resolver seeds (`utils/querysets.py::base_queryset`, never the type-keyed
+`initial_queryset`), what both visibility seals and the post-`OrderSet` seal validate against
+(the captured-model seam `utils/querysets.py::_captured_model`, which every type-keyed public
+caller still omits), what the signature builder publishes, and what every resolver dispatch runs
+through. Both reads fail loudly rather than answering softly: a second read is exactly where a
+stateful or hostile target metaclass could move the query to another table, make the source seal
+and the result seal disagree about which table this resolution is over, or remove `orderBy` from
+SDL after validation had already proved the target declares one.
+
+The connection field holds the same invariant on the same object, because it shares the
+validator and had the same re-read shape. `DjangoConnectionField` threads its captured
+definition into the generated connection class
+(`connection.py::_generate_connection_class`, and through it
+`connection.py::_connection_type_for` and `connection.py::_build_total_count_connection`), into
+its synthesized signature, into both pipelines, and into the resolve-time total order
+(`connection.py::_finalize_queryset`, whose model and `cursor_field` both come from it). The
+keyset vocabulary is fixed at class generation from that definition
+(`keyset.py::declared_cursor_state_for_definition`) rather than derived at first resolve, so the
+cursors a connection mints and the ones it decodes are the ones its class was built with; the
+type-keyed wrapper `keyset.py::resolve_declared_cursor_state` stays for the plan-time nested
+window, which reaches its target through the walker and holds no definition. A Phase-2.5
+synthesized relation connection takes its target's definition from the REGISTRY
+(`registry.py::DjangoTypeRegistry.get_definition`) at finalization and threads it the same way,
+so it never asks the target class at all.
+
 The signature builder calls
 [`django_strawberry_framework/orders/__init__.py::order_input_type`][orders-init] with
-`definition.orderset_class` rather than constructing an annotation itself. That call is
+that captured class rather than constructing an annotation itself. That call is
 load-bearing: it registers the helper reference in the shipped orphan ledger and ensures
 [finalization][glossary-finalize_django_types] materializes the same input class a
 hand-written resolver or connection uses.
@@ -594,8 +637,12 @@ the order input, whether that input was supplied, and whether any argument was s
 Material order activity comes from the `OrderSet`-owned
 `_input_has_active_terms(input_value) -> bool` helper, not a list-field input walker. One
 list-argument normalizer runs after `info` is available and before any queryset slicing. It
-treats `None` and `strawberry.UNSET` as omission, rejects `bool` explicitly despite Python's
-`bool < int` relationship, and performs the cap checks in the table above. It validates
+treats `None` and `strawberry.UNSET` as omission, requires an EXACT `int` (which rejects
+`bool` and every other subclass, so no consumer `__lt__` / `__gt__` / `__format__` can run
+inside the range checks or the error rendering), and performs the cap checks in the table
+above. Every numeric value the rejection wording interpolates renders through the guarded
+repr, so an integer CPython refuses to stringify cannot replace the typed error with a raw
+`ValueError`. It validates
 `offset` before `limit`, matching the synthesized signature and SDL order, so a direct call
 with both values invalid has one deterministic first failure.
 
@@ -613,17 +660,18 @@ precisely what makes `offset: 0` look identical to omission while behaving diffe
 record keeps them apart by construction and the package tier pins each field's independent
 effect.
 
-Argument wire names are resolved LAZILY, only while constructing a `ListArgumentError`. A
-successful request must perform zero name conversions.
+Argument wire names are resolved LAZILY, only while constructing a `ListArgumentError`, and
+never by running the converter again.
 [`strawberry/schema/name_converter.py::NameConverter.from_argument`][strawberry-name-converter]
-is a consumer-supplied hook on custom-converter schemas, normally exercised once per argument
-during schema construction; calling it on every resolver invocation would add redundant
-per-request work and would invoke a shared, possibly stateful consumer object concurrently at
-runtime, where a non-deterministic converter could report a spelling the already-built schema
-does not use. The error constructor is therefore its only caller, and a package test asserts
-an instrumented converter records zero runtime calls across a batch of successful
-argument-bearing requests and exactly one on a rejection. Converters are still required to be
-deterministic; laziness narrows where that requirement has to hold rather than replacing it.
+is a consumer-supplied hook on custom-converter schemas, exercised per argument during schema
+construction and by Strawberry's own argument mapping on each execution; the framework does
+not add a third call site. Invoking a shared, possibly stateful consumer object from the error
+path would run it concurrently across simultaneous rejections and could report a spelling the
+already-built schema does not use, so the error path reads the published argument map instead
+(Decision 3 above). Package and live tests assert an instrumented converter records zero
+`from_argument` calls from the framework on both successful and rejected requests: a rejection
+costs exactly the converter calls Strawberry's own argument mapping makes for a success, and
+the reported `argument` equals the introspected name.
 
 The record lives in [`django_strawberry_framework/list_field.py`][list-field], the argument
 owner. The shared resource-policy module does not import a list-field type (which would
@@ -783,16 +831,32 @@ For a request carrying any non-null list argument, the color-specific queryset p
    resolves an unrouted queryset's alias through the database router using both the model and
    `_hints`, so two querysets can each carry `_db is None` and still resolve to different
    databases when their hints differ - and the seal preserves whatever hints the candidate
-   carried, copying them into the rebuild. The enforced invariant is therefore ROUTING INTENT:
-   the post-apply candidate's `_db` equals the pre-order sealed source's `_db`, `None`
-   included, AND its `_hints` mapping equals that source's. Intent equality is stricter,
-   deterministic, and dispatches no consumer code (*alternatives rejected: see the
-   [rationale][rationale-d5]*). The shipped
-   seal already compares `_db` against a required alias and already proves `_hints` is `None`
-   or an exact `dict`, so this is one added comparison at an already-proven-shape site rather
-   than a new state read. The sharded live suite covers the unrouted/hint-driven mismatch as
-   well as `.using("default")` versus `.using("shard_b")`; explicit-alias cases alone would
-   leave the hint half of the invariant unpinned.
+   carried, copying them into the rebuild.
+
+   The invariant is therefore stated on the CONNECTION, not on the hint contents. Before the
+   public `apply_*` call runs, the pipeline freezes a routing record carrying the sealed
+   source's `_db`, a copy of its `_hints`, and - resolved through the same `ConnectionRouter`
+   method Django's own `QuerySet.db` property would use - the EFFECTIVE ALIAS that state
+   answers to. The accepted result is then reconstructed PINNED to that frozen alias. Hint
+   comparison remains part of the seal (the candidate's `_db` must equal the snapshot's,
+   `None` included, and every hint value must be the SAME OBJECT the snapshot holds, because
+   a router is free to tell two equal tokens apart by identity), but it is no longer what
+   carries the attestation. It cannot be: a hint value is an arbitrary consumer object handed
+   to the router untouched, and a standard `instance` hint is itself mutable, so an override
+   can edit state INSIDE a hint it preserves by identity and change the router's answer
+   without changing anything the seal can see. Deep-copying hint values is not the
+   alternative - it would dispatch consumer code, has no defined equality for arbitrary
+   objects, and breaks Django's ordinary `instance` hint semantics (*alternatives rejected:
+   see the [rationale][rationale-d5]*). Resolving once, early, and pinning the output is what
+   makes "the ordered result reads the source's database" mechanical.
+
+   Timing is part of the contract: exactly one router answer, taken at the snapshot, and none
+   during validation. A router that cannot answer, or answers with something that is not a
+   string alias, fails the ordering call closed rather than leaving the connection undecided.
+   The sharded live suite covers the unrouted/hint-driven mismatch, `.using("default")`
+   versus `.using("shard_b")`, an equal-but-distinct hint token under an identity-sensitive
+   router, and the mutable token whose internal state the router reads - the row that proves
+   the pin, because it is ACCEPTED and still completes on the source's alias.
 5. Ask that same `OrderSet` implementation whether its normalized input contains an active
    term, then enforce the nonzero-offset ordering precondition.
 6. Apply one combined raw-list window.
@@ -1079,6 +1143,9 @@ that optional method exists without calling `__anext__`. The `ListArgumentError`
 primary exception; failure to obtain or close the iterator is attached as a diagnostic note.
 This uses the same package-private cleanup utility and primary-error precedence as
 `bounded_rows_async`, so rejection cannot leak a generator or grow a second cleanup policy.
+The close is owed on every rejecting exit, including when constructing the
+`ListArgumentError` itself fails (malformed schema metadata behind the wire-name lookup): that
+failure becomes the primary exception and the same cleanup runs before it propagates.
 
 The symmetric SYNC contract is deliberately DECLINED in this card, and declining it is stated
 rather than left as an implied promise. A retained sync generator consumed through
@@ -1145,8 +1212,9 @@ code.
 
 Negative and over-ceiling values are valid GraphQL integers but invalid list arguments, so
 the wrapper raises `ListArgumentError` with package extensions. Direct unit calls that
-bypass GraphQL also reject non-integers and bools through the same type, because internal
-callers do not receive GraphQL coercion for free.
+bypass GraphQL also reject anything that is not an exact `int` - bools and `int` subclasses
+included - through the same type, because internal callers do not receive GraphQL coercion
+for free and a subclass would otherwise dispatch consumer code inside the boundary.
 
 *Alternatives rejected: see the [rationale][rationale-d10] (a custom stricter integer scalar,
 a schema extension rewriting all Int coercion errors).*
@@ -1252,14 +1320,48 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   an override whose second normalization disagrees with its first must surface an actionable
   `ConfigurationError` naming the method rather than silently deciding the offset guard on an
   incidental verdict. Instrumented tests pin the call counts, the purity requirement, and the
-  disagreement error. One immutable normalized-order record shared by both callers is the
-  cleaner long-term shape; it is not adopted here because it can only be reached by bypassing
-  the public `apply_*` override this card exists to honor, and changing that is an `OrderSet`
-  API decision of its own.
+  disagreement error. The base `_apply_orderings` hands its validated terms to the helper
+  through one invocation-scoped ATTESTATION LEDGER
+  (`orders/sets.py::_NormalizationLedger`, bound to a `ContextVar` the list pipeline opens
+  around public ordering and the offset guard, resetting the binding AND emptying the ledger in
+  `finally`): when a scope is active the base implementation APPENDS an immutable
+  `_AppliedNormalization` naming the orderset class, the input OBJECT, and its terms, and the
+  helper CLAIMS the entries matching its own class and input object, then re-normalizes once to
+  prove purity. Outside any scope - a connection, a hand-written resolver, any direct public
+  call - publishing is a no-op, so a public `apply_*` call never writes, overwrites, or clears
+  anything on the consumer's `info.context`, and a concurrent resolution that opened its own
+  scope has its own ledger.
+
+  The transport is a LEDGER rather than a slot because two requirements pull in opposite
+  directions. A supported public `apply_async` override may delegate to `super()` inside a
+  child task, and the ordering the client receives is then built there, so the guard must
+  receive an attestation published from a child task, a copied context, or a `sync_to_async`
+  worker thread - otherwise it compares its own second and third normalizations to each other,
+  agrees, and blesses a page cut from terms it never saw. At the same time an UNRELATED
+  application in any of those, or a different `OrderSet` invoked between publication and check,
+  must not be able to displace the one the guard is waiting for. A shared mutable slot loses the
+  parent's record to the last writer; a rebinding-only slot loses a legitimate child's record to
+  context isolation. So nothing ever overwrites: every application appends, entries are matched
+  by class AND input IDENTITY (never equality - a consumer `__eq__` has no say in whether an
+  attestation applies), claiming is once per class-and-input pair for the whole resolution, and
+  two applicable attestations that DISAGREE fail the claim closed rather than picking one.
+  Appends and claims are lock-synchronized, because a copied context genuinely reaches one
+  ledger from two threads.
+
+  The scope is opened only for the request shape whose guard can consume it: an `orderBy`
+  arriving WITH a positive `offset` on a field that captured an `OrderSet` to normalize through.
+  Every other argument-bearing request takes an inert context and pays for neither the ledger
+  nor the deferred `orders` import; the no-`OrderSet` condition is DECIDABLE there rather than
+  asserted, because the field's captured sidecar is passed to the predicate. An override that
+  does not delegate to the base implementation attests nothing and the helper takes the
+  double-normalization path, so public override dispatch is honored without a parallel
+  state-returning entry point.
 - [`django_strawberry_framework/utils/typing.py::schema_config_from_info`][typing-utils]
-  remains the neutral schema-config lookup. Argument error names combine it with Strawberry
-  `Info.get_argument_definition` and `name_converter.from_argument`; list code does not
-  reimplement wrapped/direct schema traversal.
+  remains the neutral schema-config lookup for the optimizer and connection readers. Argument
+  error names combine Strawberry `Info.get_argument_definition` with the executable schema's
+  published argument map (`Info._raw_info.parent_type` -> `GraphQLField.args`, matched by
+  `DEFINITION_BACKREF` identity); list code never re-runs `name_converter.from_argument` and
+  does not reimplement wrapped/direct schema traversal.
 - Manager-to-queryset coercion and visibility stay in
   [`django_strawberry_framework/utils/querysets.py`][querysets]; pagination does not grow
   another source classifier. Post-OrderSet validation extends/reuses the same hardened seal
@@ -1314,9 +1416,12 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   `limit: 0`, and `orderBy: []`; the omitted/all-null legacy branch is unchanged.
 - A custom `OrderSet.apply_*` result must SEAL to a lazy, unsliced, model-row-shaped,
   non-combined, same-model, same-route plain queryset. A sealable `QuerySet` SUBCLASS is
-  accepted and normalized into that plain rebuild rather than rejected for its class;
-  same-route means equal `_db` (`None` included) and equal `_hints`. Arbitrary custom code is
-  trusted to preserve the sealed source predicates.
+  accepted and normalized into that plain rebuild rather than rejected for its class.
+  Same-route is a claim about the CONNECTION: the candidate's `_db` must equal the sealed
+  source's (`None` included) and every hint value must be the same OBJECT, and the accepted
+  rebuild is pinned to the effective alias resolved before the override ran, so a hint object
+  mutated behind a preserved identity cannot move the read. Arbitrary custom code is trusted
+  to preserve the sealed source predicates.
 - An async-only iterable's iterator is closed when it exposes `aclose` and consumption does
   not reach natural exhaustion: the accepted exclusive stop (`offset + effective_limit`) is
   reached, iteration errors, or the source is otherwise stopped/rejected early. A naturally
@@ -1460,13 +1565,24 @@ the shipped SDL.
     than only the combined offset-plus-limit shape of row 2; the captured SQL carries the
     raised low mark and the unchanged policy high mark. A resource-policy unit row pins the
     same arithmetic at the bounding seam.
-22. `branches_combined`'s legacy branch is asserted against a NAMED BASELINE HELPER, not
-    against the absence of the new error. That helper captures what the omitted/all-null
-    request produces before the card - the exact result data or exception class and message
-    policy, the captured SQL, and the `get_queryset` call count - and the legacy row asserts
-    equality with it. "Not `LIST_ARGUMENT_INVALID`" is not a sufficient oracle here, because a
-    combined Branch queryset also meets `BranchType.get_queryset` filtering before pagination
-    and can legitimately produce either data or a pre-existing error.
+22. The omitted/all-null legacy branch - on the shipped field, on a holder field, and on
+    `branches_combined` - is asserted against a LEGACY REFERENCE FIELD mounted beside the
+    current one, not against the absence of the new error and not against a second run of
+    the current implementation. That test-only field's resolver composes the pre-card
+    pipeline from the already-shipped public primitives alone (the source queryset,
+    `apply_type_visibility_sync`, one `bounded_rows` call with no client window) and records
+    its final queryset's `str(query)`, `low_mark`, and `high_mark` before returning; the
+    current field's final marks are recorded at its one `bounded_rows` call. Both schemas
+    publish the reference under the SAME GraphQL field name, so one request envelope reaches
+    both and every legacy row - the combined-source one included - asserts equality of the RAW
+    `HttpResponse.content` bytes, the captured `library_branch` SQL, the marks, and the
+    `get_queryset` call count. A semantic projection of the two payloads would pass while
+    envelope ordering, locations, path, or extensions drifted, so no row reduces the comparison
+    to parsed rows or normalized messages. "Not
+    `LIST_ARGUMENT_INVALID`" is not a sufficient oracle here, because a combined Branch
+    queryset also meets `BranchType.get_queryset` filtering before pagination and can
+    legitimately produce either data or a pre-existing error; comparing two executions of the
+    new code is not one either, because both sides regress together.
 23. Two aliases of the same field in one document, with different `offset` / `limit` pairs,
     return independent pages. Root list fields share no window state and no merged plan, and
     this row exists so an accidental per-field cache cannot pass unnoticed.
@@ -1481,7 +1597,12 @@ the shipped SDL.
     override returning a candidate whose `_db` is `None` on both sides but whose `_hints`
     differ from the sealed source's is rejected, alongside the existing explicit
     `.using("default")` versus `.using("shard_b")` mismatch. An explicit-alias row alone would
-    leave routing-intent equality unpinned.
+    leave routing-intent equality unpinned. The same gate carries the row the attestation
+    actually rests on, and it is an ACCEPTED one: an override that mutates state INSIDE a hint
+    object it preserves by identity changes nothing the seal compares, yet would change a
+    router's answer - the completed read must still return the row seeded on the source's
+    alias, with no `library_branch` SQL on the alias the mutation named. The async coloring
+    carries the same pin on its own executable seam.
 
 Every test-local sync/async schema mount uses the established module-level current-schema
 holder under `override_settings(ROOT_URLCONF=...)`, resets that holder and Django's URL caches
@@ -1583,7 +1704,9 @@ sync or async HTTP request cannot isolate:
 - continued lazy top-level package import: constructing the signature may import orders, but
   importing `django_strawberry_framework` alone must not;
 - nullable outer annotation preservation after argument synthesis;
-- direct-call non-integer and bool rejection;
+- direct-call non-integer, bool, and `int`-subclass rejection, including a hostile subclass
+  whose comparison and formatting hooks must never fire, and an integer too large for CPython
+  to stringify;
 - `ListArgumentError.__reduce__` preserving constructor arguments, extensions, and instance
   state across a pickle round trip, matching the existing dual-base error precedent;
 - direct-call schema-name fallback and argument-definition lookup mechanics;
@@ -1632,22 +1755,40 @@ sync or async HTTP request cannot isolate:
   argument mode (and only that), the window fields producing an omission-identical window for
   `offset: 0`, `order_by_supplied` driving `queryset_required` for an empty list, and material
   activity being consulted only after apply. A test collapses none of them into another;
-- error-lazy wire-name resolution: an instrumented `NameConverter` records ZERO
-  `from_argument` calls across a batch of successful argument-bearing requests and exactly one
-  on a rejection, so a shared consumer converter is never invoked concurrently at runtime;
+- error-lazy wire-name resolution: an instrumented `NameConverter` records ZERO framework
+  `from_argument` calls on successful and rejected direct normalizations alike; a real schema
+  whose converter is swapped for a raising one after the build still yields the published
+  spelling for a captured `Info`; two concurrent rejections cost exactly the converter calls two
+  successes cost; and malformed published-argument metadata is a `ConfigurationError`, so a
+  shared consumer converter is never invoked concurrently by the error path;
 - seal-axis mechanics the live tier cannot isolate: a sealable `QuerySet` SUBCLASS post-apply
   result is normalized into a plain queryset and accepted, while a subclass carrying an
-  unresolved `_deferred_filter` still fails closed as `untrusted`; and routing-INTENT
-  equality, where two candidates both carrying `_db is None` are accepted when their `_hints`
-  match the sealed source's and rejected when they differ;
+  unresolved `_deferred_filter` still fails closed as `untrusted` - the latter also proven
+  live on both public overrides; and routing-INTENT equality, where two candidates both
+  carrying `_db is None` are accepted when their `_hints` match the sealed source's and
+  rejected when they differ. The expected routing is a frozen RECORD - `_db`, copied `_hints`,
+  and the effective alias resolved through `ConnectionRouter` - taken before the public apply
+  call, never a read of the source object afterwards, because the override was handed that
+  very object and can rewrite it in place; hint values compare by identity only, since
+  Django's `ConnectionRouter` passes them to consumer routers as objects and a legal router
+  may tell equal tokens apart, and the accepted result is PINNED to the frozen alias because
+  identity alone cannot prove a mutable hint still means the same connection. The package tier
+  pins the one-router-answer timing (one call, at the snapshot; none during validation), the
+  write-marked source's `db_for_write` resolution, and the closed failures for a router that
+  raises or answers with a non-string. Pinned alongside by an in-place-mutating override, an
+  equal-but-distinct primitive token, and a copied-hints control, with the sharded live rows
+  in `test_multi_db.py` proving each rejection fails before any row executes on either alias
+  and the accepted mutable-hint row completing on the source's alias;
 - a retained sync generator truncated by a client window is still suspended and resumable
   afterward - the sync cleanup contract Decision 8 explicitly declines - pinned so a later
   card flips it deliberately rather than discovering it;
 - an async source holding exactly `offset + limit` rows versus fewer, distinguishing an
   accepted-stop close from an observed natural exhaustion that must leave the iterator alone;
-- a benchmark of the post-apply seal over a complex annotated query, a to-many aggregate
-  order, and a queryset carrying prefetch metadata, recording the cost Decision 5 accepts
-  rather than asserting a threshold.
+- the post-apply seal's cost over a complex annotated query, a to-many aggregate order, and a
+  queryset carrying prefetch metadata is MEASURED once during Slice 3 and recorded in that
+  slice's artifact as the number Decision 5 accepts; it is not retained as a test, because a
+  threshold-less benchmark cannot fail and a thresholded one is a flake, and `fail_under = 100`
+  is the only performance gate the suite carries.
 
 [`tests/test_resource_policy.py`][test-resource-policy] already pins the generic sequence,
 non-subscriptable iterable, and async-iterable behavior at the one raw-list seam: sequence
@@ -1816,8 +1957,11 @@ structural checks, and link/kanban verification prescribed by
 - [ ] Every `DjangoListField` publishes nullable optional `offset` and `limit`; targets with
       `Meta.orderset_class` also publish the shipped typed `orderBy` input.
 - [ ] With all arguments omitted/null, sync resolver behavior, queryset low/high marks, SQL,
-      query count, ordering, and response bytes match `0.0.14`; async data/query shape also
-      matches while its result uses the required safe completion adapter; SDL gains arguments.
+      query count, ordering, and response bytes match `0.0.14` - the byte claim proven against
+      a pre-argument reference resolver mounted under the SAME GraphQL field name in its own
+      schema, so one request envelope reaches both and raw `HttpResponse.content` is what is
+      compared; async data/query shape also matches while its result uses the required safe
+      completion adapter; SDL gains arguments.
 - [ ] Limit is accepted through the effective policy/field/trusted ceiling and rejected
       above it; offset is accepted through request `max_list_rows` and rejected above it.
 - [ ] Negative and over-ceiling values raise `ListArgumentError` with stable extensions;
@@ -1833,7 +1977,8 @@ structural checks, and link/kanban verification prescribed by
 - [ ] Visibility runs before order; order runs before one combined slice; order permission
       failures occur before slicing.
 - [ ] Public `OrderSet.apply_*` results are mechanically validated as unevaluated, unsliced,
-      non-projection, non-combined, same-model/same-route plain querysets; custom overrides
+      non-projection, non-combined, same-model/same-route plain querysets, with the accepted
+      result pinned to the effective alias frozen before the override ran; custom overrides
       are documented as trusted to preserve the sealed input's predicates.
 - [ ] The shared visibility boundary rejects a pre-sliced source before the hook and a sliced
       hook result afterward for both active and omitted arguments; the list field adds no
@@ -2000,6 +2145,7 @@ structural checks, and link/kanban verification prescribed by
 [graphql-scalars]: ../.venv/lib/python3.14/site-packages/graphql/type/scalars.py
 [strawberry-info]: ../.venv/lib/python3.14/site-packages/strawberry/types/info.py
 [strawberry-name-converter]: ../.venv/lib/python3.14/site-packages/strawberry/schema/name_converter.py
+[strawberry-schema-converter]: ../.venv/lib/python3.14/site-packages/strawberry/schema/schema_converter.py
 
 <!-- External -->
 [cookbook-connection-field]: ../../django-graphene-filters/django_graphene_filters/connection_field.py

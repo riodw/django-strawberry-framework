@@ -17,7 +17,7 @@ Add `"django_strawberry_framework"` to `INSTALLED_APPS` so Django's check and si
 
 ```python
 import strawberry
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types, strawberry_config
+from django_strawberry_framework import DjangoListField, DjangoOptimizerExtension, DjangoType, finalize_django_types, strawberry_config
 from myapp.models import Category, Item
 
 
@@ -35,9 +35,7 @@ class ItemType(DjangoType):
 
 @strawberry.type
 class Query:
-    @strawberry.field
-    def all_items(self) -> list[ItemType]:
-        return Item.objects.all()
+    all_items: list[ItemType] = DjangoListField(ItemType)
 
 
 finalize_django_types()
@@ -124,7 +122,8 @@ schema = DjangoSchema(
 | Error shape | Reaches the client as |
 |---|---|
 | parse / syntax / validation error (no originating exception) | unchanged |
-| a raised `GraphQLError` — every framework rejection (`GLOBALID_INVALID`, `RESOURCE_LIMIT_EXCEEDED`, the argument rejections, the `Not authorized to ...` denial) and any you raise yourself | unchanged, `extensions.code` included |
+| a framework-raised `GraphQLError` (`GLOBALID_INVALID`, `RESOURCE_LIMIT_EXCEEDED`, the argument rejections, the `Not authorized to ...` denial) | unchanged, `extensions.code` included |
+| a `GraphQLError` you raise yourself | unchanged; `extensions.code` is present only if you supplied it |
 | any other exception escaping a resolver or hook | the policy message + a fresh `correlationId` |
 
 A validation envelope (`FieldError` rows on a mutation payload) is `data`, not an error, and is untouched. Under `settings.DEBUG` the policy is a pass-through. Configure it with `DjangoSchema(error_policy=...)` or the `DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]` mapping (the constructor argument wins), and opt out explicitly:
@@ -325,9 +324,9 @@ class ShelfType(DjangoType):
 
 The name is validated when `Meta.optimizer_hints` is built, so a typo raises `ConfigurationError` at import rather than at query time, and the override never enters the plan cache key.
 
-Both backends partition each parent's page by the child connector column and order by the connection's deterministic order, so the database can serve a page **from an index** when a composite index leads with the window's columns: `(connector, order columns..., pk)` for a reverse FK or M2M, `(content_type_id, object_id, order columns..., pk)` for a `GenericRelation`. Direction matters — a B-tree serves the requested order or its full reverse after the equality-constrained prefix, never a partial flip, so `ORDER BY title ASC, id DESC` needs `(shelf_id, title, -id)`. With `settings.DEBUG` on, the optimizer logs a one-time advisory per plan shape naming the recommended index when the model's declared metadata carries no covering one; it claims coverage only for ordinary B-tree shapes and stays silent when it cannot prove absence.
+Both backends partition each parent's page by the child connector column and order by the connection's deterministic order, so the database can serve a page **from an index** when a composite index leads with the window's columns: `(connector, order columns..., pk)` for a reverse FK, `(content_type_id, object_id, order columns..., pk)` for a `GenericRelation`. An M2M cannot take that single shape: the parent connector lives on the through table while the order columns and pk live on the related model, so it needs two indexes, the through table's `(parent_id, child_id)` pair and the related model's `(order columns..., pk)`. Direction matters — a B-tree serves the requested order or its full reverse after the equality-constrained prefix, never a partial flip, so `ORDER BY title ASC, id DESC` needs `(shelf_id, title, -id)`. With `settings.DEBUG` on, the optimizer logs a one-time advisory per plan shape naming the recommended index when the model's declared metadata carries no covering one; it claims coverage only for ordinary B-tree shapes and stays silent when it cannot prove absence.
 
-**Single-parent fast path.** Numbering every child of a partition is wasteful when a prefetch runs for exactly one parent, so a default-on optimization detects that case — one parent id, a direct FK, a count-free bounded first page — and runs a plain filtered `LIMIT`, synthesizing row numbers in Python. Every other shape degrades to the identical windowed body: a performance downgrade, never a wrong page. Disable it with `DJANGO_STRAWBERRY_FRAMEWORK["SINGLE_PARENT_FAST_PATH"] = False`, read at fetch time.
+**Single-parent fast path.** Numbering every child of a partition is wasteful when a windowed prefetch runs for exactly one parent, so a default-on optimization inside the windowed strategy detects that case — one parent id, a direct FK, a count-free bounded first page — and runs a plain filtered `LIMIT`, synthesizing row numbers in Python. Under `"lateral"` / `"auto"` the lateral backend serves eligible shapes first and only a lateral downgrade reaches this wrapper. Within the windowed body every other shape runs the identical planned window: a performance downgrade, never a wrong page. Disable it with `DJANGO_STRAWBERRY_FRAMEWORK["SINGLE_PARENT_FAST_PATH"] = False`, read at fetch time.
 
 ### File and image output
 
@@ -376,7 +375,7 @@ Two narrower gates sit alongside it: `check_<field>_permission(self, request)` o
 
 Three write flavors share one `class Meta` surface, one `FieldError` envelope, and one authorization contract. Each is exposed on the schema's `Mutation` type through the `DjangoMutationField` factory, assigned with **no** class annotation, since the generated payload has no importable name at import time.
 
-Every mutation returns a generated `<Name>Payload` carrying the written object in a uniform slot (`node` for a Relay-Node target, `result` otherwise) plus `errors: [FieldError!]!`, each `FieldError` a `field` path and `messages`. Validation failures populate that envelope and return a null object; a **write-authorization denial is a top-level `GraphQLError`**, never an envelope entry. `Meta.permission_classes` defaults to `[DjangoModelPermission]` (the Django `add` / `change` / `delete` model perms), and an explicit `permission_classes = []` is the deliberate allow-any opt-out.
+Every model-backed mutation returns a generated `<Name>Payload` carrying the written object in a uniform slot (`node` for a Relay-Node target, `result` otherwise) plus `errors: [FieldError!]!`, each `FieldError` a `field` path and `messages`. Validation failures populate that envelope and return a null object; a **write-authorization denial is a top-level `GraphQLError`**, never an envelope entry. `Meta.permission_classes` defaults to `[DjangoModelPermission]` (the Django `add` / `change` / `delete` model perms), and an explicit `permission_classes = []` is the deliberate allow-any opt-out. The one exception is a model-less `DjangoFormMutation`: its payload is `ok` plus `errors` with no object slot, and with no model to derive perms from it defaults to `DenyAll` (details in the form section below).
 
 ### Model mutations
 
@@ -573,7 +572,7 @@ MIDDLEWARE = [
 
 It runs the body boundary from that position, then your CSRF class runs in full. Listing it after a CSRF entry is refused at startup with `ConfigurationError` rather than allowed to fail open; a project that never edits `MIDDLEWARE` keeps the view-local arrangement.
 
-**The request-body cap is two layers, and you need both.** The application cap guarantees nothing is parsed, allocated, or executed from an over-limit body, but not that the bytes were never *received*: Django's ASGI handler has already drained the request into a spooled temporary file before any application cap can run, and Uvicorn, Hypercorn, and Daphne ship no total-body limit of their own. An edge cap is therefore a co-requirement, never an alternative:
+**The request-body cap is two layers, and you need both.** For a JSON body the application cap guarantees nothing is parsed, allocated, or executed past the limit, but not that the bytes were never *received*: Django's ASGI handler has already drained the request into a spooled temporary file before any application cap can run, and Uvicorn, Hypercorn, and Daphne ship no total-body limit of their own. An edge cap is therefore a co-requirement, never an alternative:
 
 ```nginx
 location /graphql/ {
@@ -582,7 +581,7 @@ location /graphql/ {
 }
 ```
 
-For a `multipart/form-data` POST the bound is the declared `Content-Length`, enforced before `MultiPartParser` runs, so an over-limit declaration is refused with the same `413`, no part parsed. Per-file count, per-file size, and aggregate upload size are **not** bounded by `MAX_REQUEST_BODY_BYTES` — bound those at the proxy, with `DATA_UPLOAD_MAX_NUMBER_FILES` / `FILE_UPLOAD_MAX_MEMORY_SIZE`, or in your own validation.
+For a `multipart/form-data` POST the bound is only the **declared** `Content-Length`, checked before `MultiPartParser` runs: an over-limit declaration is refused with the same `413`, no part parsed, but the view deliberately does not measure the real bytes, because reading them would defeat Django's streaming upload handlers. An absent or understated `Content-Length` therefore reaches the parser, so for uploads the proxy cap is the actual body limit, not a backstop. Per-file count, per-file size, and aggregate upload size are **not** bounded by `MAX_REQUEST_BODY_BYTES` either — bound the count with `DATA_UPLOAD_MAX_NUMBER_FILES` and the sizes at the proxy and in your own per-file validation (`FILE_UPLOAD_MAX_MEMORY_SIZE` only decides memory versus a temporary file; it accepts any size).
 
 **One UTF-8 wire.** A package view accepts UTF-8 and only UTF-8; UTF-16 / UTF-32 and a leading UTF-8 BOM get the same controlled `400` a malformed body gets, and the contract reaches the two multipart control fields (`operations` and `map`) too.
 
@@ -602,7 +601,7 @@ One auditable list for taking a schema from "runs" to "internet-facing". Start w
 
 ### What the package already defaults to safe
 
-Verify these on the deployed endpoint rather than configuring them; the two SDL rows read the `manage.py export_schema` output.
+Verify these on the deployed endpoint rather than configuring them; the two SDL rows read the `manage.py export_schema` output. They hold for the package surfaces, not for plain Strawberry: masking and the operation budget are installed by `DjangoSchema`, the body and UTF-8 boundaries by `DjangoGraphQLView` / `AsyncDjangoGraphQLView`, and the handshake and revalidation rows by the package router with its default consumer.
 
 | Guarantee | Since | Mechanical check |
 |---|---|---|
@@ -614,7 +613,7 @@ Verify these on the deployed endpoint rather than configuring them; the two SDL 
 | Many-side relations expose the bounded connection only | `0.0.14` | the exported SDL carries no raw list sibling you did not opt into |
 | File/image output carries no filesystem `path` unless `Meta.filesystem_path_fields` names the column | `0.0.14` | grep the exported SDL for `path` |
 | Generated writes deny by default (`[]` is the explicit opt-out) | `0.0.11` | an unauthorized generated mutation → the `Not authorized to ...` error |
-| WebSocket handshakes validate `Host` **and** `Origin`; established sockets revalidate the session actor | `0.0.14` | a hostile handshake is denied; a socket surviving an external logout closes `4403` on its next frame |
+| WebSocket handshakes validate `Host` **and** `Origin`; established sockets revalidate the session actor | `0.0.14` | a hostile handshake is denied; a socket surviving an external logout closes `4403` at its next protected checkpoint (`next` / `data` / `error` frames; `ping`, `pong`, keep-alive, and `complete` are not revalidated) |
 
 ### The production GraphQL mount
 
@@ -722,11 +721,12 @@ Never enable it on an internet-facing schema: it returns interpolated SQL values
 ```python
 from debug_toolbar.toolbar import debug_toolbar_urls
 
-INSTALLED_APPS = ["django.contrib.staticfiles", "debug_toolbar", "django_strawberry_framework"]
+INSTALLED_APPS += ["django.contrib.staticfiles", "debug_toolbar", "django_strawberry_framework"]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django_strawberry_framework.middleware.debug_toolbar.DebugToolbarMiddleware",
+    # ...your existing middleware (sessions, CSRF, authentication, ...) stays here
 ]
 
 INTERNAL_IPS = ["127.0.0.1"]
@@ -795,7 +795,13 @@ uv run python examples/fakeshop/manage.py delete_users 5
 An additive two-alias layout for exercising multi-database scenarios, toggled with `FAKESHOP_SHARDED=1`:
 
 ```shell
-# Materialize the secondary shard SQLite file (idempotent)
+# Materialize the secondary shard SQLite file with the default small seed (idempotent)
+FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
+```
+
+`db_shard_b.sqlite3` is a tracked fixture. The stress seed below creates roughly a million catalog rows and rewrites that file, so run it only against a scratch copy (`DJANGO_STRAWBERRY_KANBAN_DB` repoints the default alias; copy the shard file aside as well):
+
+```shell
 FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards --count 5000
 ```
 

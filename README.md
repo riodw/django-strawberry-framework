@@ -2,15 +2,6 @@
 
 [![build][build-image]][build-url] [![coveralls][coveralls-image]][coveralls-url] [![license][license-image]][license-url] [![changelog][changelog-image]][changelog-url]
 
-[build-image]: https://github.com/riodw/django-strawberry-framework/actions/workflows/django.yml/badge.svg
-[build-url]: https://github.com/riodw/django-strawberry-framework/actions
-[coveralls-image]: https://coveralls.io/repos/github/riodw/django-strawberry-framework/badge.svg?branch=main
-[coveralls-url]: https://coveralls.io/github/riodw/django-strawberry-framework?branch=main
-[license-image]: https://img.shields.io/github/license/riodw/django-strawberry-framework
-[license-url]: https://github.com/riodw/django-strawberry-framework/blob/main/LICENSE
-[changelog-image]: https://img.shields.io/badge/changelog-CHANGELOG.md-blue
-[changelog-url]: https://github.com/riodw/django-strawberry-framework/blob/main/CHANGELOG.md
-
 GraphQL for Django the way DRF taught you: `class Meta`, not decorators. Built on [Strawberry](https://github.com/strawberry-graphql/strawberry), with a cooperative N+1 optimizer in the box.
 
 ```python
@@ -29,7 +20,7 @@ class ItemType(DjangoType):
 finalize_django_types()
 ```
 
-That's a complete model-backed type. Relations wire themselves; nested selections become `select_related` / `prefetch_related` / `only()` without you touching a resolver.
+That's a complete model-backed type. Relations wire themselves. Mount `DjangoOptimizerExtension` on the schema and nested selections become `select_related` / `prefetch_related` / `only()` without you touching a resolver; without the extension the types still resolve, one lazy load at a time.
 
 ## Why this package exists
 
@@ -61,9 +52,10 @@ class Query:
 Every `DjangoListField` publishes nullable `offset` and `limit` arguments, and conditionally
 publishes `orderBy` when the target type declares `Meta.orderset_class`. The contract is strictly
 ordered-offset paging rather than stable or repeatable pagination: `offset > 0` requires a visible
-active order (via `orderBy` or a still-effective model `Meta.ordering`). Returned-row and skip
-coordinates are bounded by `ResourcePolicy` without injecting a primary-key tiebreaker or
-`DISTINCT`.
+active order (via `orderBy` or a still-effective model `Meta.ordering`). The skip coordinate is
+always bounded by `ResourcePolicy`, and the returned-row window is too unless the field opts into
+`trusted_max_rows=True`, which lets its declared `max_rows` outrank the policy. Neither bound
+injects a primary-key tiebreaker or `DISTINCT`.
 
 **Three mutation flavors, one shape.** Write against the model, a Django form, or a DRF serializer. Inputs are generated, and all three report validation through the same `FieldError` envelope.
 
@@ -89,7 +81,7 @@ class CreateItemViaSerializer(SerializerMutation):
 - **N+1 detection.** `DjangoOptimizerExtension(strictness="raise")` turns an unplanned lazy load into an error, so N+1 fails CI instead of surprising production.
 - **Visibility that cascades.** Override `get_queryset` as you already do; `apply_cascade_permissions` pushes it across FK / OneToOne edges with zero extra queries.
 - **Write permissions by default.** Generated mutations deny unless `DjangoModelPermission` (Django's `add` / `change` / `delete`) or your own class says yes.
-- **Production defaults.** Unexpected exceptions are masked behind a `correlationId`, request bodies are capped, and file output never leaks the server's filesystem path.
+- **Production defaults.** `DjangoSchema` masks unexpected exceptions behind a `correlationId`, `DjangoGraphQLView` / `AsyncDjangoGraphQLView` cap request bodies, and file output hides the server's filesystem path by default (`Meta.filesystem_path_fields` restores it per field). Build on plain Strawberry's schema or view and you keep none of these.
 - **Session auth.** Opt-in `login` / `logout` / `register` mutations and a `current_user` query.
 - **Tooling.** `TestClient` for in-process GraphQL tests, `DjangoDebugExtension` for SQL in `extensions.debug`, django-debug-toolbar integration, and a Channels router for subscriptions.
 
@@ -97,11 +89,11 @@ class CreateItemViaSerializer(SerializerMutation):
 
 Five optimizer wins over `strawberry-graphql-django`:
 
-- **Cross-request plan cache.** The selection tree is walked once, not on every request.
+- **Cross-request plan cache.** Every repeat of a cacheable query is a hit from a 256-entry LRU, so its selection tree is walked once, not on every request. Plans that bake in a request-scoped `get_queryset` are deliberately uncacheable and rebuild each time.
 - **N+1 detection.** Upstream is preventive only; `strictness="raise"` is a detective mode.
 - **FK-id join elision.** `{ relation { id } }` reads the FK column already on the parent, no join.
 - **Class-creation-time metadata.** Frozen when the type is created, not memoized on first request.
-- **Postgres lateral nested pagination.** Nested connection pages via `CROSS JOIN LATERAL`, paging per parent instead of numbering every child. Opt-in; measured 6.4× on dense pages in one local run.
+- **Postgres lateral nested pagination.** Nested connection pages via `CROSS JOIN LATERAL`, paging per parent instead of numbering every child. Opt-in; measured 6.4× on dense count-free pages in one local run (the benchmark runs the `totalCount` shape separately).
 
 Benchmarks: [`bench_plan_cache.py`][bench-plan-cache] and [`bench_nested_fetch.py`][bench-nested-fetch] (needs `FAKESHOP_PG_DSN`). Numbers are from one machine; run them on yours.
 
@@ -173,3 +165,11 @@ Install, quick start, reading and writing data, transport, and deployment all li
 <!-- .venv/ -->
 
 <!-- External -->
+[build-image]: https://github.com/riodw/django-strawberry-framework/actions/workflows/django.yml/badge.svg
+[build-url]: https://github.com/riodw/django-strawberry-framework/actions
+[coveralls-image]: https://coveralls.io/repos/github/riodw/django-strawberry-framework/badge.svg?branch=main
+[coveralls-url]: https://coveralls.io/github/riodw/django-strawberry-framework?branch=main
+[license-image]: https://img.shields.io/github/license/riodw/django-strawberry-framework
+[license-url]: https://github.com/riodw/django-strawberry-framework/blob/main/LICENSE
+[changelog-image]: https://img.shields.io/badge/changelog-CHANGELOG.md-blue
+[changelog-url]: https://github.com/riodw/django-strawberry-framework/blob/main/CHANGELOG.md

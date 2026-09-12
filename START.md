@@ -2,7 +2,7 @@
 
 You're in `django-strawberry-framework`. For agents, not users. Read once, then [AGENTS.md][agents] (law; this file = terrain). Then go. [CLAUDE.md][claude-md] exists only to make you read both.
 
-**Static reference.** Mechanisms, conventions, hazards that hold across releases. Never state: no version, no shipped list, no in-flight names, no counts a commit can change. State lives in [KANBAN.md][kanban], [TODAY.md][today], [docs/GLOSSARY.md][glossary]. Where a number matters, this file names where to read it. No session notes, cycle status, or "as of" facts here; a lesson lands only once release-independent.
+**Standing reference, maintained not frozen.** Mechanisms, conventions, hazards that hold across releases. Where this file restates a mechanism another file owns (CI job order, hook flags, script inventories), that file is authoritative and this one is corrected to match. Never state: no version, no shipped list, no in-flight names, no counts a commit can change. State lives in [KANBAN.md][kanban], [TODAY.md][today], [docs/GLOSSARY.md][glossary]. Where a number matters, this file names where to read it. No session notes, cycle status, or "as of" facts here; a lesson lands only once release-independent.
 
 ## Reading order
 
@@ -19,7 +19,7 @@ Also: [docs/GLOSSARY.md][glossary] = capability catalog w/ shipped/planned/defer
 
 DRF-shaped Django integration for Strawberry GraphQL. Pre-`1.0`, one maintainer, fast iteration. Shipped surface = glossary's job, not this file's. Version single-sourced: `__version__` in `django_strawberry_framework/__init__.py` (hatchling reads it).
 
-Upstream checkouts for cribbing (AGENTS.md L2): `~/projects/strawberry-django-main/strawberry_django`; `graphene_django` inside `~/projects/django-graphene-filters/.venv`. Behavior ← strawberry-graphql-django. Surface ← django-graphene-filters + DRF.
+Upstream checkouts for cribbing (paths pinned in [AGENTS.md][agents]): `~/projects/strawberry-django-main/strawberry_django`; `graphene_django` inside `~/projects/django-graphene-filters/.venv`. Behavior ← strawberry-graphql-django. Surface ← django-graphene-filters + DRF.
 
 ## How Rio communicates
 
@@ -47,10 +47,12 @@ Rio runs several sessions on this checkout, same branch, same time. Normal.
 
 - Unexpected dirty/untracked files, commits you didn't make = other session. Never revert/"tidy". Never reset `examples/fakeshop/db.sqlite3` while another session may write it.
 - `git add <path>` only; `-A` sweeps their WIP into your commit. Reverse too: your edits may land in THEIR commit; check `git log --stat` before assuming your work is unstaged. Swallowed file can be MIXED (their hunks + yours); back out hunk-wise, not file-wise.
-- No `git stash` / `checkout --` / `restore` on shared tree. Diff your change vs `git show HEAD:<path>` written to scratchpad.
+- No `git stash` / `checkout --` / `restore` on shared tree; the one sanctioned exception is `git checkout HEAD -- docs/review/` to restore that protected directory. Diff your change vs `git show HEAD:<path>` written to scratchpad.
 - `git mv` stages instantly; concurrent commit can adopt your rename while its content edits stay dirty. Rewrite content first vs plain `mv`, `git add` both together, verify `git log --stat` (swept rename vanishes from `git status`).
 - Other session may rewrite main history (amend/rebase). Prove your commit landed: `git merge-base --is-ancestor <sha> HEAD`. Not memory.
-- Commit out of a concurrently-dirty tree w/o touching their hunks: build intended blob (`git show HEAD:<path>` + your diff), `git hash-object -w`, `git update-index --cacheinfo`, commit index. Slow; stages only your bytes.
+- Commit out of a concurrently-dirty tree w/o touching their hunks OR their staged entries: build intended blob (`git show HEAD:<path>` + your diff), `git hash-object -w`; then in a PRIVATE index — `GIT_INDEX_FILE=<scratch>/idx git read-tree HEAD`, `GIT_INDEX_FILE=<scratch>/idx git update-index --add --cacheinfo <mode>,<blob>,<path>`, `GIT_INDEX_FILE=<scratch>/idx git commit` naming NO paths (`--only <paths>` re-reads the WORKING tree, swallowing their hunks back). The shared index is never the commit source, so whatever another session staged before or after your preflight can't ride along. Afterwards `git update-index --cacheinfo` the same entries into the shared index so it matches new HEAD. Slow; stages only your bytes. Verify `git ls-tree HEAD <path>`, not `git status`.
+- MIXED **sqlite** carve: destination = exact copy of `git show HEAD:<db>` in scratch; `ATTACH` the dirty working copy as `wt`; decide the owned rows UP FRONT (table + explicit pk list); `UPDATE main.<t> SET <col> = (SELECT <col> FROM wt.<t> WHERE pk = main.<t>.pk), ... WHERE pk IN (...)` with columns named from `pragma_table_info`, never inferred from `.dump` text diffs (commas, quotes, repeated values, and multi-column edits all misread) — never `DELETE`+`INSERT SELECT` (cascades). Proof: `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, and a per-table `.dump` diff vs HEAD showing 0 lines in every non-owned table.
+- Export generated from a carved DB: prove consistency by reading the renderer's selection set, not by arguing. `_kanban_lib` selects `term { id title anchor statusText }`, never `GlossaryTerm.body` ⇒ a `GlossaryTerm.body`-only edit can't reach `KANBAN.md`; it DOES select `allKanbanBoardDocs { body }`, so a `BoardDoc.body` edit is a board render change.
 - `git diff --cached --name-status` before any `git add`: index may hold their staged work; one commit ships it under your message. If they staged whole tree, `git diff -- <path>` shows your file clean; use `git diff HEAD -- <path>`.
 - Carve-out commit: first grep your new files' imports for symbols ABSENT at HEAD. Rewired onto their refactor → no standalone commit exists; leave dirty, say so.
 - Before recommending push: `git rev-list --left-right --count origin/main...main`. "Tests failing" but local green → `gh run list` first; red job may not be a test job.
@@ -68,7 +70,7 @@ Rio runs several sessions on this checkout, same branch, same time. Normal.
 - **`gh`** for CI runs / Dependabot PRs. Workflows in `.github/workflows/`.
 - **`docker compose -f docker-compose.postgres.yml up -d`** → local Postgres for `FAKESHOP_PG_DSN`.
 - Interpreter pinned by `.python-version`. Shared `.venv` = NEWEST supported, not the floor.
-- Subagents inherit plan mode → return a plan, not edits. Work inline or clear mode first.
+- Subagents inherit the ACTIVE mode: spawned from Plan mode they return a plan, not edits, so clear mode (or spawn from Default) before dispatching implementers; do not fall back to inline work.
 - `ruff format`/`--fix` during a test run invalidates that run's coverage map. Format before/after, not during.
 
 ## Support matrix: floor and ceiling
@@ -116,7 +118,7 @@ Four trees, one `pytest.ini`, one command: `uv run pytest`.
 | `examples/fakeshop/apps/<app>/tests/` | one app's models/admin/services/commands | in-process `schema.execute_sync`; packages `apps.<app>.tests` |
 | `examples/fakeshop/tests/` | project/config only (urls, settings guard, schema export) | not a package |
 
-- **Live-first, both verdicts.** Reachable from a real query → MUST be in `test_query/`. Promoting to live DELETES the package-only stand-in, same change, after proving redundancy empirically. A plan can pin a predicate's rejection live and leave acceptance package-only: check which VERDICT each live row proves. "Fixture can't reach it" = fixture gap, not unreachability. Live-tier README under-enumerates its suites; silence ≠ "no such suite".
+- **Live-first, both verdicts.** Reachable from a real query → MUST be in `test_query/`. Promoting to live DELETES the package-only stand-in, same change, after proving redundancy empirically. A plan can pin a predicate's rejection live and leave acceptance package-only: check which VERDICT each live row proves. "Fixture can't reach it" = fixture gap, not unreachability. The live-tier README suite map indexes every `test_query/test_*.py`; the module docstring is the authoritative description, the map is the index.
 - **First line of every catalog/auth test:** `seed_data(N)` / `create_users(N)` from `apps.products.services`. Library acceptance tests: inline `Model.objects.create(...)`.
 - **Parallel default.** `addopts = -v -n auto --dist loadscope --cov --cov-report=term-missing`. `loadscope` keeps a module on one worker (registry-isolation fixtures; expensive live schema rebuild). Worker = process w/ own registry + in-memory SQLite. Single test: `uv run pytest -n0 tests/test_x.py::test_name`.
 - **Warnings are errors** (`filterwarnings = error`). Never weaken. `tests/conftest.py` closes async SQLite connections that would leak `ResourceWarning`; root `conftest.py` same for Postgres.
@@ -134,15 +136,15 @@ Four trees, one `pytest.ini`, one command: `uv run pytest`.
 
 Local hooks, `.pre-commit-config.yaml`, run order. All via `uv run` (shared ruff). Config file wins over this list.
 
-1. **kanban-tracked-path-constants** (`scripts/build_kanban_tracked_path_constants.py`) — REWRITES constants module from `git ls-files`. Add/delete a tracked package/test file w/o regen → stale → hook rolls back EVERY later commit until a constants-only sync commit. `always_run` (deleted paths never in staged list). Sees a new file only once STAGED; `--all-files` before `git add` proves nothing. Unblock: commit the constants file alone (hook's `files:` doesn't match it).
+1. **kanban-tracked-path-constants** (`scripts/build_kanban_tracked_path_constants.py`) — REWRITES constants module from `git ls-files`. Add/delete a tracked package/test file → the hook rewrites the module and fails the commit until the rewritten module is staged too. `always_run: true`, `pass_filenames: false`, no `files:` key (deleted paths never appear in the staged list). Sees a new file only once STAGED; `--all-files` before `git add` proves nothing. Unblock: `git add` the rewritten constants module alongside the add/delete, rerun the hooks, commit once; no constants-only sync commit.
 2. **source-layout** (`scripts/check_trailing_commas.py --fix`) — trailing-comma explode-at-threshold (4; 2 in `models.py`), ASCII-only `.py`, `.md` link-def scaffold, JSON/GraphQL brace explosion. Auto-fixes; a rewrite fails the run so you re-stage. ASCII rule `.py`-only; em dashes fine in `.md`.
 3. **ruff-format**, 4. **ruff-check --fix**.
 5. **check-kanban-anchors** (`scripts/check_kanban_anchors.py`) — card↔card slug, card↔glossary anchor, render-id collisions. Reads DB → fires on a retitle no staged file names.
 6. **check-citations** (`scripts/check_citations.py`) — every `path::Symbol` in first-party source + board must resolve. Runs last, whole tree (a rename rots citations in files you aren't committing). `path::Symbol` ONLY: `path #"substring"` + `docs/` prose out of scope; citation wrapped across two lines invisible.
 
-CI `lint` job: source-layout + citations in `--check`, `ruff check` / `ruff format --check`, then `--check` on every generator (`build_kanban_md`, `build_kanban_html`, `build_glossary_md`, `build_tree_md`). Hand-edit to a rendered doc goes red THERE, not locally.
+CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruff format --check`, source-layout `--check`, citations `--check`, tracked-path constants `--check`, then `--check` on every generator (`build_kanban_md`, `build_kanban_html`, `build_glossary_md`, `build_tree_md`). Hand-edit to a rendered doc goes red THERE, not locally.
 
-`--check` measures WORKING TREE. Passes in a dirty tree w/ stale HEAD → CI red, local green. Measure HEAD: copy `git show HEAD:examples/fakeshop/db.sqlite3` to scratchpad, run generator w/ `DJANGO_STRAWBERRY_KANBAN_DB` pointing at it.
+`--check` measures WORKING TREE. Passes in a dirty tree w/ stale HEAD → CI red, local green. Measure HEAD: `git archive HEAD | tar -x -C <scratch>/head` and run the generator's `--check` inside that copy (`uv run --project <scratch>/head ...`). Swapping only `DJANGO_STRAWBERRY_KANBAN_DB` to a HEAD database still executes dirty renderer code, settings, migrations and, for `TREE.md`, dirty module docstrings, so it cannot say what HEAD renders.
 
 ## `scripts/`
 
@@ -160,12 +162,12 @@ CI `lint` job: source-layout + citations in `--check`, `ruff check` / `ruff form
 | `check_spec_glossary.py --spec <path>` | spec's `-terms.csv` → real glossary anchors; `--auto-link` rewrites inline mentions (NEXT.md) |
 | `check_alpha_parity.py` | every non-internal Alpha card carries parity link + justification |
 | `prove_failability.py <manifest.json>` | mutate boundary, run, restore, prove by byte compare. THE way to prove a test can fail |
-| `review_inspect.py <file> --output-dir docs/shadow` | AST-only overview + stripped source (`--all` = package); never imports |
+| `review_inspect.py <file> --output-dir <scratch>/inspect` | AST-only overview + stripped source (`--all` = package); never imports. Always pass `--output-dir` into the session scratchpad: the script's default writes flat into `docs/shadow/`, whose four subfolders each have one owner (AGENTS.md) |
 | `review_historical_package_snapshot_at_commit.py <sha>` | package snapshot at commit → `docs/shadow/current/` |
 | `review_changed_python_diffs_against_head.py <sha>` | stripped per-file diffs commit→HEAD → `docs/shadow/old|new|diff/` |
 | `bug_hunt.py` | generates `docs/bug_hunt/bug_hunt-<ver>.md` progress file (HUNT.md) |
 | `list_package_python_changes_by_commit.py` | package `.py` files per commit, for spec attribution |
-| `clean_up.py` | deletes cycle scratch (`docs/shadow/`, `temp-tests/`, `worker-memory/`, `bld-*.md`, `bug_hunt.*.md`). `bld-*.md` glob also eats deliberately-kept finals + other cycle's live artifacts → never use to tidy a cycle; delete by explicit path |
+| `clean_up.py` | deletes cycle scratch (`docs/shadow/`, `temp-tests/`, `worker-memory/`, `bld-*.md`, `bug_hunt-*.md`). `bld-*.md` glob also eats deliberately-kept finals + other cycle's live artifacts → never use to tidy a cycle; delete by explicit path |
 | `bench_plan_cache.py`, `bench_optimizer_walk.py`, `bench_nested_fetch.py` | optimizer benches (plan cache warm/cold; walker cold path; nested-fetch strategies on PG) |
 | `capture_pg_predicate_explain.py` | row-preserving-predicate `EXPLAIN` artifact from actually emitted SQL |
 | `_kanban_lib.py`, `_bench_common.py` | shared plumbing, not entry points |

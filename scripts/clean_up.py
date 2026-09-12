@@ -11,7 +11,7 @@ This script intentionally targets only known generated paths:
 - contents of ``docs/builder/temp-tests/``
 - ``bld-*.md`` files directly under ``docs/builder/``
 - ``bld-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/builder/``
-- ``docs/bug_hunt/bug_hunt.*.md``
+- ``docs/bug_hunt/bug_hunt-*.md``
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ FILE_GLOBS = (
     ("docs/builder", "bld-*.md"),
     ("docs/builder", "bld-*.py"),
     ("docs/builder", "review-*.py"),
-    ("docs/bug_hunt", "bug_hunt.*.md"),
+    ("docs/bug_hunt", "bug_hunt-*.md"),
 )
 
 

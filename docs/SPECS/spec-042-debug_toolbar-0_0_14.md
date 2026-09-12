@@ -52,7 +52,15 @@ cut][glossary-joint-version-cut]. So the `pyproject.toml` / `__version__` /
 this card — the same shared-cut posture [`spec-041`][spec-041] Decision 10 and
 [`spec-039`][spec-039] Decision 14 took. No slice below bumps the version.
 
-Status: **COMPLETE (card `DONE-042-0.0.14`) — both slices built and the card-wrap landed; the `0.0.14` version release rode the joint cut.**
+Status: **COMPLETE (card `DONE-042-0.0.14`).** The middleware, the template asset, the
+soft-dependency gate and both test tiers are on `main`, and the `0.0.14` version release rode
+the joint cut. The shipped contract was extended after the card closed — the example project
+wires the toolbar and the toolbar-present tests run in the live tier, the middleware carries a
+`Content-Encoding` bail and wider response-shape bails, and the bridge template resolves the
+toolbar handle through the shadow DOM under per-node guards, ignores a `debugToolbar` payload
+it cannot read, and skips a panel whose key cannot name a node rather than raising out of the
+patched globals — so the text below is the contract
+as it now stands, not as it stood at the cut.
 Two slices (the card is an M with one module, one template, and one test file):
 Slice 1 (**the dependency gate + `middleware/debug_toolbar.py` + the template +
 `tests/middleware/test_debug_toolbar.py`** — the `django-debug-toolbar` dev-group
@@ -82,254 +90,14 @@ single-upstream-parity posture precedent). [`docs/GLOSSARY.md`][glossary] carrie
 0.0.14`; Slice 2 updates the entry body to the implemented contract while the
 `shipped (0.0.14)` status flip rides the joint cut.
 
-Revision history (kept inline so the spec is self-contained):
-
-- **Revision 1** — initial draft authored from the [`DONE-042-0.0.14`][kanban]
-  card body via the [`docs/SPECS/NEXT.md`][next] flow (2026-07-06). Pinned: the
-  canonical structured filename
-  ([Decision 1](#decision-1--spec-filename-and-canonical-naming)); the card-scope
-  boundary — the server-side toolbar integration ships, the in-response
-  `extensions` surface stays with the sibling card, fakeshop's shipped settings
-  stay toolbar-free, no new `Meta` / settings key
-  ([Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out));
-  the `DebugToolbarMiddleware` symbol name — deliberately the **same** class
-  name as both upstream and stock `django-debug-toolbar`, distinguished by the
-  module path, because a Django middleware's public identity IS its dotted
-  settings string
-  ([Decision 3](#decision-3--the-symbol-is-debugtoolbarmiddleware--same-class-name-distinctly-ours-dotted-path));
-  the `middleware/` subpackage + template-asset + `tests/middleware/` locations
-  ([Decision 4](#decision-4--module-template-and-test-locations-a-middleware-subpackage-an-in-package-template-asset-testsmiddleware));
-  the soft-`django-debug-toolbar` guard as an **import-time**
-  `require_debug_toolbar()` at module top (the `rest_framework/__init__.py`
-  shape, NOT the `routers.py` PEP 562 lazy-symbol shape — the module import is
-  itself the opt-in, per the card's own DoD wording), with the
-  `django-debug-toolbar>=7.0.0` dev-group add + lockfile regeneration as the
-  Slice-1 dependency gate — the floor deliberately **above** upstream's
-  `>=6.0.0` because `7.0.0` is the first release with the Django 6.0 classifier
-  the package advertises (PyPI metadata: `6.0.0` classifies 4.2–5.2 only)
-  ([Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape));
-  the subclass-and-override shape borrowed as-is — `process_view` +
-  `_postprocess`, the module-level `_get_payload` helper, the `_HTML_TYPES`
-  constant, the `TemplatesPanel` skip, and the `DjangoJSONEncoder` re-encode
-  ([Decision 6](#decision-6--subclass-and-override-borrowed-as-is-process_view--_postprocess-_get_payload-_html_types));
-  the Strawberry-view detection pinned against engine-owned
-  `strawberry.django.views.BaseView`, resolving the card's `DjangoGraphQLView`
-  working-name hedge — the package ships no view class of its own; fakeshop and
-  every documented consumer path wire Strawberry's Django views directly
-  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge));
-  the introspection-query skip preserved verbatim
-  ([Decision 8](#decision-8--the-introspection-query-skip-is-preserved-verbatim));
-  the package-tests placement with real in-process fakeshop `/graphql/`
-  requests under per-test settings overrides, justified against the
-  [live-first mandate][glossary-live-first-coverage-mandate] — fakeshop's
-  shipped configuration deliberately carries no soft-dependency middleware, so
-  no live request through the example's own settings can reach these lines
-  ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence));
-  and the joint-cut version deferral
-  ([Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)).
-  One coupling tension is carried into [Risks](#risks-and-open-questions) rather
-  than silently reconciled: `_postprocess` is a private-underscore method of
-  `django-debug-toolbar` — upstream subclasses it anyway (with `@override`), and
-  this card borrows that coupling knowingly, with the floor gate and the
-  behavior-level tests as the containment.
-- **Revision 2** — maintainer-review absorption (2026-07-06/07, two review
-  rounds). First round: the injection contract restated honestly as
-  view-scoped rather than IDE-scoped; `debug_toolbar_urls()` added as the
-  third required setup piece (public docs, fixture, panel-fetch test); the
-  fixture corrected to re-enable `DEBUG=True` (pytest-django's
-  `django_debug_mode` default forces the suite to `DEBUG=False`) with an
-  always-true `SHOW_TOOLBAR_CALLBACK` and debug-toolbar cache hygiene; the
-  no-toolbar baseline moved off byte-equality; pytest restraint recorded.
-  Second round: the test-URLconf import-ordering contract (named module
-  `tests/middleware/debug_toolbar_urls.py`, dotted-path-only reference,
-  `sys.modules` eviction on setup/teardown so `urlpatterns` compute under
-  `DEBUG=True`); Test 3 changed to a **named** operation (a non-null
-  `operationName` requires one); the order-dependent "module not imported"
-  baseline assertion removed in favor of the absence tests; `django_db`
-  marking pinned for the toolbar-present group; the coverage claims mapped
-  branch-by-branch with new targeted units for the branches
-  real requests cannot reach; the fixture's `MIDDLEWARE` built from the real
-  stack and the `DebugToolbar` class caches handled save/clear/restore;
-  `render_panel`'s JSON `content`/`scripts` response shape pinned; remaining
-  "GraphiQL-tagged/-view" phrasing renamed to Strawberry-view terms (Decision
-  7's heading and anchors updated); the ASGI boundary restated as three
-  precise claims; and the debug-toolbar 7.0.0 source files added to the
-  external link block.
-- **Revision 3** — third-review absorption (2026-07-07). The JSON leak guard
-  gained its own real-request negative (Test 8: a test-only JSON probe view in
-  the test URLconf must come back with an unmodified body and no `debugToolbar`
-  key — the HTML negatives alone could not catch an inject-into-every-JSON
-  implementation); the HTML negative (Test 7) made explicitly package-scoped
-  (the stock toolbar handle may legitimately appear under the fixture's
-  always-true callback); the targeted `_postprocess` units reworded around
-  `super()._postprocess(...)` running first (protocol-complete fake toolbar;
-  "no package-specific mutation", not "no touch"); the absence import blocker
-  pinned to absolute top-level `debug_toolbar` names only (the
-  `tests/test_routers.py` scoping), so the leaf always reaches
-  `require_debug_toolbar()` (**this last point superseded by Revision 5** — the
-  `importlib`-based guard needs a `sys.modules` sentinel, not a `__import__`
-  block); and the template-port checklist gained a mechanical guard (Test 16)
-  asserting the five copied-asset invariants as substring checks.
-- **Revision 4** — fourth-review absorption (2026-07-07, source-verified
-  against the debug-toolbar 7.0.0 tag). Two factual corrections: the
-  missing-URLconf failure mode rewritten everywhere it appears (User-facing
-  API, Decision 9's fixture bullet, Test 6, both GLOSSARY checklist items) —
-  the stock postprocess renders the toolbar unconditionally for every
-  processed response and the render reverses `djdt:` routes, so omitting
-  `debug_toolbar_urls()` is a hard `NoReverseMatch` on the first
-  toolbar-processed request, not a quiet panel-click 404; and Test 6's
-  assertion strengthened past the shape check — `render_panel` returns 200
-  JSON with non-empty `content` even when the id resolves to nothing (the
-  "isn't available anymore" fallback), so the test now asserts the fallback
-  absent and a seeded-operation SQL marker present. Precision edits: Decision
-  6 states what `super()._postprocess(...)` actually does in order (per-panel
-  stats/timing, unconditional render/store — the mechanism Test 6 rides and
-  the dev-cost of tagged JSON operations — headers, then conditional HTML
-  handle); a staticfiles + `STATIC_URL` edge-case bullet (the toolbar's own
-  prerequisite, surfacing on `/graphql/` under this middleware); and the
-  template-port paragraph corrected to a byte-identical copy claim (the
-  upstream asset contains no Django template tags to adapt).
-- **Revision 5** — fifth-review absorption (2026-07-08), verified empirically
-  before absorbing. **P1 — the absence-test mechanism.** The toolbar-absent
-  fixture no longer copies the router/DRF `builtins.__import__` block:
-  `require_debug_toolbar()` is a thin
-  [`require_optional_module`][glossary-require-optional-module] wrapper, i.e. an
-  `importlib.import_module("debug_toolbar")` call, and `importlib` routes
-  through `importlib._bootstrap._gcd_import` — it does **not** consult
-  `builtins.__import__`. So the block is a no-op for the guard: it re-imports
-  the still-installed toolbar, and the raise (if any) comes from a later
-  hintless statement-import, not the wrapped guard — Tests 10/12 would have
-  failed for the wrong reason. Corrected to an importlib-compatible
-  `sys.modules["debug_toolbar"] = None` sentinel everywhere the mechanism is
-  prescribed (this glossary bullet, Decision 9, D3, the Slice checklist, the
-  Test-plan header, Tests 10/12); the eviction + **two-sided restore**
-  discipline is unchanged. This supersedes Revision 3's "the leaf always reaches
-  `require_debug_toolbar()` under the block" reasoning. **P1 — the degraded
-  path.** A present-but-broken-install test (Test 11a) was added so the numbered
-  plan actually pins what the [Error shapes](#error-shapes) prose already
-  claimed it pinned. **P2 — two narrow, documented robustness divergences** from
-  the verbatim upstream borrow, each pinned by a targeted unit: `process_view`
-  guards `issubclass` with `isinstance(view, type)` so a non-class `view_class`
-  on unrelated global traffic cannot `TypeError`/500 (a `TypeError` was
-  reproduced); `_get_payload` bails to `None` on a non-object JSON body.
-  **Documentation:** `application/graphql-response+json` stated explicitly out
-  of scope (a follow-up compatibility item); a strict-CSP caveat added for the
-  inline GraphiQL bridge script; the dependency-floor prose reworded off
-  "current release" to a verified-floor claim (`7.0.0` confirmed on PyPI as the
-  first release carrying the `Framework :: Django :: 6.0` classifier). No change
-  to the template-port guard (already substring-based, not a golden file) or the
-  fixture-locality question (already file-local; inner-helper names now named).
-- **Revision 6** — sixth-review absorption (2026-07-08), verified against the
-  debug-toolbar 7.0.0 import chain. **P2 — the missing-`INSTALLED_APPS` gap.**
-  The Error-shapes analysis covered a missing package and a broken install but
-  not the case of a package that is installed while `"debug_toolbar"` is absent
-  from `INSTALLED_APPS` — a common misconfiguration whose failure (traced
-  through `debug_toolbar.middleware`, `debug_toolbar.toolbar`,
-  `debug_toolbar.store`, then `from debug_toolbar.models import HistoryEntry`) is
-  Django's cryptic `HistoryEntry` app-label `RuntimeError`, which never names the
-  missing app and so is not self-actionable. Added a **second wiring gate** in
-  the leaf (`apps.is_installed("debug_toolbar")` immediately after
-  `require_debug_toolbar()`, raising `ImproperlyConfigured` from
-  `_DEBUG_TOOLBAR_APP_HINT`), a new [Error shapes](#error-shapes) bullet, and
-  Test 11b (toolbar importable, app omitted, `ImproperlyConfigured` asserted).
-  This is the card's one deliberate step outside the pure-`ImportError` error
-  model — an `INSTALLED_APPS` omission is a settings error and
-  `ImproperlyConfigured` is Django's idiom for it; the "top-level package only"
-  scope still governs `require_debug_toolbar()`'s import guard, a separate
-  concern from this wiring gate.
-- **Revision 7** — seventh-review absorption (2026-07-08). **P2 — the ported
-  GraphiQL bridge template broke global `JSON.parse` semantics.** As a verbatim
-  borrow the asset inherited two upstream bugs that are unsafe once the hook is a
-  *global* patch: `JSON.parse = function (text)` dropped the standard `reviver`
-  argument (every page-wide `JSON.parse(text, reviver)` lost its reviver while
-  GraphiQL was open), and `update`'s `data.hasOwnProperty(...)` guard threw for
-  null-prototype / `hasOwnProperty`-shadowing objects. Hardened to
-  `origParse.apply(this, arguments)` (reviver preserved),
-  `Object.prototype.hasOwnProperty.call(...)` behind a `typeof data !== "object"`
-  bail, and an `if (djDebug === null)` guard before DOM mutation — the card's
-  **third** documented robustness divergence from the verbatim borrow
-  (template-side; the middleware carries the other two), recorded in the
-  [Template-port checklist](#from-strawberry-graphql-django--borrow-the-mechanism-verbatim)
-  and re-pinned by Test 16 (renamed to
-  `test_template_port_invariants_and_robustness_divergence`). **P3 — the shared
-  soft-dependency test helper.** `tests/_soft_dependency.py::evicted_modules`
-  tracked parent-attr presence with a `None` check whose teardown `hasattr` probe
-  could fire a package `__getattr__` (the exact footgun the helper's docstring
-  claims to avoid); it now uses a `missing` sentinel with `vars(parent).pop` (no
-  `hasattr`/`delattr`), and its docstring no longer claims `require_drf` uses a
-  statement `import` (it delegates to `require_optional_module` like the other two
-  guards). The tracked `examples/fakeshop/db.sqlite3` diff was reviewed and
-  **kept by maintainer decision** (not feature residue to revert). **Slice 2 (the
-  docs card-wrap) was finished this pass** on top of a concurrent kanban
-  card-wrap that had already flipped the card to `DONE-042-0.0.14`: this pass
-  ticked the shipped definition-of-done items, ran `import_spec_terms` (which
-  reconciles every done card, so the `db.sqlite3` diff legitimately spans card
-  040's post-archive `docs/SPECS/` path), regenerated the DB-backed `KANBAN` /
-  `GLOSSARY` and script-rendered `TREE` docs, and flipped this status line + the
-  `README` off their planned wording. The `Debug-toolbar middleware` glossary
-  body now carries the implemented contract (its status stays `planned for
-  0.0.14` until the joint cut). The kanban tables stay owned by the concurrent
-  writer; the mixed DB + generated-doc diff is handed to the maintainer to
-  reconcile at commit.
-- **Revision 8** — eighth-review absorption (2026-07-08).
-  **P2 — the GraphiQL bridge could still leak the server-only `debugToolbar` key
-  and could throw inside the global `JSON.parse` patch.** Revision 7's
-  `if (djDebug === null) return data;` guard returned *before*
-  `delete data.debugToolbar`, so a page whose toolbar DOM did not render returned
-  the debug payload back to GraphiQL unscrubbed; and the per-panel DOM writes
-  assumed every panel in the payload had a matching content/nav node, so a
-  panel/DOM mismatch threw inside the patched `JSON.parse` /
-  `Response.prototype.json` and broke the IDE response path rather than skipping
-  one panel. Both are the same class the Revision-7 divergences already address.
-  Hardened so **payload scrubbing is mandatory and DOM updates are best-effort**:
-  the `debugToolbar` key is captured and deleted *before* the null-handle bail,
-  the panel loop is a side-effect-only `forEach` that skips an absent content
-  node and writes the nav subtitle only when the nav item exists. This grows the
-  card's third (template-side) divergence from two spots to a four-guard family
-  unified by that rule (see the [Template-port checklist](#from-strawberry-graphql-django--borrow-the-mechanism-verbatim));
-  the DOM-update body is otherwise still upstream's. Test 16 gains an ordering
-  assertion pinning the scrub before the null-handle bail. **P3 — the middleware
-  module docstring** said "No other behavior differs" after enumerating the two
-  Python divergences, eliding the documented template-side third; reworded to
-  scope "two narrow divergences" to the Python middleware and name the template's
-  defensive-DOM guards as the third. **The spec opener** still read as "Planned for
-  `0.0.14`" and carried its authoring-time status id, contradicting the
-  `COMPLETE (DONE-042-0.0.14)` status; realigned to the shipped-spec convention
-  (past tense + `DONE-` id), matching spec-040. The review's separate claim that
-  the *unchecked implementation checklist* is itself a defect was **not adopted**:
-  every shipped spec (e.g. spec-040) leaves its checklist unticked by convention
-  — the `Status:` line is the completion source of truth — so only the
-  contradictory opener was corrected.
-- **Revision 9** — post-ship maintainer change (2026-07-09), recorded here per
-  the spec's supersession convention (this note is authoritative over the
-  ship-time text it names). The example project's debug-toolbar opt-in that
-  [Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out)
-  scoped OUT (deferred to the fakeshop-activation card
-  [`TODO-BETA-062-0.1.5`][kanban]) was brought forward: **fakeshop's shipped
-  settings now wire the toolbar** — `"debug_toolbar"` in `INSTALLED_APPS`, the
-  package `DebugToolbarMiddleware` near the front of `MIDDLEWARE` (replacing no
-  stock entry — fakeshop never carried one), `INTERNAL_IPS = ["127.0.0.1"]`, and
-  `debug_toolbar_urls()` in `config.urls`. That flips
-  [Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)'s
-  premise (it placed the tests package-internal *because* fakeshop shipped no
-  toolbar), so the toolbar-PRESENT tests moved to the live tier at
-  `examples/fakeshop/test_query/test_debug_toolbar_api.py` per the
-  [live-first mandate][glossary-live-first-coverage-mandate] — driving fakeshop's
-  real `/graphql/` request path with only a `DEBUG=True` override (pytest-django
-  forces the suite to `DEBUG=False`, under which both `show_toolbar` and the
-  DEBUG-gated `debug_toolbar_urls()` short-circuit) and reloading `config.urls`
-  inside that override so the `djdt` routes populate. `tests/middleware/debug_toolbar_urls.py`
-  (the test URLconf composing fakeshop's `urlpatterns` + `debug_toolbar_urls()` +
-  the JSON probe) was **deleted**: fakeshop's real `config.urls` now supplies the
-  `djdt` routes, and the JSON-leak negative (Test 8) was recast as a
-  `RequestFactory` unit staying in `tests/middleware/test_debug_toolbar.py`
-  alongside the soft-dependency absence matrix and the coverage-only branch units
-  — the paths no live request can reach. The package coverage gate
-  (`fail_under = 100`) holds: 3014 tests pass, `middleware/debug_toolbar.py` at
-  100%. So wherever the text below says fakeshop carries no toolbar (Decision 2,
-  Current state, Decision 9's fixture prose) or names the test URLconf as a
-  shipped file (Test plan, the file table), read it as the ship-time record this
-  revision supersedes.
+Deliberation for every decision below — the alternatives it rejected and why each lost, the
+derivations that do not change how it is built, every change it has undergone, and every claim it
+once made and may no longer make — lives in the companion
+[`spec-042-debug_toolbar-0_0_14-rationale.md`][rationale]. This spec is the contract and states
+only what is currently true. The numbered revisions this spec's drafting passed through are named
+there too, under `## Round vocabulary`, and nowhere here: a citation of the form
+`spec-042 Revision N` — first-party source and sibling specs both carry some — resolves to the
+companion, which is why the names were kept rather than discarded.
 
 ## Key glossary references
 
@@ -348,7 +116,7 @@ used throughout the spec:
   UI; that card surfaces SQL / exceptions **inside** the GraphQL response's
   `extensions` map. Both useful, not mutually exclusive — the card body says so
   and this spec preserves the boundary
-  ([Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out)).
+  ([Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-and-async-verification-stay-out)).
 - [Soft dependency][glossary-soft-dependency] — the pattern this card
   instantiates a third time: one `require_*()` guard over the
   `utils/imports.py` optional-import owner, one install-hint constant,
@@ -367,7 +135,7 @@ used throughout the spec:
   refinement — but the absence itself is simulated with an importlib-compatible
   `sys.modules["debug_toolbar"] = None` sentinel, **not** the router/DRF
   `builtins.__import__` block, because the guard imports via `importlib`, which
-  the block does not intercept (Decision 9, Revision 5).
+  the block does not intercept (Decision 9).
 - [`require_optional_module`][glossary-require-optional-module] — the raising
   optional-import primitive [`spec-041`][spec-041] Slice 1 landed in
   [`utils/imports.py`][utils-imports]; `require_debug_toolbar()` is a thin
@@ -379,17 +147,18 @@ used throughout the spec:
   ([Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)).
 - [Live-first coverage mandate][glossary-live-first-coverage-mandate] — the
   test-placement rule
-  [Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)
-  answers: the covering tests drive **real fakeshop `/graphql/` requests**, but
-  they live in `tests/middleware/` because the middleware only exists in the
-  request path under per-test settings overrides — fakeshop's shipped settings
-  deliberately do not enable a soft-dependency middleware.
-- [Schema reload discipline][glossary-schema-reload-discipline] — the fixture
-  obligation Decision 9 inherits from the acceptance suites: package tests that
-  execute real GraphQL through the aggregate fakeshop schema call the
-  single-sited `schema_reload.reload_all_project_schemas()` on setup, before
-  any URLconf step, so a prior package-test `registry.clear()` can never
-  surface as an order-dependent `LazyType` `KeyError` / `DuplicatedTypeName`.
+  [Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)
+  answers: the example's shipped settings wire the toolbar, so the toolbar-present
+  tests drive **real fakeshop `/graphql/` requests** from the live tier, and only
+  the paths no live request can reach — the soft-dependency absence matrix and the
+  coverage-only branch units — stay in `tests/middleware/`.
+- [Schema reload discipline][glossary-schema-reload-discipline] — the
+  order-independence obligation the toolbar-present tests inherit from the live
+  acceptance suites: a test executing real GraphQL through the aggregate fakeshop
+  schema rebuilds that schema on setup via the single-sited
+  `schema_reload.reload_all_project_schemas()` helper, so a package test's
+  `registry.clear()` can never surface as an order-dependent `LazyType`
+  `KeyError` / `DuplicatedTypeName`.
 - [`seed_data`][glossary-seed-data] — the repo's seed-helper rule applied to
   the [Test plan](#test-plan): every product-query test's first executable
   line is `seed_data(1)` (or an explicit `seed_data(N)`) from
@@ -409,9 +178,9 @@ used throughout the spec:
   discipline, the import-time-guard-in-a-leaf-package shape this card's
   Decision 5 mirrors).
 - [`TestClient`][glossary-testclient] / [`GraphQLTestCase`][glossary-graphqltestcase]
-  — the `0.0.14` sibling card (`TODO-ALPHA-043-0.0.14`) whose helpers own
-  HTTP-level test ergonomics; this card's tests use `django.test.Client`
-  directly, as the whole suite does today.
+  — the `0.0.14` sibling card whose helpers own HTTP-level test ergonomics; the
+  toolbar's live tier posts its GraphQL envelopes through `TestClient`, so the
+  toolbar sees the same request path a consumer's own test would drive.
 - [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] — untouched
   here, but the reason this card matters more for this package than for a
   generic GraphQL library: the SQL panel is how a developer *sees* the
@@ -466,19 +235,31 @@ in-process fakeshop request tests.
         describes the verification but does not override that rule. When the
         floor is checked, the three-places-that-must-agree rule applies — the
         dev-group specifier, the `_DEBUG_TOOLBAR_INSTALL_HINT` string, and the
-        re-typed test literal all name the same floor.
+        re-typed test literal all name the same floor, and the package test
+        compares all three (hint against literal, literal against the
+        [`pyproject.toml`][pyproject] row) so none can move alone. Those three
+        are the **gated** sites, not the whole population: documentation that
+        restates the floor is gated by nothing, so a floor bump sweeps the tree
+        instead of trusting any enumeration of where it is written — and sweeps
+        for the package **name**, reading each hit, rather than for the
+        `django-debug-toolbar>=` specifier, which a restatement separating the
+        name from the constraint with a backtick or a space does not match.
   - [ ] **The Strawberry view-class gate rides the same commit**: confirm
         `strawberry.django.views.BaseView` (the `issubclass` target of
-        [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge))
-        is importable at the package's pinned `strawberry-graphql>=0.262.0`
-        floor in an isolated throwaway venv (never the shared `.venv` — the
-        [`spec-041`][spec-041] gate discipline); its presence at the installed
-        strawberry 0.316.0 is verified now (`strawberry/django/views.py`
-        defines `BaseView` with `GraphQLView` / `AsyncGraphQLView` both
-        subclassing it), the floor-presence check is upstream history
-        re-confirmed at the gate. If it is missing at the floor, bump the
-        project's Strawberry floor instead. The command and outcome are
-        recorded in the build artifact
+        [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned))
+        is importable at the package's declared `strawberry-graphql` floor in
+        an isolated throwaway venv (never the shared `.venv` — the
+        [`spec-041`][spec-041] gate discipline). **The floor version is read at
+        gate time** from [`pyproject.toml`][pyproject] and
+        [`docs/builder/BUILD.md`][build] `## Floor verification`, never from a
+        number restated in this spec: a spec that names a floor makes a
+        completion claim that the next floor bump falsifies. Its presence at the
+        installed strawberry is verified alongside
+        (`strawberry/django/views.py` defines `BaseView` with `GraphQLView` /
+        `AsyncGraphQLView` both subclassing it); the floor-presence check is
+        upstream history re-confirmed at the gate. If it is missing at the
+        floor, bump the project's Strawberry floor instead. The command and
+        outcome are recorded in the build artifact
         ([Definition of done](#definition-of-done)).
   - [ ] `django_strawberry_framework/middleware/__init__.py` (new) — the
         subpackage marker with its module docstring; imports nothing optional,
@@ -500,11 +281,12 @@ in-process fakeshop request tests.
         queries; refresh `Content-Length` on both mutation paths)
         ([Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape)
         / [Decision 6](#decision-6--subclass-and-override-borrowed-as-is-process_view--_postprocess-_get_payload-_html_types)
-        / [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge)
+        / [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned)
         / [Decision 8](#decision-8--the-introspection-query-skip-is-preserved-verbatim)).
   - [ ] `django_strawberry_framework/templates/django_strawberry_framework/debug_toolbar.html`
         (new) — the toolbar-frontend JS asset, ported from
-        [upstream's template][upstream-template] with no behavioral change (the
+        [upstream's template][upstream-template] carrying the documented guard
+        divergences of the [template-port checklist](#borrowing-posture) (the
         `JSON.parse` / `Response.prototype.json` patch consuming the injected
         `debugToolbar` key and updating the panel titles / subtitles /
         `data-request-id`); rendered by the middleware via
@@ -512,47 +294,41 @@ in-process fakeshop request tests.
         and resolved through Django's app-dirs template loader against the
         package's shipped [`AppConfig`][glossary-django-appconfig]
         ([Decision 4](#decision-4--module-template-and-test-locations-a-middleware-subpackage-an-in-package-template-asset-testsmiddleware)).
-  - [ ] `tests/middleware/test_debug_toolbar.py` (new, plus the
-        `tests/middleware/` package marker and the named test-URLconf module
-        `tests/middleware/debug_toolbar_urls.py` composing fakeshop's
-        `urlpatterns` + `debug_toolbar_urls()` + the test-only JSON probe
-        view — referenced by dotted path
-        only, evicted from `sys.modules` around each fixture activation so its
-        `urlpatterns` are computed under `DEBUG=True`, per Decision 9) —
-        **toolbar-present** (module- or class-level `pytest.mark.django_db`):
-        real in-process fakeshop `/graphql/` requests via
-        `django.test.Client` under the Decision 9 fixture (`DEBUG=True` +
-        `debug_toolbar` app + `MIDDLEWARE` built from the real stack + the
-        `ROOT_URLCONF` test module +
-        always-true `SHOW_TOOLBAR_CALLBACK`, with `show_toolbar_func_or_path`
-        cache clears and the `DebugToolbar._panel_classes`/`_urlpatterns`
-        save/clear/restore on setup/teardown), each product-query test
-        starting with
-        [`seed_data(1)`][glossary-seed-data] — covering the GraphiQL HTML path, the JSON operation
-        path (a **named** operation when `operationName` is non-null), the
-        introspection skip, the deterministic JSON-`Accept` GET
-        branch, the **panel-content route fetch through `debug_toolbar_urls()`
+  - [ ] Both test tiers land (the `tests/middleware/` package marker included),
+        split per
+        [Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence).
+        **Toolbar-present — `examples/fakeshop/test_query/test_debug_toolbar_api.py`**
+        (class-level `pytest.mark.django_db`): real fakeshop `/graphql/`
+        requests through the example's shipped toolbar wiring, under a
+        `DEBUG=True` override that reloads `config.urls` inside itself, an
+        always-true `SHOW_TOOLBAR_CALLBACK`, and the
+        `show_toolbar_func_or_path` cache clear plus the
+        `DebugToolbar._panel_classes`/`_urlpatterns` save/clear/restore — each
+        product-query test starting with [`seed_data(1)`][glossary-seed-data];
+        covering the GraphiQL HTML path, the JSON operation path (a **named**
+        operation when `operationName` is non-null), the introspection skip, the
+        deterministic JSON-`Accept` GET branch, the **panel-content route fetch
         using the injected `requestId`** (asserting `render_panel`'s JSON
-        `content`/`scripts` shape), the non-GraphiQL passthroughs (HTML views
-        and the JSON-probe leak guard), the
-        positive/negative view detection, plus the coverage-only targeted
-        units (streaming early-out, no-`request_id` bail / `has_content`
-        false, header-present `Content-Length` refreshes) and the
-        template-port guard over the five copied-asset invariants.
-        **toolbar-absent**: the eviction + two-sided parent-attribute restore
-        pattern from
+        `content`/`scripts` shape), the HTML passthroughs for both Django
+        dispatch shapes, and the inert-under-shipped-settings baseline.
+        **Package-tier — `tests/middleware/test_debug_toolbar.py`**: the paths no
+        live request reaches — the JSON-probe leak guard, the coverage-only
+        targeted units (streaming early-out, encoded-body bail, no-`request_id`
+        bail / `has_content` false / non-object and undecodable body bails, the
+        non-class `view_class` guard, header-present `Content-Length`
+        refreshes), the template-port guard, and **toolbar-absent**: the
+        eviction + two-sided parent-attribute restore pattern from
         [`tests/rest_framework/test_soft_dependency.py`][test-soft-dependency],
         but with an importlib-compatible `sys.modules["debug_toolbar"] = None`
         sentinel in place of the `builtins.__import__` block (the guard imports
-        via `importlib`, which the block does not intercept — Revision 5) —
+        via `importlib`, which the block does not intercept) —
         `import django_strawberry_framework` and `import
         django_strawberry_framework.middleware` both succeed; `import
         django_strawberry_framework.middleware.debug_toolbar` raises
         `ImportError` carrying the install hint (matched against a re-typed
         literal, the `_HINT_SUBSTRING` drift-catch discipline); plus the
-        present-but-broken-install degraded test (Test 11a)
-        ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)
-        / [Test plan](#test-plan)).
+        present-but-broken-install degraded test and the missing-`INSTALLED_APPS`
+        wiring gate ([Test plan](#test-plan)).
   - [ ] Every new symbol carries its docstring (the [`docs/TREE.md`][tree] render
         fails on missing module docstrings) and any staged-but-not-implemented
         seam carries a `TODO(spec-042 Slice N)` source anchor per
@@ -661,8 +437,9 @@ A true description of the repo as this spec is authored:
   `ensure_csrf_cookie`, with `graphql_ide="graphiql"`), and the installed
   strawberry 0.316.0 defines `BaseView` as the shared base of `GraphQLView`
   and `AsyncGraphQLView` ([`strawberry/django/views.py`][venv-strawberry-views]).
-  This is the fact that resolves the card's view-detection hedge
-  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge)).
+  That shared engine base is what the detection targets
+  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned)),
+  and it is why the package's later own views are covered by the same check.
 - **`django-debug-toolbar` is absent at spec-authoring time.** As this spec is
   authored it is in neither `[project].dependencies` nor
   `[dependency-groups].dev` in [`pyproject.toml`][pyproject], and `import
@@ -684,10 +461,11 @@ A true description of the repo as this spec is authored:
   with `pythonpath = examples/fakeshop`, so a root-`tests/` test can drive the
   real fakeshop `/graphql/` URLconf (GraphiQL page and products schema,
   real SQL) through `django.test.Client` — the vehicle
-  [Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)
-  uses. Fakeshop's shipped settings carry no `debug_toolbar` app and no toolbar
-  middleware — and this card deliberately keeps it that way
-  ([Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out)).
+  [Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)
+  uses. At authoring time fakeshop's shipped settings carried no `debug_toolbar`
+  app and no toolbar middleware; the example wires all three toolbar pieces
+  today, which is what puts the toolbar-present tests in the live tier
+  ([Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)).
 - **The version line reads `0.0.13`, and the `0.0.14` joint cut is already in
   motion.** [`DONE-041-0.0.14`][kanban] landed with its version bump deferred;
   `TODO-ALPHA-043` / `044` are non-Done at this card's patch version, so the
@@ -723,10 +501,12 @@ A true description of the repo as this spec is authored:
    settings dotted path, the middleware's equivalent of an import line.
 4. **Both dependency states tested, against real requests.** The
    toolbar-present tests drive the real fakeshop GraphiQL page and a real
-   SQL-emitting products query through `django.test.Client`; the toolbar-absent
-   path pins the guarded `ImportError`. The package coverage gate
+   SQL-emitting products query over the example's shipped wiring, posting their
+   GraphQL envelopes through the package's own
+   [`TestClient`][glossary-testclient]; the toolbar-absent path pins the guarded
+   `ImportError`. The package coverage gate
    (`fail_under = 100`) holds with `middleware/debug_toolbar.py` included
-   ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)).
+   ([Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)).
 5. **Own nothing the toolbar already owns.** No panel logic, no request
    tracking, no toolbar configuration surface — the package contributes the
    GraphQL-shaped injection points and nothing else, so toolbar upgrades keep
@@ -742,21 +522,14 @@ A true description of the repo as this spec is authored:
   — graphene-django parity, a Strawberry `SchemaExtension`, no toolbar
   involved. The two are complementary by design; nothing in this card reads or
   writes `extensions`.
-- **Wiring the toolbar into fakeshop's shipped settings.** The example's
-  runtime path stays free of soft dependencies (the [`spec-041`][spec-041]
-  posture for `channels`, applied again): no `debug_toolbar` in fakeshop's
-  `INSTALLED_APPS`, no middleware entry, no `INTERNAL_IPS`. The tests wire it
-  per-test via settings overrides
-  ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence));
-  a dev-ergonomics opt-in in the example (a `DEBUG`-gated conditional settings
-  block) is a maintainer call for the fakeshop-activation card
-  ([`TODO-BETA-062-0.1.5`][kanban]) if wanted at all.
-- **A package view class.** The Strawberry-view detection targets Strawberry's
-  engine-owned `BaseView`
-  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge));
-  shipping a `DjangoGraphQLView` wrapper just to have a package-owned
-  `issubclass` target would be surface for surface's sake. If the package ever
-  ships its own view, that card updates the one `issubclass` line.
+- **A package view class shipped for detection's sake.** The Strawberry-view
+  detection targets Strawberry's engine-owned `BaseView`
+  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned)),
+  never a package-owned class — a view introduced so that a middleware can
+  `issubclass` it would be surface for surface's sake. The package's own
+  [`views.py`][views] views ship for transport reasons of their own and are
+  covered by the engine-owned check for free, because they subclass Strawberry's
+  views; this card contributes no view and no `issubclass` target.
 - **Toolbar configuration passthrough.** `DEBUG_TOOLBAR_CONFIG`,
   `SHOW_TOOLBAR_CALLBACK`, panel selection, and `INTERNAL_IPS` are
   `django-debug-toolbar`'s own settings surface and remain the consumer's
@@ -800,21 +573,21 @@ is consistent with the module's shape: everything hard lives in
 - **`_get_payload(request, response, toolbar) -> dict | None`** — module-level
   helper: bail (`None`) when the toolbar assigned no `request_id`; otherwise
   decode the JSON response body (`force_str` with the response charset,
-  `object_pairs_hook=OrderedDict`), **bail (`None`) again if the decoded body is
-  not a mapping** (the P2.3 guard — see below), attach
+  `object_pairs_hook=OrderedDict`), **bail (`None`) again on any response-shape
+  failure** — undecodable bytes, unparseable text, or a decoded body that is not
+  a JSON object (see below), attach
   `payload["debugToolbar"] = {"panels": {...}, "requestId": toolbar.request_id}`,
   and fill `panels` from `reversed(toolbar.enabled_panels)` with each panel's
   `title` (only when `panel.has_content`, called if callable) and
   `nav_subtitle` (called if callable), **skipping `TemplatesPanel`** (its
-  content churns per request and floods the payload). The non-mapping bail is
-  the card's second deliberate divergence from upstream (which does
-  `payload = json.loads(...)` then `payload["debugToolbar"] = ...` assuming a
-  dict): a valid single GraphQL response is always a JSON object, but a
-  malformed test view or a future batch-response shape could decode to a list or
-  scalar, and without the guard the subscript-assign raises and this dev-only
-  tool turns an unusual response into a 500. `if not isinstance(payload, dict):
-  return None` keeps the toolbar silent on such responses instead. Test 14
-  pins it.
+  content churns per request and floods the payload). The response-shape bails
+  are the module's second deliberate divergence from upstream, which decodes and
+  subscript-assigns unconditionally: a valid single GraphQL response is always
+  decodable JSON and always an object, but a malformed view, a mislabelled
+  charset, or a future batch-response shape is none of those, and upstream's form
+  then raises and turns this dev-only tool into a 500. Guarding the **answer**
+  rather than one spelling of the bad input is why the bail covers the decode,
+  the parse and the type together instead of only the non-object case.
 - **`DebugToolbarMiddleware(debug_toolbar.middleware.DebugToolbarMiddleware)`**
   with exactly two methods:
   - `process_view` — `request._is_graphiql = isinstance(view, type) and
@@ -822,7 +595,7 @@ is consistent with the module's shape: everything hard lives in
     None)` and `BaseView` is `strawberry.django.views.BaseView`. The
     `isinstance(view, type)` guard is a deliberate, narrow divergence from
     upstream's `bool(view and issubclass(...))` — see
-    [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge).
+    [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned).
   - `_postprocess` (decorated `@override`) — call `super()._postprocess(...)`
     first (the stock toolbar does its own work: handle insertion into the
     GraphiQL HTML page, history tracking); return early for
@@ -849,8 +622,9 @@ The mechanism is borrowed as-is
 ([Decision 6](#decision-6--subclass-and-override-borrowed-as-is-process_view--_postprocess-_get_payload-_html_types));
 the deltas are the module path, the template's render path
 (`django_strawberry_framework/debug_toolbar.html`), the soft-dependency guard
-upstream does not need, and the documented robustness divergences (two
-Python-middleware, plus the template-side guard family — all enumerated below).
+upstream does not need, and the documented robustness divergences — **three**
+Python-middleware ones plus the template-side guard family, all enumerated
+below.
 
 **Template-port checklist.** Because the asset is JavaScript and the package
 test suite has no JS runtime, the port is a behavior-preserving copy verified
@@ -868,46 +642,88 @@ alone:
 - the `data-request-id` update on `#djDebug` (via `setAttribute`) is preserved;
 - the per-panel title / subtitle DOM updates are preserved.
 
-**Documented robustness divergences (the card's third divergence, template-side;
-Revisions 7–8).** Upstream's hook is a verbatim borrow that is unsafe as a
-*global* patch, in the same "a dev-only tool that patches a global must neither
-corrupt nor crash unrelated page code" class the middleware's other two
-divergences address. Once `update` is wired into the page-wide `JSON.parse` /
-`Response.prototype.json`, the guiding rule is **payload scrubbing is mandatory
-and DOM updates are best-effort**. The port diverges from the borrow in four
-spots, all serving that rule:
+**Documented robustness divergences (the template-side family).** Upstream's
+hook is a verbatim borrow that is unsafe as a *global* patch, in the same "a
+dev-only tool that patches a global must neither corrupt nor crash unrelated page
+code" class the middleware's three Python divergences address. Once `update` is
+wired into the page-wide `JSON.parse` / `Response.prototype.json`, the guiding
+rule is **payload scrubbing is mandatory and DOM updates are best-effort**. The
+port diverges from the borrow in seven spots, every one of them serving that rule:
 
-- **Reviver preservation (Rev 7).** Upstream's `JSON.parse = function (text) {
+- **Reviver preservation.** Upstream's `JSON.parse = function (text) {
   return update(origParse(text)); }` drops the standard second `reviver`
   argument, so every page-wide `JSON.parse(text, reviver)` silently loses its
   reviver while GraphiQL is open — the port forwards every argument via
   `JSON.parse = function () { return update(origParse.apply(this, arguments)); }`.
-- **Membership-guard safety (Rev 7).** Upstream's
+- **Membership-guard safety.** Upstream's
   `!data.hasOwnProperty("debugToolbar")` guard throws for a null-prototype object
   (`Object.create(null)`) or one that shadows `hasOwnProperty` — the port's
-  `update` bails on `data === null`, `typeof data !== "object"`, and
-  `!Object.prototype.hasOwnProperty.call(data, "debugToolbar")`.
-- **Mandatory scrub before the null-handle bail (Rev 8).** The port captures the
+  `update` bails unless the record predicate below accepts `data` **and**
+  `Object.prototype.hasOwnProperty.call(data, "debugToolbar")` finds the key, so
+  neither shape reaches a method lookup on the payload itself.
+- **Mandatory scrub before the null-handle bail.** The port captures the
   `debugToolbar` payload and `delete`s the key *before* the
   `if (djDebug === null) return data;` guard, so a page whose toolbar DOM did not
   render still returns a scrubbed GraphQL payload instead of leaking the
-  server-only key back to GraphiQL. (Rev 7 added the `djDebug === null` guard for
-  crash-avoidance but returned *before* the scrub; Rev 8 makes the scrub
-  unconditional.)
-- **Best-effort per-panel DOM (Rev 8).** The panel loop is a side-effect-only
+  server-only key back to GraphiQL. The ordering is the contract, not an
+  accident: the scrub is unconditional and the DOM work is what may be skipped.
+- **Best-effort per-panel DOM.** The panel loop is a side-effect-only
   `forEach` that skips a panel whose content node is absent (`content === null`)
   and writes the nav subtitle only when the nav item exists, so a panel present
   in the payload but missing from the current toolbar DOM cannot throw inside the
   patched `JSON.parse` / `Response.prototype.json` and break the IDE response
-  path.
+  path. The same promise covers the panel **key**, which the loop interpolates
+  into the `#…` selectors locating that panel's content and nav nodes: the key
+  reaches `querySelector` only through a form the selector parser always
+  accepts, and the one key that cannot be put into such a form is skipped
+  before either lookup. So every key either names a node, resolves to nothing
+  and skips that one panel exactly as an absent node does, or is skipped
+  outright — and none raises a `DOMException` out of the patched globals. What
+  the guard makes total is the **answer** the loop needs, not the lookup
+  itself. A key that cannot be *resolved* and a node that cannot be *found* are
+  the same promise, so they are guarded here rather than as a form of their own.
+- **Shadow-DOM handle resolution.** `django-debug-toolbar` 7 defaults
+  `USE_SHADOW_DOM=True`, so `#djDebug` lives inside `#djDebugRoot`'s shadow tree
+  and upstream's bare `document.getElementById("djDebug")` resolves to `null` —
+  under which the guard above is correct and every DOM update silently stops. The
+  port mirrors the stock toolbar's own element lookup: read `#djDebugRoot`, and
+  when it has a `shadowRoot` resolve `#djDebug` inside it, falling back to the
+  light-DOM lookup so `USE_SHADOW_DOM=False` consumers keep working. Nav lookups
+  go through the resolved handle for the same reason.
+- **Per-node null guards on the panel render.** Every nested `querySelector`
+  result inside a panel — the panel title, its heading, the scroll container, the
+  loader's content parent, and the nav subtitle — is null-checked before it is
+  written to. The chained upstream form throws a `TypeError` inside the patched
+  `JSON.parse` the moment one node is absent, which blanks the toolbar and breaks
+  the IDE response path; a missing node must skip one write, not the request.
+- **Payload-shape guard.** Upstream reads `data.debugToolbar.panels` and every
+  panel entry unconditionally, so a `debugToolbar` value that is `null`, a
+  scalar, or an object without `panels` — or a panel entry that is not an
+  object — throws a `TypeError` out of the patched `JSON.parse` /
+  `Response.prototype.json` and breaks the caller's parse. The port asks the one
+  question the DOM update depends on, "can keys be read from this value", with
+  a single record predicate (`value !== null && typeof value === "object"`,
+  defined once as `isRecord`) applied at every read site: `data` itself at the
+  entry guard above, the captured `toolbar`, its `panels`, and each `panel`
+  inside the loop. A payload the DOM
+  update cannot read returns the already-scrubbed data; a panel entry it cannot
+  read skips that one panel. The scrub stays unconditional and precedes this
+  guard, so the server-only key is deleted from the response even when the
+  payload is malformed. The guard is written against that answer, never against
+  an enumeration of bad-input spellings, and never as a `try` / `catch` around
+  the DOM work (a swallowed exception would hide a real toolbar-DOM bug behind a
+  silent no-op). The `data-request-id` write stays upstream's: `setAttribute`
+  coerces a non-string value and never throws for one, so a missing `requestId`
+  degrades to the stock toolbar's own panel-miss fallback.
 
 The DOM-update body is otherwise upstream's: the asset is a single `<script>`
 IIFE with **no Django template tags at all** — no `{% load %}`, no `{% static %}`,
 no `{% url %}`, and no pre-existing header comment to adapt. The only renamed
 path in this card is the `render_to_string(...)` argument in the middleware,
 which is not in the asset. Test 16 pins both the preserved invariants and the
-diverged forms (including the scrub-before-bail ordering) so none can silently
-regress.
+diverged forms — the scrub-before-bail ordering, the shadow-DOM resolution, the
+per-node guards and the payload-shape guard included — one test row per
+predicate, so a dropped form fails its own rows and none can silently regress.
 
 ### Explicitly do not borrow
 
@@ -1117,7 +933,7 @@ Consumer-visible behavior:
   JSON-injection path keys on `Content-Type == "application/json"` exactly as
   upstream does, so a response served as `application/graphql-response+json`
   (the GraphQL-over-HTTP "watershed" media type) is **not** injected. This is
-  **in scope as a documented non-goal, not a defect** (P2.2): Strawberry's
+  **in scope as a documented non-goal, not a defect**: Strawberry's
   Django view returns `application/json` today, so the card matches upstream and
   does not diverge for a media type the engine does not yet emit. Broadening the
   sniff to a `{"application/json", "application/graphql-response+json"}` set is a
@@ -1136,32 +952,24 @@ Consumer-visible behavior:
   a non-IDE client watching that endpoint could observe the extra top-level
   `debugToolbar` key. Dev-only, but real; the Slice-2 GLOSSARY / user-facing
   note must say a CSP consumer has to allow the toolbar script path or accept
-  that the GraphiQL DOM updates will not run (P2.4).
+  that the GraphiQL DOM updates will not run.
 
 ## Architectural decisions
 
 ### Decision 1 — Spec filename and canonical naming
 
-This spec lives at `docs/spec-042-debug_toolbar-0_0_14.md`: card NNN `042`, topic
-slug `debug_toolbar` (the card's subject), version segment `0_0_14` from the
-card's trailing `-0.0.14`. Follows the [`docs/SPECS/NEXT.md`][next] convention.
+The spec stem is `spec-042-debug_toolbar-0_0_14`: card NNN `042`, topic slug
+`debug_toolbar` (the card's subject), version segment `0_0_14` from the card's
+trailing `-0.0.14`. Follows the [`docs/SPECS/NEXT.md`][next] convention. The file
+is archived at `docs/SPECS/`, its `-terms.csv` and `-rationale.md` companions at
+`docs/SPECS/appx/`.
 
-Alternatives considered (and rejected):
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d1].
 
-- **`spec-042-debug_toolbar_middleware-0_0_14.md`.** Rejected: the `_middleware`
-  suffix adds length without disambiguation — no other card touches the debug
-  toolbar, and the sibling debug card ([`TODO-ALPHA-044-0.0.14`][kanban]) is
-  named by its own distinct subject (response extensions), so `debug_toolbar`
-  alone is unambiguous. Precedent favors the shorter slug
-  (`channels_router`, `auth_mutations`, not `channels_asgi_router_module`).
-- **`spec-042-django_debug_toolbar-0_0_14.md`.** Rejected: the `django_` prefix
-  restates the ecosystem every card lives in; the package's own module path
-  (`middleware/debug_toolbar.py`) uses the short form.
-
-### Decision 2 — Card-scope boundary: the server-side toolbar integration ships; the in-response surface, fakeshop settings opt-in, and async verification stay out
+### Decision 2 — Card-scope boundary: the server-side toolbar integration ships; the in-response surface and async verification stay out
 
 This card ships exactly the card's DoD: the middleware module, the template
-asset, the soft dependency, and the two test paths. Four adjacent-looking pieces
+asset, the soft dependency, and the two test paths. Three adjacent-looking pieces
 of work are explicitly out:
 
 - **The in-response `extensions["debug"]` surface.** That is the sibling card
@@ -1173,20 +981,11 @@ of work are explicitly out:
   parity stories with different upstreams. The one deliberate touch point:
   Slice 2's GLOSSARY body-edit keeps the two entries' "distinct from"
   cross-links accurate.
-- **Fakeshop settings opt-in.** The example's shipped runtime stays free of
-  soft dependencies (the [`spec-041`][spec-041] `channels` posture): wiring
-  `debug_toolbar` into fakeshop's `INSTALLED_APPS` / `MIDDLEWARE` — even
-  `DEBUG`-gated — would make the example's `manage.py runserver` path require
-  an optional package the moment a developer flips `DEBUG`. The tests wire the
-  middleware per-test instead
-  ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence));
-  a dogfooding opt-in belongs to the fakeshop-activation card
-  ([`TODO-BETA-062-0.1.5`][kanban]) if the maintainer wants it.
 - **Not a Channels / ASGI toolbar integration.** Three precise statements, so
   "Django served under ASGI" is never conflated with "Channels consumer
   traffic": (1) the **tested contract** is sync Django test-client traffic
-  through fakeshop's `GraphQLView` — a Django **HTTP middleware** wrapping
-  Strawberry's **Django views**; (2) a Django `ASGIHandler` deployment that
+  through fakeshop's mounted GraphQL view — a Django **HTTP middleware**
+  wrapping a Strawberry **Django view**; (2) a Django `ASGIHandler` deployment that
   runs the normal Django middleware chain **may be structurally compatible** —
   the stock toolbar middleware has been async-capable since its 4.x line and
   the subclass inherits `async_capable` — but this card does not verify it and
@@ -1205,40 +1004,18 @@ of work are explicitly out:
   [`START.md`][start] rule ("add a settings key only when the feature that
   needs it lands") — no feature here needs one.
 
-Justification: the card body pins the boundary itself ("Both mechanisms are
-useful and not mutually exclusive" on the sibling; "developer experience" /
-"Single module + tests" on scope), and the [`START.MD`][start] advice ("resist
-scope creep... don't quietly mix in while-I'm-here extras") applies verbatim.
-
-Alternatives considered (and rejected):
-
-- **Fold both debug cards into one spec.** Rejected: different upstreams
-  (🍓-only vs ⚛️-only), different mechanisms (Django HTTP middleware vs
-  Strawberry `SchemaExtension`), different module homes (`middleware/` vs
-  `extensions/`), and the board deliberately tracks them as two cards with
-  "distinct from" edges. A joint spec would re-litigate the board.
-- **Add the fakeshop `DEBUG`-gated toolbar block now for dogfooding.**
-  Rejected: it drags a soft dependency into the example's runtime path and adds
-  a settings branch the live acceptance suite never exercises (tests run
-  `DEBUG=False`); dead weight until a deliberate dogfooding pass owns it.
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d2].
 
 ### Decision 3 — The symbol is `DebugToolbarMiddleware` — same class name, distinctly-ours dotted path
 
 The class is named `DebugToolbarMiddleware`, matching both upstream's subclass
-**and** the stock `django-debug-toolbar` class it extends. This looks like it
-contradicts the [`spec-041`][spec-041] Decision 3 "distinctly-ours symbol name"
-posture; it does not, because the two surfaces have different identity
-mechanics. A router class is *imported by name* in consumer code
-(`from ... import DjangoGraphQLProtocolRouter`) — the name is the API. A Django
-middleware is *referenced by dotted settings string* —
+**and** the stock `django-debug-toolbar` class it extends. A Django middleware is
+referenced by dotted settings string —
 `"django_strawberry_framework.middleware.debug_toolbar.DebugToolbarMiddleware"` —
-so the module path IS the distinctly-ours identity, and the class name is a
+so the module path is the distinctly-ours identity and the class name is the
 Django-ecosystem convention (`SessionMiddleware`, `AuthenticationMiddleware`,
-`DebugToolbarMiddleware`) that consumers pattern-match, not a namespace anyone
-imports across packages. Upstream made the same call for the same reason: its
-class is also named `DebugToolbarMiddleware`, distinguished from the stock one
-purely by module path. The card's own DoD pre-pins the name ("exposing a
-`DebugToolbarMiddleware`"); this decision preserves it and adds the reasoning.
+`DebugToolbarMiddleware`) consumers pattern-match, never a namespace anyone
+imports across packages.
 
 No package-root re-export, and no `middleware/__init__.py` re-export either:
 the consumer surface is the full dotted path in a settings string, mirroring
@@ -1251,20 +1028,7 @@ export][glossary-pep-562-lazy-export], `DebugToolbarMiddleware` is a real
 module global once the module imports
 ([Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape)).
 
-Alternatives considered (and rejected):
-
-- **A distinctly-ours class name (`DjangoStrawberryDebugToolbarMiddleware`,
-  `GraphQLDebugToolbarMiddleware`).** Rejected: the settings string already
-  carries full provenance; a novel class name buys nothing a consumer sees
-  (nobody imports the class) while breaking the ecosystem naming convention
-  and making the migration diff noisier than one path segment.
-- **Re-exporting from `middleware/__init__.py`
-  (`django_strawberry_framework.middleware.DebugToolbarMiddleware`).**
-  Rejected: it would force the `__init__.py` to import the guarded module —
-  making `import django_strawberry_framework.middleware` itself raise on a
-  toolbar-less machine and breaking whole-package walkers (the
-  [`docs/TREE.md`][tree] renderer, coverage collection) for zero consumer
-  benefit; the settings string is typed once either way.
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d3].
 
 ### Decision 4 — Module, template, and test locations: a `middleware/` subpackage, an in-package template asset, `tests/middleware/`
 
@@ -1295,31 +1059,16 @@ Packaging needs no new build configuration: [`pyproject.toml`][pyproject]'s
 hatchling wheel target packages the `django_strawberry_framework` directory
 wholesale, non-Python files included.
 
-The tests are `tests/middleware/test_debug_toolbar.py` — a `tests/` package
-mirroring the source subpackage, the same shape `tests/auth/` /
+The tests split across two trees. `tests/middleware/test_debug_toolbar.py` — a
+`tests/` package mirroring the source subpackage, the same shape `tests/auth/` /
 `tests/rest_framework/` use for their subpackages (the top-level
-`tests/test_routers.py` shape applies to top-level modules, which this is not).
+`tests/test_routers.py` shape applies to top-level modules, which this is not) —
+owns the paths no live `/graphql/` request can reach. The toolbar-present tests
+that drive a real request live in the live tier at
+`examples/fakeshop/test_query/test_debug_toolbar_api.py`, because the example's
+shipped settings wire the toolbar ([Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)).
 
-Alternatives considered (and rejected):
-
-- **A top-level `middleware.py` module.** Rejected: [`docs/TREE.md`][tree]'s
-  planned rows commit to the subpackage; the sibling card
-  ([`TODO-ALPHA-044-0.0.14`][kanban]) similarly reserves `extensions/` — the
-  two debug surfaces landing as sibling subpackages keeps the package tree
-  legible; and a top-level module would need the router's lazier guard shape to
-  stay walker-safe (see the rejected PEP 562 alternative in
-  [Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape)).
-- **Serving the script from `static/` instead of a template.** Rejected: the
-  asset is injected server-side into an already-rendered HTML body by
-  `response.write(...)` — a template rendered to a string is the mechanism
-  upstream uses and the only one that needs no URL configuration, no
-  `collectstatic` step, and no extra request; a static file would add all
-  three.
-- **Inlining the script as a Python string constant.** Rejected: a ~45-line JS
-  asset inside a Python module is unreviewable and unlintable as JS; the
-  template file matches upstream (easing future diff-syncs against upstream
-  fixes) and the app-dirs resolution costs nothing given the shipped
-  `AppConfig`.
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d4].
 
 ### Decision 5 — Soft `django-debug-toolbar` dependency: an import-time `require_debug_toolbar()` guard (the `rest_framework/` shape)
 
@@ -1345,12 +1094,10 @@ lazy-symbol][glossary-pep-562-lazy-export] variant:
    `strawberry.django.views`) imports, then `_HTML_TYPES`, `_get_payload`, and
    the `DebugToolbarMiddleware` class. This is the card's own DoD wording ("the
    middleware module raises `ImportError` with an install hint when actually
-   imported") and the `rest_framework/` precedent — [`spec-041`][spec-041]
-   Decision 5 rejected import-time guarding *for the router* precisely because
-   "a top-level module sitting in the package's own directory" gets imported by
-   innocent whole-package walkers, and noted "the `rest_framework/` package
-   could afford import-time because its import is itself the opt-in". The
-   middleware leaf is the second case, not the first: nothing imports
+   imported") and the `rest_framework/` precedent. The rule the two shapes
+   divide on: a top-level module innocent whole-package walkers must traverse
+   lazies; a dedicated opt-in leaf guards at import. This is a leaf — nothing
+   imports
    `django_strawberry_framework.middleware.debug_toolbar` except a consumer's
    `MIDDLEWARE` setting (via Django's `import_string` at startup) or an
    explicit import — both are the opt-in. The parent
@@ -1360,55 +1107,26 @@ lazy-symbol][glossary-pep-562-lazy-export] variant:
    `[dependency-groups].dev` and regenerates `uv.lock` in the same commit (the
    [`spec-039`][spec-039] lockfile discipline). **The floor is `7.0.0`,
    single-valued across the hint, the dev group, and the re-typed test
-   literal** — and deliberately above upstream's `>=6.0.0`: per
-   [PyPI metadata][debug-toolbar-pypi],
-   `django-debug-toolbar` `6.0.0` (2025-07-25) classifies Django 4.2–5.2 only,
-   while `7.0.0` is the **first checked release carrying the
-   `Framework :: Django :: 6.0` classifier** — with `django>=5.2` and
-   `python>=3.10`, exactly matching the package's own floors
-   ([`pyproject.toml`][pyproject]: `Django>=5.2`, `requires-python >=3.10`,
-   classifiers 5.2 / 6.0 / 6.1). The floor's Django coverage therefore
-   reaches 6.0 and stops there: `7.0.0` does not classify the `6.1` the
-   package also advertises. The [`spec-041`][spec-041] single-floor rule applies
-   verbatim: the install hint is the error message a deploying consumer
-   follows, so it must not guide a Django 6.0 user into an unsupported toolbar.
+   literal** — deliberately above upstream's `>=6.0.0`, because `7.0.0` is the
+   first release whose Django classifiers reach the `6.0` this package
+   advertises. The [`spec-041`][spec-041] single-floor rule applies verbatim:
+   the install hint is the error message a deploying consumer follows, so it
+   must not guide a Django 6.0 user into an unsupported toolbar. The floor's
+   Django coverage reaches 6.0 and stops short of the `6.1`
+   [`pyproject.toml`][pyproject] also advertises — a gap recorded deliberately.
    The worker records the pytest command for the maintainer rather than running
    the suite (the [`AGENTS.md`][agents] rule, [Slice checklist](#slice-checklist));
-   the three-places-that-must-agree rule holds.
+   the three-places-that-must-agree rule holds, and it names the **gated** trio:
+   the package test compares the hint to the re-typed literal and the literal
+   to the [`pyproject.toml`][pyproject] dev-group row, so none of the three can
+   move alone. It is not a census of everywhere the floor is written — the
+   consumer docs restate it ungated — so a bump sweeps the tree rather than
+   trusting an enumeration, and sweeps for the package **name**, reading each
+   hit: a needle carrying the `>=` misses a restatement that puts a backtick or
+   a space between the name and the constraint, so the specifier is a narrower
+   instrument than the population it is aimed at.
 
-Alternatives considered (and rejected):
-
-- **A hard dependency.** Rejected: the toolbar is a dev-only tool by its own
-  design (it disables itself outside `DEBUG` + `INTERNAL_IPS`); taxing every
-  production install with it inverts its purpose. Upstream itself ships it as
-  an extra, not a core dependency.
-- **A `django-strawberry-framework[debug-toolbar]` extra (upstream's shape).**
-  Rejected: the DRF and channels precedents both rejected extras — an extra
-  changes how consumers *install*, not whether the import needs guarding (an
-  extra is advisory; nothing stops an extra-less install from listing the
-  middleware), so it adds a second documented thing without removing any code.
-  Three soft dependencies with one uniform no-extras contract beats two
-  contracts.
-- **The PEP 562 lazy-symbol shape (the `routers.py` pattern: clean module
-  import, guard fires on attribute access).** Rejected for this surface, with
-  the reasoning made explicit since the two shapes now coexist in the package:
-  (a) the consumer's access path is Django's `import_string` on a settings
-  string, which imports the module and immediately does `getattr` — the guard
-  fires at the same startup moment either way, so laziness buys the consumer
-  nothing; (b) the leaf module has no reason to be importable without its
-  dependency — unlike `routers.py` (a top-level module walkers must traverse),
-  nothing legitimate imports the leaf except the opt-in; (c) the lazy shape
-  costs a builder function, a module-global cache, a `__getattr__`, and a
-  `# noqa: F822` — real complexity the router needed and this module does not;
-  and (d) the card's DoD pre-pins the import-time wording. The
-  decision rule this leaves behind: **a top-level module lazies; a dedicated
-  opt-in leaf guards at import.**
-- **Guarding inside `DebugToolbarMiddleware.__init__` (a stub class).**
-  Rejected: the class *body* needs the import (it subclasses the stock
-  middleware), so a stub would lie about identity — the exact rejection
-  [`spec-041`][spec-041] recorded for the router stub, and here the two-phase
-  failure would be worse: Django imports middleware at startup, so the error
-  would move from a clean startup `ImportError` to a first-request failure.
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d5].
 
 ### Decision 6 — Subclass-and-override, borrowed as-is: `process_view` + `_postprocess`, `_get_payload`, `_HTML_TYPES`
 
@@ -1428,12 +1146,13 @@ already owns"):
   `process_view` of its own (it is a `__call__` / `__acall__`-style middleware
   across the toolbar's whole `3.8`–`6.x` line), so there is no stock hook to
   preserve. This method's one deliberate divergence from upstream (the first of
-  the module's two — the other is `_get_payload`'s non-mapping bail) is the
+  the module's three — the others are `_get_payload`'s response-shape bails and
+  `_postprocess`'s `Content-Encoding` bail) is the
   `isinstance(view, type)` guard in front of `issubclass`: upstream writes
   `bool(view and issubclass(...))`, which raises `TypeError` if a `view_class`
   attribute is ever a non-class, and this middleware runs `process_view` for
   **all** global traffic (see
-  [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge)).
+  [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned)).
   Otherwise mirroring upstream. (Verified against the upstream source: its
   `process_view` body is the two lines above modulo that guard, no `super()`
   call — and against the toolbar sources: no stock `process_view` to chain to.)
@@ -1452,6 +1171,14 @@ already owns"):
   upstream-parity behavior, stated so it isn't a surprise). The package must
   not re-implement or skip any of it. Then:
   - **streaming responses return immediately** (no body to inspect or mutate);
+  - **an encoded body returns immediately** — a response carrying a
+    `Content-Encoding` header is left untouched, the module's third deliberate
+    divergence from upstream. The stock postprocess refuses encoded bodies for
+    the same reason its own HTML handle insertion operates on decoded bytes:
+    appending the bridge script to a gzipped body, or re-encoding one as JSON,
+    corrupts the response. The middleware's documented ordering guidance —
+    place it after any response-encoding middleware — is what keeps this an
+    edge case rather than the normal path;
   - **HTML path** — `Content-Type`'s first segment in `_HTML_TYPES`, request
     tagged `_is_graphiql`, status 200: append
     `render_to_string("django_strawberry_framework/debug_toolbar.html")` via
@@ -1469,9 +1196,13 @@ already owns"):
     a payload — re-encode `response.content = json.dumps(payload,
     cls=DjangoJSONEncoder)` and refresh `Content-Length`.
 - **`_get_payload`** — `None` when the toolbar assigned no `request_id`
-  (nothing to reference); `None` again when the decoded body is not a mapping
-  (the P2.3 divergence: a non-object JSON body would otherwise make the
-  `debugToolbar` subscript-assign raise and 500 the request); otherwise decode
+  (nothing to reference); `None` again on any **response-shape** failure — the
+  bytes cannot be decoded with the response's declared charset, the decoded text
+  is not valid JSON, or the decoded body is not a JSON object. That family is the
+  module's second deliberate divergence from upstream, which decodes and
+  subscript-assigns unconditionally: a declared-JSON response the middleware
+  cannot read is left alone rather than turned into a 500, because a dev-only
+  diagnostic must never be the thing that breaks a request. Otherwise decode
   the response body with the
   response's own charset, attach `debugToolbar = {"panels": ..., "requestId":
   toolbar.request_id}` from `reversed(toolbar.enabled_panels)` — per panel,
@@ -1484,62 +1215,42 @@ already owns"):
   subtitle values that can be lazy translation proxies / datetimes; Django's
   encoder is the one that serializes them.
 
-Alternatives considered (and rejected):
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d6].
 
-- **A from-scratch Django middleware reading `connection.queries`.** Rejected
-  by the card's own posture line — that mechanism (lower-fidelity,
-  response-side) is the *sibling card's* design space, and re-implementing
-  panel rendering would break every toolbar panel except SQL while doubling
-  the maintenance surface.
-- **Chaining `super().process_view(...)`.** Rejected: the stock
-  `debug_toolbar.middleware.DebugToolbarMiddleware` defines **no**
-  `process_view` — it is a `__call__` / `__acall__`-style middleware in every
-  release across the toolbar's `3.8`–`6.x` line (verified against the on-disk
-  toolbar sources), so there is no stock `process_view` behavior to preserve
-  and nothing for `super().process_view(...)` to reach but the base-class
-  no-op. Upstream's override therefore does not chain, and neither does this
-  one; byte-borrowing that choice keeps the module diffable against its
-  reference.
-- **Injecting into every JSON response (dropping the `_is_graphiql` gate).**
-  Rejected: the gate scopes injection to responses from a **Strawberry Django
-  view**, so a JSON response from some *other* view (a DRF endpoint, an admin
-  AJAX call) never grows a `debugToolbar` key. It does **not** narrow injection
-  to the IDE — every JSON response from the GraphQL view gets the key while the
-  toolbar is enabled, IDE-originated or not (the honest contract stated in the
-  [User-facing API](#user-facing-api)); the gate's job is view-scoping, not
-  IDE-detection. Dropping it entirely would leak the key onto unrelated JSON
-  views, which is why it stays even though it is not an IDE filter.
+### Decision 7 — Strawberry-view detection: `issubclass` against `strawberry.django.views.BaseView` (engine-owned)
 
-### Decision 7 — Strawberry-view detection: `issubclass` against `strawberry.django.views.BaseView` (engine-owned) — resolving the card's `DjangoGraphQLView` hedge
+The detection target is the **engine-owned** `strawberry.django.views.BaseView`,
+exactly as upstream's is — never a package-owned class. `BaseView` holds the
+shared constructor and both `GraphQLView` and `AsyncGraphQLView` subclass it, so
+the check is engine-shaped rather than package-shaped and covers every consumer
+who wires a Strawberry Django view, subclassed or not. This is the "Strawberry
+stays as the engine" line ([`README.md`][readme]) applied to view identity, the
+same way [`spec-041`][spec-041] Decision 7 applied it to the Channels consumers.
 
-The card hedges the detection target: "Our equivalent uses the same
-`issubclass` check against whichever view class the package settles on (working
-name `DjangoGraphQLView`; pinned during implementation)." This spec resolves
-the hedge with a fact: **the package ships no view class, and should not grow
-one for this card.** The package's documented consumer wiring — and fakeshop's
-real URLconf ([`examples/fakeshop/config/urls.py`][config-urls]) — uses
-Strawberry's own `strawberry.django.views.GraphQLView` (or `AsyncGraphQLView`);
-both subclass the engine-owned `strawberry.django.views.BaseView` (verified at
-the installed strawberry 0.316.0, [`strawberry/django/views.py`][venv-strawberry-views] —
-`BaseView` holds the shared constructor; the two concrete views mix it with the
-sync/async HTTP-view bases). So the detection target is **`BaseView`, exactly
-as upstream's is** — the check is engine-shaped, not package-shaped, and it
-covers every consumer who wires Strawberry's Django views, subclassed or not.
-This is the "Strawberry stays as the engine" line ([`README.md`][readme])
-applied to view identity, the same way [`spec-041`][spec-041] Decision 7
-applied it to the Channels consumers.
+**The package's own views are covered by the same one line.**
+[`views.py`][views]'s `DjangoGraphQLView` and `AsyncDjangoGraphQLView` mix the
+package's request-body boundary into Strawberry's `GraphQLView` /
+`AsyncGraphQLView`, which subclass `BaseView` — so
+`issubclass(view, BaseView)` resolves for them, and fakeshop's `/graphql/` mount
+(which is the package view, decorated with `ensure_csrf_cookie`) is detected
+through the engine base with no package-specific branch. Keeping the target
+engine-owned is what makes that true without this module knowing the package's
+view exists.
 
 Three mechanical notes the implementation carries:
 
-- `strawberry.django.views` is **Strawberry core's** Django integration (inside
-  the pinned `strawberry-graphql>=0.262.0` floor — presence re-confirmed at the
-  Slice-1 gate), not `strawberry-graphql-django`; the import adds no
-  dependency. It is imported at module level *after* the guard — it needs
-  Django configured but nothing optional.
+- `strawberry.django.views` is **Strawberry core's** Django integration, not
+  `strawberry-graphql-django`; the import adds no dependency. Its presence is
+  re-confirmed at the Slice-1 gate against the package's declared
+  `strawberry-graphql` floor — read at gate time from
+  [`pyproject.toml`][pyproject] and [`docs/builder/BUILD.md`][build]
+  `## Floor verification`, never from a version restated here (a floor written
+  into a spec rots the moment the floor moves). It is imported at module level
+  *after* the guard — it needs Django configured but nothing optional.
 - The `view_class` attribute survives decoration: `View.as_view()` sets it on
   the returned function, and Django's stacked decorators
   (`ensure_csrf_cookie`, which fakeshop's URLconf actually applies) copy
-  function `__dict__` via `functools.wraps` — so the fakeshop view is detected
+  function `__dict__` via `functools.wraps` — so the mounted view is detected
   through its decorator, and the test plan pins exactly that path (the tests
   drive fakeshop's real decorated URL).
 - **The `issubclass` call is guarded with `isinstance(view, type)`** — the one
@@ -1555,30 +1266,14 @@ Three mechanical notes the implementation carries:
   raises `TypeError: issubclass() arg 1 must be a class`). This is a strict
   robustness improvement, not a detection change: `None` and every real view
   class resolve identically to upstream, so no legitimate Strawberry view's
-  detection differs. It joins the card's other documented divergences (the
+  detection differs. It joins the module's other documented divergences (the
   `middleware/` rename, the `>=7.0.0` floor, the dropped `@override`, the
-  template hook's robustness fix) rather than silently breaking the "borrow
+  `_get_payload` response-shape bails, the `Content-Encoding` bail, and the
+  template hook's guard family) rather than silently breaking the "borrow
   verbatim" posture, and Test 14a pins the non-class case the real-request tests
   cannot reach.
 
-Alternatives considered (and rejected):
-
-- **Ship a package `DjangoGraphQLView` and detect that.** Rejected: a view
-  class introduced *so that a middleware can `issubclass` it* is surface for
-  surface's sake — it would narrow detection to consumers who adopt the new
-  view (breaking every existing `GraphQLView` consumer, including fakeshop)
-  and create a public API this card has no other reason to ship. If a future
-  card ships a package view for its own reasons, it subclasses `BaseView` and
-  detection keeps working unchanged.
-- **Path-based detection (`request.path == settings.GRAPHQL_PATH`).**
-  Rejected: it invents the settings key
-  [Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out)
-  forbids, breaks multi-endpoint schemas, and diverges from upstream's proven
-  mechanism for zero gain.
-- **Duck-typed detection (`hasattr(view, "schema")`).** Rejected: looser than
-  `issubclass` with no compensating benefit — any consumer view exposing a
-  `schema` attribute would be silently tagged, and the upstream-parity claim
-  ("the same `issubclass` check") would be false.
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d7].
 
 ### Decision 8 — The introspection-query skip is preserved, verbatim
 
@@ -1592,161 +1287,113 @@ detection reads the request body's `operationName` field — the standard GraphQ
 POST envelope — with the broad-exception fallback to `None` (a body that
 cannot be parsed is by definition not the IDE's introspection poll).
 
-The skip is deliberately **name-based, not content-based**: a consumer who
-issues an introspection query under a different `operationName` gets a payload
-(harmless), and a consumer who names a data query `IntrospectionQuery` loses
-its payload (their choice). Matching upstream exactly here matters more than
-closing that cosmetic gap — the skip's contract must be identical for the
-one-settings-string migration
-([Goal 3](#goals)) to be behavior-preserving.
+The skip is **name-based, not content-based**: a consumer who issues an
+introspection query under a different `operationName` gets a payload, and a
+consumer who names a data query `IntrospectionQuery` loses its payload. The
+contract is identical to upstream's, which is what the one-settings-string
+migration ([Goal 3](#goals)) rests on.
 
-Alternatives considered (and rejected):
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d8].
 
-- **Parsing the query text for `__schema` selections.** Rejected: a GraphQL
-  parse per response on the dev hot path, to improve a heuristic whose false
-  positives are cosmetic. Upstream's name check is O(1) and proven.
-- **Making the skip configurable.** Rejected: a knob on a dev tool's history
-  hygiene is configuration surface nobody asked for; upstream ships none.
+### Decision 9 — Test strategy: live-tier tests through fakeshop's shipped toolbar; package tests for the paths no live request reaches; eviction-simulated absence
 
-### Decision 9 — Test strategy: package tests driving real in-process fakeshop requests under settings overrides; eviction-simulated absence
+Test placement follows the [live-first mandate][glossary-live-first-coverage-mandate]:
+a package line covered by a real fakeshop GraphQL request **through the example's
+shipped configuration** belongs in `examples/fakeshop/test_query/`, and everything
+else stays package-internal. `middleware/debug_toolbar.py` falls on both sides of
+that line, so the tests split across two trees:
 
-All tests live in `tests/middleware/test_debug_toolbar.py`. The
-[live-first mandate][glossary-live-first-coverage-mandate] sends a test to
-`examples/fakeshop/test_query/` when "a package line can be covered by a real
-fakeshop GraphQL request" **through the example's shipped configuration** — and
-no `middleware/debug_toolbar.py` line can be: fakeshop's shipped settings
-deliberately carry no `debug_toolbar` app, no toolbar middleware, and no
-show-toolbar override
-([Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out)),
-so the middleware exists in the request path only when a test's own settings
-override puts it there. Per-test settings mutation is package-test machinery,
-not the example's consumer-visible surface — the same
-genuinely-unreachable-live reasoning [`spec-041`][spec-041] Decision 8 recorded
-for the WSGI-only router, applied to a shipped-settings boundary instead of a
-protocol boundary.
+- **`examples/fakeshop/test_query/test_debug_toolbar_api.py` — the toolbar-present
+  group.** Fakeshop's shipped settings wire the toolbar's three pieces:
+  `"debug_toolbar"` in `INSTALLED_APPS`, the package middleware's dotted path near
+  the front of `MIDDLEWARE`, `INTERNAL_IPS`, and `debug_toolbar_urls()` appended in
+  [`config/urls.py`][config-urls]. So the middleware is in the example's real
+  request path and these tests drive it there — the real GraphiQL HTML render
+  (through the real `ensure_csrf_cookie` decorator, proving the `view_class`
+  detection survives decoration), and a real products query emitting real SQL
+  through the real optimizer.
+- **`tests/middleware/test_debug_toolbar.py` — the paths no live request can
+  reach.** The soft-dependency absence matrix (a missing dependency is never a live
+  path) and the coverage-only `_postprocess` / `_get_payload` branch units the real
+  toolbar lifecycle does not naturally expose, driven directly against
+  `RequestFactory` requests and fake toolbar objects.
 
-The tests are **not** structural for it — they drive the real thing. Because
-[`pytest.ini`][pytest-ini] points the whole suite at fakeshop's
-`config.settings`, a `tests/middleware/` test uses `django.test.Client` against
-fakeshop's real `/graphql/` URL — the real GraphiQL HTML render (through the
-real `ensure_csrf_cookie` decorator, proving the `view_class` detection
-survives decoration), and a real products query emitting real SQL through the
-real optimizer — with a test fixture layering the toolbar's **three** pieces on
-top via `django.test.utils.override_settings` / `modify_settings`. The DEBUG
-posture is the load-bearing detail: the checked-in fakeshop
-[`config/settings.py`][config-settings] sets `DEBUG = True`, but
-[`pytest.ini`][pytest-ini] does not set `django_debug_mode`, so pytest-django
-defaults it to `False` and forces `settings.DEBUG = False` for the whole suite
-at `setup_test_environment(debug=False)` time — pytest-django's documented
-`django_debug_mode` ini-option behavior (its default is `False`), a property
-of the tool, not of any locally installed copy (the local-source spot-check
-belongs in the build notes, not here). So the fixture
-must **re-enable `DEBUG=True` itself** — both because the toolbar's default
-gate returns `False` when `DEBUG` is false (verified in
+**The one setting the live tier still overrides is `DEBUG`, and that is
+load-bearing.** The checked-in fakeshop [`config/settings.py`][config-settings]
+sets `DEBUG = True`, but [`pytest.ini`][pytest-ini] does not set
+`django_debug_mode`, so pytest-django defaults it to `False` and forces
+`settings.DEBUG = False` for the whole suite at
+`setup_test_environment(debug=False)` time — pytest-django's documented
+ini-option behavior, a property of the tool rather than of any locally installed
+copy. Under `DEBUG=False` the toolbar is inert in **both** directions: the default
+gate returns `False` (verified in
 [`debug_toolbar.middleware.show_toolbar`][debug-toolbar-middleware-source] at
-7.0.0: `if not settings.DEBUG: return False` is the first check) *and* because
-[`debug_toolbar_urls()`][debug-toolbar-toolbar-source] returns
-`[]` when `DEBUG` is false, so the panel routes would not exist. The fixture:
+7.0.0: `if not settings.DEBUG: return False` is the first check), and
+[`debug_toolbar_urls()`][debug-toolbar-toolbar-source] returns `[]`, so the `djdt`
+routes do not exist. The toolbar-present fixture therefore:
 
-- `override_settings(DEBUG=True)` — re-enables the toolbar's `DEBUG` gate and
-  arms the `DEBUG`-gated `debug_toolbar_urls()`; makes the test independent of
-  pytest-django's suite default and of any future change to fakeshop's own
-  `DEBUG`.
-- `modify_settings(INSTALLED_APPS={"append": "debug_toolbar"})` — Django's
-  test utilities fire `setting_changed`, whose `INSTALLED_APPS` receiver
-  rebuilds the app registry and the `get_app_template_dirs` cache
-  (`django/test/signals.py::update_installed_apps`), so the toolbar's panels
-  and templates materialize per-test.
-- `override_settings(MIDDLEWARE=[...])` — a list **built from the real
-  `settings.MIDDLEWARE`** with the package's dotted path inserted near the
-  front, preserving the rest of fakeshop's stack (sessions, CSRF, auth,
-  messages) so the test path stays the real fakeshop request path — never an
-  abbreviated replacement list. The insert replaces nothing (fakeshop ships no
-  stock toolbar entry), and the list must never contain **both** the stock
-  `debug_toolbar.middleware.DebugToolbarMiddleware` and the package middleware.
-- `override_settings(ROOT_URLCONF="tests.middleware.debug_toolbar_urls")` — a
-  tiny test URLconf module ([Implementation plan](#implementation-plan)) whose
-  module body composes fakeshop's real `urlpatterns` **plus**
-  `debug_toolbar_urls()`, so the `djdt` namespace and its panel-content routes
-  (`render_panel`) actually resolve. Without this, **every** toolbar-processed
-  request dies with `NoReverseMatch` — the stock postprocess unconditionally
-  renders the toolbar, whose template reverses `djdt:` routes
-  ([User-facing API](#user-facing-api)) — so the whole present-path group
-  crashes on its first request; Test 6 additionally needs the routes to serve
-  the stored panel content. **Import ordering is load-bearing and part of the
-  fixture contract:** `debug_toolbar_urls()` returns `[]` when `settings.DEBUG`
-  is false and the module-level `urlpatterns` are computed **once, at first
-  import** — so if anything imports the test URLconf while pytest-django's
-  forced `DEBUG=False` is still in effect, the `djdt` namespace is permanently
-  missing for that module object and the present-path tests crash with
-  `NoReverseMatch` even though the fixture later sets `DEBUG=True`. Therefore: the test file never imports the URLconf module
-  at module level (it is referenced **only** by dotted path in the
-  `ROOT_URLCONF` override); the fixture activates the override only after
-  `override_settings(DEBUG=True)` is in effect; on setup the fixture **evicts
-  `"tests.middleware.debug_toolbar_urls"` from `sys.modules`** before the first
-  request so its `urlpatterns` are computed under `DEBUG=True`; and on teardown
-  it evicts the module again, so no later test can inherit `urlpatterns`
-  computed under the wrong `DEBUG` value.
+- `override_settings(DEBUG=True)` — re-enables the toolbar's `DEBUG` gate and arms
+  the `DEBUG`-gated `debug_toolbar_urls()`.
+- **reloads `config.urls` inside that override** — the module-level `urlpatterns`
+  are computed **once, at first import**, so a `config.urls` imported under the
+  suite's forced `DEBUG=False` holds an empty `debug_toolbar_urls()` result
+  permanently for that module object, and every panel-route reverse fails with
+  `NoReverseMatch` even though the fixture set `DEBUG=True`. The reload must
+  therefore happen while the override is active, and the restore must happen under
+  ambient `DEBUG=False` so the `djdt` routes cannot leak into a neighbouring test.
 - `override_settings(DEBUG_TOOLBAR_CONFIG={"SHOW_TOOLBAR_CALLBACK": <always-true>})`
   — pins the show-toolbar decision to true regardless of `REMOTE_ADDR` /
-  `INTERNAL_IPS` (the default gate's second check), so the test is independent
-  of client-address defaults. Overriding the callback is
-  `django-debug-toolbar`'s own documented test recipe.
+  `INTERNAL_IPS` (the default gate's second check), so the test is independent of
+  client-address defaults. Overriding the callback is `django-debug-toolbar`'s own
+  documented test recipe.
+
+Nothing else is overridden: `INSTALLED_APPS`, `MIDDLEWARE` and `ROOT_URLCONF` are
+fakeshop's shipped values. The stock
+`debug_toolbar.middleware.DebugToolbarMiddleware` must never appear in that list
+beside the package class — the package class subclasses it, and listing both runs
+the toolbar twice.
 
 **Cache hygiene is part of the fixture contract, not an afterthought.**
 `django-debug-toolbar` 7.0.0 memoizes the resolved show-toolbar callback with
 `functools.cache`
 ([`debug_toolbar.middleware.show_toolbar_func_or_path`][debug-toolbar-middleware-source],
-verified `@cache`-decorated), and caches its panel classes and URL patterns on
-the toolbar class ([`DebugToolbar._panel_classes` /
-`DebugToolbar._urlpatterns`][debug-toolbar-toolbar-source]).
-A per-test `DEBUG_TOOLBAR_CONFIG` / app / URLconf override that does not clear
-these can leak a stale always-true callback (or stale panel/url set) into a
-later test on the same worker — especially under `--dist loadscope`, which keeps
-a module's tests on one worker, so the local file passes while a neighbor
-inherits the leaked callback. The fixture therefore treats these as
-**save / clear / restore** state, not set-to-`None` state: on setup it calls
-`debug_toolbar.middleware.show_toolbar_func_or_path.cache_clear()`, **saves**
-the current `DebugToolbar._panel_classes` / `DebugToolbar._urlpatterns` values,
-then sets both to `None`; on teardown it calls `cache_clear()` again, discards
-whatever values the test populated, and **restores the saved values** — so a
-neighboring test (or an earlier same-worker test that had already initialized
-the toolbar's caches) gets back exactly the state it had, rather than a
-fixture-imposed `None`. Because all present-path tests share one fixed toolbar
-configuration, the panel/url handling is belt-and-suspenders; the callback
+verified `@cache`-decorated), and caches its panel classes and URL patterns on the
+toolbar class ([`DebugToolbar._panel_classes` /
+`DebugToolbar._urlpatterns`][debug-toolbar-toolbar-source]). **None of them resets
+with a settings override**, so a per-test `DEBUG_TOOLBAR_CONFIG` override that does
+not clear them leaks a stale always-true callback (or a stale panel/url set) into a
+later test on the same worker — especially under `--dist loadscope`, which keeps a
+module's tests on one worker, so the local file passes while a neighbour inherits
+the leak. The fixture treats these as **save / clear / restore** state, never
+set-to-`None` state: on setup it calls
+`debug_toolbar.middleware.show_toolbar_func_or_path.cache_clear()`, **saves** the
+current `DebugToolbar._panel_classes` / `_urlpatterns` values, then sets both to
+`None`; on teardown it calls `cache_clear()` again, discards whatever the test
+populated, and **restores the saved values** — so a neighbour (or an earlier
+same-worker test that had already initialized the toolbar's caches) gets back
+exactly the state it had, rather than a fixture-imposed `None`. The callback
 `cache_clear()` is mandatory because it is tied directly to the per-test
-`DEBUG_TOOLBAR_CONFIG` override.
+`DEBUG_TOOLBAR_CONFIG` override; the panel/url handling is belt-and-suspenders,
+since all present-path tests share one toolbar configuration.
 
 One more fixture obligation, from pytest-django rather than the toolbar: the
-toolbar-present tests drive fakeshop's real `/graphql/` view and (in Tests 3
-and 6) `seed_data(1)` — real ORM traffic — so **the toolbar-present group
-carries `pytest.mark.django_db`** (a module- or class-level mark over the
-group is preferred, since every test in it can open the database through the
-fakeshop schema or the SQL panel). Without the mark, pytest-django's database
-blocker trips on the first SQL-emitting request before the middleware behavior
-is exercised. The absence / guard tests (Tests 9–12) are pure import-machinery
-tests and stay **unmarked**.
+toolbar-present tests drive fakeshop's real `/graphql/` view and
+[`seed_data(1)`][glossary-seed-data] — real ORM traffic — so **the toolbar-present
+group carries `pytest.mark.django_db`** (a class-level mark over the group is
+preferred, since every test in it can open the database through the fakeshop
+schema or the SQL panel). Without the mark, pytest-django's database blocker trips
+on the first SQL-emitting request before the middleware behavior is exercised. The
+package-tier absence and guard tests are pure import machinery and stay
+**unmarked**.
 
-A second suite-shape obligation comes from *where* these tests run: they
-execute real GraphQL through the aggregate `config.schema` from inside the
-package tree — the tree whose files call `registry.clear()` for isolation.
-[`test_query/README.md`][test-query-readme] documents the failure class: after
-a package test clears the global type registry, the combined schema is exposed
-to a `LazyType` `KeyError` under collection orders that did not happen to
-pre-materialize the referenced types — an order-dependent flake that
-`--dist loadscope` localizes to whichever worker drew both files. Every
-fakeshop acceptance suite answers it with the
-[schema reload discipline][glossary-schema-reload-discipline]'s single-sited
-`schema_reload.reload_all_project_schemas()` helper (importable from any test
-via [`pytest.ini`][pytest-ini]'s `pythonpath = examples/fakeshop`), which
-rebuilds every contributing app's schema in dependency-safe order, then
-reloads `config.schema` / `config.urls` and clears URL caches. The
-toolbar-present fixture calls the same helper **first, on setup, before the
-URLconf steps** — so the test URLconf composes freshly rebuilt fakeshop
-`urlpatterns` and every request executes a fully re-registered schema
-regardless of what ran earlier on the worker. The absence / guard tests
-(9–12), the targeted units (13–15), and the template-port guard (16) never
-execute GraphQL and skip the reload.
+The live tier inherits the acceptance suites' order-independence discipline rather
+than carrying its own: it drives the aggregate `config.schema` through the same
+project-schema fixture every fakeshop live suite uses, which rebuilds the project
+schema and reloads `config.schema` / `config.urls`, so a package test's
+`registry.clear()` can never surface here as an order-dependent
+`LazyType` `KeyError` / `DuplicatedTypeName` (the
+[schema reload discipline][glossary-schema-reload-discipline]). The package-tier
+tests never execute GraphQL and need none of it.
 
 The toolbar-absent path reuses the
 [eviction-simulated absence][glossary-eviction-simulated-absence] discipline —
@@ -1754,64 +1401,39 @@ strict `sys.modules` eviction of `debug_toolbar*` and
 `django_strawberry_framework.middleware.debug_toolbar`, with the **two-sided
 restore** (the parent `middleware` package's `debug_toolbar` attribute is
 saved/restored alongside the `sys.modules` entries, putting the original module
-object back in both places — the [`spec-041`][spec-041] Revision-2 refinement
-that closes the `pytest-xdist` order-dependence hole) — but simulates the
-absence itself with an **importlib-compatible `sys.modules["debug_toolbar"] =
-None` sentinel, not the `builtins.__import__` block the router/DRF fixtures
-use** (Revision 5). The distinction is load-bearing here in a way it is not for
-the router: `require_debug_toolbar()` is a thin
-[`require_optional_module`][glossary-require-optional-module] wrapper, i.e. an
+object back in both places — the [`spec-041`][spec-041] refinement that closes the
+`pytest-xdist` order-dependence hole) — but simulates the absence itself with an
+**importlib-compatible `sys.modules["debug_toolbar"] = None` sentinel, not the
+`builtins.__import__` block the router/DRF fixtures use**. The distinction is
+load-bearing here in a way it is not for the router: `require_debug_toolbar()` is a
+thin [`require_optional_module`][glossary-require-optional-module] wrapper, i.e. an
 `importlib.import_module("debug_toolbar")` call, and `importlib` routes through
 `importlib._bootstrap._gcd_import` — it does **not** consult
-`builtins.__import__`. A `__import__` block is therefore a no-op for this guard:
-it re-imports the still-installed toolbar and the guard returns it, so the raise
-(if any) would come from a later hintless statement-import rather than the
-wrapped guard — Tests 10/12 would fail for the wrong reason. A `None` entry in
-`sys.modules` is the documented importlib absence sentinel: `import_module`
-raises `ModuleNotFoundError` (`"import of debug_toolbar halted; None in
-sys.modules"`), which the guard catches and re-raises as the install hint.
-(Empirically verified against the installed `channels`: under a `__import__`
-block `importlib.import_module` still returns the real module; under the `None`
-sentinel it raises. The same sentinel shape is documented in
-[`utils/imports.py`][utils-imports]'s `import_attr_if_importable`.) The block is
-still fine for the DRF/router fixtures — DRF's guard is a direct `import`
-statement, and the router's builder statement-imports `channels.*` submodules
-that the block *does* see — but this guard's importlib shape needs the sentinel.
+`builtins.__import__`. A `__import__` block is therefore a no-op for this guard: it
+re-imports the still-installed toolbar and the guard returns it, so the raise (if
+any) would come from a later hintless statement-import rather than the wrapped
+guard, and the absence tests would pass for the wrong reason. A `None` entry in
+`sys.modules` is the documented importlib absence sentinel: `import_module` raises
+`ModuleNotFoundError` (`"import of debug_toolbar halted; None in sys.modules"`),
+which the guard catches and re-raises as the install hint. (The same sentinel shape
+is documented in [`utils/imports.py`][utils-imports]'s
+`import_attr_if_importable`.) The block stays correct for the DRF/router fixtures —
+DRF's guard is a direct `import` statement, and the router's builder
+statement-imports `channels.*` submodules the block *does* see — but this guard's
+importlib shape needs the sentinel.
+
+One package-tier ordering obligation follows from the toolbar's own import chain:
+`debug_toolbar.middleware` defines a Django model, so the **first** leaf import in
+a process must happen with `"debug_toolbar"` in `INSTALLED_APPS`. The package-tier
+fixture owns that explicitly rather than relying on an earlier same-worker test
+having imported the leaf, which is what keeps the absence tests and the targeted
+units order-independent under `pytest-xdist`.
+
 The install hint is matched against a **re-typed literal** in the test file (the
-`_HINT_SUBSTRING` drift-catch discipline — a test asserting the imported
-constant against itself could never notice the hint drifting from the dev-group
-floor).
+`_HINT_SUBSTRING` drift-catch discipline — a test asserting the imported constant
+against itself could never notice the hint drifting from the dev-group floor).
 
-Alternatives considered (and rejected):
-
-- **A live `examples/fakeshop/test_query/` placement with the same settings
-  overrides.** Rejected: the live suite's charter is "consumer-visible GraphQL
-  behavior" through the example as shipped, and its coverage rule reserves the
-  fall-back for code "genuinely unreachable from a live `/graphql/` request"
-  ([`test_query/README.md`][test-query-readme]) — which these lines are until
-  settings opt in. A test that must rewrite `INSTALLED_APPS` / `MIDDLEWARE`
-  before the surface exists is asserting package-internal wiring, not the
-  example's shipped behavior; it would blur the boundary the
-  [live-first mandate][glossary-live-first-coverage-mandate]'s placement rule
-  protects. When a future card opts fakeshop's settings into the toolbar for
-  real, the covering test moves live and the package stand-in is deleted (the
-  documented promotion rule).
-- **Wiring `debug_toolbar` permanently into fakeshop settings for the tests'
-  benefit.** Rejected in
-  [Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out);
-  additionally it would put the toolbar's middleware into every *other* suite
-  request's path (inert but present), a blanket change to the whole suite's
-  request pipeline for one test file's convenience.
-- **Unit-testing the overrides against synthetic
-  `HttpRequest` / `HttpResponse` objects only.** Rejected: the module exists
-  to compose with the *real* toolbar lifecycle (`super()._postprocess`
-  behavior, `toolbar.request_id` assignment, panel enablement) and the *real*
-  Strawberry view (`view_class` through a decorator) — precisely the seams
-  synthetic objects would fake. The [`START.md`][start] "coverage is a
-  feature" posture: if the composition is wrong, only real traffic notices.
-- **Uninstall-based absence testing (a separate no-toolbar CI job).**
-  Rejected: the DRF and channels precedents both chose simulation (one env,
-  one `uv run pytest` gate, no matrix).
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d9].
 
 ### Decision 10 — Version bumps are owned by the joint `0.0.14` cut
 
@@ -1839,19 +1461,7 @@ own `version` entry inside it stays `0.0.13` until the joint cut — the exact
 reconciliation [`spec-041`][spec-041] Decision 10 pinned for the channels
 dev-group add.
 
-Justification: per [`docs/SPECS/NEXT.md`][next] Step 3 / Step 6, when multiple
-cards target one patch version the bump belongs to the joint cut, not any
-individual card's spec. Three non-Done cards remain at `0.0.14` after this one
-flips; this card is not the last.
-
-Alternatives considered (and rejected):
-
-- **Bump to `0.0.14` in Slice 2.** Rejected: two siblings still ship into
-  `0.0.14`; a per-card bump races the joint cut and would be reconciled twice
-  over.
-- **Defer the lockfile regeneration to the joint cut too.** Rejected: Slice 1's
-  tests import `debug_toolbar`; a dev-dependency without its lock entry breaks
-  the reproducible-env contract the moment CI runs `uv sync`.
+Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d10].
 
 ## Implementation plan
 
@@ -1864,10 +1474,11 @@ specified in the decisions cited; **no slice bumps the version** — the joint
 | --- | --- | --- |
 | [`pyproject.toml`][pyproject] + `uv.lock` | `django-debug-toolbar>=7.0.0` into `[dependency-groups].dev`; lock regenerated in the same commit | 1 |
 | `django_strawberry_framework/middleware/__init__.py` (new) | Subpackage marker, docstring only; imports nothing optional ([Decision 4](#decision-4--module-template-and-test-locations-a-middleware-subpackage-an-in-package-template-asset-testsmiddleware)) | 1 |
-| `django_strawberry_framework/middleware/debug_toolbar.py` (new) | `_DEBUG_TOOLBAR_INSTALL_HINT` / `require_debug_toolbar()` (thin [`require_optional_module`][glossary-require-optional-module] wrapper) executed at import; `_HTML_TYPES`; `_get_payload`; `DebugToolbarMiddleware` with `process_view` + `_postprocess` overrides ([Decision 3](#decision-3--the-symbol-is-debugtoolbarmiddleware--same-class-name-distinctly-ours-dotted-path) / [5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape) / [6](#decision-6--subclass-and-override-borrowed-as-is-process_view--_postprocess-_get_payload-_html_types) / [7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge) / [8](#decision-8--the-introspection-query-skip-is-preserved-verbatim)) | 1 |
+| `django_strawberry_framework/middleware/debug_toolbar.py` (new) | `_DEBUG_TOOLBAR_INSTALL_HINT` / `require_debug_toolbar()` (thin [`require_optional_module`][glossary-require-optional-module] wrapper) executed at import; `_HTML_TYPES`; `_get_payload`; `DebugToolbarMiddleware` with `process_view` + `_postprocess` overrides ([Decision 3](#decision-3--the-symbol-is-debugtoolbarmiddleware--same-class-name-distinctly-ours-dotted-path) / [5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape) / [6](#decision-6--subclass-and-override-borrowed-as-is-process_view--_postprocess-_get_payload-_html_types) / [7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned) / [8](#decision-8--the-introspection-query-skip-is-preserved-verbatim)) | 1 |
 | `django_strawberry_framework/templates/django_strawberry_framework/debug_toolbar.html` (new) | The GraphiQL-side JS asset, ported from [upstream][upstream-template] with the render path renamed ([Decision 4](#decision-4--module-template-and-test-locations-a-middleware-subpackage-an-in-package-template-asset-testsmiddleware)) | 1 |
-| `tests/middleware/__init__.py` + `tests/middleware/test_debug_toolbar.py` (new) | Tests 1–16 per the [Test plan](#test-plan), incl. the panel-route fetch, the fixture's schema-reload + cache save/clear/restore contract, the coverage-only targeted units, and the template-port guard | 1 |
-| `tests/middleware/debug_toolbar_urls.py` (new) | The test URLconf: module body composes fakeshop's real `urlpatterns` + `debug_toolbar_urls()` + a tiny test-only JSON probe view (Test 8's non-Strawberry JSON negative). Referenced **only** by dotted path in the fixture's `ROOT_URLCONF` override (never imported at test-module import time) and evicted from `sys.modules` on fixture setup and teardown so `urlpatterns` are always computed under `DEBUG=True` (Decision 9) | 1 |
+| `tests/middleware/__init__.py` + `tests/middleware/test_debug_toolbar.py` (new) | The package tier of the [Test plan](#test-plan): the soft-dependency absence matrix, the JSON-probe leak guard, the coverage-only targeted units, and the template-port guard — the paths no live `/graphql/` request reaches ([Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)) | 1 |
+| `examples/fakeshop/test_query/test_debug_toolbar_api.py` (new) | The live tier of the [Test plan](#test-plan): real fakeshop `/graphql/` traffic through the example's shipped toolbar wiring, incl. the panel-route fetch and the fixture's `DEBUG=True` + `config.urls` reload + cache save/clear/restore contract ([Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)) | 1 |
+| [`examples/fakeshop/config/settings.py`][config-settings] + [`config/urls.py`][config-urls] | The example opts into the toolbar: `"debug_toolbar"` in `INSTALLED_APPS`, the package middleware near the front of `MIDDLEWARE`, `INTERNAL_IPS`, and `debug_toolbar_urls()` appended to `urlpatterns` — what puts the toolbar-present tests in the live tier | 1 |
 | [`docs/GLOSSARY.md`][glossary] | [Debug-toolbar middleware][glossary-debug-toolbar-middleware] entry body updated to the implemented contract; status flip deferred | 2 |
 | [`docs/TREE.md`][tree] | Regenerated (script-rendered) after the card flips Done | 2 |
 | [`KANBAN.md`][kanban] / `KANBAN.html` | Card wrap via DB edit + re-render | 2 |
@@ -1879,7 +1490,7 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
 [`spec-041`][spec-041] discipline).
 
 - [ ] **D1** — the guard rides
-  [`utils/imports.py::require_optional_module`][glossary-require-optional-module]
+  [`django_strawberry_framework/utils/imports.py::require_optional_module`][glossary-require-optional-module]
   (landed by [`spec-041`][spec-041] Slice 1): `require_debug_toolbar()` is a
   thin wrapper passing `_DEBUG_TOOLBAR_INSTALL_HINT` — never a fourth
   hand-rolled import pattern
@@ -1897,8 +1508,8 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
   an importlib-compatible `sys.modules["debug_toolbar"] = None` sentinel rather
   than the `builtins.__import__` block the DRF/router fixtures use — because the
   guard imports via `importlib`, which the block does not intercept
-  ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence),
-  Revision 5). The eviction + restore structure is copied and target names
+  ([Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)).
+  The eviction + restore structure is copied and target names
   swapped; the absence *mechanism* is deliberately not. **This is the third copy
   of the absence fixture** (DRF, router, now toolbar) — but the three are **not**
   behavior-identical, and that is the point: DRF blocks a direct `import`
@@ -1976,16 +1587,48 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
   `REMOTE_ADDR` is in `INTERNAL_IPS` — so the toolbar (and every injected byte)
   is off in production, and the subclass flows through as a near-no-op
   (`process_view` tags one attribute; `_postprocess` is only reached when the
-  stock middleware decided to process at all). Note this is why the test fixture
-  must set **both** `DEBUG=True` (pytest-django forces the suite to `DEBUG=False`)
-  **and** an always-true `SHOW_TOOLBAR_CALLBACK` (to be independent of
-  `INTERNAL_IPS` / `REMOTE_ADDR`) — it satisfies the real gate rather than
-  bypassing it
-  ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)).
+  stock middleware decided to process at all). This is also what makes the
+  example's shipped toolbar wiring safe: under the suite's `DEBUG=False` the
+  whole integration is inert, which the live tier pins directly. It is why the
+  toolbar-present fixture must set **both** `DEBUG=True` (pytest-django forces
+  the suite to `DEBUG=False`) **and** an always-true `SHOW_TOOLBAR_CALLBACK` (to
+  be independent of `INTERNAL_IPS` / `REMOTE_ADDR`) — it satisfies the real gate
+  rather than bypassing it
+  ([Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)).
 - **Streaming responses are skipped.** `response.streaming` returns before any
   body inspection — a streaming body has no `.content` to decode or append to.
   Strawberry's Django views stream only for multipart-subscription responses;
   either way the guard is upstream's and stays.
+- **Encoded response bodies are skipped.** A response carrying a
+  `Content-Encoding` header returns untouched, before either mutation path: the
+  bridge script cannot be appended to a gzipped body and a re-encoded JSON body
+  would no longer match its declared encoding. This is why the documented
+  ordering guidance places the toolbar middleware **after** any
+  response-encoding middleware — in that position the middleware sees decoded
+  bodies and the skip is the rare case rather than the normal one
+  ([Decision 6](#decision-6--subclass-and-override-borrowed-as-is-process_view--_postprocess-_get_payload-_html_types)).
+- **A declared-JSON response the middleware cannot read.** If the body's bytes
+  do not decode under the response's own charset, or the decoded text is not
+  valid JSON, or it parses to something other than an object, `_get_payload`
+  returns `None` and the response is passed through unmodified. A GraphQL
+  response is none of those things, so this is the guard against a mislabelled
+  or hand-rolled response rather than an expected path — and passing it through
+  is the contract: a development diagnostic must never be what turns an unusual
+  response into a 500.
+- **A `debugToolbar` value the bridge cannot read.** The bridge's `update` hook
+  is a global patch, so a JSON body carrying a `debugToolbar` key whose value is
+  not an object with an object `panels` — or whose panel entries are not
+  objects — must not throw out of `JSON.parse` / `Response.prototype.json`. The
+  key is scrubbed unconditionally; the DOM update then proceeds only for a value
+  the record predicate accepts, skipping any single panel entry it cannot read
+  ([Borrowing posture](#borrowing-posture), the payload-shape guard). The panel
+  **keys** carry the same contract from the other direction: a key that cannot
+  name a DOM node skips that one panel rather than raising a `DOMException` out
+  of the patched globals, which is the best-effort per-panel rule applied to the
+  selector the key is interpolated into. A real middleware payload keys its
+  panels by the toolbar's own class-derived panel ids and is always readable, so
+  both halves guard a foreign or hand-rolled `debugToolbar` key rather than an
+  expected path.
 - **`request.body` re-read in `_postprocess`.** Django caches the raw body
   bytes after first access (the view already read it), so the `operationName`
   sniff costs no I/O and raises no "body already read" — with one exception:
@@ -2008,7 +1651,7 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
   through something that is not a `strawberry.django.views.BaseView` subclass
   gets stock toolbar behavior only (no injection). Documented as the
   detection contract
-  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge));
+  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned));
   the escape hatch is subclassing the package middleware and widening
   `process_view` — supported but undocumented-as-API.
 - **Async posture.** The stock toolbar middleware is async-capable
@@ -2019,20 +1662,19 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
   coroutine-hostile (they run in the sync `_postprocess` hook the stock
   middleware calls from either mode), which is exactly as far as this card's
   claim goes.
-- **`override_settings(INSTALLED_APPS=...)` in a `loadscope` suite.** Django's
-  test utilities re-populate the app registry on `INSTALLED_APPS` change and
-  restore it on exit; the fixture scopes the override to each test (or the
-  module's fixture) so no toolbar state leaks into neighboring files — and
-  `pytest.ini`'s `--dist loadscope` keeps the whole module on one worker, the
-  same isolation story every registry-touching test file in the suite already
-  relies on. **The toolbar's own module- and class-level caches do NOT reset
-  with the settings override**, though — `show_toolbar_func_or_path` is
-  `@cache`-memoized and `DebugToolbar._panel_classes` / `_urlpatterns` are
-  class attributes — so the fixture clears the callback cache and
-  saves / clears / restores the class caches on setup and teardown
-  (Decision 9's cache-hygiene contract). Under `--dist loadscope` a
-  leaked always-true callback would otherwise let this module pass while a
-  later same-worker test inherits it; the cache clears close that hole.
+- **Toolbar state leaking across tests on a `loadscope` worker.** The
+  toolbar-present fixture's `DEBUG=True` / `DEBUG_TOOLBAR_CONFIG` overrides are
+  scoped and restored by Django's own test utilities, but **the toolbar's module-
+  and class-level caches do NOT reset with a settings override** —
+  `show_toolbar_func_or_path` is `@cache`-memoized and
+  `DebugToolbar._panel_classes` / `_urlpatterns` are class attributes. So the
+  fixture clears the callback cache and saves / clears / restores the class
+  caches on setup and teardown (Decision 9's cache-hygiene contract). Under
+  `pytest.ini`'s `--dist loadscope`, which keeps a module's tests on one worker,
+  a leaked always-true callback would otherwise let this module pass while a
+  later same-worker test inherits it; the cache clears close that hole. The
+  reloaded `config.urls` is the same class of state and is restored the same
+  way, under ambient `DEBUG=False`, so the `djdt` routes cannot leak either.
 - **Template `Content-Length` refresh.** Both mutation paths (`response.write`
   on HTML, `response.content = ...` on JSON) refresh `Content-Length` only
   when the header is already present — Django's `HttpResponse` normally
@@ -2041,29 +1683,30 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
 
 ## Test plan
 
-All in `tests/middleware/test_debug_toolbar.py` (placement per
-[Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)).
-The toolbar-present tests share the one fixture specified in Decision 9's
-fixture contract — a setup-time `schema_reload.reload_all_project_schemas()`
-call first (the acceptance suites' order-independence-by-reconstruction
-discipline, Decision 9), then `DEBUG=True`, `INSTALLED_APPS + "debug_toolbar"`,
-`MIDDLEWARE` built from the real `settings.MIDDLEWARE` with the package dotted
-path inserted near the front, `ROOT_URLCONF =
-"tests.middleware.debug_toolbar_urls"` (referenced by dotted path only — never
-imported at test-module import time — and evicted from `sys.modules` on both
-setup and teardown so its `urlpatterns` are always computed under `DEBUG=True`),
-and `DEBUG_TOOLBAR_CONFIG = {"SHOW_TOOLBAR_CALLBACK": <always-true>}`, plus the
-mandatory `show_toolbar_func_or_path.cache_clear()` and the save / clear /
-restore of `DebugToolbar._panel_classes`/`_urlpatterns` on setup and teardown —
-driving fakeshop's real `/graphql/` URL through `django.test.Client`. The
-toolbar-present group carries a module- or class-level `pytest.mark.django_db`
-(Decision 9); the absence / guard tests (9–12), the targeted coverage units
-(13–15), and the template-port guard (16) stay unmarked. **Every
+Split across two tiers per
+[Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence).
+**Tests 1–7 are the live tier**,
+`examples/fakeshop/test_query/test_debug_toolbar_api.py`, driving fakeshop's real
+`/graphql/` URL through the example's shipped toolbar wiring — GraphQL envelopes
+posted via the package's own [`TestClient`][glossary-testclient], the raw
+`HttpResponse` inspected for the content-type, header and injected-payload
+assertions. **Tests 8–16 are the package tier**,
+`tests/middleware/test_debug_toolbar.py`, holding only what no live request can
+reach.
+
+The toolbar-present group shares the one fixture Decision 9 specifies —
+`DEBUG=True` with `config.urls` reloaded **inside** the override so its
+`DEBUG`-gated `djdt` routes populate, `DEBUG_TOOLBAR_CONFIG =
+{"SHOW_TOOLBAR_CALLBACK": <always-true>}`, and the mandatory
+`show_toolbar_func_or_path.cache_clear()` plus the save / clear / restore of
+`DebugToolbar._panel_classes` / `_urlpatterns` on setup and teardown. Everything
+else is fakeshop's shipped configuration, unmodified. That group carries a
+class-level `pytest.mark.django_db`; the package tier is unmarked. **Every
 product-query test's first executable line is `seed_data(1)`** (or an explicit
 `seed_data(N)`) from `apps.products.services` — the repo's seed-helper rule; the
 panel payload does not depend on row counts, but the query must hit real rows to
-emit SQL. The absence / guard tests (9–12) deliberately import **no** fakeshop
-catalog helper.
+emit SQL. The absence / guard tests deliberately import **no** fakeshop catalog
+helper.
 
 **Toolbar-present — the GraphiQL HTML path:**
 
@@ -2073,20 +1716,20 @@ catalog helper.
    package's appended template script (a distinctive substring of the asset —
    proving the HTML branch fired). `Content-Length`, when present, matches
    `len(response.content)` after the append.
-2. The same GET **without** the settings fixture (stock fakeshop settings, no
-   toolbar) asserts **stable behavior, not byte-equality** (a Strawberry-rendered,
+2. The same GET **under fakeshop's shipped settings** — i.e. without the
+   `DEBUG=True` override, so the suite's forced `DEBUG=False` applies — asserts
+   **stable behavior, not byte-equality** (a Strawberry-rendered,
    `ensure_csrf_cookie`-wrapped page has no checked-in golden file): status 200,
    an HTML `Content-Type`, the GraphiQL marker present, the package
    debug-toolbar script **absent**, and the stock toolbar handle **absent**.
-   This is the no-toolbar baseline proving the card changes nothing for
-   consumers who don't opt in; pinning it here makes a future settings-bleed
-   regression fail in this file, not an unrelated one. Deliberately **no**
-   "package middleware module not imported" assertion: under `--dist loadscope`
-   any toolbar-present test that ran earlier on the same worker leaves
-   `django_strawberry_framework.middleware.debug_toolbar` in `sys.modules`, so
-   that assertion would pass or fail on local test order alone while the
-   response is perfectly clean. Import-surface guarantees belong to the absence
-   tests (9–12), which evict and restore modules deliberately.
+   This is the production-safety baseline: the example ships the toolbar wired,
+   and this pins that the whole integration is inert wherever `DEBUG` is off.
+   Deliberately **no** "package middleware module not imported" assertion: under
+   `--dist loadscope` any toolbar-present test that ran earlier on the same
+   worker leaves `django_strawberry_framework.middleware.debug_toolbar` in
+   `sys.modules`, so that assertion would pass or fail on local test order alone
+   while the response is perfectly clean. Import-surface guarantees belong to the
+   absence tests, which evict and restore modules deliberately.
 
 **Toolbar-present — the JSON operation path:**
 
@@ -2124,10 +1767,10 @@ catalog helper.
 
 6. `seed_data(1)`, POST the named products operation of Test 3, and capture
    `debugToolbar.requestId` from the JSON body. Then GET the toolbar's
-   `render_panel` view through the fixture's `debug_toolbar_urls()` routes —
-   `GET /__debug__/render_panel/?request_id=<id>&panel_id=SQLPanel` under the
-   default prefix (the test resolves the path via the route, staying correct if
-   the fixture ever passes a custom `debug_toolbar_urls(prefix=...)`) — and
+   `render_panel` view through the `djdt` routes fakeshop's own `config.urls`
+   contributes — `GET /__debug__/render_panel/?request_id=<id>&panel_id=SQLPanel`
+   under the default prefix, resolved via `reverse("djdt:render_panel")` so the
+   test stays correct under a custom `debug_toolbar_urls(prefix=...)` — and
    assert what debug-toolbar 7.0.0 actually returns: a **JSON** response
    ([`render_panel`][debug-toolbar-views-source] responds with a JSON body
    carrying `content` and `scripts` keys, keyed off `request_id` / `panel_id`
@@ -2164,26 +1807,30 @@ catalog helper.
    appear in this ordinary HTML, because the package middleware subclasses and
    preserves stock behavior — asserting "no stock toolbar" here would fail for
    the wrong reason. The positive direction needs no separate test: the
-   GraphiQL/JSON requests in Tests 1/3/5/6 already run through the real
-   `ensure_csrf_cookie(GraphQLView.as_view(...))` URLconf, so a passing Test 3
-   IS the proof that `view_class` + `issubclass(..., BaseView)` resolves
-   through `functools.wraps`-copied attributes.
-8. Detection's negative direction for **JSON** — the payload leak guard. The
-   HTML negatives above cannot prove it: an implementation that injected
-   `debugToolbar` into *every* JSON response would still pass Tests 1–7. The
-   test URLconf module gains a tiny test-only **JSON probe view** (a plain
-   Django function view returning `JsonResponse({"probe": "ok"})`, defined in
-   `tests/middleware/debug_toolbar_urls.py` beside the composed fakeshop
-   `urlpatterns` + `debug_toolbar_urls()`); with the toolbar fixture active,
-   GET it through `django.test.Client` and assert the response is JSON, the
-   probe body round-trips unmodified, and there is **no** top-level
-   `debugToolbar` key. Stock debug-toolbar *headers* on the response are
-   acceptable — the contract under test is "unrelated JSON bodies are never
-   mutated", not "the stock toolbar ignores the request".
+   GraphiQL/JSON requests in Tests 1/3/5/6 already run through fakeshop's real
+   `ensure_csrf_cookie(...as_view(...))` mount, so a passing Test 3 IS the proof
+   that `view_class` + `issubclass(..., BaseView)` resolves through
+   `functools.wraps`-copied attributes — and, because that mount is the
+   package's own [`views.py`][views] view, that the engine-owned check covers a
+   package view with no branch of its own.
+**Package tier — detection's negative direction for JSON:**
 
-**Toolbar-absent (simulated via eviction + a `sys.modules["debug_toolbar"] =
-None` importlib sentinel — Revision 5; the `builtins.__import__` block the
-router/DRF fixtures use is a no-op for this `importlib`-based guard):**
+8. The payload leak guard. The HTML negatives above cannot prove it: an
+   implementation that injected `debugToolbar` into *every* JSON response would
+   still pass Tests 1–7. Drive `_postprocess` directly with an untagged
+   `RequestFactory` request and a JSON response standing in for an unrelated
+   view's, and assert the body round-trips unmodified with **no** top-level
+   `debugToolbar` key. Stock debug-toolbar *headers* are acceptable — the
+   contract under test is "unrelated JSON bodies are never mutated", not "the
+   stock toolbar ignores the request". It is a package-tier unit because
+   fakeshop ships no unrelated JSON endpoint to aim a live request at, and
+   adding one to the example purely to be a negative would be example surface
+   that exists for a test.
+
+**Package tier — toolbar-absent (simulated via eviction + a
+`sys.modules["debug_toolbar"] = None` importlib sentinel; the
+`builtins.__import__` block the router/DRF fixtures use is a no-op for this
+`importlib`-based guard):**
 
 9. `import django_strawberry_framework` and
    `import django_strawberry_framework.middleware` both succeed;
@@ -2212,13 +1859,16 @@ then the leaf's own `import debug_toolbar.middleware` statement fails: assert
 `_DEBUG_TOOLBAR_INSTALL_HINT` — and that `__cause__` is the original failing
 import. This pins the [Error shapes](#error-shapes) contract that the guard
 wraps only the top-level package and never misreports a broken install as "not
-installed" (the numbered plan previously claimed to pin this but did not —
-Revision 5).
+installed".
 
 **Test 11b — installed but absent from `INSTALLED_APPS` (the wiring gate).**
 Leave `debug_toolbar` importable but with `"debug_toolbar"` **omitted** from
-`INSTALLED_APPS` (fakeshop's shipped default), and evict only the framework leaf
-so its body re-runs. `require_debug_toolbar()` **passes**, and — before the
+`INSTALLED_APPS`, and evict only the framework leaf so its body re-runs. (The
+example ships the app, so the omission is the test's own `modify_settings`
+context, not an ambient default — and the inverse obligation holds too: the
+**first** leaf import in a process must happen with the app installed, because
+`debug_toolbar.middleware` defines a Django model, which is what the package
+tier's leaf fixture owns.) `require_debug_toolbar()` **passes**, and — before the
 `debug_toolbar.middleware` import that would otherwise surface Django's cryptic
 `HistoryEntry` app-label `RuntimeError` — the `apps.is_installed("debug_toolbar")`
 gate raises `ImproperlyConfigured` naming the fix (asserted against the
@@ -2236,13 +1886,23 @@ contract: a missing app is reported as a settings error, neither misfiled as
     unit tests, landed with [`spec-041`][spec-041], are not duplicated here).
     (Under a `builtins.__import__` block this assertion would fail: the guard's
     `importlib.import_module` call bypasses the block and returns the still
-    installed toolbar — Revision 5.)
+    installed toolbar.)
+
+12a. **The floor's gated trio agrees.** Read [`pyproject.toml`][pyproject] and
+    assert its `django-debug-toolbar>=` dev-group row is exactly the re-typed
+    `_HINT_SUBSTRING` literal, and that the literal is a substring of
+    `_DEBUG_TOOLBAR_INSTALL_HINT` — the same regex-over-`pyproject.toml` idiom
+    the suite's governance rows use for the Channels and Strawberry floors.
+    Together with Test 10's hint match this is what makes the three-places rule
+    a gate rather than a comment: none of the specifier, the hint, and the
+    literal can move alone. It says nothing about documentation that restates
+    the floor, and its docstring says so.
 
 **Coverage-only targeted units** (branches the real toolbar lifecycle does not
-naturally expose through Tests 1–8; unmarked, no database, direct calls with
+naturally expose through the live tier; unmarked, no database, direct calls with
 stub objects — mock only where the real path is impossible, per the
 [coverage-priority rule][glossary-live-first-coverage-mandate]). One shared
-constraint shapes all three: the package override calls
+constraint shapes all of them: the package override calls
 `super()._postprocess(...)` **before** its own branches, so any unit that
 enters `_postprocess` runs the stock toolbar postprocess first — the fake
 toolbar must therefore implement the small stock-toolbar protocol
@@ -2257,8 +1917,25 @@ or use a real toolbar instance where that is simpler:
     content. Not "returns without touching the response" in the absolute
     sense — the stock postprocess runs first and may legitimately generate
     stats and headers before `if response.streaming` sends the package branch
-    home. No listed real-request test returns a streaming response, so the
-    branch is unreachable through Tests 1–8.
+    home. No live request returns a streaming response, so the branch is
+    unreachable through the live tier.
+
+13a. **Encoded-body early-out** — the same shape one guard later: call
+    `_postprocess` with a response carrying a `Content-Encoding` header and
+    assert no package-specific mutation after the stock postprocess returns.
+    Parametrized over more than one encoding **and** over both mutation paths
+    (the GraphiQL HTML append and the tagged-JSON re-encode), so the guard rests
+    on the header's presence rather than one value and is measured at both
+    sites it protects. Every row's body is one its mutation path would
+    otherwise accept — plain HTML for the append, a decodable JSON **object**
+    for the re-encode — and every row first drives the same request with the
+    same body and **no** `Content-Encoding` header as its positive control,
+    asserting the mutation happens; only then does it drive the header-bearing
+    twin and assert byte-identity. A body `_get_payload` would reject on its own
+    proves the response-shape bail a second time and the encoding guard not at
+    all, which is why the bodies are readable and the control is inside the
+    row. Fakeshop serves no encoded `/graphql/` response, so this too is
+    unreachable live.
 14. **`_get_payload` no-`request_id` bail** — call `_get_payload` with a stub
     toolbar whose `request_id` is `None` and assert `None`: under the fixture's
     always-true show callback the real toolbar always assigns a `request_id`,
@@ -2266,19 +1943,26 @@ or use a real toolbar instance where that is simpler:
     sibling case) drives a stub panel with `has_content` false, since real
     default panels do not reliably produce both `has_content` outcomes across
     toolbar versions. A further sibling case drives the **non-object-body bail**
-    (the P2.3 guard): a response whose decoded JSON is a list (not a mapping)
+    guard: a response whose decoded JSON is a list (not a mapping)
     makes `_get_payload` return `None`, so the JSON path leaves the body
     unmodified. A valid single GraphQL response is always an object, so this
     branch is unreachable through the real-request tests.
 
+14b. **Undecodable / unparseable declared-JSON body** — parametrized over a
+    body that is not JSON at all and one whose bytes do not decode under the
+    response's declared charset; each must leave the response unrewritten. This
+    is the rest of the response-shape family Test 14's non-object case starts,
+    and it is parametrized because a guard written against one spelling of a bad
+    input is a guess where a guard written against the answer is a boundary.
+
 **Test 14a — `process_view` non-class `view_class` guard.** Call `process_view`
 with a `view_func` whose `view_class` attribute is a non-class value (e.g. the
 string `"not-a-class"`) and assert `request._is_graphiql` is `False` with **no
-exception**. The `isinstance(view, type)` guard (P2.1) short-circuits before
-`issubclass`, which would otherwise raise `TypeError` and 500 the request.
-Tests 7–8 only drive real class/function views, so this guard — which matters
+exception**. The `isinstance(view, type)` guard short-circuits before
+`issubclass`, which would otherwise raise `TypeError` and 500 the request. The
+live tier only drives real class/function views, so this guard — which matters
 precisely because the middleware runs for **all** global traffic, not just
-GraphQL — is unreachable through them.
+GraphQL — is unreachable through it.
 
 15. **`Content-Length` refresh branches, HTML and JSON** — build responses
     with `Content-Length` explicitly pre-set, run the mutation paths, and
@@ -2291,33 +1975,81 @@ GraphQL — is unreachable through them.
 **Template-port guard** (mechanical, no JS runtime — reads the asset, executes
 nothing):
 
-16. Render (or read) `templates/django_strawberry_framework/debug_toolbar.html`
-    and assert the five [template-port checklist](#from-strawberry-graphql-django--borrow-the-mechanism-verbatim)
-    invariants as substring/pattern checks: the `JSON.parse` wrapper, the
+16. Read `templates/django_strawberry_framework/debug_toolbar.html` and assert
+    both halves of the
+    [template-port checklist](#from-strawberry-graphql-django--borrow-the-mechanism-verbatim)
+    as **one parametrized test row per predicate** — a module-level table of
+    (name, predicate over the asset text) with the names as the pytest ids,
+    never a single test with a list of assertions, so that dropping one form
+    fails that form's rows and only those. Substring presence, substring
+    absence, and index-ordering predicates are all rows of the same table. The
+    rows pin the five preserved invariants (the `JSON.parse` wrapper, the
     `Response.prototype.json` wrapper, `delete data.debugToolbar`, the
-    `data-request-id` update on `#djDebug`, and the per-panel title / subtitle
-    DOM updates. The suite has no JS runtime, so this does not prove the script
-    *works* — it turns the checklist's by-eye diff into a mechanical guard that
-    fails if a future edit drops one of the load-bearing behaviors.
+    `data-request-id` update on the toolbar handle, and the per-panel title /
+    subtitle DOM updates) **and** each of the seven diverged forms — the
+    argument-forwarding `JSON.parse`, the safe membership guard, the mandatory
+    scrub **ordering and unconditionality** (one row per early return and DOM
+    write that follows the scrub — the null-handle bail, the payload-shape
+    guard, the panel loop, the `data-request-id` write — plus the rows that pin
+    the scrub unconditional, which an index comparison cannot see: that nothing
+    returns between the entry guard and the scrub, counted from the function
+    opener as well as from that guard's own return so that a bail hoisted
+    *above* the guard is visible too, that nothing but whitespace separates the
+    capture from it, that it stands alone on its own line, and that it is not
+    nested inside a block of its own), the
+    skip-on-absent-content-node panel loop with its selector-safe panel key, the
+    shadow-root handle resolution with its light-DOM fallback, the per-node
+    null checks, and the payload-shape guard (the guard's presence, its position
+    after the scrub and before the panel loop, the per-panel record guard's
+    presence as the loop body's first statement, the single `isRecord`
+    definition, and the absence of any post-scrub `data.debugToolbar.*` read).
+    Each kind of form is pinned by the kind of row that can falsify it. A form
+    that diverges **by spelling** carries both halves of its divergence: a row
+    pinning the port's spelling, and a row pinning that the upstream spelling it
+    replaced is **absent** — the silent-revert detector a presence check cannot
+    supply, since a paste of upstream's text can restore its shape alongside the
+    port's. A form that diverges **by position** instead — the borrow carries
+    the same statement, elsewhere — has no replaced spelling to assert absent
+    and is pinned by rows comparing indices, adjacency, nesting, and the returns
+    between two points, which a substring copy satisfies and a reordering, a
+    condition wrapped around the statement, or a bail hoisted above it does not.
+    A **preserved** invariant carries the row pinning the upstream
+    write the port keeps. What falsifies the claim, stated so it can be checked
+    rather than believed: a spelling-diverged form whose rows are all presence
+    checks, a post-scrub site no ordering row names, or an absence row that
+    cannot fail on its own. Three shapes make an absence row unfailable and all
+    three read exactly like a working row, so each is checked by its own
+    instrument: a needle the borrow never spells (counted in **both** assets,
+    occurrences rather than matching lines); a needle that **contains another
+    absence row's needle**, which no text can fail without failing that row too
+    (pairwise containment across the table's own needles); and a needle
+    **derived from a shared constant** rather than typed literally, which goes
+    silently inert the moment the constant drifts — where a presence row reading
+    the same constant goes red instead, so an absence needle is a typed literal
+    even where its neighbours are not. The suite has no JS
+    runtime, so this does not prove the script *works* — it turns the
+    checklist's by-eye diff into a mechanical guard that fails, row by row, if
+    a future edit drops one of the load-bearing behaviors.
 
 Coverage: the package gate is `fail_under = 100`, and each branch has a named
-owner rather than an implicit hope. Reached by the **real-request tests
-(1–8)**: the guard's success path, both `_postprocess` main branches (HTML —
-Test 1; JSON — Tests 3/5), the non-GraphiQL early-out (HTML — Test 7; JSON —
-Test 8), the introspection skip (Test 4), the `operationName` except-branch
-(Test 5), the `TemplatesPanel` skip and the `has_content`-true panel path
-(Test 3), and the panel-route round trip (Test 6). Reached by the
+owner rather than an implicit hope. Reached by the **live tier (1–7)**: the
+guard's success path, both `_postprocess` main branches (HTML — Test 1; JSON —
+Tests 3/5), the non-GraphiQL HTML early-out (Test 7), the introspection skip
+(Test 4), the `operationName` except-branch (Test 5), the `TemplatesPanel` skip
+and the `has_content`-true panel path (Test 3), and the panel-route round trip
+(Test 6); Test 2 pins the inert-under-`DEBUG=False` direction. Reached by the
 **absence / guard tests (9–12, incl. the degraded-install Test 11a and the
 missing-app wiring-gate Test 11b)**: the guard's raise path, the import-surface
 matrix, the raw-`ImportError` propagation for a present-but-broken install, and
-the `apps.is_installed` wiring gate's `ImproperlyConfigured` raise. Reached **only by the targeted
-units (13–15, incl. 14a)**: the streaming early-out, the no-`request_id` bail /
-`has_content`-false / non-object-body branches of `_get_payload`, the
-`isinstance(view, type)` detection guard, and both header-present
-`Content-Length` refreshes. The template-port guard (16) earns no Python
-coverage — the asset is markup and JavaScript, not
-counted lines; it exists to pin the port's five invariants mechanically. If
-implementation finds another
+the `apps.is_installed` wiring gate's `ImproperlyConfigured` raise. Reached
+**only by the package-tier units (8, 13–16)**: the untagged-JSON passthrough,
+the streaming early-out, the encoded-body early-out, the no-`request_id` bail /
+`has_content`-false / non-object / undecodable / unparseable branches of
+`_get_payload`, the `isinstance(view, type)` detection guard, and both
+header-present `Content-Length` refreshes. The template-port guard (16) earns no
+Python coverage — the asset is markup and JavaScript, not
+counted lines; it exists to pin the port's invariants and diverged forms
+mechanically. If implementation finds another
 branch unreachable through real requests, it gets its own targeted unit the
 same way — the fallback is named per branch, never a blanket claim that the
 numbered real-request tests reach everything.
@@ -2353,7 +2085,8 @@ joint `0.0.14` cut:
   file is script-rendered; missing module docstrings fail the render, so the
   `middleware/__init__.py` and `middleware/debug_toolbar.py` docstrings are
   written for their rows): the package tree's planned `middleware/` annotations
-  resolve to real rows; the test tree gains `tests/middleware/`.
+  resolve to real rows; the test tree gains `tests/middleware/` and the live
+  tier's toolbar suite.
 - [`KANBAN.md`][kanban] / `KANBAN.html` — card wrap via the DB + re-render
   (Slice 2 checklist).
 - **Deferred to the joint cut:** [`README.md`][readme] /
@@ -2364,77 +2097,67 @@ joint `0.0.14` cut:
 
 ## Risks and open questions
 
+Each constraint below is live. The preferred-posture / fallback weighing that
+settled it, and the risks this card closed, are in the
+[rationale][rationale-risks].
+
 - **`_postprocess` is a private-underscore method of `django-debug-toolbar`.**
   The subclass overrides (and chains to) a method the toolbar does not
   advertise as API; a toolbar major release could rename or reshape it, and
   the `>=7.0.0` floor is deliberately unbounded above (the package pins
-  floors, not ceilings). This is a knowingly borrowed coupling — upstream
-  carries the identical override (decorated `@override`, so upstream CI
-  notices a rename) and the archived `django-graphiql-debug-toolbar` before it
-  did too; the mechanism has been stable across the toolbar's 4.x → 7.x line.
-  **Preferred posture:** accept the coupling; the behavior-level tests
-  (Tests 1, 3) fail loudly on any reshape, and the fix tracks upstream's fix.
-  **Fallback:** if a toolbar release breaks the hook, the gate that catches it
-  (the suite under a refreshed lockfile) also scopes the repair — worst case
-  the floor gains a temporary ceiling with a follow-on card, the same
-  containment any soft dependency carries.
-- **The `7.0.0` floor is metadata-grounded, not yet suite-verified.** Per PyPI
-  metadata, `7.0.0` is the first release with the Django 6.0 classifier
-  (`6.0.0` stops at 5.2), and its `django>=5.2` / `python>=3.10` floors match
-  the package's own. The Slice-1 dependency gate installs it and the worker
-  records the pytest command for the maintainer to run (not run by the worker
-  itself, per [`AGENTS.md`][agents]) before the hint string freezes.
-  **Preferred answer:** `7.0.0` holds and all naming sites ship with it. **Fallback:** the gate moves all sites
-  together — the dev-group specifier, the `_DEBUG_TOOLBAR_INSTALL_HINT`
-  string, and the re-typed test literal — the three-places-that-must-agree
-  rule, verbatim from [`spec-041`][spec-041].
-- **The card's view-detection hedge, resolved against a package fact.** The
-  card's architectural posture names a "working name `DjangoGraphQLView`...
-  pinned during implementation"; this spec pins the target as engine-owned
-  `strawberry.django.views.BaseView` instead, because the package ships no
-  view class and fakeshop wires Strawberry's views directly
-  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge)).
-  This is the card's own hedge resolving in the direction its "same
-  `issubclass` check" sentence already pointed (upstream's check targets
-  `BaseView` too), not a card conflict — recorded per the
-  [`docs/SPECS/NEXT.md`][next] prefer-the-card rule: if a future card ships a
-  package view class, the one `issubclass` line is that card's to update.
-- **`BaseView` presence at the Strawberry floor is upstream history.** Verified
-  at the installed strawberry 0.316.0; the Slice-1 gate re-confirms
-  importability at the pinned `strawberry-graphql==0.262.0` floor in a
-  throwaway venv. **Preferred answer:** present (the class predates the
-  package's floor by a wide margin). **Fallback:** bump the project's
-  Strawberry floor — the same recourse the [`spec-041`][spec-041] consumer
-  gate named.
-- **App-registry churn from per-test `INSTALLED_APPS` overrides.** Django's
-  test utilities support it and the suite's `--dist loadscope` keeps the
-  module on one worker, but registry re-population interacts with anything
-  else module-scoped that caches app state. **Preferred answer:** the fixture
-  is test-scoped, the suite's existing registry-sensitive files prove the
-  pattern, and any surfaced flake is fixed at source (the
-  [`tests/conftest.py`][tests-conftest] precedent — never by weakening the
-  suite's `-W error` posture). **Fallback:** promote the overrides to a
-  module-scoped fixture with an explicit teardown ordering, still inside
-  `tests/middleware/`.
-- **Schema-registry order-dependence on a shared worker.** Package tests
-  `registry.clear()` for isolation; these tests execute real GraphQL from the
-  same tree, the documented `LazyType` `KeyError` class
-  ([`test_query/README.md`][test-query-readme]). **Preferred answer:** the
-  fixture's setup-time `schema_reload.reload_all_project_schemas()` call
-  (Decision 9) reconstructs the whole project schema per test — the same
-  order-independence-by-reconstruction every live acceptance suite's autouse
-  fixture already relies on, via the same single-sited helper (never a
-  narrower private reload). **Fallback:** none anticipated; a surfaced flake
-  in this class is fixed in the shared helper, at source.
+  floors, not ceilings). The coupling is knowingly borrowed — upstream carries
+  the identical override and the archived `django-graphiql-debug-toolbar`
+  before it did too — and the containment is the behavior-level tests
+  (Tests 1, 3), which fail loudly on any reshape.
+- **The floor is single-valued across its three gated sites, and restated
+  elsewhere ungated.** The dev-group specifier, the `_DEBUG_TOOLBAR_INSTALL_HINT`
+  string, and the re-typed test literal must always name the same
+  `django-debug-toolbar` floor; the package test compares all three, so moving
+  one alone fails the suite. The install hint is the error message a deploying
+  consumer follows, so a drift there misdirects a real install. The consumer
+  docs restate the floor with no gate behind them, so a floor bump owes a sweep
+  of the tree — never a count of the places it is written, which is a claim
+  nothing checks. The sweep is for the package **name**, each hit read: a needle
+  carrying the `>=` is bounded by one spelling and misses a restatement that
+  separates the name from the constraint with a backtick or a space.
+- **The Strawberry floor is read, never restated.** `BaseView`'s presence at the
+  package's declared `strawberry-graphql` floor is re-confirmed at the Slice-1
+  gate in a throwaway venv, with the floor version read at gate time from
+  [`pyproject.toml`][pyproject] and [`docs/builder/BUILD.md`][build]
+  `## Floor verification`. If it is ever missing at the floor, the recourse is
+  to raise the project's Strawberry floor, not to weaken the check
+  ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned)).
+- **Toolbar process state outlives a settings override.** `show_toolbar`'s
+  resolved callback is `@cache`-memoized and `DebugToolbar`'s panel/URL caches
+  are class attributes, so any test that changes the toolbar's configuration
+  owes the clear-and-restore contract in Decision 9. Under `--dist loadscope` a
+  leak passes locally and fails a neighbour, so a surfaced flake in this class
+  is fixed at source, never by weakening the suite's `-W error` posture.
+- **Schema-registry order-dependence on a shared worker.** Package tests call
+  `registry.clear()` for isolation, and the toolbar-present tests execute real
+  GraphQL through the aggregate project schema — the documented `LazyType`
+  `KeyError` class ([`test_query/README.md`][test-query-readme]). The answer is
+  order-independence by reconstruction through the single-sited
+  `schema_reload` helper, never a narrower private reload.
 - **The async path ships unverified.** The stock middleware is async-capable
-  and the overrides run in hooks it calls from either mode, but no test
-  drives `AsyncGraphQLView` or an ASGI stack. **Preferred answer for
-  `0.0.14`:** ship sync-verified with the GLOSSARY body claiming exactly that;
-  async verification rides whichever card first gives the suite an async
-  request vehicle (the [`TestClient`][glossary-testclient] card's
-  `AsyncTestClient` is the natural owner). **Fallback:** if the joint cut
-  wants the claim earlier, a dedicated async smoke test is a small follow-on,
-  not a redesign.
+  and the overrides run in hooks it calls from either mode, but no test drives
+  an async Strawberry view or an ASGI stack, and the glossary body claims only
+  what is verified. Async verification rides whichever card first gives the
+  suite an async request vehicle; [`spec-043`][spec-043]'s `AsyncTestClient` is
+  the named owner.
+- **The bridge asset's guards are pinned by text, never by execution.** The
+  suite has no JavaScript runtime, so Test 16's rows prove that each guard is
+  present, single-sited and correctly ordered in the file on disk, and prove
+  nothing about what any of them returns: that the record predicate accepts the
+  values it should, that the escaped key is a selector `querySelector` parses,
+  that a skipped panel is the only thing skipped. Those follow from the
+  language and the CSSOM identifier-serialization rules, which is reasoning, not
+  a measurement. The absence rows narrow the gap in one direction only — they
+  detect a paste of upstream's text, and a rewrite of the same hole in different
+  words passes every one of them. Whether this repository takes on a JS runtime
+  is a maintainer decision and the named owner of this risk; until it is taken,
+  a change to the asset's behavior is reviewed by reading and recorded in the
+  build artifact, never demonstrated by a green suite.
 
 ## Out of scope (explicitly tracked elsewhere)
 
@@ -2442,15 +2165,13 @@ joint `0.0.14` cut:
   parity) — [`TODO-ALPHA-044-0.0.14`][kanban]
   ([Response-extensions debug middleware][glossary-response-extensions-debug-middleware]);
   the two entries' "distinct from" cross-links are kept accurate by Slice 2.
-- **`TestClient` / `GraphQLTestCase` helpers** — [`TODO-ALPHA-043-0.0.14`][kanban]
-  ([`TestClient`][glossary-testclient] / [`GraphQLTestCase`][glossary-graphqltestcase]);
-  this card's tests use `django.test.Client` directly. The async verification
-  handoff ([Risks](#risks-and-open-questions)) lands there if anywhere.
-- **Fakeshop toolbar dogfooding** (a `DEBUG`-gated settings opt-in in the
-  example) — the fakeshop-activation card [`TODO-BETA-062-0.1.5`][kanban] if
-  the maintainer wants it; when it lands, the covering tests move live and the
-  package stand-ins are deleted per the
-  [live-first promotion rule][glossary-live-first-coverage-mandate].
+- **The `TestClient` / `GraphQLTestCase` helpers themselves** —
+  [`spec-043`][spec-043]
+  ([`TestClient`][glossary-testclient] / [`GraphQLTestCase`][glossary-graphqltestcase]).
+  This card does not build them; the live tier consumes `TestClient` to post its
+  GraphQL envelopes, and the async verification handoff
+  ([Risks](#risks-and-open-questions)) lands on that card's `AsyncTestClient` if
+  anywhere.
 - **The migration guide itself** — [`TODO-BETA-068-0.1.8`][kanban]; this card
   hands it the one-row settings-string mapping
   (`strawberry_django.middlewares.debug_toolbar.DebugToolbarMiddleware` →
@@ -2467,23 +2188,23 @@ joint `0.0.14` cut:
       overriding `process_view` + `_postprocess` per
       [Decision 6](#decision-6--subclass-and-override-borrowed-as-is-process_view--_postprocess-_get_payload-_html_types))
       behind the import-time `require_debug_toolbar()` guard (a thin wrapper
-      over `utils/imports.py::require_optional_module` — Helper-reuse D1).
+      over `django_strawberry_framework/utils/imports.py::require_optional_module` — Helper-reuse D1).
 - [ ] The template asset ships at
       `django_strawberry_framework/templates/django_strawberry_framework/debug_toolbar.html`
       and the middleware renders it via `render_to_string(...)` into GraphiQL
-      HTML responses; the port preserves upstream's five invariants
+      HTML responses; the port preserves upstream's five invariants and carries
+      the seven documented guard divergences
       ([template-port checklist](#borrowing-posture))
       ([Decision 4](#decision-4--module-template-and-test-locations-a-middleware-subpackage-an-in-package-template-asset-testsmiddleware)).
 - [ ] The public wiring documents **all three** toolbar pieces — app,
       middleware (near the front of `MIDDLEWARE`, replacing the stock entry,
       after any response-encoding middleware), **and** `debug_toolbar_urls()`
-      in the URLconf — and the toolbar-present tests wire `ROOT_URLCONF =
-      "tests.middleware.debug_toolbar_urls"` (composing fakeshop's
-      `urlpatterns` + `debug_toolbar_urls()`) **by dotted path only**, the
-      module never imported at test-module import time and evicted from
-      `sys.modules` on fixture setup and teardown so its `urlpatterns` are
-      always computed under `DEBUG=True`
-      ([User-facing API](#user-facing-api) / [Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)).
+      in the URLconf — and the example project wires all three in its own
+      shipped settings and URLconf, so the toolbar-present tests need no
+      wiring override of their own: only `DEBUG=True`, with `config.urls`
+      reloaded inside that override so its `DEBUG`-gated `djdt` routes populate
+      and restored outside it so they cannot leak
+      ([User-facing API](#user-facing-api) / [Decision 9](#decision-9--test-strategy-live-tier-tests-through-fakeshops-shipped-toolbar-package-tests-for-the-paths-no-live-request-reaches-eviction-simulated-absence)).
 - [ ] The injection contract is stated honestly: injection is view-scoped
       (every JSON response from a Strawberry Django view while the toolbar is
       enabled, minus `IntrospectionQuery`), **not** IDE-scoped — no wording
@@ -2501,42 +2222,55 @@ joint `0.0.14` cut:
       [Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape)).
 - [ ] Strawberry-view detection targets `strawberry.django.views.BaseView`
       and is proven through fakeshop's real decorated URLconf
-      ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge)).
+      ([Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned)).
 - [ ] The introspection-query skip is preserved: no payload injection when
       `operationName == "IntrospectionQuery"`
       ([Decision 8](#decision-8--the-introspection-query-skip-is-preserved-verbatim)).
 - [ ] **`django-debug-toolbar>=7.0.0`** (or the floor the Slice-1 gate proves,
       moving all naming sites together) is in `[dependency-groups].dev` with
       `uv.lock` regenerated in the same commit; the dev-group specifier, the
-      hint string, and the re-typed test literal agree on the **single** floor,
-      whose Django coverage reaches 6.0 and stops short of the `6.1`
-      [`pyproject.toml`][pyproject] also advertises.
+      hint string, and the re-typed test literal agree on the **single** floor
+      and the package test compares all three (Test 12a), whose Django coverage
+      reaches 6.0 and stops short of the `6.1` [`pyproject.toml`][pyproject]
+      also advertises.
 - [ ] The Strawberry view-class gate ran: `strawberry.django.views.BaseView`
-      confirmed importable at `strawberry-graphql==0.262.0` in an isolated
-      throwaway venv (never the shared `.venv`), or the project's Strawberry
-      floor was bumped instead; the command and outcome are recorded in the
-      build artifact.
-- [ ] `tests/middleware/test_debug_toolbar.py` covers both dependency states
-      per the [Test plan](#test-plan) — including the real GraphiQL HTML
-      injection, the real SQL-emitting **named** JSON operation (each
-      product-query test starting with `seed_data(1)`) with the `SQLPanel`
-      entry present and
-      `TemplatesPanel` absent, the introspection skip, the deterministic
-      JSON-`Accept` GET branch, the **panel-content fetch through
-      `debug_toolbar_urls()` using the injected `requestId`** (asserting
-      `render_panel`'s JSON `content`/`scripts` shape with the fallback
-      "isn't available anymore" message **absent** and a SQL-panel marker from
-      the seeded operation **present**), the non-GraphiQL passthroughs (HTML **and** the JSON-probe
-      leak guard), the two-sided-restore absence
-      matrix, the coverage-only targeted units (streaming early-out,
-      no-`request_id` bail / `has_content`-false, header-present
-      `Content-Length` refreshes), and the template-port guard over the five
-      copied-asset invariants — the toolbar-present group marked
+      confirmed importable at the package's declared `strawberry-graphql` floor
+      — the version read at gate time from [`pyproject.toml`][pyproject] and
+      [`docs/builder/BUILD.md`][build] `## Floor verification`, never from a
+      number this spec restates — in an isolated throwaway venv (never the
+      shared `.venv`), or the project's Strawberry floor was bumped instead; the
+      command and outcome are recorded in the build artifact.
+- [ ] Both test tiers cover both dependency states per the
+      [Test plan](#test-plan). **Live —
+      `examples/fakeshop/test_query/test_debug_toolbar_api.py`:** the real
+      GraphiQL HTML injection, the real SQL-emitting **named** JSON operation
+      (each product-query test starting with `seed_data(1)`) with the `SQLPanel`
+      entry present and `TemplatesPanel` absent, the introspection skip, the
+      deterministic JSON-`Accept` GET branch, the **panel-content fetch using
+      the injected `requestId`** (asserting `render_panel`'s JSON
+      `content`/`scripts` shape with the fallback "isn't available anymore"
+      message **absent** and a SQL-panel marker from the seeded operation
+      **present**), the HTML passthroughs for both dispatch shapes, and the
+      inert-under-shipped-settings baseline — the group marked
       `pytest.mark.django_db`, with the fixture's mandatory
       `show_toolbar_func_or_path.cache_clear()` + `DebugToolbar` cache
-      save/clear/restore on setup/teardown — and the package coverage gate
-      (`fail_under = 100`) holds with `middleware/debug_toolbar.py` included,
-      each branch mapped to a named test owner.
+      save/clear/restore on setup/teardown. **Package —
+      `tests/middleware/test_debug_toolbar.py`:** the two-sided-restore absence
+      matrix, the JSON-probe leak guard, the coverage-only targeted units
+      (streaming early-out, encoded-body early-out, no-`request_id` bail /
+      `has_content`-false / non-object and undecodable body bails, the
+      non-class `view_class` guard, header-present `Content-Length` refreshes),
+      the pyproject-row gate over the floor's three sites, and the template-port
+      guard over the copied-asset invariants **and** the diverged guard forms as
+      one parametrized row per predicate, each form pinned by the kind of row
+      that can falsify it — a form diverging by spelling carrying both the row
+      for the port's spelling and the row asserting upstream's replaced spelling
+      absent, a form diverging by position carrying the index, adjacency,
+      nesting and return-count rows a substring copy satisfies. The package
+      coverage gate
+      (`fail_under = 100`) holds
+      with `middleware/debug_toolbar.py` included, each branch mapped to a named
+      test owner.
 - [ ] The migration-guide handoff row content is recorded for
       [`TODO-BETA-068-0.1.8`][kanban] (the one settings-string swap, behavior
       unchanged) ([Goal 3](#goals)).
@@ -2594,11 +2328,25 @@ joint `0.0.14` cut:
 
 <!-- docs/SPECS/ -->
 [next]: NEXT.md
+[rationale]: appx/spec-042-debug_toolbar-0_0_14-rationale.md
+[rationale-d1]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-1--spec-filename-and-canonical-naming
+[rationale-d10]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-10--version-bumps-are-owned-by-the-joint-0014-cut
+[rationale-d2]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-2--card-scope-boundary
+[rationale-d3]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-3--the-symbol-is-debugtoolbarmiddleware
+[rationale-d4]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-4--module-template-and-test-locations
+[rationale-d5]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-5--soft-django-debug-toolbar-dependency
+[rationale-d6]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-6--subclass-and-override-borrowed-as-is
+[rationale-d7]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-7--strawberry-view-detection-against-baseview
+[rationale-d8]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-8--the-introspection-query-skip-is-preserved-verbatim
+[rationale-d9]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#decision-9--test-strategy
+[rationale-risks]: appx/spec-042-debug_toolbar-0_0_14-rationale.md#risks-and-open-questions
 [spec-039]: spec-039-serializer_mutations-0_0_13.md
 [spec-040]: spec-040-auth_mutations-0_0_13.md
 [spec-041]: spec-041-channels_router-0_0_14.md
+[spec-043]: spec-043-test_client-0_0_14.md
 
 <!-- docs/builder/ -->
+[build]: ../builder/BUILD.md
 
 <!-- django_strawberry_framework/ -->
 [conf]: ../../django_strawberry_framework/conf.py
@@ -2606,12 +2354,11 @@ joint `0.0.14` cut:
 [rf-init]: ../../django_strawberry_framework/rest_framework/__init__.py
 [routers]: ../../django_strawberry_framework/routers.py
 [utils-imports]: ../../django_strawberry_framework/utils/imports.py
+[views]: ../../django_strawberry_framework/views.py
 
 <!-- tests/ -->
 [test-base-init]: ../../tests/base/test_init.py
 [test-soft-dependency]: ../../tests/rest_framework/test_soft_dependency.py
-[tests-conftest]: ../../tests/conftest.py
-[test-routers]: ../../tests/test_routers.py
 
 <!-- examples/ -->
 [config-settings]: ../../examples/fakeshop/config/settings.py
@@ -2626,10 +2373,9 @@ joint `0.0.14` cut:
 [venv-strawberry-views]: ../../.venv/lib/python3.14/site-packages/strawberry/django/views.py
 
 <!-- External -->
-[upstream-middleware]: ../../../strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py
-[upstream-template]: ../../../strawberry-django-main/strawberry_django/templates/strawberry_django/debug_toolbar.html
 [debug-toolbar-install-docs]: https://django-debug-toolbar.readthedocs.io/en/latest/installation.html
 [debug-toolbar-middleware-source]: https://raw.githubusercontent.com/django-commons/django-debug-toolbar/7.0.0/debug_toolbar/middleware.py
 [debug-toolbar-toolbar-source]: https://raw.githubusercontent.com/django-commons/django-debug-toolbar/7.0.0/debug_toolbar/toolbar.py
 [debug-toolbar-views-source]: https://raw.githubusercontent.com/django-commons/django-debug-toolbar/7.0.0/debug_toolbar/views.py
-[debug-toolbar-pypi]: https://pypi.org/pypi/django-debug-toolbar/json
+[upstream-middleware]: ../../../strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py
+[upstream-template]: ../../../strawberry-django-main/strawberry_django/templates/strawberry_django/debug_toolbar.html

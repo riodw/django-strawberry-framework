@@ -34,17 +34,21 @@ wiring gate, spec-042 Error shapes): the ``debug_toolbar.middleware`` import
 below defines a Django model, and an unregistered app would otherwise surface
 Django's cryptic ``HistoryEntry`` app-label ``RuntimeError`` instead.
 
-The Python middleware keeps two narrow, deliberate robustness divergences from
-the verbatim upstream borrow, both documented in spec-042: ``process_view``
-guards ``issubclass`` with ``isinstance(view, type)`` (this middleware runs for
-ALL global traffic, and a non-class ``view_class`` must not ``TypeError``/500 an
-unrelated view), and ``_get_payload`` bails to ``None`` when a declared-JSON
-body cannot be decoded or parsed, or when the decoded body is not an object (a
-dev-only tool must not turn an unusual response into a 500). The injected
-GraphiQL bridge template carries the third documented divergence: defensive
-DOM guards that keep ``debugToolbar`` payload scrubbing mandatory while
-treating the toolbar DOM updates as best-effort. No other Python behavior
-differs.
+The Python middleware keeps narrow, deliberate robustness divergences from the
+verbatim upstream borrow, each documented in spec-042 and named here rather
+than counted: ``process_view`` guards ``issubclass`` with
+``isinstance(view, type)`` (this middleware runs for ALL global traffic, and a
+non-class ``view_class`` must not ``TypeError``/500 an unrelated view);
+``_get_payload`` bails to ``None`` on any response-shape failure - a
+declared-JSON body whose bytes will not decode under its own charset, whose
+text will not parse, or which parses to something other than an object (a
+dev-only tool must not turn an unusual response into a 500); and
+``_postprocess`` returns an already-encoded response untouched, since appending
+the bridge script to a compressed body - or re-encoding one as JSON - corrupts
+it. The injected GraphiQL bridge template carries a guard family of its own,
+enumerated in spec-042 ``## Borrowing posture``: defensive DOM guards that keep
+``debugToolbar`` payload scrubbing mandatory while treating the toolbar DOM
+updates as best-effort.
 """
 
 from __future__ import annotations
@@ -61,10 +65,18 @@ from django_strawberry_framework.utils.imports import require_optional_module
 
 # The single django-debug-toolbar install-hint string (spec-042 Decision 5).
 # Every toolbar-absent raise routes through ``require_debug_toolbar()`` so the
-# hint lives in exactly one source location and names the verified floor
-# (place 2 of the three-places-that-must-agree: place 1 is the
-# ``[dependency-groups].dev`` pin in ``pyproject.toml``, place 3 is the
-# re-typed test literal; all three say ``>=7.0.0``).
+# hint lives in exactly one source location and names the verified floor. The
+# floor is written here, re-typed as ``_HINT_SUBSTRING`` in
+# ``tests/middleware/test_debug_toolbar.py`` (the drift-catch), and pinned in
+# ``pyproject.toml``'s ``[dependency-groups].dev`` row; that test compares all
+# of them - hint against literal, literal against the dependency row - which is
+# what makes the three-places-that-must-agree rule a gate rather than a note,
+# and none of the three can move alone. Those are the GATED sites, not a census
+# of where the floor is written: anything else restating it, documentation
+# included, is gated by nothing, so a floor bump sweeps the tree for the package
+# NAME and reads each hit, rather than trusting this enumeration or sweeping for
+# the ``django-debug-toolbar>=`` specifier - a restatement that separates the
+# name from the constraint with a backtick or a space does not match it.
 _DEBUG_TOOLBAR_INSTALL_HINT: str = (
     "DebugToolbarMiddleware requires django-debug-toolbar, which is not installed. Install it "
     "with `pip install 'django-debug-toolbar>=7.0.0'` (the package's verified debug-toolbar "

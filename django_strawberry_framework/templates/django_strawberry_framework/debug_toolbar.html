@@ -12,11 +12,21 @@
       return document.getElementById("djDebug");
     }
 
+    // The one question every read below depends on: can keys be read from this
+    // value without a TypeError? Defined once and applied at every read site,
+    // so the guards answer that question rather than enumerating spellings of
+    // bad input (a null payload, a scalar, a missing "panels", a panel entry
+    // that is not an object) - an enumeration always misses one, and a miss
+    // throws out of the globally patched JSON.parse / Response.prototype.json
+    // and breaks the caller's parse.
+    function isRecord(value) {
+      return value !== null && typeof value === "object";
+    }
+
     const djDebug = getDjDebug();
     function update(data) {
       if (
-        data === null ||
-        typeof data !== "object" ||
+        !isRecord(data) ||
         !Object.prototype.hasOwnProperty.call(data, "debugToolbar")
       ) {
         return data;
@@ -24,15 +34,28 @@
 
       // Payload scrubbing is mandatory; DOM updates are best-effort. Capture the
       // debug payload and strip the server-only "debugToolbar" key BEFORE any
-      // DOM-dependent work, so a missing toolbar handle - or a panel present in
-      // the payload whose content/nav node is absent from the current toolbar
-      // DOM - can never leak the key back into the GraphiQL response.
+      // DOM-dependent work, so a missing toolbar handle - a payload shape the
+      // DOM update cannot read - or a panel present in the payload whose
+      // content/nav node is absent from the current toolbar DOM can never leak
+      // the key back into the GraphiQL response.
       const toolbar = data.debugToolbar;
       delete data.debugToolbar;
 
       if (djDebug === null) return data;
+      if (!isRecord(toolbar) || !isRecord(toolbar.panels)) return data;
 
-      Object.entries(toolbar.panels).forEach(([id, panel]) => {
+      Object.entries(toolbar.panels).forEach(([panelId, panel]) => {
+        if (!isRecord(panel)) return;
+        // A panel key is arbitrary payload text, so it reaches querySelector
+        // only through CSS.escape - the one form the selector parser accepts
+        // for every key, rather than an enumeration of the spellings it
+        // rejects (an unescaped key that is not a valid CSS identifier throws
+        // a SyntaxError out of the globally patched JSON.parse /
+        // Response.prototype.json and breaks the caller's parse). The escape
+        // of an empty key is the empty identifier, which can name no node, so
+        // that panel is skipped exactly as one whose content node is absent is.
+        const id = CSS.escape(panelId);
+        if (id === "") return;
         if (panel.title) {
           const content = djDebug.querySelector(`#${id}`);
           if (content === null) return;
@@ -70,6 +93,9 @@
           }
         }
       });
+      // setAttribute coerces a non-string value and never throws for one, so a
+      // missing requestId degrades to the stock toolbar's own panel-miss
+      // fallback rather than a broken parse - upstream's write, kept.
       djDebug.setAttribute("data-request-id", toolbar.requestId);
 
       return data;
@@ -80,7 +106,7 @@
       return update(origParse.apply(this, arguments));
     };
 
-    const origJson = Response.prototype.json
+    const origJson = Response.prototype.json;
     Response.prototype.json = function () {
       return origJson.apply(this, arguments).then((data) => update(data));
     };

@@ -3,8 +3,12 @@
 Pins Decision 7 (spec #"Decision 7: optimizer and projection invariants"): when a Relay-declared type selects
 ``id`` the optimizer's ``only()`` projection must still include the
 concrete pk attname; ``_resolve_id_default`` must read from the loaded
-``__dict__`` cache without triggering a lazy load. Ordinary relation traversal
-across Relay-declared fakeshop targets is pinned through live HTTP in
+``__dict__`` cache without triggering a lazy load. The default-pk half of that
+projection contract is live at
+``test_products_visibility_api.py::test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids``;
+the custom-pk half stays here because fakeshop ships no model whose pk attname
+differs from ``id``. Ordinary relation traversal across Relay-declared fakeshop
+targets is pinned through live HTTP in
 ``examples/fakeshop/test_query/test_products_api.py``.
 """
 
@@ -28,34 +32,6 @@ def _isolate_registry():
     registry.clear()
     yield
     registry.clear()
-
-
-@pytest.mark.django_db
-def test_relay_id_only_projection_includes_pk_attname(django_assert_num_queries):
-    """Selecting Relay ``id`` keeps the concrete pk attname in the optimizer's ``only()``."""
-    services.seed_data(1)
-
-    class CategoryNode(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryNode]:
-            return Category.objects.all()
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    ctx = SimpleNamespace()
-    with django_assert_num_queries(1):
-        result = schema.execute_sync("{ allCategories { id } }", context_value=ctx)
-    assert result.errors is None
-    plan = ctx.dst_optimizer_plan
-    assert "id" in plan.only_fields
 
 
 @pytest.mark.django_db
@@ -119,10 +95,13 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
     loaded value from ``root.__dict__`` instead of falling back to
     ``getattr`` and triggering a per-row pk fetch (Decision 7).
 
-    Uses the ``managed=False`` + manual ``schema_editor`` pattern from
+    Every fakeshop model uses the default ``id`` pk, so no live query can put a
+    custom pk attname in front of the walker - a gap in the fixture, not a
+    property a request is unable to observe. The ``managed=False`` + manual
+    ``schema_editor`` pattern from
     ``test_walker.py::test_plan_elides_forward_fk_when_target_pk_is_not_named_id``
-    so the model exists for ``_meta.pk.attname`` introspection AND the
-    table exists for a real query - no fakeshop model addition needed.
+    stands in: the model exists for ``_meta.pk.attname`` introspection and the
+    table exists for a real query.
     """
 
     class CustomPKItem(models.Model):

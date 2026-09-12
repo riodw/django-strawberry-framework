@@ -1,35 +1,13 @@
-"""Library schema tests for project-schema exposure and declaration-order invariants without HTTP.
+"""Library schema test for the declaration-order invariant the app deliberately carries.
 
-Type exposure is checked through the composed project schema; the intentionally
-cross-referenced declaration order is pinned against the library schema module
-directly (self-contained). The live HTTP counterpart lives in
-``examples/fakeshop/test_query``.
+The intentionally cross-referenced declaration order is pinned against the
+library schema module directly (self-contained, and invisible to any request).
+That the composed project schema publishes the library types is read over real
+HTTP in ``examples/fakeshop/test_query/test_schema_composition_api.py``.
 """
-
-from config.schema import schema as project_schema
 
 from apps.library import schema as library_schema
 from django_strawberry_framework import DjangoType
-
-
-def test_project_schema_includes_library_types():
-    """The composed project schema exposes the library app's DjangoTypes."""
-    result = project_schema.execute_sync(
-        """
-        query {
-          __type(name: "BookType") {
-            name
-            fields { name }
-          }
-        }
-        """,
-    )
-
-    assert result.errors is None
-    assert result.data["__type"]["name"] == "BookType"
-    assert {"title", "shelf", "genres"} <= {
-        field["name"] for field in result.data["__type"]["fields"]
-    }
 
 
 def test_library_djangotype_declaration_order_stays_awkward():

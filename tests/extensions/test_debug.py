@@ -563,16 +563,6 @@ def test_parse_and_validation_failures_have_no_debug_key():
     assert "debug" not in (validation_result.extensions or {})
 
 
-@override_settings(DEBUG=True)
-def test_executed_no_op_operation_carries_both_empty_lists(default_wrapper):
-    schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
-
-    result = schema.execute_sync("{ __typename }")
-
-    assert result.errors is None
-    assert result.extensions["debug"] == {"sql": [], "exceptions": []}
-
-
 # ---------------------------------------------------------------------------
 # Scenario 8 - the restore contract around real sync execution.
 # ---------------------------------------------------------------------------
@@ -1236,41 +1226,32 @@ def test_malformed_debug_setting_stays_fail_closed(settings, debug_value):
 
 
 @override_settings(DEBUG=False)
-def test_acknowledged_factory_publishes_the_payload_and_logs_no_warning(default_wrapper, caplog):
-    """The acknowledgement is the ONE spelling that keeps the payload under DEBUG false."""
+def test_acknowledged_factory_restores_the_cursor_bracket_and_logs_no_warning(
+    default_wrapper,
+    caplog,
+):
+    """The acknowledged spelling is silent, and its bracket unwinds like the gated one.
+
+    Both halves are internal state a response cannot show: the absence of a log
+    record (the withheld path's warning is what a request CAN see) and the
+    wrapper flag the extension borrowed for the operation, restored to the value
+    it found with no coordinator entry left behind. What the acknowledgement
+    publishes on the wire under ``DEBUG`` false is pinned live in
+    ``examples/fakeshop/test_query/test_debug_extension_api.py``.
+    """
     schema = strawberry.Schema(
         query=_OkQuery,
         extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
     )
 
     with caplog.at_level(logging.WARNING, logger="django_strawberry_framework"):
-        result = schema.execute_sync("{ ok }")
+        schema.execute_sync("{ ok }")
 
-    assert result.extensions["debug"] == {"sql": [], "exceptions": []}
     assert [
         record for record in caplog.records if record.name == "django_strawberry_framework"
     ] == []
     assert default_wrapper.force_debug_cursor is False  # the bracket still restored
     assert debug_module._coordinator._active == {}
-
-
-@override_settings(DEBUG=False)
-def test_acknowledged_factory_stays_fresh_per_operation(default_wrapper):
-    """A factory entry is still one instance per operation - no payload carries over."""
-    schema = strawberry.Schema(
-        query=_BoomQuery,
-        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)],
-    )
-
-    failing = schema.execute_sync("{ boom }")
-    clean = schema.execute_sync("{ ok }")
-
-    assert [row["message"] for row in failing.extensions["debug"]["exceptions"]] == [
-        "sensitive boom detail",
-    ]
-    # The second operation's payload is its own, not the first one's stash.
-    assert clean.errors is None
-    assert clean.extensions["debug"] == {"sql": [], "exceptions": []}
 
 
 # ---------------------------------------------------------------------------

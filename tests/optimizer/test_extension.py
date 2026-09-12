@@ -12,11 +12,17 @@ Covers, by topic code:
   ``Prefetch`` for target types with custom ``get_queryset`` hooks.
 - **B1** - plan cache: hits, misses, eviction, named-fragment
   differentiation, directive-variable cache splitting, runtime-path
-  inclusion.
+  inclusion. Reuse of one cached plan ACROSS requests belongs to the shared
+  extension instance the project schema mounts and is pinned live in
+  ``test_library_api.py::test_library_optimizer_plan_cache_is_reused_across_http_requests``.
 - **B2** - forward FK-id elision (and the guards that disable it).
 - **B3** - strictness API (``off`` / ``warn`` / ``raise``).
-- **B4** - ``Meta.optimizer_hints`` (SKIP, force_select, force_prefetch,
-  explicit ``Prefetch``).
+- **B4** - ``Meta.optimizer_hints`` declaration-time rejection (unknown field
+  name, non-``OptimizerHint`` value), skip dispatch through a non-sentinel
+  ``skip=True`` hint, and ``force_select`` downgrading under a target hook.
+  The observable SKIP / force-prefetch SQL shapes are live in
+  ``test_library_api.py::test_library_optimizer_hints_are_observable_over_http``
+  against the hints ``examples/fakeshop/apps/library/schema.py::LoanType`` ships.
 - **B5** - plan introspection via ``info.context`` and the read/write
   symmetry of the ``_context`` helpers (dict, dict-subclass, non-dict
   mapping, frozen mapping, immutable ``dict`` subclass, ``None``).
@@ -971,43 +977,6 @@ def test_on_execute_sets_and_resets_context_var():
 # ---------------------------------------------------------------------------
 # B1: plan cache
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_cache_hit_on_repeated_query(django_assert_num_queries):
-    """B1: executing the same query twice produces a cache hit on the second call."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-
-    ext = DjangoOptimizerExtension()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    query = "{ allItems { name category { name } } }"
-
-    schema.execute_sync(query)
-    assert ext.cache_info().misses == 1
-    assert ext.cache_info().hits == 0
-
-    schema.execute_sync(query)
-    assert ext.cache_info().hits == 1
-    assert ext.cache_info().misses == 1
-    assert ext.cache_info().size == 1
 
 
 @pytest.mark.django_db
@@ -3467,44 +3436,6 @@ def test_check_schema_hidden_fields_not_flagged():
 
 
 @pytest.mark.django_db
-def test_optimizer_hint_skip_suppresses_relation(django_assert_num_queries):
-    """B4: OptimizerHint.SKIP excludes a relation from the plan."""
-    from django_strawberry_framework import OptimizerHint
-
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-            optimizer_hints = {"category": OptimizerHint.SKIP}
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    ctx = SimpleNamespace()
-    result = schema.execute_sync(
-        "{ allItems { name category { name } } }",
-        context_value=ctx,
-    )
-    assert result.errors is None
-    plan = ctx.dst_optimizer_plan
-    # SKIP means category is NOT in select_related.
-    assert "category" not in plan.select_related
-
-
-@pytest.mark.django_db
 def test_optimizer_hint_skip_routes_through_hint_is_skip():
     """Pins ``rev-optimizer__hints.md`` Medium: the walker dispatches
     skip directives through ``hint_is_skip`` rather than open-coding the
@@ -3545,46 +3476,6 @@ def test_optimizer_hint_skip_routes_through_hint_is_skip():
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
     assert "category" not in plan.select_related
-
-
-@pytest.mark.django_db
-def test_optimizer_hint_force_prefetch(django_assert_num_queries):
-    """B4: OptimizerHint.prefetch_related() forces prefetch on a forward FK."""
-    from django_strawberry_framework import OptimizerHint
-
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-            optimizer_hints = {"category": OptimizerHint.prefetch_related()}
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    ctx = SimpleNamespace()
-    result = schema.execute_sync(
-        "{ allItems { name category { name } } }",
-        context_value=ctx,
-    )
-    assert result.errors is None
-    plan = ctx.dst_optimizer_plan
-    # Force-prefetch overrides the default select_related for forward FK.
-    assert [lookup.prefetch_to for lookup in plan.prefetch_related] == ["category"]
-    assert "category" not in plan.select_related
-    assert "category_id" in plan.only_fields
 
 
 @pytest.mark.django_db

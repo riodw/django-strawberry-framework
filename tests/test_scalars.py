@@ -4,11 +4,11 @@ Covers the ``BigInt`` scalar's strict parser, strict serializer, public
 top-level import surface, and the import-time deprecation-suppression
 contract. Wire-level / schema-execution behavior lives in
 ``tests/types/test_converters.py`` per the [`docs/TREE.md`](../docs/TREE.md)
-mirror rule (scalar internals here; converter dispatch there).
-Additionally, two ``strawberry.Schema(query=..., config=strawberry_config())``
-integration tests pin the post-migration ``BigInt`` round trip end-to-end
-(``test_bigint_serializes_int_via_strawberry_config_schema``,
-``test_bigint_parses_decimal_string_via_strawberry_config_schema``).
+mirror rule (scalar internals here; converter dispatch there). The ``BigInt``
+round trip a consumer actually sees - decimal-string serialization for both
+the signed and unsigned columns, and a decimal-string literal argument - is
+pinned over live HTTP in
+``examples/fakeshop/test_query/test_scalars_api.py``.
 """
 
 import subprocess
@@ -604,41 +604,6 @@ def test_strawberry_config_unknown_kwarg_raises_typeerror_from_upstream():
     """An unknown kwarg surfaces upstream's ``TypeError``; the helper does not swallow it."""
     with pytest.raises(TypeError):
         strawberry_config(this_kwarg_does_not_exist_in_strawberry=True)
-
-
-# ---------------------------------------------------------------------------
-# strawberry_config() factory - integration tests (schema round-trip)
-# ---------------------------------------------------------------------------
-
-
-def test_bigint_serializes_int_via_strawberry_config_schema():
-    """An ``int`` returned from a ``BigInt``-typed resolver round-trips as the decimal string."""
-
-    @strawberry.type
-    class Q:
-        @strawberry.field
-        def big(self) -> BigInt:
-            return 9_223_372_036_854_775_807  # int64_max
-
-    schema = strawberry.Schema(query=Q, config=strawberry_config())
-    result = schema.execute_sync("{ big }")
-    assert result.errors is None
-    assert result.data == {"big": "9223372036854775807"}
-
-
-def test_bigint_parses_decimal_string_via_strawberry_config_schema():
-    """A decimal-string argument typed ``BigInt`` is parsed and echoed back as the decimal string."""
-
-    @strawberry.type
-    class Q:
-        @strawberry.field
-        def echo(self, value: BigInt) -> BigInt:
-            return value
-
-    schema = strawberry.Schema(query=Q, config=strawberry_config())
-    result = schema.execute_sync('{ echo(value: "9223372036854775807") }')
-    assert result.errors is None
-    assert result.data == {"echo": "9223372036854775807"}
 
 
 # ---------------------------------------------------------------------------

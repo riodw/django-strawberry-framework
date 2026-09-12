@@ -798,12 +798,13 @@ def test_convert_scalar_binary_field_raises_unsupported():
 #   ``BigAutoField -> Int`` (NOT BigInt). The scalars app's id columns
 #   are also ``BigAutoField`` but the example schema doesn't introspect
 #   into the synthetic ``managed=False`` shape this test needs.
-# - Four BigInt rejection / edge tests (``null`` input, bool / float
-#   argument rejection, bool return-value rejection). The strict parser
-#   / serializer error contracts surface as ``GraphQLError`` from
-#   Strawberry - reachable via HTTP in principle but the package test is
-#   the contract source; HTTP coverage would only re-verify what the
-#   library round-trip tests already prove for non-error inputs.
+# - Two BigInt edge tests with no wire shape of their own: a nullable
+#   ``BigInt`` argument given ``null`` (Strawberry strips it before the
+#   parser runs, so the claim is about what the RESOLVER receives), and a
+#   resolver returning ``bool`` for a ``BigInt`` annotation (no fakeshop
+#   field can return the wrong Python type). Literal rejection over the
+#   wire is pinned live on the scalars filter surface
+#   (``test_query/test_scalars_api.py::test_filter_specimens_by_bigint_exact_rejects_non_integer_literal``).
 #
 # Synthetic models live under ``app_label = "test_bigint"`` so they do not
 # collide with the choice-enum fixture's ``app_label = "test_choice_enums"``.
@@ -919,36 +920,6 @@ def test_bigint_in_input_position_with_null_via_schema_execution():
     result = schema.execute_sync("query { echo(val: null) }")
     assert result.errors is None
     assert result.data == {"echo": "null"}
-
-
-def test_bigint_rejects_bool_argument_via_schema_execution():
-    """Inbound: ``bool`` literals are rejected by the strict parser at the schema boundary."""
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def echo(self, val: BigInt) -> BigInt:
-            return val
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    result = schema.execute_sync("query { echo(val: true) }")
-    assert result.errors is not None
-    assert len(result.errors) > 0
-
-
-def test_bigint_rejects_float_argument_via_schema_execution():
-    """Inbound: float literals are rejected by the strict parser at the schema boundary."""
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def echo(self, val: BigInt) -> BigInt:
-            return val
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    result = schema.execute_sync("query { echo(val: 1.9) }")
-    assert result.errors is not None
-    assert len(result.errors) > 0
 
 
 def test_bigint_resolver_returning_bool_raises_via_schema_execution():

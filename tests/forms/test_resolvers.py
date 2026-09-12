@@ -6,16 +6,22 @@ payload) driven through a finalized package-test ``@strawberry.type Mutation``
 (the live ``/graphql/`` surface is covered in the fakeshop suite). Fixtures:
 
 - the products ``Item`` / ``Category`` (FK + ``unique_item_per_category``) cover
-  the FK relation decode, the partial-update reconstruction, the ``"__all__"``
-  constraint sentinel, untouched stale-value revalidation, the
-  visibility-scoped locate, and the re-fetch G2 plan;
+  the FK relation decode, the partial-update reconstruction, the narrowed-input
+  required-field guards, and the re-fetch G2 plan;
 - the library ``Book`` / ``Genre`` / ``Shelf`` (a real M2M + a ``choices`` field)
   cover the M2M relation decode + the choice-enum unwrap;
 - the scalars ``MediaSpecimen`` (``FileField`` / ``ImageField``) covers the
   ``files=`` decode split;
-- package-local plain ``forms.Form`` fixtures cover the model-less ``{ ok errors }``
-  payload + ``perform_mutate``, the kwarg-requiring-form ``get_form_kwargs`` hook,
-  and the ``to_field_name`` relation contract.
+- package-local plain ``forms.Form`` fixtures cover ``perform_mutate``'s
+  success-only / write-phase contracts and the ``to_field_name`` relation contract.
+
+The consumer-visible halves - the created / updated node, the ``clean_<field>``
+and ``"__all__"`` envelopes, untouched stale-value revalidation, the explicit-null
+FK required error, the omitted-required coercion error, the visibility-scoped
+locate, the authorize-before-decode ordering, the plain-form ``{ ok errors }``
+shapes and its deny-by-default posture, and the ``get_form_kwargs`` constructor
+injection - are earned over real HTTP in
+``examples/fakeshop/test_query/test_products_api.py``.
 
 The relation-visibility tests drive BOTH a Relay-``GlobalID`` primary AND a
 non-Relay raw-pk primary, single AND multi, to pin the visibility-on-every-branch
@@ -220,31 +226,6 @@ _UPDATE = (
 
 
 @pytest.mark.django_db
-def test_modelform_create_writes_and_returns_node():
-    """A ModelForm create writes the row + returns the node with its FK relation."""
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "Made", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"]["name"] == "Made"
-    assert payload["node"]["category"]["name"] == cat.name
-    assert payload["errors"] == []
-    assert product_models.Item.objects.filter(name="Made", category=cat).count() == 1
-
-
-@pytest.mark.django_db
 def test_modelform_update_locates_writes_and_returns():
     """A ModelForm update locates the row, writes the change, returns it."""
     (
@@ -271,85 +252,6 @@ def test_modelform_update_locates_writes_and_returns():
 # ---------------------------------------------------------------------------
 # form.errors -> envelope (incl. NON_FIELD_ERRORS -> "__all__")
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_clean_field_failure_maps_to_field_keyed_error():
-    """A ``clean_<field>`` failure surfaces as a field-keyed ``FieldError`` (null node)."""
-
-    class PickyForm(forms.ModelForm):
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "category")
-
-        def clean_name(self):
-            value = self.cleaned_data["name"]
-            if value == "bad":
-                raise forms.ValidationError("name may not be 'bad'.")
-            return value
-
-    class CategoryT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Category
-            fields = ("id", "name")
-            primary = True
-
-    class ItemT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Item
-            fields = ("id", "name")
-            primary = True
-
-    class CreateItem(DjangoModelFormMutation):
-        class Meta:
-            form_class = PickyForm
-            operation = "create"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        create_item = DjangoMutationField(CreateItem)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    res = schema.execute_sync(
-        "mutation($d: PickyFormInput!){ createItem(data:$d){ node{ name } errors{ field messages } } }",
-        variable_values={"d": {"name": "bad", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["name"]
-
-
-@pytest.mark.django_db
-def test_non_field_constraint_failure_keys_to_all_sentinel():
-    """A ``unique_item_per_category`` (model-wide) failure keys to the ``"__all__"`` sentinel.
-
-    The reused ``validation_error_to_field_errors(ValidationError(form.errors.as_data()))``
-    keys the form's ``NON_FIELD_ERRORS`` bucket to ``"__all__"`` byte-identically to
-    a model ``full_clean()`` failure.
-    """
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    product_models.Item.objects.create(name="Dup", category=cat)
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "Dup", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert NON_FIELD_ERROR_KEY in [e["field"] for e in payload["errors"]]
 
 
 # ---------------------------------------------------------------------------
@@ -885,60 +787,6 @@ def test_null_boolean_field_omitted_in_mutation_uses_unset_default():
 
 
 @pytest.mark.django_db
-def test_get_form_kwargs_override_injects_constructor_kwarg():
-    """An override injecting ``user=`` drives a form whose ``__init__`` requires it."""
-
-    class KwargForm(forms.Form):
-        note = forms.CharField()
-
-        def __init__(self, *args, user=None, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._user = user
-
-        def clean(self):
-            if self._user is None:
-                raise forms.ValidationError("user is required.")
-            return self.cleaned_data
-
-    captured = {}
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = KwargForm
-            permission_classes = []
-
-        def get_form_kwargs(
-            self,
-            info,
-            *,
-            data,
-            files,
-            instance=None,
-        ):
-            kwargs = {"data": data, "files": files, "user": "alice"}
-            if instance is not None:
-                kwargs["instance"] = instance
-            return kwargs
-
-        def perform_mutate(self, form, info):
-            captured["user"] = form._user
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = schema.execute_sync(
-        "mutation($d: KwargFormInput!){ submit(data:$d){ ok errors{ field messages } } }",
-        variable_values={"d": {"note": "x"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["submit"]["ok"] is True
-    assert captured["user"] == "alice"
-
-
-@pytest.mark.django_db
 def test_get_form_kwargs_override_waives_create_required_guard():
     """Overriding ``get_form_kwargs`` waives the create-required-narrowing guard.
 
@@ -1172,75 +1020,6 @@ def test_partial_update_preserves_unprovided_fk_and_validates_constraint():
     assert NON_FIELD_ERROR_KEY in [e["field"] for e in payload["errors"]]
     item.refresh_from_db()
     assert item.name == "Mine"  # not written
-
-
-@pytest.mark.django_db
-def test_partial_update_revalidates_untouched_stale_field():
-    """An untouched value that violates the current form blocks the whole partial update.
-
-    Models a row written before the form gained a stricter ``name`` rule. The
-    partial resolver reconstructs the omitted ``name`` from that row and the bound
-    ``ModelForm`` revalidates it, so changing only ``description`` fails without
-    persisting anything. Sending a valid replacement for ``name`` in the same
-    mutation repairs the row and lets the requested description change land.
-    """
-
-    class StricterItemForm(forms.ModelForm):
-        name = forms.CharField(min_length=10)
-
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "description", "category")
-
-    (
-        schema,
-        (
-            _CategoryT,
-            ItemT,
-            _C,
-            UpdateItem,
-        ),
-    ) = _build_item_form_schema(form_class=StricterItemForm)
-    input_name = UpdateItem._input_class.__name__
-    query = (
-        f"mutation($id: ID!, $d: {input_name}!){{ updateItem(id:$id, data:$d){{ "
-        "node{ name } errors{ field messages } } }"
-    )
-    category = product_models.Category.objects.create(name=_uniq("Cat"))
-    item = product_models.Item.objects.create(
-        name="old",
-        description="Before",
-        category=category,
-    )
-
-    blocked = schema.execute_sync(
-        query,
-        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"description": "Blocked"}},
-    )
-    assert blocked.errors is None, blocked.errors
-    blocked_payload = blocked.data["updateItem"]
-    assert blocked_payload["node"] is None
-    assert [error["field"] for error in blocked_payload["errors"]] == ["name"]
-    item.refresh_from_db()
-    assert item.name == "old"
-    assert item.description == "Before"
-
-    repaired = schema.execute_sync(
-        query,
-        variable_values={
-            "id": global_id_for(ItemT, item.pk),
-            "d": {"name": "valid-name", "description": "After"},
-        },
-    )
-    assert repaired.errors is None, repaired.errors
-    repaired_payload = repaired.data["updateItem"]
-    assert repaired_payload["errors"] == []
-    assert repaired_payload["node"] == {
-        "name": "valid-name",
-    }
-    item.refresh_from_db()
-    assert item.name == "valid-name"
-    assert item.description == "After"
 
 
 @pytest.mark.django_db
@@ -1651,63 +1430,6 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_plain_form_valid_returns_ok_true():
-    """A valid plain-form submit returns ``{ ok: true, errors: [] }``."""
-
-    class ContactForm(forms.Form):
-        message = forms.CharField()
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = ContactForm
-            permission_classes = []
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = schema.execute_sync(
-        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
-        variable_values={"d": {"message": "hi"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["submit"] == {"ok": True, "errors": []}
-
-
-@pytest.mark.django_db
-def test_plain_form_invalid_returns_ok_false_with_errors():
-    """An invalid plain-form submit returns ``{ ok: false, errors: [...] }``."""
-
-    class PickyContactForm(forms.Form):
-        message = forms.CharField()
-
-        def clean_message(self):
-            raise forms.ValidationError("nope")
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = PickyContactForm
-            permission_classes = []
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = schema.execute_sync(
-        "mutation($d: PickyContactFormInput!){ submit(data:$d){ ok errors{ field messages } } }",
-        variable_values={"d": {"message": "x"}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["submit"]
-    assert payload["ok"] is False
-    assert [e["field"] for e in payload["errors"]] == ["message"]
-
-
-@pytest.mark.django_db
 def test_perform_mutate_override_runs_only_on_success():
     """The ``perform_mutate`` override runs on a valid submit, NOT on a failing one."""
     calls = []
@@ -1883,35 +1605,6 @@ def test_plain_form_expired_deadline_rejects_before_perform_mutate_write():
 
 
 @pytest.mark.django_db
-def test_update_hidden_row_is_not_found_no_existence_leak():
-    """A caller who cannot SEE the row gets a not-found ``FieldError`` on ``id`` (no leak)."""
-
-    @classmethod
-    def hide_private(cls, qs, info):
-        return qs.filter(is_private=False)
-
-    (
-        schema,
-        (
-            _CategoryT,
-            ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema(item_get_queryset=hide_private)
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    hidden = product_models.Item.objects.create(name="Secret", category=cat, is_private=True)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": global_id_for(ItemT, hidden.pk), "d": {"name": "Y"}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["id"]
-
-
-@pytest.mark.django_db
 def test_update_malformed_id_is_field_error_before_lookup():
     """A malformed / wrong-model ``id:`` -> ``id``-keyed ``FieldError`` before any lookup."""
     (
@@ -1936,64 +1629,6 @@ def test_update_malformed_id_is_field_error_before_lookup():
 # ---------------------------------------------------------------------------
 # write-auth denial vs success
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_write_auth_denial_raises_top_level_error():
-    """A deny permission raises a top-level ``GraphQLError`` (NOT an in-band payload)."""
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema(permission_classes=[_DenyAll])
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "X", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is not None
-    assert "Not authorized" in str(res.errors[0].message)
-
-
-@pytest.mark.django_db
-def test_write_auth_runs_before_relation_visibility_decode():
-    """An unauthorized caller submitting a HIDDEN relation id gets the auth denial,
-    NOT a relation ``FieldError`` -- write-auth runs BEFORE the visibility-scoped
-    relation decode, so an unauthorized actor cannot probe related-object
-    visibility/existence by id (the authz-ordering side channel).
-
-    Pre-fix the decode ran first, so a hidden ``categoryId`` returned an in-band
-    ``FieldError`` payload (``res.errors is None``) while a *visible* one reached the
-    denial -- an observable distinction. Post-fix both collapse to the denial.
-    """
-
-    @classmethod
-    def hide_all(cls, qs, info):
-        return qs.none()
-
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema(permission_classes=[_DenyAll], category_get_queryset=hide_all)
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "X", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    # The denial (top-level GraphQLError), not a categoryId FieldError payload:
-    # the visibility-scoped relation decode never ran for the unauthorized caller.
-    assert res.errors is not None
-    assert "Not authorized" in str(res.errors[0].message)
-    assert res.data is None or res.data.get("createItem") is None
 
 
 @pytest.mark.django_db
@@ -2168,69 +1803,6 @@ def test_modelform_refetch_keeps_select_related_and_suppresses_only():
 
 
 @pytest.mark.django_db
-def test_plain_form_unset_permission_classes_denies_by_default():
-    """An unset ``permission_classes`` on a plain form DENIES (deny-by-default), not crashes.
-
-    A model-less plain form cannot inherit the ``DjangoModelPermission`` default
-    (that class reads the resolved model, which the plain flavor never provides -
-    it would raise at request time). An unset ``permission_classes`` therefore
-    installs ``DenyAll`` and the write is denied with the top-level authorization
-    error, not an ``AttributeError`` (``spec-038-form_mutations-0_0_12`` Finding 1).
-    """
-
-    class ContactForm(forms.Form):
-        message = forms.CharField()
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = ContactForm
-            # permission_classes intentionally unset -> deny-by-default (DenyAll).
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = schema.execute_sync(
-        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
-        variable_values={"d": {"message": "hi"}},
-    )
-    assert res.errors is not None
-    assert "Not authorized" in str(res.errors[0].message)
-    assert res.data is None or res.data["submit"] is None
-
-
-@pytest.mark.django_db
-def test_required_form_field_omitted_yields_coercion_error():
-    """Omitting a generated REQUIRED form field is rejected at coercion, not delivered as None.
-
-    ``Item.name`` is required, so the create input's ``name`` is non-null AND now
-    carries no class default: omitting it produces a top-level GraphQL coercion
-    error before the resolver and writes no row
-    (``spec-038-form_mutations-0_0_12`` Finding 2).
-    """
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"categoryId": global_id_for(CategoryT, cat.pk)}},  # name omitted
-    )
-    assert res.errors is not None
-    assert "name" in str(res.errors[0]).lower()
-    assert res.data is None
-    assert product_models.Item.objects.count() == 0  # the resolver never ran
-
-
-@pytest.mark.django_db
 def test_narrowed_update_preserves_excluded_required_fk_and_validates_constraint():
     """A ``Meta.fields``-narrowed update reconstructs an EXCLUDED required FK from the row.
 
@@ -2341,34 +1913,6 @@ def test_decode_relation_multi_empty_values_return_empty_list():
         )
         assert error is None
         assert decoded == []
-
-
-@pytest.mark.django_db
-def test_explicit_null_fk_on_update_yields_form_required_error_not_invalid_id():
-    """Explicit ``null`` on a required FK surfaces the FORM's field-keyed required error,
-    NOT a decode-level 'Invalid id' on the relation
-    (``spec-038-form_mutations-0_0_12`` Finding 4)."""
-    (
-        schema,
-        (
-            _CategoryT,
-            ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    item = product_models.Item.objects.create(name="X", category=cat)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"categoryId": None}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    fields = [e["field"] for e in payload["errors"]]
-    assert "category" in fields  # the bound form's required error, keyed to the form field
-    assert "categoryId" not in fields  # NOT the decode-level 'Invalid id for relation' error
 
 
 @pytest.mark.django_db

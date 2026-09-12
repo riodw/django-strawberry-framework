@@ -8,12 +8,12 @@ now ships the live root-node surface (``node`` / ``nodes`` over ``/graphql/`` in
 contract is carried there. The tests here stay package-side because they assert
 what a live query cannot per the ``examples/fakeshop/test_query/README.md``
 live-HTTP-first rule: synthetic model-label / type-strategy routing,
-multi-type-over-one-model dispatch, custom ``relay.NodeID`` attributes, exact
-query-count side channels, ``GLOBALID_INVALID`` error-code shapes,
-construction- / finalize-time guards, ``SyncMisuseError`` discrimination, and
-the public-export surface. Behavior-only twins whose contract the live suite
-now carries are migration candidates under the live-first coverage mandate
-(``examples/fakeshop/test_query/README.md``).
+multi-type-over-one-model dispatch, custom ``relay.NodeID`` attributes,
+``GLOBALID_INVALID`` error-code shapes, construction- / finalize-time guards,
+``SyncMisuseError`` discrimination, and the public-export surface. Query counts
+are NOT such a claim - ``CaptureQueriesContext`` measures them over a live
+request - so a row here that counts queries keeps its place on one of the
+reasons above, never on the count.
 """
 
 import pytest
@@ -313,51 +313,6 @@ def test_stamp_node_type_returns_a_model_instance_that_rejects_copying():
     node = UncopyableNode()
     assert _stamp_node_type(resolved_type, node) is node
     assert not hasattr(node, "_dsf_node_type_hint")
-
-
-@pytest.mark.django_db
-def test_typed_node_field_resolves_target():
-    """``DjangoNodeField(CategoryNode)`` returns the row for a matching id."""
-    services.seed_data(1)
-    category_node = _make_node_type("CategoryNode")
-    schema = _schema_with(
-        "category",
-        category_node | None,
-        DjangoNodeField(category_node),
-    )
-    row = Category.objects.order_by("pk").first()
-    result = schema.execute_sync(
-        _CATEGORY_QUERY,
-        variable_values={"id": _gid("products.category", row.pk)},
-    )
-    assert result.errors is None
-    assert result.data["category"] == {"name": row.name}
-
-
-@pytest.mark.django_db
-def test_typed_node_field_mismatch_raises():
-    """An ItemNode id at a CategoryNode-typed field raises naming expected/received types."""
-    services.seed_data(1)
-    category_node = _make_node_type("CategoryNode")
-    _make_node_type("ItemNode", model=Item)
-    schema = _schema_with(
-        "category",
-        category_node | None,
-        DjangoNodeField(category_node),
-    )
-    item = Item.objects.order_by("pk").first()
-    result = schema.execute_sync(
-        _CATEGORY_QUERY,
-        variable_values={"id": _gid("products.item", item.pk)},
-    )
-    assert result.errors is not None
-    message = str(result.errors[0])
-    assert "CategoryNode" in message
-    assert "ItemNode" in message
-    # The mismatch error carries NO extensions code (only GLOBALID_INVALID is
-    # spec-assigned); the nullable field carries null under the error.
-    assert (result.errors[0].extensions or {}).get("code") is None
-    assert result.data == {"category": None}
 
 
 # ---------------------------------------------------------------------------
@@ -762,33 +717,6 @@ _NODES_QUERY = (
 
 
 @pytest.mark.django_db
-def test_nodes_preserves_input_order_with_null_holes():
-    """Visible / hidden / missing ids interleave with nulls at the right indexes."""
-    services.seed_data(1)
-    hidden_node = _make_hidden_category_node()
-    schema = _schema_with(
-        "categories",
-        list[hidden_node | None],
-        DjangoNodesField(hidden_node),
-    )
-    visible = Category.objects.filter(is_private=False).order_by("pk").first()
-    hidden = Category.objects.filter(is_private=True).order_by("pk").first()
-    missing_pk = Category.objects.order_by("-pk").first().pk + 1
-    result = schema.execute_sync(
-        _CATEGORIES_QUERY,
-        variable_values={
-            "ids": [
-                _gid("products.category", hidden.pk),
-                _gid("products.category", visible.pk),
-                _gid("products.category", missing_pk),
-            ],
-        },
-    )
-    assert result.errors is None
-    assert result.data["categories"] == [None, {"name": visible.name}, None]
-
-
-@pytest.mark.django_db
 def test_nodes_batches_per_type(django_assert_num_queries):
     """Ids spanning two types issue exactly one query per distinct type."""
     services.seed_data(2)
@@ -819,45 +747,6 @@ def test_nodes_batches_per_type(django_assert_num_queries):
         {"__typename": "ItemNode", "name": item.name},
         {"__typename": "CategoryNode", "name": categories[1].name},
     ]
-
-
-@pytest.mark.django_db
-def test_nodes_duplicate_ids():
-    """The same id twice resolves per position - two equal entries."""
-    services.seed_data(1)
-    category_node = _make_node_type("CategoryNode")
-    schema = _schema_with(
-        "categories",
-        list[category_node | None],
-        DjangoNodesField(category_node),
-    )
-    row = Category.objects.order_by("pk").first()
-    gid = _gid("products.category", row.pk)
-    result = schema.execute_sync(
-        _CATEGORIES_QUERY,
-        variable_values={"ids": [gid, gid]},
-    )
-    assert result.errors is None
-    assert result.data["categories"] == [{"name": row.name}, {"name": row.name}]
-
-
-@pytest.mark.django_db
-def test_nodes_empty_list(django_assert_num_queries):
-    """``ids: []`` returns ``[]`` without touching the database."""
-    services.seed_data(1)
-    category_node = _make_node_type("CategoryNode")
-    schema = _schema_with(
-        "categories",
-        list[category_node | None],
-        DjangoNodesField(category_node),
-    )
-    with django_assert_num_queries(0):
-        result = schema.execute_sync(
-            _CATEGORIES_QUERY,
-            variable_values={"ids": []},
-        )
-    assert result.errors is None
-    assert result.data["categories"] == []
 
 
 @pytest.mark.django_db

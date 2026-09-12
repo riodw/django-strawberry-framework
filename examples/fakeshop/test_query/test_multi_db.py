@@ -1,7 +1,9 @@
 """Live GraphQL HTTP tests for sharded resolver isolation and multi-database debug capture.
 
-Scope (per spec Goals item 3 + Test plan ``### examples/fakeshop/test_query/test_multi_db.py``):
-three live ``/graphql/`` HTTP tests against the sharded fakeshop layout.
+Scope: live ``/graphql/`` HTTP rows against the sharded fakeshop layout.
+
+Resolver isolation and debug capture (per spec Goals item 3 + Test plan
+``### examples/fakeshop/test_query/test_multi_db.py``):
 
 - Seeding rows on ``shard_b`` and reading them through ``/graphql/`` via a
   ``.using("shard_b")`` root resolver returns the seeded rows.
@@ -9,6 +11,20 @@ three live ``/graphql/`` HTTP tests against the sharded fakeshop layout.
   ``using("shard_b")`` resolver.
 - A debug-enabled probe captures SQL from ``shard_b`` with the correct database
   alias and restores every connection's debug-cursor state.
+
+The suite also owns the alias pins that only a second database can prove: the
+row-preserving relational leaf predicate executing wholly on ``shard_b``, the write
+alias for generated and serializer mutations, and the post-``OrderSet`` routing
+attestation. Four routing rows mount a consumer override on a ``.using("shard_b")``
+list field and cover an alias change, a hints change, an in-place rewrite of the
+queryset the override was handed, and an equal-but-distinct hint token under a router
+that tells hint objects apart by identity; each must fail before any row executes,
+with no ``library_branch`` SQL on either alias. The fifth row is ACCEPTED and is what
+the attestation rests on: the override mutates state INSIDE a hint object it preserves
+by identity, so nothing the seal compares changed, yet a router reading into that
+object would now answer ``default``. The effective alias is frozen before the override
+runs and the result is pinned to it, so the completed read returns the ``shard_b`` row
+and ``default`` sees no ``library_branch`` SQL at all.
 
 Critical contract pins (do not violate without an explicit spec revision):
 
@@ -52,6 +68,7 @@ from apps.library import models
 from django.conf import settings
 from django.db import connections
 from django.test import Client, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
 from graphql_client import (
     assert_graphql_success as _graphql_data,
@@ -194,16 +211,18 @@ def _build_list_field_hints_mismatch_schema(
         queryset,
         info,
     ):
-        # Receives unrouted queryset with hints={'instance': 1}, returns candidate with hints={'instance': 2}
+        # Receives an unrouted queryset with hints={'tenant': 1}; returns a candidate
+        # carrying hints={'tenant': 2}. Both sides have ``_db is None``, so the hints
+        # are the only thing that could route them apart.
         ordered = queryset.order_by("name")
-        ordered._hints = {"instance": 2}
+        ordered._hints = {"tenant": 2}
         return ordered
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_hints_apply_sync))
 
     def _hints_resolver(root, info):
         qs = models.Branch.objects.all()
-        qs._hints = {"instance": 1}
+        qs._hints = {"tenant": 1}
         return qs
 
     @strawberry.type
@@ -251,8 +270,330 @@ def test_post_orderset_hints_routing_mismatch_rejected_on_sharded_db(
     assert "errors" in payload
     err_msg = payload["errors"][0]["message"]
     assert "apply_sync changed database routing intent" in err_msg
-    assert "expected db=None, hints={'instance': 1}" in err_msg
-    assert "got db=None, hints={'instance': 2}" in err_msg
+    assert "expected db=None, hints={'tenant': 1}" in err_msg
+    assert "got db=None, hints={'tenant': 2}" in err_msg
+
+
+@pytest.fixture
+def _build_list_field_in_place_routing_mutation_schema(
+    _reload_project_schema_for_acceptance_tests,
+    monkeypatch,
+):
+    """Branch list field whose OrderSet rewrites the RECEIVED queryset's routing in place."""
+    from apps.library.orders import BranchOrder
+    from apps.library.schema import BranchType
+
+    def _in_place_apply_sync(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        # Mutates the very object it was handed and returns it unchanged otherwise:
+        # a post-call read of that object would see the rewritten routing as the baseline.
+        queryset._db = "default"
+        queryset._hints = {"tenant": 2}
+        return queryset
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_in_place_apply_sync))
+
+    def _shard_b_tenant_resolver(root, info):
+        qs = models.Branch.objects.using("shard_b")
+        qs._hints = {"tenant": 1}
+        return qs
+
+    @strawberry.type
+    class _InPlaceRoutingQuery:
+        branches_shard_b: list[BranchType] = DjangoListField(
+            BranchType,
+            resolver=_shard_b_tenant_resolver,
+        )
+
+    _current["schema"] = DjangoSchema(query=_InPlaceRoutingQuery, config=strawberry_config())
+    yield
+    _current["schema"] = None
+
+
+def _branch_sql(captured: list[dict]) -> list[str]:
+    return [q["sql"] for q in captured if "library_branch" in q["sql"].lower()]
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_post_orderset_in_place_routing_mutation_rejected_on_sharded_db(
+    _build_list_field_in_place_routing_mutation_schema,
+):
+    """Routing is snapshotted BEFORE ``apply_sync`` runs, so an in-place rewrite cannot pass.
+
+    The override receives the sealed ``shard_b`` queryset, points it at ``default``
+    with new hints, and returns the same object. Compared against the pre-call
+    snapshot it is a routing change; the request fails before any row executes,
+    and no ``library_branch`` SQL reaches either alias.
+    """
+    models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
+    models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
+
+    query = """
+    query {
+      branchesShardB(orderBy: [{ city: ASC }]) {
+        name
+      }
+    }
+    """
+    client = Client()
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DEBUG=True,
+        MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+    ):
+        clear_url_caches()
+        try:
+            with (
+                CaptureQueriesContext(connections["default"]) as default_ctx,
+                CaptureQueriesContext(connections["shard_b"]) as shard_ctx,
+            ):
+                payload = graphql_payload(query, client=client)
+        finally:
+            clear_url_caches()
+
+    assert payload["data"] is None
+    err_msg = payload["errors"][0]["message"]
+    assert "apply_sync changed database routing intent" in err_msg
+    assert "expected db='shard_b', hints={'tenant': 1}" in err_msg
+    assert "got db='default', hints={'tenant': 2}" in err_msg
+    assert _branch_sql(default_ctx.captured_queries) == []
+    assert _branch_sql(shard_ctx.captured_queries) == []
+
+
+# Two EQUAL but DISTINCT hint tokens: a router is handed the object itself and may
+# tell them apart by identity, which is what the identity-only hints compare protects.
+_TENANT_TOKEN = "tenant-a!"[:-1]
+_EQUAL_DISTINCT_TOKEN = "tenant-a!"[:-1]
+assert _TENANT_TOKEN == _EQUAL_DISTINCT_TOKEN
+assert _TENANT_TOKEN is not _EQUAL_DISTINCT_TOKEN
+
+
+class _IdentitySensitiveRouter:
+    """Routes reads carrying THE tenant token object to ``shard_b``; equal copies stay on default."""
+
+    def db_for_read(self, model, **hints):
+        return "shard_b" if hints.get("tenant") is _TENANT_TOKEN else None
+
+    def db_for_write(self, model, **hints):
+        return None
+
+    def allow_relation(self, obj1, obj2, **hints):
+        return None
+
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
+        return None
+
+
+@pytest.fixture
+def _build_list_field_identity_token_schema(
+    _reload_project_schema_for_acceptance_tests,
+    monkeypatch,
+):
+    """Unrouted Branch list field whose hints carry the identity token; the override swaps it."""
+    from apps.library.orders import BranchOrder
+    from apps.library.schema import BranchType
+
+    swap = {"active": False}
+
+    def _token_swapping_apply_sync(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        ordered = queryset.order_by("name")
+        if swap["active"]:
+            ordered._hints = {"tenant": _EQUAL_DISTINCT_TOKEN}
+        return ordered
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_token_swapping_apply_sync))
+
+    def _tenant_resolver(root, info):
+        qs = models.Branch.objects.all()
+        qs._hints = {"tenant": _TENANT_TOKEN}
+        return qs
+
+    @strawberry.type
+    class _TenantQuery:
+        branches_tenant: list[BranchType] = DjangoListField(BranchType, resolver=_tenant_resolver)
+
+    _current["schema"] = DjangoSchema(query=_TenantQuery, config=strawberry_config())
+    yield swap
+    _current["schema"] = None
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_post_orderset_equal_but_distinct_hint_token_rejected_under_identity_router(
+    _build_list_field_identity_token_schema,
+):
+    """An equal-but-not-identical hint value is a routing change under a legal identity router.
+
+    Control: with the token preserved, the identity-sensitive router reads the
+    unrouted queryset on ``shard_b`` and the request returns the row seeded there.
+    Then the override replaces the token with an equal but distinct string; the
+    same router would have sent that read to ``default``, so the seal rejects the
+    result before any row executes and no ``library_branch`` SQL reaches either alias.
+    """
+    swap = _build_list_field_identity_token_schema
+    models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
+    models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
+
+    query = """
+    query {
+      branchesTenant(orderBy: [{ city: ASC }]) {
+        name
+      }
+    }
+    """
+    client = Client()
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DEBUG=True,
+        MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+        DATABASE_ROUTERS=[_IdentitySensitiveRouter()],
+    ):
+        clear_url_caches()
+        try:
+            swap["active"] = False
+            with CaptureQueriesContext(connections["shard_b"]) as control_shard_ctx:
+                control = graphql_payload(query, client=client)
+            swap["active"] = True
+            with (
+                CaptureQueriesContext(connections["default"]) as default_ctx,
+                CaptureQueriesContext(connections["shard_b"]) as shard_ctx,
+            ):
+                rejected = graphql_payload(query, client=client)
+        finally:
+            clear_url_caches()
+
+    assert "errors" not in control, control
+    assert control["data"]["branchesTenant"] == [{"name": "Branch-ShardB"}]
+    assert len(_branch_sql(control_shard_ctx.captured_queries)) == 1
+
+    assert rejected["data"] is None
+    err_msg = rejected["errors"][0]["message"]
+    assert "apply_sync changed database routing intent" in err_msg
+    assert "expected db=None, hints={'tenant': 'tenant-a'}" in err_msg
+    assert "got db=None, hints={'tenant': 'tenant-a'}" in err_msg
+    assert _branch_sql(default_ctx.captured_queries) == []
+    assert _branch_sql(shard_ctx.captured_queries) == []
+
+
+class _NestedTenantRouter:
+    """Routes by state INSIDE the tenant hint object, which is ordinary router code.
+
+    ``ConnectionRouter`` hands hint values to a router untouched, and a standard
+    ``instance`` hint is itself mutable, so reading into one is legal. It is also
+    why preserving a hint's identity cannot prove the route is unchanged.
+    """
+
+    def db_for_read(self, model, **hints):
+        token = hints.get("tenant")
+        return token["alias"] if type(token) is dict else None
+
+    def db_for_write(self, model, **hints):
+        return None
+
+    def allow_relation(self, obj1, obj2, **hints):
+        return None
+
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
+        return None
+
+
+@pytest.fixture
+def _build_list_field_mutable_hint_schema(
+    _reload_project_schema_for_acceptance_tests,
+    monkeypatch,
+):
+    """Unrouted Branch list field whose tenant hint is a dict the override mutates in place."""
+    from apps.library.orders import BranchOrder
+    from apps.library.schema import BranchType
+
+    token = {"alias": "shard_b"}
+
+    def _hint_mutating_apply_sync(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        # Mutate INSIDE the hint value the source carried, then return an ordinary
+        # ordered clone. ``QuerySet._clone`` carries the same ``_hints`` object
+        # forward, so every identity the seal compares still holds.
+        token["alias"] = "default"
+        return queryset.order_by("name")
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_hint_mutating_apply_sync))
+
+    def _tenant_resolver(root, info):
+        qs = models.Branch.objects.all()
+        qs._hints = {"tenant": token}
+        return qs
+
+    @strawberry.type
+    class _MutableHintQuery:
+        branches_tenant: list[BranchType] = DjangoListField(BranchType, resolver=_tenant_resolver)
+
+    _current["schema"] = DjangoSchema(query=_MutableHintQuery, config=strawberry_config())
+    yield token
+    _current["schema"] = None
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_post_orderset_mutable_hint_cannot_reroute_the_completed_read(
+    _build_list_field_mutable_hint_schema,
+):
+    """A hint mutated behind a preserved identity cannot move the read to another alias.
+
+    The source is unrouted and carries a mutable tenant token the router reads
+    into; at request time that token says ``shard_b``. The override edits the
+    token to ``default`` and returns an ordinary ordered clone, so every hint
+    object the seal compares is still the same object and the result is
+    legitimately accepted. The effective alias was resolved and frozen before the
+    override ran, and the accepted result is pinned to it, so the completed read
+    is the one the source intended: the ``shard_b`` row comes back, the
+    distinguishable ``default`` row does not, and no ``library_branch`` SQL
+    reaches ``default`` at all.
+    """
+    token = _build_list_field_mutable_hint_schema
+    models.Branch.objects.using("shard_b").create(name="Branch-ShardB", city="Boston")
+    models.Branch.objects.using("default").create(name="Branch-Default", city="Boston")
+
+    query = """
+    query {
+      branchesTenant(orderBy: [{ city: ASC }]) {
+        name
+      }
+    }
+    """
+    client = Client()
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DEBUG=True,
+        MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+        DATABASE_ROUTERS=[_NestedTenantRouter()],
+    ):
+        clear_url_caches()
+        try:
+            with (
+                CaptureQueriesContext(connections["default"]) as default_ctx,
+                CaptureQueriesContext(connections["shard_b"]) as shard_ctx,
+            ):
+                payload = graphql_payload(query, client=client)
+        finally:
+            clear_url_caches()
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["branchesTenant"] == [{"name": "Branch-ShardB"}]
+    assert len(_branch_sql(shard_ctx.captured_queries)) == 1
+    assert _branch_sql(default_ctx.captured_queries) == []
+    # The override really did change what a late resolution would have answered.
+    assert token["alias"] == "default"
 
 
 # ---------------------------------------------------------------------------

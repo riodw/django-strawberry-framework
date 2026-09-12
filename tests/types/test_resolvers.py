@@ -16,7 +16,6 @@ be exercised without a real Django OneToOne in the example schema.
 """
 
 import datetime
-import itertools
 import uuid
 from types import SimpleNamespace
 
@@ -25,8 +24,6 @@ import strawberry
 from apps.products import services
 from apps.products.models import Category, Item
 from django.db import connection as db_connection
-from django.db import models as djmodels
-from django.test import override_settings
 from django.utils import timezone
 
 from django_strawberry_framework import DjangoType, finalize_django_types
@@ -83,43 +80,6 @@ def test_o1_make_relation_resolver_many_side():
     fake_info = SimpleNamespace(context=None, path=None)
     assert resolver(fake_root, fake_info) == [1, 2, 3]
     assert resolver.__name__ == "resolve_items"
-
-
-@pytest.mark.django_db
-def test_many_relation_scopes_custom_target_without_optimizer():
-    """Generated relation resolvers enforce target visibility without an optimizer."""
-    services.seed_data(1)
-    category = Category.objects.first()
-    assert category is not None
-    item = Item.objects.filter(category=category).first()
-    assert item is not None
-    Item.objects.filter(pk=item.pk).update(is_private=True)
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset.filter(is_private=False)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "items")
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
-            return Category.objects.filter(pk=category.pk)
-
-    result = strawberry.Schema(query=Query).execute_sync("{ categories { items { name } } }")
-    assert result.errors is None, result.errors
-    assert result.data == {"categories": [{"items": []}]}
 
 
 @pytest.mark.django_db
@@ -815,70 +775,6 @@ async def test_forward_resolver_async_planned_path_contains_unsaved_instance():
     assert await resolver(root, fake_info) is None
 
 
-@pytest.mark.django_db
-def test_forward_resolver_contains_dangling_fk_through_public_schema():
-    """A dangling FK read through a real schema execution stays contained.
-
-    The category row is deleted with constraint checks disabled, emulating a
-    data-integrity anomaly (a restore, a partial import, manual SQL). The
-    forward resolver's descriptor read raises ``Category.DoesNotExist`` at
-    RESOLVE time; the containment collapses it to ``None``, so the raw ORM
-    absence signal never reaches graphql-core's error layer - the wire sees
-    only the non-null completion guard for the non-nullable field.
-    """
-    from apps.products import services
-
-    services.seed_data(1)
-    category = Category.objects.first()
-    assert category is not None
-    item = Item.objects.filter(category=category).first()
-    assert item is not None
-    disabled = db_connection.disable_constraint_checking()
-    try:
-        with db_connection.cursor() as cursor:
-            cursor.execute("DELETE FROM products_category WHERE id = %s", [category.pk])
-
-        class CategoryType(DjangoType):
-            class Meta:
-                model = Category
-                fields = ("id", "name")
-
-        class ItemType(DjangoType):
-            class Meta:
-                model = Item
-                fields = ("id", "name", "category")
-
-        finalize_django_types()
-
-        @strawberry.type
-        class Query:
-            @strawberry.field
-            def items(self) -> list[ItemType]:
-                return Item.objects.filter(pk=item.pk)
-
-        result = strawberry.Schema(query=Query).execute_sync(
-            "{ items { name category { name } } }",
-        )
-        assert result.errors is not None and len(result.errors) == 1
-        original = result.errors[0].original_error
-        # The ORM absence signal must not surface as the error's cause: the
-        # only error left is graphql-core's own non-null completion guard.
-        assert not isinstance(original, AttributeError)
-    finally:
-        # Remove every row whose FK now dangles off the deleted category,
-        # children before parents, BEFORE re-enabling constraint checks so the
-        # fixture teardown's ``PRAGMA foreign_key_check`` sees a consistent
-        # database (the test's transaction rolls back anyway).
-        from apps.products.models import Entry, Property
-
-        Entry.objects.filter(property__category_id=category.pk).delete()
-        Entry.objects.filter(item__category_id=category.pk).delete()
-        Property.objects.filter(category_id=category.pk).delete()
-        Item.objects.filter(category_id=category.pk).delete()
-        if disabled:
-            db_connection.enable_constraint_checking()
-
-
 def test_o1_reverse_one_to_one_propagates_plain_attribute_error():
     """Reverse OneToOne: a plain ``AttributeError`` is a BUG, not an absent row.
 
@@ -1022,11 +918,15 @@ def test_forward_resolver_propagates_consumer_attribute_error():
 
 @pytest.mark.django_db
 def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries):
-    """Correctness-only: query count is 1 + N until the optimizer lands.
+    """A schema with no optimizer extension answers a many-side selection in 1 + N queries.
 
-    Without the optimizer extension, ``{ allCategories { items { name } } }``
-    returns correct results in 26 SQL queries (1 + 25): one category query
-    plus one item query per category.
+    The generated many-side resolver is correct on its own - one category query
+    plus one item query per category - and buying that correctness back down to
+    a fixed query count is the optimizer's job, not the resolver's. The
+    optimized count on the shipped schema is pinned live in
+    ``examples/fakeshop/test_query/test_optimizer_auto_api.py``; this row is the
+    unoptimized reference it is measured against, so a silent change here would
+    make that comparison meaningless.
     """
     from apps.products import services
 
@@ -1492,351 +1392,6 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog):
     result = resolver(root, info)
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
     assert isinstance(result, Category)
-
-
-# ---------------------------------------------------------------------------
-# File / image output resolvers (spec-037 Decision 4)
-# ---------------------------------------------------------------------------
-
-
-def _tiny_png_bytes():
-    """Return the bytes of a 2x3 PNG built with Pillow (a real, parseable image).
-
-    Pillow is a dev/test-only dependency added by spec-037 so the
-    ``DjangoImageType`` ``width`` / ``height`` resolvers exercise a real
-    image-dimension read rather than a stand-in. The package itself never
-    imports Pillow.
-    """
-    import io
-
-    from PIL import Image
-
-    buffer = io.BytesIO()
-    Image.new("RGB", (2, 3)).save(buffer, format="PNG")
-    return buffer.getvalue()
-
-
-_asset_model_counter = itertools.count(1)
-
-
-def _make_asset_model():
-    """Return a synthetic ``managed=False`` model with a FileField + ImageField.
-
-    ``app_label="products"`` (an INSTALLED app) so the table can be created with
-    ``schema_editor``; ``attachment`` is a required (no blank / no null) file
-    column and ``preview`` is ``blank=True`` -- but both file/image outputs are
-    nullable by default (spec-037 Decision 4), so the empty-file parent guard has
-    a nullable object to land on either way. The model NAME is uniquified per call so Django's app
-    registry does not warn ``Model 'products.asset' was already registered``
-    when several tests each build a synthetic asset model.
-    """
-    suffix = next(_asset_model_counter)
-    meta = type("Meta", (), {"app_label": "products", "managed": False})
-    return type(
-        f"Asset{suffix}",
-        (djmodels.Model,),
-        {
-            "__module__": __name__,
-            "attachment": djmodels.FileField(upload_to="files/"),
-            "preview": djmodels.ImageField(upload_to="previews/", blank=True),
-            "Meta": meta,
-        },
-    )
-
-
-def _asset_type(model, *, filesystem_path_fields=()):
-    """Build the asset DjangoType, optionally opting columns into the filesystem path.
-
-    ``filesystem_path_fields`` threads ``Meta.filesystem_path_fields``
-    (spec-048 Decision 2) so a row needing the ``path`` subfield asks for it
-    the way a consumer would; omitted, the type gets the safe default output,
-    which has no ``path`` at all.
-    """
-    attrs = {"model": model, "fields": ("id", "attachment", "preview")}
-    if filesystem_path_fields:
-        attrs["filesystem_path_fields"] = filesystem_path_fields
-    meta = type("Meta", (), attrs)
-    return type(f"{model.__name__}Type", (DjangoType,), {"Meta": meta})
-
-
-def _asset_schema(asset_type, model):
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def assets(self) -> list[asset_type]:
-            return list(model.objects.all())
-
-    finalize_django_types()
-    return strawberry.Schema(query=Query)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_populated_file_and_image_resolve_all_subfields(tmp_path):
-    """A populated FileField / ImageField resolves name/size/url (+ width/height).
-
-    ``path`` is deliberately absent from the selection: it is off the safe
-    default output (spec-048 Decision 1), and the SDL assertion below is what
-    pins that rather than a query that would merely fail to compile.
-    """
-    from django.core.files.base import ContentFile
-
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            asset = model()
-            asset.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
-            asset.preview.save("pic.png", ContentFile(_tiny_png_bytes()), save=False)
-            asset.save()
-
-            schema = _asset_schema(_asset_type(model), model)
-            # The default output objects publish no filesystem path at all.
-            sdl = str(schema)
-            assert "type DjangoFileType {" in sdl
-            assert "path" not in sdl
-            result = schema.execute_sync(
-                "{ assets { attachment { name size url } "
-                "preview { name size url width height } } }",
-            )
-            assert result.errors is None
-            row = result.data["assets"][0]
-            assert row["attachment"]["name"].endswith("doc.txt")
-            assert row["attachment"]["size"] == len(b"hello bytes")
-            assert "doc.txt" in row["attachment"]["url"]
-            # ImageField dimensions read through the real Pillow-parsed image.
-            assert row["preview"]["width"] == 2
-            assert row["preview"]["height"] == 3
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_empty_file_resolves_parent_object_to_null(tmp_path):
-    """An empty / falsy FieldFile resolves the whole object to ``null`` (parent guard)."""
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            # ``preview`` is blank=True and left unset: an empty ImageFieldFile.
-            from django.core.files.base import ContentFile
-
-            asset = model()
-            asset.attachment.save("doc.txt", ContentFile(b"x"), save=False)
-            asset.save()
-
-            schema = _asset_schema(_asset_type(model), model)
-            result = schema.execute_sync("{ assets { preview { url } } }")
-            assert result.errors is None
-            assert result.data["assets"][0]["preview"] is None
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_empty_required_file_resolves_to_null_without_error(tmp_path):
-    """A required (``null=False, blank=False``) FileField holding an empty value
-    resolves to ``null`` -- never a top-level "Cannot return null" error.
-
-    ``attachment`` is a plain required ``FileField``; a row saved with no file
-    stores ``""`` (the same empty-string state legacy rows, direct
-    ``Model.objects.create()``, fixtures, and manual SQL produce). The parent
-    resolver maps that empty ``FieldFile`` to ``None``, so the generated SDL must
-    be nullable to represent it (spec-037 Decision 4). Emitting
-    ``attachment: DjangoFileType!`` instead would turn the empty-file ``None``
-    into a GraphQL non-null execution error.
-    """
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            # Required FileField left unset -> stored as "" (the legacy / direct-create edge).
-            asset = model()
-            asset.save()
-
-            schema = _asset_schema(_asset_type(model), model)
-            # SDL is nullable: the required column no longer emits ``DjangoFileType!``.
-            assert "attachment: DjangoFileType\n" in str(schema)
-            result = schema.execute_sync("{ assets { attachment { url } } }")
-            assert result.errors is None
-            assert result.data["assets"][0]["attachment"] is None
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_per_subfield_guard_isolates_storage_failure(tmp_path, monkeypatch):
-    """A storage failure on ``path`` nulls only ``path``; ``url`` / ``name`` still resolve.
-
-    The type opts ``attachment`` into ``Meta.filesystem_path_fields`` so the
-    ``path`` subfield exists to fail (spec-048 Decision 2); the narrow guard
-    itself is unchanged, and removing ``path`` from the default output is not a
-    substitute for it (spec-048 Decision 3).
-
-    Each subfield is selected ONE AT A TIME so the failure cannot be attributed
-    to the parent resolver -- proving ``_safe_file_attr`` guards at the field
-    level. The non-filesystem ``path`` case (S3-style) is the realistic backend
-    whose ``.path`` raises ``NotImplementedError``; it is the one case mocked
-    (a real non-filesystem backend is impractical in a unit test).
-    """
-    from django.core.files.base import ContentFile
-    from django.core.files.storage import FileSystemStorage
-
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            asset = model()
-            asset.attachment.save("doc.txt", ContentFile(b"hello"), save=False)
-            asset.save()
-
-            def _no_path(self, name):
-                raise NotImplementedError("This backend doesn't support absolute paths.")
-
-            monkeypatch.setattr(FileSystemStorage, "path", _no_path)
-
-            schema = _asset_schema(
-                _asset_type(model, filesystem_path_fields=("attachment",)),
-                model,
-            )
-            # ``path`` selected alone -> degrades to null via the subfield guard.
-            path_result = schema.execute_sync("{ assets { attachment { path } } }")
-            assert path_result.errors is None
-            assert path_result.data["assets"][0]["attachment"]["path"] is None
-            # ``url`` selected alone -> still resolves (its own guard never fires).
-            url_result = schema.execute_sync("{ assets { attachment { url } } }")
-            assert url_result.errors is None
-            assert "doc.txt" in url_result.data["assets"][0]["attachment"]["url"]
-            # ``name`` selected alone -> the un-guarded stored string still resolves.
-            name_result = schema.execute_sync("{ assets { attachment { name } } }")
-            assert name_result.errors is None
-            assert name_result.data["assets"][0]["attachment"]["name"].endswith("doc.txt")
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_suspicious_file_operation_is_not_swallowed(tmp_path, monkeypatch):
-    """A ``SuspiciousFileOperation`` on a subfield surfaces, never hides as ``null``.
-
-    It is a ``SuspiciousOperation`` subclass, NOT a ``ValueError`` / ``OSError``,
-    so the narrow ``_safe_file_attr`` guard must let it propagate (spec-037
-    Decision 4 -- a path-traversal security signal). The type opts ``attachment``
-    into ``Meta.filesystem_path_fields`` so the subfield exists at all.
-    """
-    from django.core.exceptions import SuspiciousFileOperation
-    from django.core.files.base import ContentFile
-    from django.core.files.storage import FileSystemStorage
-
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            asset = model()
-            asset.attachment.save("doc.txt", ContentFile(b"hello"), save=False)
-            asset.save()
-
-            def _suspicious(self, name):
-                raise SuspiciousFileOperation("escaped media root")
-
-            monkeypatch.setattr(FileSystemStorage, "path", _suspicious)
-
-            schema = _asset_schema(
-                _asset_type(model, filesystem_path_fields=("attachment",)),
-                model,
-            )
-            result = schema.execute_sync("{ assets { attachment { path } } }")
-            # The error surfaces (it is NOT degraded to a null subfield).
-            assert result.errors is not None
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_vanished_file_degrades_size_to_null(tmp_path):
-    """A vanished-on-disk file nulls ``size`` (the ``OSError`` arm).
-
-    An earlier revision fired only the ``NotImplementedError`` arm of ``_safe_file_attr``
-    (the non-filesystem ``.path`` case). This pins the ``OSError`` / ``ValueError``
-    arms: a populated file deleted from disk makes ``FieldFile.size`` raise
-    ``FileNotFoundError`` (an ``OSError`` subclass), so ``_safe_file_attr``
-    degrades ``size`` to ``null`` -- the realistic "missing file in storage"
-    edge (spec-037 Decision 4). Real on-disk deletion under ``tmp_path`` is used
-    rather than a monkeypatch (Decision 9 prefers real temp storage).
-    """
-    import os
-
-    from django.core.files.base import ContentFile
-
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            asset = model()
-            asset.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
-            asset.save()
-            # Remove the underlying file so storage can no longer read it.
-            os.remove(asset.attachment.path)
-
-            schema = _asset_schema(_asset_type(model), model)
-            result = schema.execute_sync("{ assets { attachment { name size } } }")
-            assert result.errors is None
-            attachment = result.data["assets"][0]["attachment"]
-            # ``size`` degrades to null (its read raised FileNotFoundError);
-            # ``name`` (the un-guarded stored string) still resolves.
-            assert attachment["size"] is None
-            assert attachment["name"].endswith("doc.txt")
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_corrupt_image_degrades_width_and_height_to_null(tmp_path):
-    """A corrupt image nulls ``width`` / ``height`` (the dimension-read FAILURE path).
-
-    Sibling tests read ``width`` / ``height`` from a VALID Pillow image (the
-    success path). This pins the FAILURE path: bytes that are not a parseable
-    image make ``ImageFieldFile.width`` / ``.height`` raise when Pillow reads the
-    dimensions, so ``_safe_file_attr`` degrades each to ``null`` -- the spec-037
-    Decision 4 "corrupt / missing image dimensions degrade to null" edge. The
-    bytes are stored with ``save=False`` so Pillow never validates at save time.
-    """
-    from django.core.files.base import ContentFile
-
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            asset = model()
-            asset.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
-            # Non-image bytes on the ImageField -> dimension reads raise.
-            asset.preview.save("broken.png", ContentFile(b"not an image"), save=False)
-            asset.save()
-
-            schema = _asset_schema(_asset_type(model), model)
-            result = schema.execute_sync("{ assets { preview { name width height } } }")
-            assert result.errors is None
-            preview = result.data["assets"][0]["preview"]
-            # ``width`` / ``height`` degrade to null (Pillow cannot parse the
-            # bytes); ``name`` still resolves.
-            assert preview["width"] is None
-            assert preview["height"] is None
-            assert preview["name"].endswith("broken.png")
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)

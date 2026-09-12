@@ -280,32 +280,11 @@ def test_connection_type_for_returns_concrete_subclass_when_total_count_false():
     """``connection = {"total_count": False}`` yields the concrete subclass, no ``totalCount`` variant."""
     node_type = _make_node_type("FalseNode", total_count=False)
 
-    connection_type = _connection_type_for(
-        node_type,
-        node_type.__django_strawberry_definition__,
-    )
+    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     assert issubclass(connection_type, DjangoConnection)
     assert connection_type is not DjangoConnection
     assert connection_type.__name__ == "FalseNodeConnection"
     assert "total_count" not in getattr(connection_type, "__annotations__", {})
-
-
-def test_total_count_present_only_when_opted_in():
-    """``totalCount`` is in the SDL for an opted-in type and absent for a bare one."""
-    opted_schema = _schema_for(_make_node_type("PresentOpted", total_count=True))
-    assert "totalCount" in str(opted_schema)
-
-    registry.clear()
-    _connection_type_cache.clear()
-
-    bare_schema = _schema_for(_make_node_type("PresentBare", total_count=None))
-    assert "totalCount" not in str(bare_schema)
-    # SDL description parity (spec-032): the always-concrete
-    # non-opted ``<TypeName>Connection`` must preserve the description the bare
-    # ``DjangoConnection[T]`` alias inherited from Strawberry's ``Connection``
-    # base - the production code reads it from the parent strawberry definition;
-    # the literal is pinned here so a silent drop regresses loudly.
-    assert "A connection to a list of items." in str(bare_schema)
 
 
 # =============================================================================
@@ -395,29 +374,6 @@ def test_total_count_requested_recurses_through_fragments():
 # =============================================================================
 # totalCount counting + selection-gating through a real schema query
 # =============================================================================
-
-
-@pytest.mark.django_db
-def test_first_and_last_graphql_error_through_schema_without_opt_in():
-    """The ``first`` + ``last`` guard fires through-schema with NO ``totalCount`` opt-in.
-
-    Deliberate near-twin of the opted sibling above: the two dispatch shapes
-    (opted ``totalCount`` subclass vs the non-opted generated subclass) are
-    exactly the contract under test. Before the spec-032 fix the
-    non-opted path handed the schema the bare ``DjangoConnection[T]`` alias,
-    whose ``resolve_connection`` override Strawberry's generic specialization
-    dropped - ``first: 1, last: 1`` resolved silently. This is the ROOT-level
-    pin of the fixed dispatch (the synthesized-relation pin lives in
-    ``tests/test_relay_connection.py::test_relation_connection_first_and_last_rejected``).
-    """
-    services.seed_data(2)
-    schema = _schema_for(_make_node_type("BareBothArgsNode", total_count=None))
-
-    result = schema.execute_sync(
-        "{ items(first: 1, last: 1) { edges { node { id } } } }",
-    )
-    assert result.errors is not None
-    assert any("mutually exclusive" in str(err.message) for err in result.errors)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2250,51 +2206,6 @@ def test_window_rows_are_annotated_hostile_key_error_returns_false():
     from django_strawberry_framework.connection import _window_rows_are_annotated
 
     assert _window_rows_are_annotated(HostileList([object()])) is False
-
-
-@pytest.mark.django_db
-def test_negative_first_is_graphql_error_not_valueerror():
-    """``first: -1`` through the connection field is ``GraphQLError`` (not raw ``ValueError``)."""
-    node = _make_node_type("NegFirstApiNode", total_count=None)
-    schema = _field_schema(node)
-    result = schema.execute_sync("{ items(first: -1) { edges { node { id } } } }")
-    assert result.errors is not None
-    assert any("non-negative" in str(e.message).lower() for e in result.errors)
-    assert all(
-        not isinstance(getattr(e, "original_error", None), ValueError) for e in result.errors
-    )
-    assert any(isinstance(getattr(e, "original_error", None), GraphQLError) for e in result.errors)
-
-
-@pytest.mark.django_db
-def test_over_cap_first_is_graphql_error():
-    """``first`` over ``relay_max_results`` is ``GraphQLError``."""
-    node = _make_node_type("OverCapApiNode", total_count=None)
-    schema = _field_schema(node, config=strawberry_config(relay_max_results=2))
-    result = schema.execute_sync("{ items(first: 3) { edges { node { id } } } }")
-    assert result.errors is not None
-    assert any("cannot be higher than" in str(e.message) for e in result.errors)
-    assert all(
-        not isinstance(getattr(e, "original_error", None), ValueError) for e in result.errors
-    )
-
-
-@pytest.mark.django_db
-def test_malformed_after_cursor_is_graphql_error():
-    """A malformed ``after:`` cursor is ``GraphQLError`` (not ``ValueError``/``TypeError``)."""
-    node = _make_node_type("BadCursorApiNode", total_count=None)
-    schema = _field_schema(node)
-    result = schema.execute_sync(
-        '{ items(first: 1, after: "not-base64") { edges { node { id } } } }',
-    )
-    assert result.errors is not None
-    # The error message comes from SliceMetadata cursor decode (base64)
-    assert len(result.errors) >= 1
-    assert all(
-        not isinstance(getattr(e, "original_error", None), (ValueError, TypeError))
-        for e in result.errors
-    )
-    assert all(isinstance(getattr(e, "original_error", None), GraphQLError) for e in result.errors)
 
 
 def test_keyset_order_ref_hostile_entry_returns_none():

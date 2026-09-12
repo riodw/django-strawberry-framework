@@ -236,6 +236,38 @@ def test_single_parent_keyset_first_page_skips_window_as_staff_over_http():
 
 
 @pytest.mark.django_db
+def test_single_parent_keyset_seek_page_keeps_window_over_http():
+    """An ``after:`` seek on the same single-parent connection keeps the windowed body.
+
+    The fast path exists to reproduce a plain filtered ``LIMIT`` row for row; a
+    keyset seek carries a predicate that shape cannot express, so the recognizer
+    refuses it and the ``ROW_NUMBER() OVER (...)`` window the strategy planned
+    runs instead - correct rows, window kept. The contrast in the same row is the
+    must-not: the FIRST page of the same keyset-cursored connection, same staff
+    viewer, same parent, skips the window. Being keyset-cursored is not what
+    costs the fast path; seeking is.
+    """
+    _seed_periodical("Astro", 4)
+
+    first_payload, first_captured = _capture_as_staff(
+        _issues_query("(first: 2) { edges { cursor node { title } } }"),
+    )
+    assert not _has_window(first_captured)
+    first_conn = _periodicals(first_payload)[0]["node"]["issuesConnection"]
+    after = first_conn["edges"][-1]["cursor"]
+
+    payload, captured = _capture_as_staff(
+        _issues_query(f'(first: 2, after: "{after}") {{ edges {{ node {{ title }} }} }}'),
+    )
+
+    conn = _periodicals(payload)[0]["node"]["issuesConnection"]
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Astro #2", "Astro #1"]
+    issue_sql = _child_sql(captured, "library_issue")
+    assert issue_sql, captured.captured_queries
+    assert any("OVER (" in sql for sql in issue_sql), issue_sql
+
+
+@pytest.mark.django_db
 def test_visibility_filtered_child_keeps_window_over_http():
     """The same first-page query ANONYMOUS: the visibility filter refuses the fast path.
 

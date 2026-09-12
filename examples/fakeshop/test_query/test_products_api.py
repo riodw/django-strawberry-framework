@@ -182,6 +182,50 @@ def test_create_item_happy_path():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_create_item_private_row_is_refetched_for_its_author_but_stays_hidden_from_reads():
+    """A permitted caller writing a row their own reads hide still gets it back in the payload.
+
+    `ItemType.get_queryset` hides `is_private` rows from a non-staff viewer, and
+    `view_item_1` (granted `add_item`) is exactly such a viewer. The post-write
+    re-fetch is by pk WITHOUT the visibility filter, so the payload `node` carries the
+    row the caller just wrote and the column really is set in the DB. The must-not is
+    the same caller's `allItems` read in the same session, which does NOT list it: the
+    write-time re-fetch is an exemption for the actor's own write, never a hole in the
+    read-side visibility rule.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    data = _graphql_data(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": "PrivateLiveWidget",
+                "categoryId": _global_id("products.category", category.pk),
+                "isPrivate": True,
+            },
+        },
+    )
+    result = data["createItem"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "PrivateLiveWidget", "category": {"name": category.name}}
+    created = models.Item.objects.get(name="PrivateLiveWidget")
+    assert created.is_private is True
+
+    # The same caller's read does not see it: the re-fetch exemption is write-only.
+    read = _graphql_data(
+        "{ allItems { edges { node { name } } } }",
+        client=client,
+    )
+    names = [edge["node"]["name"] for edge in read["allItems"]["edges"]]
+    assert names, read
+    assert "PrivateLiveWidget" not in names
+
+
+@pytest.mark.django_db(transaction=True)
 def test_update_item_non_colliding_partial_update():
     """A partial update changing only ``name`` to a fresh value persists, leaving other fields.
 
@@ -755,6 +799,37 @@ def test_visibility_scoped_update_delete_hidden_private_row_is_not_found():
     result = payload["data"]["updateItem"]
     assert result["errors"] == []
     assert result["node"] == {"name": "PublicRenamed"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_anonymous_on_hidden_private_row_is_not_found_before_any_auth_signal():
+    """An anonymous update of an invisible row answers not-found, never "not authorized".
+
+    The anonymous arm of the ordering
+    `test_visibility_scoped_update_delete_hidden_private_row_is_not_found` proves for
+    a permitted caller: the visibility lookup runs BEFORE the authorization check, so
+    a caller who would certainly be denied still gets the in-band not-found
+    `FieldError` on `id` rather than a top-level denial. The denial would be an
+    existence leak - it only fires once a row has been located - so the load-bearing
+    half is the ABSENCE of a top-level error, and the row is unchanged.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    hidden = models.Item.objects.create(name="SecretRow", category=category, is_private=True)
+
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        variables={"id": _global_id("products.item", hidden.pk), "d": {"name": "Leaked"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["id"]
+    hidden.refresh_from_db()
+    assert hidden.name == "SecretRow"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1609,6 +1684,55 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
         and "join" in q["sql"].lower()
         for q in captured
     )
+
+
+@pytest.mark.django_db
+def test_all_items_dangling_forward_fk_is_the_non_null_completion_error_only():
+    """A dangling forward FK read live surfaces graphql-core's completion guard, nothing rawer.
+
+    The `Category` row is removed through a raw cursor with constraint checks
+    disabled, emulating the data-integrity anomaly a restore or a partial import
+    leaves behind. The forward resolver's descriptor read then raises
+    ``Category.DoesNotExist`` at resolve time and the containment collapses it to
+    ``None``, so the only thing reaching the wire is graphql-core's own non-null
+    completion message for `ItemType.category`: exactly one error, `data` nulled under
+    it, and no ORM descriptor / `AttributeError` text. The row runs under
+    `_ERROR_POLICY_PASS_THROUGH` because the shipped error policy replaces every
+    unexpected message with its stable production one, which would make the
+    distinguishing half of this claim unreadable.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.filter(category=category).first()
+    assert item is not None
+    client = _staff_client()
+
+    with connection.constraint_checks_disabled():
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM products_category WHERE id = %s", [category.pk])
+        try:
+            with override_settings(**_ERROR_POLICY_PASS_THROUGH):
+                response = _post_graphql(
+                    "{ allItems { edges { node { name category { name } } } } }",
+                    client=client,
+                )
+            assert response.status_code == 200
+            payload = response.json()
+            assert len(payload["errors"]) == 1, payload
+            message = payload["errors"][0]["message"]
+            assert message == "Cannot return null for non-nullable field ItemType.category."
+            assert "DoesNotExist" not in message
+            assert "AttributeError" not in message
+            assert payload["data"] is None
+        finally:
+            # Remove every row whose FK now dangles off the deleted category, children
+            # before parents, BEFORE constraint checks come back on so the fixture
+            # teardown's ``PRAGMA foreign_key_check`` sees a consistent database.
+            models.Entry.objects.filter(property__category_id=category.pk).delete()
+            models.Entry.objects.filter(item__category_id=category.pk).delete()
+            models.Property.objects.filter(category_id=category.pk).delete()
+            models.Item.objects.filter(category_id=category.pk).delete()
 
 
 @pytest.mark.django_db
@@ -2781,7 +2905,9 @@ def test_post_multibyte_utf8_json_body_round_trips_the_non_ascii_value():
     [
         pytest.param(b'"just a string"', id="json-string"),
         pytest.param(b"42", id="json-number"),
+        pytest.param(b"3.14", id="json-float"),
         pytest.param(b"true", id="json-boolean"),
+        pytest.param(b"false", id="json-boolean-false"),
         pytest.param(b"null", id="json-null"),
     ],
 )
@@ -2805,6 +2931,7 @@ def test_post_non_object_json_body_returns_400_not_500(body):
     [
         pytest.param(b"[1, 2, 3]", id="array-of-numbers"),
         pytest.param(b"[null]", id="array-of-null"),
+        pytest.param(b'["not", "objects"]', id="array-of-strings"),
         pytest.param(b'[{"query": "{ __typename }"}, 42]', id="mixed-batch"),
     ],
 )
@@ -2845,6 +2972,44 @@ def test_get_query_with_null_param_executes_like_upstream(param):
 
     assert response.status_code == 200
     assert response.json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_get_query_with_object_variables_executes_like_upstream():
+    """GET `?query=...&variables={"n": 1}` -> 200 with data: the shield parses the object.
+
+    The happy path of the shielded GET parse. The param IS a JSON object, which is
+    exactly what upstream's per-param contract accepts, so the request executes and
+    returns data. Paired with the malformed-param row below, this pins that the
+    shield's two nested parses still route through the captured original
+    `parse_json` rather than the envelope guard: a shield that stopped parsing (or
+    started applying the request-body guard) would turn this 200 into a 400.
+    """
+    client = Client()
+
+    response = client.get("/graphql/", {"query": "{ __typename }", "variables": '{"n": 1}'})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_get_query_with_malformed_variables_param_is_the_upstream_parse_400():
+    """GET `?variables={not json` -> upstream's own malformed-JSON 400, byte for byte.
+
+    The shield adds no error handling of its own: the failure is raised inside the
+    delegated original `parse_json`, so an unparseable GET param answers with the
+    same body an unparseable POST body does. A shield that swallowed or reworded the
+    parse failure would change that one wire meaning.
+    """
+    client = Client()
+
+    response = client.get("/graphql/", {"query": "{ __typename }", "variables": "{not json"})
+
+    assert response.status_code == 400
+    assert response.content == b"Unable to parse request body as JSON"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -3161,6 +3326,97 @@ def test_update_item_via_form_partial_update_preserves_category_and_description(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_update_item_via_form_revalidates_an_untouched_stale_name():
+    """A stored `name` the current form rejects blocks a partial update that never sends it.
+
+    The row is written through the ORM carrying `REJECTED_ITEM_NAME`, which
+    `ItemModelForm.clean_name` refuses - the shape a row written before the form
+    gained a stricter rule has. `updateItemViaForm` sends only `description`, so the
+    omitted `name` is reconstructed from the located row and revalidated by the bound
+    form: the whole update fails on `name` and nothing persists. Sending a valid
+    replacement `name` in the same mutation repairs the row and lets the requested
+    `description` change land, which is what separates "revalidated" from "never
+    validated at all".
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(
+        name=REJECTED_ITEM_NAME,
+        description="Before",
+        category=category,
+    )
+    client = _login_with_perm("staff_1", "change_item")
+    gid = _global_id("products.item", item.pk)
+
+    blocked = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": gid, "d": {"description": "Blocked"}},
+    )
+    assert blocked.status_code == 200
+    payload = blocked.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["name"]
+    # `clean_name`'s own rejection, not a "this field is required" from an empty
+    # bound field: the stored value really was put back and run through the form.
+    assert result["errors"][0]["messages"] == ["This name is not allowed."]
+    item.refresh_from_db()
+    assert item.name == REJECTED_ITEM_NAME
+    assert item.description == "Before"
+
+    repaired = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": gid, "d": {"name": "RepairedName", "description": "After"}},
+    )
+    payload = repaired.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "RepairedName"}
+    item.refresh_from_db()
+    assert item.name == "RepairedName"
+    assert item.description == "After"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_form_explicit_null_category_id_is_the_form_required_error():
+    """An explicit `null` on the required FK keys to the FORM field `category`, not `categoryId`.
+
+    `null` is not an unresolvable relation id: the decode passes it through as an
+    empty value and the bound `ItemModelForm` rejects it as its own required-field
+    error, keyed to the form field `category`. A decode that treated `null` as a
+    lookup would answer with an "invalid id" error on the input field `categoryId`
+    instead, so the absence of `categoryId` from the error keys is the load-bearing
+    half of this row.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="KeepsItsCategory", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"categoryId": None}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["node"] is None
+    fields = [e["field"] for e in result["errors"]]
+    assert "category" in fields
+    assert "categoryId" not in fields
+    item.refresh_from_db()
+    assert item.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
 def test_update_item_via_form_partial_collision_fires_unique_constraint_on_name_change():
     """RIGHT-PATH / LOAD-BEARING: a `name`-only collision fires `unique_item_per_category`.
 
@@ -3226,6 +3482,35 @@ def test_create_item_via_form_clean_field_error_is_field_keyed():
     assert result["node"] is None
     assert [e["field"] for e in result["errors"]] == ["name"]
     assert result["errors"][0]["messages"]
+    assert models.Item.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_omitted_required_name_is_a_coercion_error_no_write():
+    """Omitting a required generated form field is refused at coercion, before the resolver.
+
+    `ItemModelForm`'s `name` is required, so `ItemModelFormInput.name` is non-null and
+    carries no class default: leaving it out of the variables is a GraphQL coercion
+    failure naming `name`, `data` is null, and the resolver never runs - proven by the
+    absence of any new row. A generated input that silently defaulted the field to
+    `None` would instead deliver it to the form and answer with the in-band envelope.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"d": {"categoryId": _global_id("products.category", category.pk)}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert "name" in payload["errors"][0]["message"]
+    assert payload.get("data") is None
     assert models.Item.objects.count() == before
 
 
@@ -3439,6 +3724,43 @@ def test_create_item_via_form_relation_id_for_hidden_category_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_authorize_before_decode_anonymous_gets_auth_denial():
+    """An unauthorized caller submitting a HIDDEN `categoryId` gets the AUTH denial, not the relation error.
+
+    The form flavor's half of the security ordering (the serializer flavor's half is
+    `test_create_item_via_serializer_authorize_before_decode_unpermitted_gets_auth_denial`):
+    write-auth runs BEFORE the visibility-scoped relation decode, so an anonymous
+    caller cannot probe a private `Category`'s existence by id. The answer is the
+    top-level authorization error with `data` nulled, with NO in-band `categoryId`
+    `FieldError` - the permitted-caller contrast
+    (`test_create_item_via_form_relation_id_for_hidden_category_is_field_error`) is
+    what makes that distinction observable - and no row is written.
+    """
+    create_users(1)
+    chain = seed_cascade_split()
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        variables={
+            "d": {
+                "name": "AnonProbeForm",
+                "categoryId": _global_id("products.category", chain["private_cat"].pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    # No in-band relation FieldError leaked alongside the denial.
+    assert all("categoryId" not in error["message"] for error in payload["errors"])
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="AnonProbeForm").exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
     """A raw `django.test.Client` multipart upload to a form-backed `Upload` field.
 
@@ -3600,7 +3922,7 @@ def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path)
 _CREATE_DEFAULT_CATEGORY_ITEM_VIA_FORM = (
     "mutation($d: DefaultCategoryItemModelFormInput!) { "
     "createDefaultCategoryItemViaForm(data: $d) { "
-    "node { name } errors { field messages } } }"
+    "node { name } errors { field path messages codes } } }"
 )
 
 
@@ -3675,10 +3997,17 @@ def test_create_default_category_item_via_form_write_time_integrity_error_uses_e
     result = payload["data"]["createDefaultCategoryItemViaForm"]
     assert result["node"] is None
     assert len(result["errors"]) == 1
-    assert result["errors"][0]["field"] == "__all__"
-    # The save-time mapper's wording - proof the row passed validation and failed at
-    # the write, rather than being caught by `validate_constraints`.
-    assert result["errors"][0]["messages"] == ["A database constraint was violated."]
+    # The whole save-time envelope, over the wire: the `"__all__"` sentinel sits in
+    # `field` while `path` stays EMPTY (a model-wide error names no field position),
+    # the wording proves the row passed validation and failed at the write rather
+    # than being caught by `validate_constraints`, and `codes` is the machine-readable
+    # `"constraint"` a client branches on.
+    assert result["errors"][0] == {
+        "field": "__all__",
+        "path": [],
+        "messages": ["A database constraint was violated."],
+        "codes": ["constraint"],
+    }
     assert models.Item.objects.filter(name="RaceFormDup", category=category).count() == 1
 
 

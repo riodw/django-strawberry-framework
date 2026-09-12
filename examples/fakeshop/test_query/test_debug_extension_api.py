@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for ``DjangoDebugExtension`` (spec-044 Test plan 1-7).
+"""Live GraphQL HTTP tests for the ``DjangoDebugExtension`` request-visible contract.
 
 The request-visible half of the debug extension's coverage: every case posts a
 real operation over HTTP to a debug-enabled probe schema mounted on this

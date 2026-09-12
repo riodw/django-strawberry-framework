@@ -19,9 +19,12 @@ import json
 
 import pytest
 from apps.products.services import TEST_USER_PASSWORD, create_users
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 from django.test import Client, override_settings
 from graphql_client import assert_graphql_success as _graphql_data
+from graphql_client import post_graphql as _post_graphql
 
 # A password that passes all four fakeshop ``AUTH_PASSWORD_VALIDATORS`` and is
 # unrelated to any seeded username (the similarity validator must not bite).
@@ -37,6 +40,33 @@ _REGISTER = (
     "node{ username email } errors{ field messages codes } } }"
 )
 _ME = "{ me{ username } }"
+
+#: The shipped stack with every session-dependent middleware removed, plus the
+#: ``DEBUG`` pass-through gate the ``test_products_api.py::_ERROR_POLICY_PASS_THROUGH``
+#: idiom describes: the shipped error policy would otherwise replace the refusal
+#: message under test with its stable production one, and ``settings.DEBUG`` is the
+#: only instrument this tier can reach. ``debug_toolbar`` leaves with it because
+#: fakeshop wires the toolbar behind ``DEBUG`` and the panel would reference ``djdt``
+#: routes the URLconf never computed. ``AuthenticationMiddleware`` and
+#: ``MessageMiddleware`` leave too: each asserts ``request.session`` exists, so a
+#: stack missing only ``SessionMiddleware`` fails inside Django's own middleware
+#: before the GraphQL view can build a request at all.
+_SESSIONLESS_PASS_THROUGH = {
+    "DEBUG": True,
+    "MIDDLEWARE": [
+        entry
+        for entry in settings.MIDDLEWARE
+        if not any(
+            dropped in entry
+            for dropped in (
+                "debug_toolbar",
+                "sessions.middleware",
+                "auth.middleware",
+                "messages.middleware",
+            )
+        )
+    ],
+}
 
 
 def _login(client: Client, username: str, password: str) -> dict:
@@ -150,6 +180,54 @@ def test_inactive_user_gets_the_same_envelope():
     assert payload["node"] is None
     assert [error["field"] for error in payload["errors"]] == ["__all__"]
     assert payload["errors"][0]["messages"] == ["Incorrect username/password"]
+    # Byte-identical to the wrong-password class: the enumeration guard collapses
+    # "no such account state" and "wrong credentials" into one answer.
+    assert payload == _login(Client(), "staff_1", "not-the-password")
+
+
+class PermissionDeniedBackend:
+    """An authentication backend that refuses every attempt with ``PermissionDenied``.
+
+    Django's ``authenticate`` treats ``PermissionDenied`` as "stop iterating the
+    backends" and returns ``None``, so this is the fourth distinguishable failure
+    class - a backend that actively refuses, rather than one that merely finds no
+    match. It is a module-level class so ``AUTHENTICATION_BACKENDS`` can name it by
+    import path (the ``DictFormPasswordValidator`` precedent above).
+    """
+
+    def authenticate(self, request, username=None, password=None, **kwargs):
+        raise PermissionDenied
+
+    def get_user(self, user_id):
+        return None
+
+
+@pytest.mark.django_db
+def test_backend_raising_permission_denied_returns_the_same_envelope():
+    """A backend refusing with ``PermissionDenied`` yields the same undifferentiated envelope.
+
+    The credentials are VALID for the ``ModelBackend`` listed second, so the only
+    reason this login fails is the first backend's refusal stopping Django's backend
+    iteration. The caller cannot tell that apart from a wrong password: the wrong-password
+    envelope is captured under the SHIPPED backends first, so the comparison spans two
+    genuinely different failure causes rather than one cause run twice. No session is
+    established either.
+    """
+    create_users(1)
+    wrong_password = _login(Client(), "staff_1", "not-the-password")
+
+    with override_settings(
+        AUTHENTICATION_BACKENDS=[
+            "test_auth_api.PermissionDeniedBackend",
+            "django.contrib.auth.backends.ModelBackend",
+        ],
+    ):
+        client = Client()
+        refused = _login(client, "staff_1", TEST_USER_PASSWORD)
+
+    assert refused["node"] is None
+    assert refused == wrong_password
+    assert "sessionid" not in client.cookies
 
 
 @pytest.mark.django_db
@@ -386,6 +464,83 @@ def test_register_surrogate_password_keys_to_password_not_a_crash():
         "Text contains invalid Unicode (unpaired surrogate code points).",
     ]
     assert not get_user_model().objects.filter(username="surrogate_reg_user").exists()
+
+
+@pytest.mark.django_db
+def test_non_string_login_username_fails_validation_before_the_resolver():
+    """``login(username: 123)`` is refused by GraphQL validation; nobody is authenticated.
+
+    ``username`` is a ``String!``, so an integer literal fails document validation and
+    the resolver never runs - no backend is consulted and no session is established.
+    The observable that separates "rejected before the resolver" from "rejected inside
+    it" is the follow-up ``me`` on the SAME client: still ``null``.
+    """
+    create_users(1)
+    client = Client()
+
+    response = _post_graphql(
+        'mutation{ login(username: 123, password: "x"){ node{ username } errors{ field } } }',
+        client=client,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload.get("data") is None
+    assert "sessionid" not in client.cookies
+    assert _graphql_data(_ME, client=client)["me"] is None
+
+
+@pytest.mark.django_db
+def test_sessionless_login_refuses_with_the_error_naming_both_middleware_stacks():
+    """A deployment with no session stack gets the package's actionable refusal, not an ``AttributeError``.
+
+    ``login`` probes for the session BEFORE any session mutation, so a stack missing
+    ``SessionMiddleware`` answers with a message naming BOTH installable stacks
+    (Django's ``SessionMiddleware`` and, for Channels, ``AuthMiddlewareStack``) instead
+    of Django's raw ``'WSGIRequest' object has no attribute 'session'`` from deep inside
+    ``login()``. Asserting both names is what distinguishes the shipped refusal: a bare
+    "session" substring holds under either implementation.
+    """
+    create_users(1)
+
+    with override_settings(**_SESSIONLESS_PASS_THROUGH):
+        response = _post_graphql(
+            _LOGIN,
+            client=Client(),
+            variables={"u": "staff_1", "p": TEST_USER_PASSWORD},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert "SessionMiddleware" in message
+    assert "AuthMiddlewareStack" in message
+    assert "session" in message.lower()
+
+
+@pytest.mark.django_db
+def test_sessionless_logout_refuses_with_the_error_naming_both_middleware_stacks():
+    """``logout`` runs the same probe, for its rejection side effect alone.
+
+    The transport prologue is shared: logout discards the session object the probe
+    returns but still runs it, so a sessionless logout refuses exactly as a sessionless
+    login does rather than silently reporting ``ok``.
+    """
+    create_users(1)
+
+    with override_settings(**_SESSIONLESS_PASS_THROUGH):
+        response = _post_graphql(_LOGOUT, client=Client())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert "SessionMiddleware" in message
+    assert "AuthMiddlewareStack" in message
+    assert "session" in message.lower()
 
 
 @pytest.mark.django_db

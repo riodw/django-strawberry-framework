@@ -43,10 +43,6 @@ class DummyQuery:
     def hello(self) -> str:
         return "world"
 
-    @strawberry.field
-    def error_field(self) -> str:
-        raise ValueError("Simulated field error")
-
 
 @strawberry.type
 class DummyMutation:
@@ -208,36 +204,6 @@ def test_execution_errors_fallback():
 
     ctx.collected_errors = object()
     assert ctx._execution_errors() == []
-
-
-def test_schema_execute_sync_query():
-    schema = DjangoSchema(query=DummyQuery)
-    result = schema.execute_sync("query { hello }")
-    assert result.errors is None
-    assert result.data == {"hello": "world"}
-
-
-@pytest.mark.asyncio
-async def test_schema_execute_async_query():
-    schema = DjangoSchema(query=DummyQuery)
-    result = await schema.execute("query { hello }")
-    assert result.errors is None
-    assert result.data == {"hello": "world"}
-
-
-def test_schema_execute_sync_error():
-    schema = DjangoSchema(query=DummyQuery)
-    result = schema.execute_sync("query { errorField }")
-    assert result.errors is not None
-    assert len(result.errors) == 1
-
-
-@pytest.mark.asyncio
-async def test_schema_execute_async_error():
-    schema = DjangoSchema(query=DummyQuery)
-    result = await schema.execute("query { errorField }")
-    assert result.errors is not None
-    assert len(result.errors) == 1
 
 
 def test_schema_policy_resolution_and_validation():

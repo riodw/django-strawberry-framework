@@ -22,7 +22,6 @@ from django_strawberry_framework.utils.errors import (
     coded_error_extensions,
     empty_validation_error,
     field_error,
-    integrity_error_field_errors,
     join_error_path,
     null_field_error,
     relation_field_error,
@@ -313,15 +312,6 @@ def test_validation_error_mapper_handles_lazy_translation_objects():
     assert global_err.field == NON_FIELD_ERROR_KEY
     assert global_err.messages == ["Global model validation error."]
     assert global_err.codes == ["invalid"]
-
-
-def test_integrity_error_field_errors_shape_and_sentinel():
-    """Verify integrity_error_field_errors returns standard constraint error envelope."""
-    (error,) = integrity_error_field_errors()
-    assert error.field == NON_FIELD_ERROR_KEY
-    assert error.path == []
-    assert error.messages == ["A database constraint was violated."]
-    assert error.codes == ["constraint"]
 
 
 @pytest.mark.parametrize(

@@ -12,6 +12,8 @@ newest-first mixed-direction shape) and ``PeriodicalType.issuesConnection``
   partition, and the batched window stays one prefetch query;
 - tampered, foreign-order, and offset (``arrayconnection``) cursors are
   rejected with the uniform invalid-cursor error;
+- a cursor outlives a ``SECRET_KEY`` rotation that declares the old key in
+  ``SECRET_KEY_FALLBACKS``, and dies with one that does not;
 - cursors are permission-aware by construction: a staff-minted cursor
   replays for an anonymous viewer over only the rows that viewer can see.
 
@@ -21,8 +23,10 @@ because the payload is authenticated-encrypted opaque bytes (the codec contract)
 
 import pytest
 from apps.library import models
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql_client import assert_graphql_success as _assert_graphql_success
 from graphql_client import post_graphql as _post_graphql
@@ -123,6 +127,35 @@ def test_root_keyset_rejects_tampered_and_offset_cursors():
         payload = response.json()
         assert "errors" in payload, payload
         assert "invalid cursor" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_root_keyset_cursor_survives_a_secret_key_rotation_that_keeps_the_fallback():
+    """A live cursor keeps working across a ``SECRET_KEY`` rotation that declares the old key.
+
+    Cursors are authenticated-encrypted with the deployment's ``SECRET_KEY``, so a
+    rotation would otherwise invalidate every page link a client is holding mid-
+    session. The decode consults ``SECRET_KEY_FALLBACKS``, which is what makes a
+    rotation a configuration change rather than an outage. The must-not is the
+    second half: with the old key dropped from the fallbacks the SAME cursor is
+    tamper-equivalent, so the fallback list is a declared trust set, not a
+    weakening of the authentication.
+    """
+    _seed_periodicals()
+    original_key = settings.SECRET_KEY
+    cursor = _root_page(first=3)["pageInfo"]["endCursor"]
+
+    with override_settings(SECRET_KEY="rotated-live-key", SECRET_KEY_FALLBACKS=[original_key]):
+        rotated = _root_page(first=3, after=cursor)
+    assert _titles(rotated) == ["Bot #3", "Astro #2", "Bot #2"]
+
+    with override_settings(SECRET_KEY="rotated-live-key", SECRET_KEY_FALLBACKS=[]):
+        response = _post_graphql(ROOT_PAGE_QUERY, variables={"first": 3, "after": cursor})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "invalid cursor" in payload["errors"][0]["message"], payload
 
 
 @pytest.mark.django_db

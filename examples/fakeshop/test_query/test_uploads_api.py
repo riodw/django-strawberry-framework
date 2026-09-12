@@ -8,14 +8,15 @@ model. They cover:
 - the **read** output objects (`DjangoFileType` / `DjangoImageType`) over HTTP,
   the default-nullable SDL shape (a *required* column still renders nullable),
   populated subfield serialization, and the empty-file object-null behavior;
+- the **degradation** contract each subfield carries: a backend that cannot
+  produce a filesystem path nulls only ``path``, a file gone from storage nulls
+  only ``size``, unparseable image bytes null ``width`` / ``height``, and a
+  ``SuspiciousFileOperation`` surfaces as a reported error rather than a silent
+  ``null``;
 - the **write** ``Upload`` mapping: the generated ``MediaSpecimenInput`` exposes
   ``Upload`` over HTTP, and a real GraphQL **multipart** request creates a row
   with uploaded files end to end (URL routing -> view -> multipart parse ->
   schema execution -> JSON response).
-
-Storage-backend fault injection and corrupt-image dimension edges stay in the
-package-internal ``tests/types/test_resolvers.py`` (they need a mocked
-non-filesystem backend, unreachable from a live request).
 
 The suite drives through the package's own ``TestClient`` (spec-043):
 the JSON posts earn the helper's happy-path lines live, and the two multipart
@@ -25,11 +26,15 @@ operation is exactly the envelope the engine base's map builder cannot produce.
 """
 
 import io
+import os
 
 import pytest
 from apps.scalars import models
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.base import ContentFile
+from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 
@@ -39,6 +44,17 @@ from django_strawberry_framework.testing import TestClient
 # deterministic values rather than a square that could pass by coincidence.
 _IMAGE_WIDTH = 5
 _IMAGE_HEIGHT = 9
+
+# The production error policy substitutes its own stable message for any
+# exception it did not expect, so a row that asserts on the ORIGINAL message
+# opens the policy's pass-through gate with ``DEBUG=True``. The toolbar
+# middleware is dropped in the same override because fakeshop wires
+# debug-toolbar behind ``DEBUG`` and it would inject a panel against ``djdt``
+# routes the URLconf never computed.
+_ERROR_POLICY_PASS_THROUGH = {
+    "DEBUG": True,
+    "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+}
 
 
 def _png_bytes() -> bytes:
@@ -95,6 +111,33 @@ def test_default_file_output_objects_expose_no_filesystem_path_over_http():
         field["name"] for field in _introspect_type("DjangoFileType", "fields { name }")["fields"]
     }
     assert file_names == {"name", "size", "url"}
+
+
+def test_file_output_objects_publish_nullable_subfields_over_http():
+    """Every subfield a storage read can fail is nullable; only the stored ``name`` is not.
+
+    The divergence from upstream's all-non-null subfields, read off the live
+    schema: ``size`` / ``url`` (and ``width`` / ``height`` on the image type)
+    are the reads that answer ``null`` for a vanished file, a backend with no
+    absolute paths, or bytes no image parser recognizes, so declaring any of
+    them non-null would let one such row take the whole object down. ``name``
+    is the stored column string and stays non-null.
+    """
+    image_fields = {
+        field["name"]: field["type"]
+        for field in _introspect_type(
+            "DjangoImageType",
+            "fields { name type { kind name } }",
+        )["fields"]
+    }
+
+    assert image_fields == {
+        "name": {"kind": "NON_NULL", "name": None},
+        "size": {"kind": "SCALAR", "name": "Int"},
+        "url": {"kind": "SCALAR", "name": "String"},
+        "width": {"kind": "SCALAR", "name": "Int"},
+        "height": {"kind": "SCALAR", "name": "Int"},
+    }
 
 
 def test_filesystem_path_opt_in_is_absent_unless_declared_over_http():
@@ -235,6 +278,150 @@ def test_empty_required_file_resolves_to_null_over_http(tmp_path):
     assert row["label"] == "empty"
     assert row["attachment"] is None
     assert row["image"] is None
+
+
+@pytest.mark.django_db
+def test_empty_image_beside_populated_file_resolves_only_the_image_to_null_over_http(tmp_path):
+    """The empty-file guard is per column: an unset image is ``null`` beside a resolved file.
+
+    Both columns are required, so a row stored with only the attachment leaves
+    ``image`` holding ``""``. The generated parent resolver maps that one empty
+    ``FieldFile`` to ``None`` without disturbing its populated sibling in the
+    same row - the whole-row ``null`` that a shared guard would produce is the
+    failure this rules out.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = models.MediaSpecimen(label="file-only")
+        specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
+        specimen.save()
+
+        res = TestClient().query(
+            "{ allMediaSpecimens { label attachment { name } image { name } } }",
+        )
+        assert res.response.status_code == 200
+        row = res.data["allMediaSpecimens"][0]
+
+    assert row["label"] == "file-only"
+    assert row["attachment"]["name"].endswith("doc.txt")
+    assert row["image"] is None
+
+
+@pytest.mark.django_db
+def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
+    tmp_path,
+    monkeypatch,
+):
+    """A backend that cannot produce a path nulls ``path`` alone; ``name`` / ``url`` resolve.
+
+    ``types/converters.py::_safe_file_attr`` guards each subfield, not the parent
+    object: a storage backend whose ``path`` raises ``NotImplementedError`` (the
+    S3-style case, and the reason the opt-in subfield is nullable) degrades that
+    one subfield while the sibling subfields of the SAME object still answer.
+    All three are selected in one request, so a guard that sat on the parent
+    would show up as ``attachment: null`` rather than a null ``path``.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = models.MediaSpecimen(label="unpathable")
+        specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
+        specimen.save()
+
+        def _no_absolute_path(self, name):
+            raise NotImplementedError("This backend doesn't support absolute paths.")
+
+        monkeypatch.setattr(FileSystemStorage, "path", _no_absolute_path)
+
+        res = TestClient().query(
+            "{ allMediaSpecimensWithPath { attachment { name path url } } }",
+        )
+        assert res.response.status_code == 200
+        attachment = res.data["allMediaSpecimensWithPath"][0]["attachment"]
+
+    assert attachment["path"] is None
+    assert attachment["name"].endswith("doc.txt")
+    # ``url`` is string-built from MEDIA_URL and never consults storage paths.
+    assert attachment["url"].endswith("doc.txt")
+
+
+@pytest.mark.django_db
+def test_vanished_file_resolves_size_to_null_over_http(tmp_path):
+    """A file gone from storage nulls ``size``; the stored ``name`` still resolves.
+
+    ``FieldFile.size`` raises ``FileNotFoundError`` (an ``OSError``) once the
+    underlying file is deleted, and the subfield guard degrades it to ``null``
+    instead of failing the request. ``name`` is the stored column string, read
+    without the guard, so it proves the object itself survived.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = models.MediaSpecimen(label="vanished")
+        specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
+        specimen.save()
+        os.remove(specimen.attachment.path)
+
+        res = TestClient().query("{ allMediaSpecimens { attachment { name size } } }")
+        assert res.response.status_code == 200
+        attachment = res.data["allMediaSpecimens"][0]["attachment"]
+
+    assert attachment["size"] is None
+    assert attachment["name"].endswith("doc.txt")
+
+
+@pytest.mark.django_db
+def test_corrupt_image_resolves_width_and_height_to_null_over_http(tmp_path):
+    """Unparseable image bytes resolve ``width`` / ``height`` to ``null``; ``name`` survives.
+
+    Django answers a dimension read on bytes Pillow cannot parse with ``None``
+    rather than an exception, so what carries this case is the nullability
+    ``DjangoImageType`` declares on both dimensions - the deliberate divergence
+    from upstream's all-non-null subfields. Declaring them non-null would turn a
+    single corrupt row into a non-null execution error that takes the whole
+    object down; the sibling rows read the same two subfields from a valid
+    image, which is only the success half. The bytes are stored with
+    ``save=False`` so nothing validates them as an image on the way to storage.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = models.MediaSpecimen(label="corrupt")
+        specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
+        specimen.image.save("broken.png", ContentFile(b"not an image"), save=False)
+        specimen.save()
+
+        res = TestClient().query("{ allMediaSpecimens { image { name width height } } }")
+        assert res.response.status_code == 200
+        image = res.data["allMediaSpecimens"][0]["image"]
+
+    assert image["width"] is None
+    assert image["height"] is None
+    assert image["name"].endswith("broken.png")
+
+
+@pytest.mark.django_db
+def test_suspicious_file_operation_is_reported_not_nulled_over_http(tmp_path, monkeypatch):
+    """A ``SuspiciousFileOperation`` on a subfield is reported, never a silent ``null``.
+
+    It is a ``SuspiciousOperation`` - not one of the storage-shaped exceptions
+    the subfield guard degrades - so a path-traversal signal has to reach the
+    client as an error instead of reading like an ordinary backend that cannot
+    produce a path. The request runs under the ``DEBUG`` pass-through so the
+    original message is readable; with the production policy in force the same
+    exception would still be reported, under the policy's stable text.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path), **_ERROR_POLICY_PASS_THROUGH):
+        specimen = models.MediaSpecimen(label="suspicious")
+        specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
+        specimen.save()
+
+        def _suspicious_path(self, name):
+            raise SuspiciousFileOperation("escaped media root")
+
+        monkeypatch.setattr(FileSystemStorage, "path", _suspicious_path)
+
+        res = TestClient().query(
+            "{ allMediaSpecimensWithPath { attachment { path } } }",
+            assert_no_errors=False,
+        )
+        assert res.response.status_code == 200
+
+    assert res.errors, res.data
+    assert "escaped media root" in res.errors[0]["message"], res.errors
 
 
 # ---------------------------------------------------------------------------

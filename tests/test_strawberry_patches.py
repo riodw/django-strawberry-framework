@@ -38,10 +38,14 @@ of ``BaseView.parse_query_params`` routing its two nested parses through
 the captured original ``parse_json`` - so the guard never fires on
 upstream's GET ``variables`` / ``extensions`` parses, where upstream has
 its own precise per-param handling (``null`` -> ``None`` -> the request
-executes; a scalar -> a per-param 400). The live GET regressions live in
-``examples/fakeshop/test_query/test_products_api.py``; the tests here pin
-the shield's parse semantics, the full install lifecycle, and the
-reimplementer's body pin.
+executes; a scalar -> a per-param 400). Every wire-observable outcome of
+both gap 2's envelope guard and the shield - the rejected scalar and
+non-object-batch bodies, the object and malformed GET params - is earned
+over real HTTP in ``examples/fakeshop/test_query/test_products_api.py``;
+the rows here pin the parse semantics that have no wire shape of their
+own (the falsy skip, the scalar pass-through upstream then rejects, the
+well-typed batch handed on to upstream's own validator), the full
+install lifecycle, and the reimplementer's body pin.
 
 **What is deliberately absent here.** The strict UTF-8 wire contract
 (spec-046 Decision 9) used to live in this module and no longer does: it
@@ -245,28 +249,6 @@ def test_patched_parse_json_passes_through_malformed_json_as_400():
     assert excinfo.value.status_code == 400
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        '"a string"',
-        "42",
-        "3.14",
-        "true",
-        "false",
-        "null",
-    ],
-)
-def test_patched_parse_json_rejects_non_object_body_as_400(body):
-    """A valid-JSON scalar body -> ``HTTPException(400)``, not a passed-through scalar.
-
-    Without the guard the scalar reaches ``parse_http_body``'s
-    ``data.get("query")`` and raises a raw ``AttributeError`` -> ``500``.
-    """
-    with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_json(BaseView(), body)
-    assert excinfo.value.status_code == 400
-
-
 def test_patched_parse_json_passes_through_list_for_batch_handling():
     """A JSON array of objects passes through so upstream's batch validation owns it.
 
@@ -278,28 +260,6 @@ def test_patched_parse_json_passes_through_list_for_batch_handling():
         {"query": "{ x }"},
     ]
     assert patches._patched_parse_json(BaseView(), "[]") == []
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "[1, 2, 3]",
-        "[null]",
-        '[{"query": "{ x }"}, 42]',
-        '["not", "objects"]',
-    ],
-)
-def test_patched_parse_json_rejects_batch_with_non_object_elements_as_400(body):
-    """A JSON array containing any non-object -> ``HTTPException(400)``, not a pass-through.
-
-    Upstream's ``_validate_batch_request`` never checks element types; with
-    batching enabled the batch branch then does ``item.get("query")`` and
-    raises a raw ``AttributeError`` -> ``500``. The envelope guard must reject
-    those bodies before that path runs.
-    """
-    with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_json(BaseView(), body)
-    assert excinfo.value.status_code == 400
 
 
 class _MultipartView:
@@ -511,27 +471,6 @@ def test_patched_parse_query_params_passes_scalar_through_for_upstream_handling(
         {"query": "{ __typename }", "variables": "42"},
     )
     assert result["variables"] == 42
-
-
-def test_patched_parse_query_params_parses_object_params():
-    """The happy path: JSON-object params parse exactly as upstream."""
-    result = patches._patched_parse_query_params(
-        BaseView(),
-        {"variables": '{"a": 1}', "extensions": '{"b": 2}'},
-    )
-    assert result["variables"] == {"a": 1}
-    assert result["extensions"] == {"b": 2}
-
-
-def test_patched_parse_query_params_malformed_param_is_upstream_400():
-    """Malformed JSON in a param still becomes upstream's ``HTTPException(400)``.
-
-    The error is raised inside the delegated original ``parse_json`` - the
-    shield adds no error handling of its own.
-    """
-    with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_query_params(BaseView(), {"variables": "{not json"})
-    assert excinfo.value.status_code == 400
 
 
 def test_patched_parse_query_params_skips_empty_string_param():

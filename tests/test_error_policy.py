@@ -24,7 +24,8 @@ it matters. What is left here is the surface a request cannot express:
 - the two fail-closed degrades, which need an error object and a result object no
   engine builds;
 - the gate and the floor under inputs no engine produces either: a ``DEBUG``
-  setting that cannot be read at all, an ``ErrorPolicy`` subclass whose attribute
+  setting that cannot be read at all or that is not a bool at all, an
+  ``ErrorPolicy`` subclass whose attribute
   reads raise, a container that lies about its emptiness, and an error whose
   ``original_error`` read raises - every read the policy cannot verify answers
   toward MASKING, and the floor that everything degrades onto cannot itself
@@ -341,14 +342,6 @@ def test_an_instance_entry_also_suppresses_the_prepend():
     assert _with_error_policy_extension([installed]) == [installed]
 
 
-def test_the_disabled_policy_leaves_the_original_message_on_the_wire(settings):
-    """The ``{"enabled": False}`` opt-out, read on a real execution under ``DEBUG=False``."""
-    assert settings.DEBUG is False
-    schema = DjangoSchema(query=_Query, error_policy={"enabled": False})
-    result = schema.execute_sync("{ boom }")
-    assert _SENSITIVE in result.errors[0].message
-
-
 @pytest.mark.parametrize("debug_value", ["False", 1, object()])
 def test_a_malformed_debug_setting_does_not_disable_production_masking(settings, debug_value):
     """Only an explicit ``DEBUG=True`` opens the development pass-through gate."""
@@ -471,41 +464,6 @@ async def test_an_async_pre_execution_error_keeps_its_own_message(settings):
     assert "notAField" in result.errors[0].message
     assert result.errors[0].original_error is None
     assert result.errors[0].extensions in (None, {})
-
-
-def test_a_value_completion_failure_is_still_masked(settings):
-    """A resolver exception surfaced through COMPLETION is unexpected too.
-
-    graphql-core raises from two different phases and wraps both the same way: a
-    resolver that raises, and a resolved value that fails to complete (non-null
-    propagation, list-item completion, scalar serialization). The classifier reads
-    ``original_error`` through that wrapping, so the phase makes no difference -
-    which is the property that keeps a masked surface from having a hole shaped
-    like the completion phase.
-
-    Exercised through a real execution of a NON-NULL field, where the resolver's
-    exception reaches the client via ``Query.explodes``'s completion propagation
-    rather than as a nullable field's own entry.
-    """
-    assert settings.DEBUG is False
-
-    @strawberry.type
-    class _NonNullQuery:
-        """One non-nullable field whose resolver raises."""
-
-        @strawberry.field
-        def explodes(self) -> str:
-            raise ValueError(_SENSITIVE)
-
-    schema = DjangoSchema(query=_NonNullQuery)
-
-    result = schema.execute_sync("{ explodes }")
-
-    assert result.data is None
-    assert len(result.errors) == 1
-    assert result.errors[0].message == DEFAULT_ERROR_POLICY.message
-    assert _SENSITIVE not in str(result.errors[0].message)
-    assert result.errors[0].original_error is None
 
 
 # ---------------------------------------------------------------------------

@@ -274,6 +274,34 @@ def test_document_over_the_token_bound_is_rejected():
     assert extensions["charged"] == MAX_TOKENS + 1
 
 
+def test_a_malformed_document_keeps_the_parsers_own_syntax_diagnostic():
+    """A document the lexer cannot finish comes back as a syntax error, not a resource rejection.
+
+    The scan tokenizes the raw text to charge it, so it meets a malformed
+    document before graphql-core does. Swallowing its own lexer error is what
+    lets the accurate diagnostic survive; reporting it would answer a syntax
+    mistake with a bound nothing exceeded. The must-not is the row below: the
+    swallow is scoped to the lexer's complaint and does not also discard the
+    tokens already charged.
+    """
+    payload = _post("/rp-tokens/", "{ foo(bar: 'single quotes') }")
+
+    _no_rejection(payload)
+    assert payload["data"] is None, payload
+    assert len(payload["errors"]) == 1, payload
+    assert "Syntax Error" in payload["errors"][0]["message"], payload
+
+
+def test_a_malformed_document_over_the_token_bound_is_rejected_on_size():
+    """Tokens are charged as they are lexed, so size fires before the lexer reaches the garbage."""
+    fields = " ".join(f"a{index}: __typename" for index in range(MAX_TOKENS))
+
+    extensions = _rejection(_post("/rp-tokens/", "{ %s 'garbage' }" % fields))
+
+    assert extensions["bound"] == "max_document_tokens"
+    assert extensions["limit"] == MAX_TOKENS
+
+
 def test_document_over_the_depth_bound_is_rejected():
     """Structural nesting is charged before the parse, so deep documents cannot recurse it."""
     query = "{ " * (MAX_DEPTH + 1) + "__typename" + " }" * (MAX_DEPTH + 1)

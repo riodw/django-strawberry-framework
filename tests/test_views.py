@@ -642,21 +642,6 @@ def test_a_disabled_cap_skips_the_check_entirely():
     assert hasattr(request, "_body") is False
 
 
-@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_misconfigured_mount_fails_loud_on_every_request_including_get(view_class):
-    """Resolution happens FIRST, so a bad value cannot hide behind a bodyless request.
-
-    If the GET no-op were checked before the resolve, a mount configured with a
-    nonsense cap would serve the IDE happily and only fail once someone posted an
-    operation. Failing on the GET too is what makes the misconfiguration a
-    deployment-time error rather than a latent one.
-    """
-    view = _capped_view(0, view_class=view_class)
-
-    with pytest.raises(ConfigurationError, match="positive int"):
-        view._enforce_request_body_limit(RequestFactory().get("/graphql/"))
-
-
 def test_the_body_boundary_mixin_stays_private_and_sits_first_in_both_base_lists():
     """The mixin is private, unexported, and ahead of upstream in the MRO.
 
@@ -2066,23 +2051,6 @@ def test_the_wire_contract_holds_with_the_upstream_patches_opted_out(view_class,
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == _JSON_PARSE_REASON
     assert type(excinfo.value.__cause__) is cause
-
-
-@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_the_package_view_parses_valid_utf8_including_multibyte_unchanged(view_class):
-    """The success path is untouched, and the contract is UTF-8 rather than ASCII.
-
-    A control built the usual way would be vacuous: ``json.dumps``'s default
-    ``ensure_ascii=True`` emits ``\\u00e9`` escapes, so it would pass even under an
-    ``"ascii"`` codec. This body carries a genuine ``C3 A9`` on the wire, asserted
-    before the parse.
-    """
-    view = view_class(schema=SCHEMA)
-    multibyte = json.dumps({"a": "caf\u00e9"}, ensure_ascii=False).encode("utf-8")
-    assert max(multibyte) > 0x7F
-
-    assert view.parse_json(b'{"a": 1}') == {"a": 1}
-    assert view.parse_json(multibyte) == {"a": "caf\u00e9"}
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)

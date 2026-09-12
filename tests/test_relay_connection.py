@@ -516,31 +516,6 @@ def test_synthesized_connection_paginates():
     assert connection["pageInfo"]["hasNextPage"] is True
 
 
-@pytest.mark.django_db
-def test_synthesized_connection_per_parent_query_cost(django_assert_num_queries):
-    """Each parent row pays its own window query - the documented cost contract.
-
-    Relation-seeded connections run per-parent (no
-    cross-parent batching in the pre-``033`` posture), so a nested connection
-    under an N-row parent list issues ``1 + N`` queries: the parent list, then
-    one window query per parent (a ``totalCount`` selection would add one
-    ``COUNT`` per parent on a countable target). Pinning the count documents
-    the contract and surfaces any silent regression toward per-edge loading.
-    """
-    services.seed_data(2)
-    _make_type("ItemType", Item, ("id", "name", "category"))
-    category_type = _make_type("CategoryType", Category, ("id", "name", "items"))
-
-    schema = _schema_with_root(category_type)
-    parent_count = Category.objects.count()
-    with django_assert_num_queries(1 + parent_count):
-        result = schema.execute_sync(
-            "{ objs { itemsConnection(first: 2) { edges { node { name } } } } }",
-        )
-    assert result.errors is None
-    assert len(result.data["objs"]) == parent_count
-
-
 # =============================================================================
 # Partial-finalize re-entrancy
 # =============================================================================
@@ -832,28 +807,6 @@ def _books_connection(schema, args, selection):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", ["default", "connection"])
-def test_relation_connection_first_zero(shape):
-    """``first: 0`` yields empty edges + well-formed ``pageInfo``.
-
-    The Strawberry overfetch shape the live ``first: 0`` pin documents:
-    rows exist past the zero window, so ``hasNextPage`` is true with a null
-    ``endCursor`` (no edges).
-    """
-    _seed_library_books(["a", "b", "c"])
-    schema = _shelf_books_connection_schema(shape)
-
-    conn = _books_connection(
-        schema,
-        "first: 0",
-        "edges { node { title } } pageInfo { hasNextPage endCursor }",
-    )
-    assert conn["edges"] == []
-    assert conn["pageInfo"]["hasNextPage"] is True
-    assert conn["pageInfo"]["endCursor"] is None
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_first_overrun(shape):
     """``first: N`` past the remainder returns the actual remainder."""
     _seed_library_books(["a", "b", "c"])
@@ -915,32 +868,6 @@ def test_relation_connection_first_and_last_rejected(shape):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", ["default", "connection"])
-def test_relation_connection_page_info_four_fields(shape):
-    """All four ``pageInfo`` fields are correct across a forward page walk."""
-    _seed_library_books(["a", "b", "c"])
-    schema = _shelf_books_connection_schema(shape)
-    selection = "edges { cursor } pageInfo { hasNextPage hasPreviousPage startCursor endCursor }"
-
-    page_one = _books_connection(schema, "first: 2", selection)
-    cursors = [edge["cursor"] for edge in page_one["edges"]]
-    info_one = page_one["pageInfo"]
-    assert info_one["hasNextPage"] is True
-    assert info_one["hasPreviousPage"] is False
-    assert info_one["startCursor"] == cursors[0]
-    assert info_one["endCursor"] == cursors[1]
-
-    page_two = _books_connection(
-        schema,
-        f'first: 2, after: "{info_one["endCursor"]}"',
-        selection,
-    )
-    info_two = page_two["pageInfo"]
-    assert info_two["hasNextPage"] is False
-    assert info_two["hasPreviousPage"] is True
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["default", "connection"])
 def test_relation_connection_has_next_page_when_edges_unrequested(shape):
     """A nested ``pageInfo``-only selection still computes ``hasNextPage``.
 
@@ -958,52 +885,15 @@ def test_relation_connection_has_next_page_when_edges_unrequested(shape):
     assert exact["pageInfo"]["hasNextPage"] is False
 
 
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["default", "connection"])
-def test_relation_connection_backward_pagination_last_before(shape):
-    """``last`` / ``before`` row identity through the relation-seeded pipeline."""
-    _seed_library_books(
-        [
-            "a",
-            "b",
-            "c",
-            "d",
-            "e",
-        ],
-    )
-    schema = _shelf_books_connection_schema(shape)
-
-    tail = _books_connection(
-        schema,
-        "last: 2",
-        "edges { node { title } } pageInfo { hasNextPage hasPreviousPage }",
-    )
-    assert [edge["node"]["title"] for edge in tail["edges"]] == ["d", "e"]
-    assert tail["pageInfo"]["hasPreviousPage"] is True
-    assert tail["pageInfo"]["hasNextPage"] is False
-
-    full = _books_connection(schema, "first: 5", "edges { cursor node { title } }")
-    last_row_cursor = full["edges"][-1]["cursor"]
-    window = _books_connection(
-        schema,
-        f'last: 2, before: "{last_row_cursor}"',
-        "edges { node { title } } pageInfo { hasNextPage hasPreviousPage }",
-    )
-    assert [edge["node"]["title"] for edge in window["edges"]] == ["c", "d"]
-    # Rows exist on both sides of the window (overfetch sees "e"; slice
-    # start > 0 sees "a" / "b").
-    assert window["pageInfo"]["hasNextPage"] is True
-    assert window["pageInfo"]["hasPreviousPage"] is True
-
-
 # =============================================================================
 # spec-033 - connection-class fast path (Decision 5). The walker's
 # windowed prefetch only lands on ``root`` when the PARENT queryset
 # flows through ``DjangoOptimizerExtension``, so the fast-path schemas use a
 # ``DjangoListField`` root (which the optimizer plans) with the extension
 # installed. The existing ``_schema_with_root`` (a plain list resolver the
-# optimizer never sees) stays the pipeline-path baseline - and
-# ``test_synthesized_connection_per_parent_query_cost`` stays ``1 + N`` there.
+# optimizer never sees) stays the pipeline-path baseline; the ``1 + N`` cost
+# an optimizer-less mount pays is pinned live at
+# ``test_products_visibility_api.py::test_nested_connection_costs_one_query_per_parent_without_the_optimizer``.
 # =============================================================================
 
 
@@ -1135,7 +1025,8 @@ def _exec(schema, query):
 def test_fast_path_single_query(django_assert_num_queries):
     """Parent page + one window query, zero per-parent queries (the cost contract).
 
-    The optimizer-on mirror of ``test_synthesized_connection_per_parent_query_cost``:
+    The optimizer-on mirror of the optimizer-less ``1 + N`` cost (live at
+    ``test_products_visibility_api.py::test_nested_connection_costs_one_query_per_parent_without_the_optimizer``):
     a nested connection under a parent list pays parent list + one batched
     window query. Pinned at ONE cardinality, with the ABSOLUTE count that makes
     it distinguishing: 4 parent genres and exactly 2 queries, where a per-parent

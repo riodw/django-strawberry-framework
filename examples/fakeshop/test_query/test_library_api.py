@@ -1,6 +1,7 @@
 """Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface."""
 
 import base64
+import sys
 from typing import NamedTuple
 
 import pytest
@@ -546,6 +547,19 @@ def test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_htt
 
 @pytest.mark.django_db
 def test_library_optimizer_hints_are_observable_over_http():
+    """Both ``LoanType.Meta.optimizer_hints`` entries are readable from the SQL alone.
+
+    ``{"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint.SKIP}``
+    (``apps/library/schema.py::LoanType``) has two halves, each with a must-not:
+
+    - forced prefetch on a forward FK: the relation is fetched by a SECOND
+      query keyed on the FK column the root projection kept (``book_id``), and
+      the root query carries NO join - the default ``select_related`` for a
+      forward FK is genuinely overridden, not merely accompanied.
+    - ``SKIP``: the relation is not planned at all, so nothing joins it and
+      nothing prefetches it; each row's ``patron`` lazy-loads on access, which
+      is one query per row rather than one batched query for the set.
+    """
     _seed_library_graph()
     book = models.Book.objects.get(title="Kindred")
     second_patron = models.Patron.objects.create(name="Katherine")
@@ -575,9 +589,12 @@ def test_library_optimizer_hints_are_observable_over_http():
             ],
         },
     }
+    # Two loan rows, two queries: the root read plus ONE batched book fetch.
     assert len(captured_prefetch) == 2
     assert "JOIN" not in captured_prefetch[0]["sql"]
     assert "library_loan" in captured_prefetch[0]["sql"]
+    # The forced prefetch needs the FK column, so the root projection keeps it.
+    assert "book_id" in captured_prefetch[0]["sql"]
     assert "library_book" in captured_prefetch[1]["sql"]
 
     with CaptureQueriesContext(connection) as captured_skip:
@@ -609,7 +626,73 @@ def test_library_optimizer_hints_are_observable_over_http():
     assert len(captured_skip) == 3
     assert "JOIN" not in captured_skip[0]["sql"]
     assert "library_loan" in captured_skip[0]["sql"]
+    # One patron query PER ROW, never a single batched prefetch: an unplanned
+    # relation has no batch to ride on.
     assert "library_patron" in captured_skip[1]["sql"]
+    assert "library_patron" in captured_skip[2]["sql"]
+    assert "library_patron" not in captured_skip[0]["sql"]
+
+
+#: One document posted twice by the plan-cache row, so the two requests differ
+#: in nothing but their ordinal. Neither ``MembershipCardType`` nor its
+#: ``patron`` target declares a ``get_queryset`` hook, so the plan this document
+#: produces is cacheable - a plan baked around a request-scoped visibility hook
+#: is deliberately never cached.
+_PLAN_CACHE_DOCUMENT = """
+query {
+  allLibraryMembershipCards {
+    barcode
+    patron { name }
+  }
+}
+"""
+
+
+def _library_sql(captured: CaptureQueriesContext) -> list[str]:
+    """Return only the library-table SQL of a capture, dropping session traffic."""
+    return [entry["sql"] for entry in captured.captured_queries if "library_" in entry["sql"]]
+
+
+@pytest.mark.django_db
+def test_library_optimizer_plan_cache_is_reused_across_http_requests():
+    """The shipped optimizer plans one document once and reuses that plan next request.
+
+    ``config/schema.py`` holds a single module-level ``DjangoOptimizerExtension``
+    and hands the schema a ``lambda: _optimizer`` factory, so the instance-bound
+    plan cache outlives a request. Two identical documents over ``/graphql/``
+    therefore record a miss then a hit against ONE cache entry. A per-request
+    extension would report two misses; a reused plan that had gone stale would
+    change the emitted SQL, so the second request's library SQL must match the
+    first's exactly.
+
+    ``config.schema`` is read from ``sys.modules`` inside the test body: the
+    acceptance conftest rebuilds that module before every test, so a
+    module-import-time reference would be to a discarded instance.
+    """
+    _seed_library_graph()
+    optimizer = sys.modules["config.schema"]._optimizer
+    # The per-test schema rebuild is what makes the counters below absolute.
+    assert optimizer.cache_info().size == 0, optimizer.cache_info()
+
+    with CaptureQueriesContext(connection) as first_capture:
+        first = _post_graphql(_PLAN_CACHE_DOCUMENT)
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert "errors" not in first_payload, first_payload
+    assert optimizer.cache_info().misses == 1
+    assert optimizer.cache_info().hits == 0
+
+    with CaptureQueriesContext(connection) as second_capture:
+        second = _post_graphql(_PLAN_CACHE_DOCUMENT)
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert "errors" not in second_payload, second_payload
+    assert optimizer.cache_info().hits == 1
+    assert optimizer.cache_info().misses == 1
+    assert optimizer.cache_info().size == 1
+
+    assert second_payload["data"] == first_payload["data"]
+    assert _library_sql(second_capture) == _library_sql(first_capture)
 
 
 @pytest.mark.django_db
@@ -2005,10 +2088,10 @@ def test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplicati
     ``.annotate(<alias>=Min("shelves__code")).order_by("city", <alias>)``: a
     ``GROUP BY`` on the parent that ALSO orders by a non-aggregate scalar
     column. This live query exercises that GROUP-BY functional-dependency shape
-    end-to-end: the unit test in ``tests/orders/test_sets.py`` asserts the
-    expression SHAPE, while this asserts the EXECUTED result on a real backend,
-    and proves both terms are load-bearing AND no parent row is multiplied
-    despite multi-shelf branches.
+    end-to-end on a real backend, and proves both terms are load-bearing AND no
+    parent row is multiplied despite multi-shelf branches. The all-to-many
+    spelling - two to-many terms, each earning its own aggregate - is
+    ``::test_library_books_order_by_two_to_many_terms_each_get_their_own_aggregate``.
 
     Seed -- each branch's MIN shelf code in parentheses:
       West  (Austin; shelves A + Z -> min A)
@@ -2177,6 +2260,82 @@ def test_library_books_order_by_m2m_absolute_import_path():
             ],
         },
     )
+
+
+@pytest.mark.django_db
+def test_library_books_order_by_two_to_many_terms_each_get_their_own_aggregate():
+    """Two to-many order terms each earn their own aggregate; no row is multiplied.
+
+    ``BookOrder`` declares ``genres`` and ``loans`` as separate ``RelatedOrder``
+    branches, so ``orderBy: [{ genres: { name: ASC } }, { loans: { note: ASC } }]``
+    walks two independent to-many paths in one query. Each must compile to its
+    OWN ``MIN`` aggregate over a grouped parent: one shared aggregate would make
+    the second term silently inert, and a raw fan-out JOIN would list "First"
+    four times (two genres x two loans) and then need a ``DISTINCT`` to hide it.
+
+    The seed makes both terms load-bearing: the genre term alone cannot
+    separate "First" from "Second" (both minimize to "Alpha"), and the loan
+    term alone would order ``Second, Third, First``.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    alpha = models.Genre.objects.create(name="Alpha")
+    beta = models.Genre.objects.create(name="Beta")
+    zulu = models.Genre.objects.create(name="Zulu")
+    first = models.Book.objects.create(title="First", shelf=shelf)
+    second = models.Book.objects.create(title="Second", shelf=shelf)
+    third = models.Book.objects.create(title="Third", shelf=shelf)
+    first.genres.add(alpha, zulu)
+    second.genres.add(alpha)
+    third.genres.add(beta)
+    models.Loan.objects.create(
+        book=first,
+        patron=models.Patron.objects.create(name="Ada"),
+        note="n-b",
+    )
+    models.Loan.objects.create(
+        book=first,
+        patron=models.Patron.objects.create(name="Grace"),
+        note="n-z",
+    )
+    models.Loan.objects.create(
+        book=second,
+        patron=models.Patron.objects.create(name="Katherine"),
+        note="n-a",
+    )
+    models.Loan.objects.create(
+        book=third,
+        patron=models.Patron.objects.create(name="Mae"),
+        note="n-a0",
+    )
+
+    with CaptureQueriesContext(connection) as captured:
+        data = _post_graphql(
+            """
+            query {
+              allLibraryBooks(
+                orderBy: [{ genres: { name: ASC } }, { loans: { note: ASC } }]
+              ) {
+                title
+              }
+            }
+            """,
+        ).json()
+
+    assert "errors" not in data, data
+    titles = [row["title"] for row in data["data"]["allLibraryBooks"]]
+    # genre-min ASC primary (Alpha, Alpha, Beta), loan-min ASC tiebreaker inside
+    # the Alpha group (n-a before n-b).
+    assert titles == ["Second", "First", "Third"]
+    # Grouping, not de-duplication: every parent appears exactly once because
+    # the aggregates collapsed the fan-out, not because a DISTINCT hid it.
+    assert len(titles) == len(set(titles))
+    book_queries = [
+        entry["sql"] for entry in captured.captured_queries if "library_book" in entry["sql"]
+    ]
+    assert len(book_queries) == 1, book_queries
+    assert book_queries[0].count("MIN(") == 2, book_queries[0]
+    assert "DISTINCT" not in book_queries[0].upper(), book_queries[0]
 
 
 @pytest.mark.django_db
@@ -4002,7 +4161,10 @@ def test_typed_node_field_mismatch_live():
     """A book id at the typed ``genre(id:)`` field raises the mismatch error.
 
     The expected/received-types ``GraphQLError`` (Decision 4): a wrong-type
-    id at a typed field is a client bug surfaced loudly, not a ``null``.
+    id at a typed field is a client bug surfaced loudly, not a ``null``. The
+    error carries no ``extensions`` code - only ``GLOBALID_INVALID`` is an
+    assigned code, and this id decoded fine - and the nullable field itself
+    carries ``null`` beneath the error.
     """
     from apps.library.schema import BookType
 
@@ -4015,6 +4177,8 @@ def test_typed_node_field_mismatch_live():
     assert "errors" in payload, payload
     messages = " ".join(error["message"] for error in payload["errors"])
     assert "Wrong node type: expected a GenreType id, received a BookType id." in messages
+    assert [error.get("extensions", {}).get("code") for error in payload["errors"]] == [None]
+    assert payload["data"] == {"genre": None}
 
 
 @pytest.mark.django_db
@@ -4048,26 +4212,35 @@ def test_node_uncoercible_pk_live():
 
 @pytest.mark.django_db
 def test_nodes_batch_mixed_types_order_and_null():
-    """``nodes(ids:)`` preserves input order across types with a ``null`` hole.
+    """``nodes(ids:)`` holds input order across types, with holes for missing AND hidden rows.
 
-    Genre + book ids interleaved with one WELL-FORMED missing-pk id; the
-    hole resolves to a positional ``null``, both real rows resolve to their
-    concrete types. (A malformed id mid-batch fails the whole field - pinned
-    package-side in tests/test_relay_node_field.py.)
+    Four ids interleaved: a genre, a WELL-FORMED missing-pk genre id, a visible
+    book, and a book in ``repair`` circulation that ``BookType.get_queryset``
+    hides from anonymous callers. Anonymously both holes are positional
+    ``null``s. Re-posting the SAME document as staff fills the last one and
+    leaves the missing-pk hole empty, which is what separates the two: a hidden
+    row reads as absent only to a caller who cannot see it, and a batch must
+    never leak that distinction by shifting positions. (A malformed id mid-batch
+    fails the whole field - pinned package-side in tests/test_relay_node_field.py.)
     """
     from apps.library.schema import BookType, GenreType
 
+    shelf = _seed_shelf()
     genre = models.Genre.objects.create(name="Speculative")
-    book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
+    book = models.Book.objects.create(title="Kindred", shelf=shelf)
+    hidden_book = models.Book.objects.create(
+        title="Dune",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
     ids = (
         global_id_for(GenreType, genre.pk),
         global_id_for(GenreType, 999999),
         global_id_for(BookType, book.pk),
+        global_id_for(BookType, hidden_book.pk),
     )
     id_literals = ", ".join(f'"{gid}"' for gid in ids)
-
-    response = _post_graphql(
-        f"""
+    document = f"""
         query {{
           nodes(ids: [{id_literals}]) {{
             __typename
@@ -4075,8 +4248,9 @@ def test_nodes_batch_mixed_types_order_and_null():
             ... on BookType {{ title }}
           }}
         }}
-        """,
-    )
+        """
+
+    response = _post_graphql(document)
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
@@ -4084,12 +4258,29 @@ def test_nodes_batch_mixed_types_order_and_null():
         {"__typename": "GenreType", "name": "Speculative"},
         None,
         {"__typename": "BookType", "title": "Kindred"},
+        None,
+    ]
+
+    staff_response = _post_graphql_as_staff(document)
+    assert staff_response.status_code == 200
+    staff_payload = staff_response.json()
+    assert "errors" not in staff_payload, staff_payload
+    assert staff_payload["data"]["nodes"] == [
+        {"__typename": "GenreType", "name": "Speculative"},
+        None,
+        {"__typename": "BookType", "title": "Kindred"},
+        {"__typename": "BookType", "title": "Dune"},
     ]
 
 
 @pytest.mark.django_db
 def test_nodes_duplicates_and_empty_live():
-    """Duplicate ids resolve per position; ``ids: []`` returns ``[]``."""
+    """Duplicate ids resolve per position; ``ids: []`` returns ``[]`` and reads no row.
+
+    The empty batch has nothing to group by type, so it must short-circuit
+    before any per-type fetch: a genre row exists, and no query touches its
+    table.
+    """
     from apps.library.schema import GenreType
 
     genre = models.Genre.objects.create(name="Speculative")
@@ -4103,11 +4294,15 @@ def test_nodes_duplicates_and_empty_live():
     assert "errors" not in duplicated_payload, duplicated_payload
     assert duplicated_payload["data"]["nodes"] == [{"name": "Speculative"}] * 2
 
-    empty = _post_graphql("query { nodes(ids: []) { __typename } }")
+    with CaptureQueriesContext(connection) as captured:
+        empty = _post_graphql("query { nodes(ids: []) { __typename } }")
     assert empty.status_code == 200
     empty_payload = empty.json()
     assert "errors" not in empty_payload, empty_payload
     assert empty_payload["data"]["nodes"] == []
+    assert not any("library_genre" in entry["sql"] for entry in captured.captured_queries), [
+        entry["sql"] for entry in captured.captured_queries
+    ]
 
 
 @pytest.mark.django_db
@@ -4576,6 +4771,70 @@ def _genre_books_connection(arguments: str, selection: str):
 def _array_cursor(index: int) -> str:
     """The ``arrayconnection`` cursor for a 0-based offset index (matches endCursor)."""
     return relay.to_base64("arrayconnection", str(index))
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_page_info_four_fields():
+    """All four ``pageInfo`` fields are correct across a forward walk of a RELATION page.
+
+    The relation-seeded colour of ``::test_page_info_four_fields`` (which walks
+    the ROOT ``allLibraryGenresConnection``): the nested ``booksConnection``
+    computes its flags and cursors from its own partition, not from the parent
+    page. Page 1 of 3 rows reports ``hasNextPage`` true / ``hasPreviousPage``
+    false with ``startCursor`` / ``endCursor`` equal to its own first / last edge
+    cursors; feeding that ``endCursor`` back as ``after:`` reports the mirror
+    image. Cursors come from the prior response, never hand-minted.
+    """
+    _seed_genre_books("a", "b", "c")
+    selection = "edges { cursor } pageInfo { hasNextPage hasPreviousPage startCursor endCursor }"
+
+    page_one, _ = _genre_books_connection("first: 2", selection)
+    cursors = [edge["cursor"] for edge in page_one["edges"]]
+    info_one = page_one["pageInfo"]
+    assert info_one["hasNextPage"] is True
+    assert info_one["hasPreviousPage"] is False
+    assert info_one["startCursor"] == cursors[0]
+    assert info_one["endCursor"] == cursors[1]
+
+    page_two, _ = _genre_books_connection(
+        f'first: 2, after: "{info_one["endCursor"]}"',
+        selection,
+    )
+    info_two = page_two["pageInfo"]
+    assert info_two["hasNextPage"] is False
+    assert info_two["hasPreviousPage"] is True
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_backward_pagination_last_before():
+    """``last`` / ``before`` pick rows by identity on a RELATION-seeded connection.
+
+    The relation-seeded colour of ``::test_backward_pagination_last_before``:
+    ``last: 2`` over five books returns the final two in order, and ``last: 2``
+    before the last row's own emitted cursor returns the two immediately
+    preceding it - with rows on both sides of that window, so both flags are
+    true. Wrong-end or off-by-one windowing changes WHICH rows come back, not
+    how many, so the assertion is on titles rather than a count.
+    """
+    _seed_genre_books("a", "b", "c", "d", "e")
+    selection = "edges { node { title } } pageInfo { hasNextPage hasPreviousPage }"
+
+    tail, _ = _genre_books_connection("last: 2", selection)
+    assert [edge["node"]["title"] for edge in tail["edges"]] == ["d", "e"]
+    assert tail["pageInfo"]["hasPreviousPage"] is True
+    assert tail["pageInfo"]["hasNextPage"] is False
+
+    full, _ = _genre_books_connection("first: 5", "edges { cursor node { title } }")
+    last_row_cursor = full["edges"][-1]["cursor"]
+    window, _ = _genre_books_connection(
+        f'last: 2, before: "{last_row_cursor}"',
+        selection,
+    )
+    assert [edge["node"]["title"] for edge in window["edges"]] == ["c", "d"]
+    # Rows exist on both sides of the window: the overfetch sees "e", and the
+    # slice starting past 0 sees "a" / "b".
+    assert window["pageInfo"]["hasNextPage"] is True
+    assert window["pageInfo"]["hasPreviousPage"] is True
 
 
 @pytest.mark.django_db
@@ -5780,7 +6039,9 @@ def test_nested_connection_first_zero_empty_page_live():
     window keeps each partition's row 1 as a marker, so ``first: 0`` is served
     from that same window query rather than by a per-parent fallback - empty
     edges, but ``hasNextPage`` True because the marker proves the genre has
-    books beyond the zero window. The marker-row shape itself is pinned at
+    books beyond the zero window. With no edges there is no cursor to report,
+    so ``endCursor`` is null - the two halves of a well-formed empty page. The
+    marker-row shape itself is pinned at
     ``::test_nested_ambiguous_empty_served_from_marker_in_fixed_queries``; this
     test is wire-only.
     """
@@ -5792,7 +6053,7 @@ def test_nested_connection_first_zero_empty_page_live():
           allLibraryGenres {
             booksConnection(first: 0) {
               edges { node { title } }
-              pageInfo { hasNextPage }
+              pageInfo { hasNextPage endCursor }
             }
           }
         }
@@ -5804,6 +6065,7 @@ def test_nested_connection_first_zero_empty_page_live():
     conn = payload["data"]["allLibraryGenres"][0]["booksConnection"]
     assert conn["edges"] == []
     assert conn["pageInfo"]["hasNextPage"] is True
+    assert conn["pageInfo"]["endCursor"] is None
 
 
 _EMPTY_PARENT_GENRES_CONNECTION_QUERY = """

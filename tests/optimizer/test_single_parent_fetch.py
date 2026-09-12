@@ -104,7 +104,15 @@ def test_spec_rejects_ineligible_windows(overrides, reason):
 
 
 def test_spec_rejects_a_keyset_seek():
-    """A keyset ``after:`` seek is out of v1 scope (not a plain filtered LIMIT)."""
+    """A keyset ``after:`` seek is refused at plan time (not a plain filtered LIMIT).
+
+    Kept package-side on purpose: the seek is guarded twice in series. If this
+    plan-time refusal were removed, ``_single_parent_where_ids`` would still fail
+    closed on the seek's extra WHERE qual and the emitted SQL would not change,
+    so no live row can observe this half alone. The wire consequence of the pair
+    is pinned by
+    ``examples/fakeshop/test_query/test_single_parent_fastpath_api.py::test_single_parent_keyset_seek_page_keeps_window_over_http``.
+    """
     from django_strawberry_framework.keyset import (
         KeysetCursor,
         KeysetSeek,

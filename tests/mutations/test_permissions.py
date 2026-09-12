@@ -11,9 +11,10 @@ finalized schema, the resolver invokes ``check_permission`` /
 ``Meta.permission_classes`` at the spec-036 Decision 8 / Decision 15 placement
 (before validation for ``create``; after the visibility lookup for ``update`` /
 ``delete``) and maps a denial to a **top-level ``GraphQLError``**, distinct from the
-field-keyed validation envelope. The ``Meta.permission_classes`` override and the
-no-existence-leak ordering (hidden row is not-found before any auth signal) are
-pinned here too.
+field-keyed validation envelope. The ``Meta.permission_classes`` override is
+pinned here too; the consumer-visible denial and the no-existence-leak ordering
+(a hidden row is not-found before any auth signal) are earned over real HTTP in
+``examples/fakeshop/test_query/test_products_api.py``.
 """
 
 from __future__ import annotations
@@ -232,23 +233,6 @@ _CREATE_Q = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{
 
 
 @pytest.mark.django_db
-def test_anonymous_create_denied_top_level_error_no_write():
-    """An anonymous create is denied with a top-level ``GraphQLError`` and no write."""
-    schema, (CategoryT, _ItemT) = _build_auth_schema()
-    cat = product_models.Category.objects.create(name="Cat-anon")
-    res = _execute(
-        schema,
-        _CREATE_Q,
-        AnonymousUser(),
-        {"d": {"name": "Blocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is not None
-    assert "authorized" in res.errors[0].message.lower()
-    # No payload entry (top-level error nulls the field), no write.
-    assert not product_models.Item.objects.filter(name="Blocked").exists()
-
-
-@pytest.mark.django_db
 def test_under_privileged_create_denied():
     """A user lacking ``add_item`` is denied (top-level error), no write."""
     schema, (CategoryT, _ItemT) = _build_auth_schema()
@@ -279,75 +263,6 @@ def test_permitted_create_succeeds():
     assert res.errors is None, res.errors
     assert res.data["createItem"]["node"]["name"] == "Allowed"
     assert product_models.Item.objects.filter(name="Allowed").exists()
-
-
-@pytest.mark.django_db
-def test_denial_raises_top_level_not_field_error_envelope():
-    """A denial surfaces in top-level ``errors`` with a null payload, not a ``FieldError`` envelope entry."""
-    schema, (CategoryT, _ItemT) = _build_auth_schema()
-    cat = product_models.Category.objects.create(name="Cat-distinct")
-    res = _execute(
-        schema,
-        _CREATE_Q,
-        AnonymousUser(),
-        {"d": {"name": "X", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    # Authorization failure: top-level errors, payload null/absent.
-    assert res.errors is not None
-    assert res.data is None or res.data.get("createItem") is None
-
-
-@pytest.mark.django_db
-def test_hidden_row_is_not_found_before_auth_signal_no_existence_leak():
-    """For update, a hidden row is not-found BEFORE any auth signal (no existence leak).
-
-    The visibility lookup runs first; a row the caller cannot see returns a
-    not-found ``FieldError`` on ``id`` (the validation envelope), NOT a top-level
-    "not authorized" error - so the auth path never reveals the row's existence.
-    """
-
-    class CategoryT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Category
-            fields = ("id", "name")
-            primary = True
-
-    class ItemT(DjangoType, relay.Node):
-        get_queryset = classmethod(lambda cls, qs, info, **k: qs.filter(is_private=False))
-
-        class Meta:
-            model = product_models.Item
-            fields = ("id", "name")
-            primary = True
-
-    class UpdateItem(DjangoMutation):
-        class Meta:
-            model = product_models.Item
-            operation = "update"
-
-    @strawberry.type
-    class Mutation:
-        update_item = DjangoMutationField(UpdateItem)
-
-    finalize_django_types()
-    schema = DjangoSchema(query=_Query, mutation=Mutation, error_policy=_NO_ERROR_MASKING)
-
-    cat = product_models.Category.objects.create(name="Cat-hidden")
-    hidden = product_models.Item.objects.create(name="Secret", category=cat, is_private=True)
-    # Even an anonymous caller (who would be denied an authorization check) gets
-    # not-found first - the row is invisible, so no "not authorized" signal leaks
-    # that it exists.
-    res = _execute(
-        schema,
-        "mutation($id: ID!, $d: ItemPartialInput!){ updateItem(id:$id, data:$d){ "
-        "node{ name } errors{ field } } }",
-        AnonymousUser(),
-        {"id": global_id_for(ItemT, hidden.pk), "d": {"name": "Leak"}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert payload["errors"][0]["field"] == "id"
 
 
 @pytest.mark.django_db

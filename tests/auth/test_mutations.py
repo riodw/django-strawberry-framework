@@ -6,7 +6,7 @@ here (the AGENTS.md placement rule; the live consumer surface is
 lifecycle (survive-the-pre-bind-reset / ``registry.clear()`` drain /
 reload-idempotence / the conflicting-``permission_classes`` raise), the
 surface-keyed bind validation arms, the post-finalize factory reject, the async
-resolver paths, the sessionless edge, the async-permission ``SyncMisuseError``,
+resolver paths, the async-permission ``SyncMisuseError``,
 the register rider internals (``derive_register_fields``, the exclusion seam's
 provided-marker contract, plaintext-never-persisted on BOTH resolver paths,
 hash-before-``full_clean`` ordering), and the permission-gate variants - the
@@ -917,61 +917,6 @@ async def test_async_register_never_persists_the_plaintext():
     stored = await get_user_model().objects.aget(username="async_reg")
     assert "pw-9x-strong" not in stored.password
     assert stored.check_password("pw-9x-strong")
-
-
-def _assert_sessionless_configuration_error(res):
-    """Assert the shipped ``require_session`` refusal, not Django's raw ``AttributeError``.
-
-    The distinguishing set both sessionless rows share: the error is the package's
-    own ``ConfigurationError`` and its message names BOTH installable stacks. A bare
-    ``"session"`` substring holds under either implementation, so it is asserted
-    alongside the two names rather than in place of them.
-    """
-    assert res.errors is not None
-    assert isinstance(res.errors[0].original_error, ConfigurationError)
-    message = res.errors[0].message
-    assert "SessionMiddleware" in message
-    assert "AuthMiddlewareStack" in message
-    assert "session" in message.lower()
-
-
-@pytest.mark.django_db
-def test_sessionless_login_raises_the_configuration_error_naming_both_middlewares():
-    """No session stack -> the package's own ``ConfigurationError``, naming the fix.
-
-    ``auth/sessions.py::require_session`` probes for the session BEFORE any
-    session mutation, so a misconfigured deployment gets a package error naming
-    both installable stacks instead of Django's raw ``AttributeError`` from deep
-    inside ``login()``. Both the class and the two middleware names are asserted:
-    a bare ``"session"`` substring holds under either implementation and so
-    distinguishes nothing.
-    """
-    schema = _login_logout_schema()
-    user_model = get_user_model()
-    user_model.objects.create_user(username="probe", password="pw-9x-strong")
-    request = RequestFactory().post("/graphql/")  # deliberately no SessionMiddleware
-    request.user = AnonymousUser()
-    res = schema.execute_sync(
-        _LOGIN_Q,
-        variable_values={"p": "pw-9x-strong"},
-        context_value=request,
-    )
-    _assert_sessionless_configuration_error(res)
-
-
-@pytest.mark.django_db
-def test_sessionless_logout_raises_the_configuration_error_naming_both_middlewares():
-    """Logout runs the same probe, for its rejection side effect alone.
-
-    ``::_transport_prologue`` is shared: logout discards the session object it
-    returns but still runs ``require_session``, so a sessionless logout rejects
-    exactly as a sessionless login does rather than silently reporting ``ok``.
-    """
-    schema = _login_logout_schema()
-    request = RequestFactory().post("/graphql/")  # deliberately no SessionMiddleware
-    request.user = AnonymousUser()
-    res = schema.execute_sync(_LOGOUT_Q, context_value=request)
-    _assert_sessionless_configuration_error(res)
 
 
 @pytest.mark.django_db
@@ -1927,21 +1872,6 @@ def test_storable_weird_credentials_reach_the_backend_unchanged(weird):
     assert _RecordingBackend.seen == [(weird, weird)]
 
 
-@override_settings(AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._RecordingBackend"])
-@pytest.mark.django_db
-def test_wrong_graphql_type_fails_validation_before_the_resolver():
-    """A non-``String`` username fails GraphQL validation; the resolver (and backend) never run."""
-    create_users(1)
-    _RecordingBackend.seen = []
-    schema = _login_logout_schema()
-    res = schema.execute_sync(
-        'mutation{ login(username: 123, password: "x"){ node{ username } errors{ field } } }',
-        context_value=_session_request(),
-    )
-    assert res.errors is not None
-    assert _RecordingBackend.seen == []
-
-
 @pytest.mark.django_db
 def test_login_password_never_appears_in_logs_or_error_text(caplog):
     """The password never leaks into captured logs or exception/repr text (a wrong-password attempt)."""
@@ -2430,51 +2360,6 @@ async def test_async_channels_http_wrong_password_is_failed_login_envelope_sessi
 
 
 # --- Enumeration guard: one byte-identical envelope across failure classes ----
-
-
-@pytest.mark.django_db
-def test_all_four_failure_classes_share_one_byte_identical_envelope():
-    """Wrong-password, unknown-user, inactive-under-``ModelBackend``, and backend ``PermissionDenied``.
-
-    The same selection set over all four failure classes must yield ``==`` full
-    GraphQL responses (the account-enumeration guard: ``field: "__all__"`` + the one
-    undifferentiated message, no top-level error, for every class).
-    """
-    create_users(1)
-    schema = _login_logout_schema()
-
-    def _envelope(variables, backends=None):
-        ctx = (
-            override_settings(AUTHENTICATION_BACKENDS=backends)
-            if backends is not None
-            else contextlib.nullcontext()
-        )
-        with ctx:
-            res = schema.execute_sync(
-                _LOGIN_VAR_Q,
-                variable_values=variables,
-                context_value=_session_request(),
-            )
-        return {"data": res.data, "errors": res.errors}
-
-    User.objects.filter(username="regular_1").update(is_active=False)
-    wrong_password = _envelope({"u": "staff_1", "p": "not-the-password"})
-    unknown_user = _envelope({"u": "no-such-user", "p": TEST_USER_PASSWORD})
-    inactive = _envelope({"u": "regular_1", "p": TEST_USER_PASSWORD})
-    permission_denied = _envelope(
-        {"u": "staff_1", "p": TEST_USER_PASSWORD},
-        backends=[f"{_BACKEND_MODULE}._PermissionDeniedBackend", _MODEL_BACKEND],
-    )
-    assert wrong_password == unknown_user == inactive == permission_denied
-    assert wrong_password == {
-        "data": {
-            "login": {
-                "node": None,
-                "errors": [{"field": "__all__", "messages": ["Incorrect username/password"]}],
-            },
-        },
-        "errors": None,
-    }
 
 
 # --- Django HTTP: the session stays modified so the cookie is emitted ---------

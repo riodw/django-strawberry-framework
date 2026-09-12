@@ -5,10 +5,9 @@ The ``current_user`` residue a live fakeshop request cannot drive: the
 its pre-bind ``register_subsystem_clear`` row), the injected-signature return
 typing resolving to the concrete user type, the surface-keyed
 current-user-only bind (its no-``UserType`` arm + no orphan payloads), the
-permission-gate variants (denial string; gated-anonymous ``GraphQLError`` vs
-the AllowAny ``null``), and the async lazy-user forcing inside the one
-``sync_to_async`` boundary. The live ``me`` behavior (authenticated /
-anonymous over ``/graphql/``) is earned in
+gated-anonymous ``GraphQLError`` and its exact denial string, and the async
+lazy-user forcing inside the one ``sync_to_async`` boundary. The live ``me``
+behavior (authenticated / anonymous over ``/graphql/``) is earned in
 ``examples/fakeshop/test_query/test_auth_api.py``.
 """
 
@@ -236,20 +235,6 @@ async def test_async_me_dispatch_awaits_the_native_async_body_exactly_once(_sync
     assert res.errors is None, res.errors
     assert res.data["me"] == {"username": "me_async"}
     assert len(_sync_boundary_spy) == 1
-
-
-@pytest.mark.django_db
-def test_allow_any_default_returns_null_for_anonymous_and_the_user_when_authenticated():
-    """The two axes are distinct: allowed-but-anonymous is ``null``, never an error."""
-    schema = _me_schema()
-    anonymous = schema.execute_sync(_ME_Q, context_value=_session_request())
-    assert anonymous.errors is None, anonymous.errors
-    assert anonymous.data["me"] is None
-
-    user = User.objects.create_user(username="me_probe", password="pw-9x-strong")
-    authenticated = schema.execute_sync(_ME_Q, context_value=_session_request(user))
-    assert authenticated.errors is None, authenticated.errors
-    assert authenticated.data["me"] == {"username": "me_probe"}
 
 
 @pytest.mark.django_db

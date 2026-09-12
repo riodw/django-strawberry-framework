@@ -93,6 +93,7 @@ from django_strawberry_framework import DjangoSchema, strawberry_config
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
 from django_strawberry_framework import _strawberry_patches as strawberry_patches
 from django_strawberry_framework._boundary_ordering import _BOUNDARY_MARKER
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.middleware.request_body import _package_view_instance
 from django_strawberry_framework.views import (
     _BODY_LIMIT_REASON,
@@ -108,6 +109,12 @@ from django_strawberry_framework.views import (
 # ---------------------------------------------------------------------------
 
 _TYPENAME = "{ __typename }"
+
+#: A value whose UTF-8 encoding genuinely needs bytes above 0x7F, so the
+#: multibyte row cannot pass under an ASCII-only decode. Spelled with escapes
+#: because source files here are ASCII-only; the runtime value is
+#: "cafe_uber" with an e-acute and a u-umlaut.
+_MULTIBYTE_VALUE = "caf\u00e9_\u00fcber"
 _ITEMS = "{ allItems(first: 1) { edges { node { name } } } }"
 _ME = "{ me { username } }"
 _CREATE_CATEGORY = (
@@ -250,6 +257,12 @@ async def _async_graphql_view(request, *args, **kwargs):
 _TINY_CAP = 256
 _ROOMY_CAP = 8 * 1024 * 1024
 
+#: A cap value the resolver refuses. ``0`` is the near-universal "unlimited"
+#: spelling elsewhere, and under this cap's comparison it would instead mean
+#: "reject every non-empty body" - so it is the misconfiguration a deployment is
+#: most likely to write, and the one a mount must fail loudly on.
+_INVALID_CAP = 0
+
 #: Every ``parse_json`` call the spy mount saw, newest last. The row-15 witness:
 #: a ``413`` that leaves this empty is a ``413`` raised before any parse.
 _PARSE_CALLS: list[str | bytes] = []
@@ -386,6 +399,20 @@ async def _async_capped_multipart_view(request, *args, **kwargs):
     return await view(request, *args, **kwargs)
 
 
+@_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
+async def _async_cap_misconfigured_view(request, *args, **kwargs):
+    """The async twin of ``cap-misconfigured/``: a cap value the resolver refuses.
+
+    Spelled out rather than produced by ``_capped_view`` for the same reason
+    ``_async_graphql_view`` is: the ``await`` is the difference, and the
+    misconfiguration has to be refused on the event loop too.
+    """
+    from config.schema import schema
+
+    view = AsyncDjangoGraphQLView.as_view(schema=schema, max_request_body_bytes=_INVALID_CAP)
+    return await view(request, *args, **kwargs)
+
+
 async def _async_cap_tiny_view(request, *args, **kwargs):
     """The async twin under the tiny cap, so the ``async def run`` override is proven live.
 
@@ -442,6 +469,8 @@ urlpatterns = [
     path("cap-tiny/", _capped_view(DjangoGraphQLView, _TINY_CAP)),
     path("cap-spy/", _capped_view(_ParseSpyView, _TINY_CAP)),
     path("cap-off/", _capped_view(DjangoGraphQLView, _ROOMY_CAP)),
+    path("cap-misconfigured/", _capped_view(DjangoGraphQLView, _INVALID_CAP)),
+    path("async-cap-misconfigured/", _async_cap_misconfigured_view),
     path("multipart-tiny/", _capped_view(DjangoGraphQLView, _TINY_CAP, uploads=True)),
     path("async-multipart-tiny/", _async_cap_tiny_multipart_view),
     path("async-multipart/", _async_capped_multipart_view),
@@ -1152,6 +1181,40 @@ async def test_the_async_package_view_enforces_the_same_utf8_wire_contract():
     assert control.json()["data"] == {"__typename": "Query"}
 
 
+async def test_the_async_package_view_parses_a_multibyte_utf8_body_unchanged():
+    """The contract is UTF-8, not ASCII: a multi-byte body reaches the schema intact.
+
+    The positive control the rejection rows above need, and it has to be built
+    deliberately: ``json.dumps``'s default ``ensure_ascii=True`` emits
+    ``\\u00e9`` escapes, so an ordinary body is pure ASCII and would round-trip
+    even under a decoder that only understood ASCII. This one carries a genuine
+    ``C3 A9`` on the wire - asserted before the post - and the value comes back
+    out of the response, so the bytes were neither mangled at the decode nor
+    lost at the variable coercion that reports them.
+
+    The sync colour of the same contract is
+    ``test_products_api.py::test_post_multibyte_utf8_json_body_round_trips_the_non_ascii_value``,
+    which round-trips through a stored row; this row stays DB-free like its async
+    siblings, so the echo is the coercion error's own report of the value it was
+    handed.
+    """
+    document = json.dumps(
+        {
+            "query": "query($value: Int!) { allItems(first: $value) { edges { node { id } } } }",
+            "variables": {"value": _MULTIBYTE_VALUE},
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    assert max(document) > 0x7F
+
+    with override_settings(ROOT_URLCONF=__name__):
+        response = await _post_bytes(AsyncClient(), document, path="/async-graphql/")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert _MULTIBYTE_VALUE in payload["errors"][0]["message"], payload
+
+
 # ---------------------------------------------------------------------------
 # The shared-helper colour: the ordinary path still reads as an ordinary
 # GraphQL response through ``graphql_client.py`` on the package's own view.
@@ -1548,6 +1611,57 @@ def test_a_none_setting_disables_the_package_cap_that_the_default_would_apply():
 
     assert disabled.status_code == 200
     assert disabled.json()["data"] == {"__typename": "Query"}
+
+
+# ---------------------------------------------------------------------------
+# Row 17: a cap the resolver refuses fails the mount, not one request shape
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_misconfigured_mount_fails_loud_on_every_request_including_get():
+    """Resolution runs first, so a nonsense cap cannot hide behind a bodyless request.
+
+    If the GET no-op were checked before the cap is resolved, a mount configured
+    with a value the resolver refuses would serve the IDE happily and only fail
+    once someone posted an operation - a latent misconfiguration instead of a
+    deployment-time one. Both request shapes are driven against the same mount so
+    the GET half is a statement about ordering rather than about GET.
+
+    The exception reaches the caller rather than a status code because it is a
+    ``ConfigurationError``, not an ``HTTPException``: upstream's ``dispatch``
+    translates only the latter, and ``django.test.Client`` re-raises whatever
+    escapes the handler. A production deployment sees the same refusal as a
+    ``500`` on every request to that mount.
+    """
+    seed_data(1)
+
+    with override_settings(ROOT_URLCONF=__name__):
+        client = Client()
+        with pytest.raises(ConfigurationError, match="positive int"):
+            client.get("/cap-misconfigured/")
+        with pytest.raises(ConfigurationError, match="positive int"):
+            _post_bytes(client, json.dumps({"query": _TYPENAME}), path="/cap-misconfigured/")
+
+
+async def test_the_async_mount_fails_loud_on_a_bodyless_request_too():
+    """The async colour: the shared cap resolution runs ahead of the GET no-op there too.
+
+    Both transports resolve the cap in the one mixin method, so a divergence here
+    would mean an ASGI deployment could carry a misconfigured mount that a WSGI
+    deployment refuses at the first request. DB-free, like the sibling async
+    rows: the refusal happens before anything reaches the schema.
+    """
+    with override_settings(ROOT_URLCONF=__name__):
+        client = AsyncClient()
+        with pytest.raises(ConfigurationError, match="positive int"):
+            await client.get("/async-cap-misconfigured/")
+        with pytest.raises(ConfigurationError, match="positive int"):
+            await _post_bytes(
+                client,
+                json.dumps({"query": _TYPENAME}),
+                path="/async-cap-misconfigured/",
+            )
 
 
 # ---------------------------------------------------------------------------

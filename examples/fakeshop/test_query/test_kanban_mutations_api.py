@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the kanban write surface (WS-3B).
+"""Live GraphQL HTTP tests for the kanban write surface.
 
 Exercises every kanban mutation over a real ``/graphql/`` request per the
 ``test_query/README.md`` live-first mandate: each mutation gets a happy path plus a

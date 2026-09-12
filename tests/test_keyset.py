@@ -16,7 +16,6 @@ import base64
 import pytest
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
-from django.test import override_settings
 from graphql import GraphQLError
 from strawberry.relay.utils import from_base64, to_base64
 
@@ -332,36 +331,6 @@ def test_decode_rejects_unparsable_value_shape():
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             _encrypted_payload_cursor({"o": _fingerprint(), "v": ["not-an-int", "2"]}),
-            _issue_columns(),
-            fingerprint=_fingerprint(),
-            argument="after",
-        )
-
-
-@pytest.mark.django_db
-def test_decode_honors_secret_key_fallbacks_rotation():
-    """Key rotation keeps live cursors valid: old-key cursors verify via fallbacks."""
-    from django.conf import settings as django_settings
-
-    periodical = Periodical.objects.create(name="P")
-    issue = Issue.objects.create(periodical=periodical, number=1, title="one")
-    original_key = django_settings.SECRET_KEY
-    cursor = _mint(issue)
-    with override_settings(SECRET_KEY="rotated-new-key", SECRET_KEY_FALLBACKS=[original_key]):
-        decoded = decode_keyset_cursor(
-            cursor,
-            _issue_columns(),
-            fingerprint=_fingerprint(),
-            argument="after",
-        )
-        assert decoded.values[0] == 1
-    # Rotation WITHOUT the fallback rejects the old cursor (tamper-equivalent).
-    with (
-        override_settings(SECRET_KEY="rotated-new-key", SECRET_KEY_FALLBACKS=[]),
-        pytest.raises(GraphQLError, match="invalid cursor"),
-    ):
-        decode_keyset_cursor(
-            cursor,
             _issue_columns(),
             fingerprint=_fingerprint(),
             argument="after",

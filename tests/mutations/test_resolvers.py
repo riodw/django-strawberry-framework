@@ -7,8 +7,8 @@ Mutation`` over a finalized schema (the live products write surface and the
 
 - the realistic products ``Item`` / ``Category`` (FK + ``unique_item_per_category``)
   cover the validation-envelope, ``"__all__"`` sentinel, partial-constraint,
-  wrong-type ``GlobalID``, hidden-row, re-fetch-skips-visibility, and the
-  sync/async/transaction cases - all over real DB tables;
+  unresolvable-``GlobalID``, and the sync/async/transaction cases - all over real
+  DB tables;
 - the library ``Book`` / ``Genre`` / ``Shelf`` (a real M2M) cover the M2M
   replace / clear / omit, which products cannot (no M2M model).
 
@@ -120,15 +120,8 @@ def _build_item_schema(
     category_get_queryset=None,
     input_cls=None,
     partial_input_cls=None,
-    with_entries_connection=False,
 ):
     """Declare Item/Category primaries + create/update/delete mutations; return (schema, types).
-
-    ``with_entries_connection`` adds an ``Entry`` primary type and selects the
-    reverse-FK ``entries`` relation on the ``Item`` primary, so phase 2.5
-    synthesizes an ``entriesConnection`` sibling (the default
-    ``"connection"`` relation shape) - the connection-child half of the
-    delete-snapshot guarantee needs a connection on the payload's node type.
 
     ``item_get_queryset`` injects a visibility hook on the ``Item`` primary type;
     ``category_get_queryset`` does the same on the ``Category`` primary type so the FK
@@ -151,25 +144,6 @@ def _build_item_schema(
     CategoryT = type("CategoryT", (DjangoType, relay.Node), category_body)
 
     item_fields = ("id", "name", "category")
-    if with_entries_connection:
-        type(
-            "EntryT",
-            (DjangoType, relay.Node),
-            {
-                "Meta": type(
-                    "Meta",
-                    (),
-                    {"model": product_models.Entry, "fields": ("id", "value"), "primary": True},
-                ),
-            },
-        )
-        item_fields = (
-            "id",
-            "name",
-            "category",
-            "entries",
-        )
-
     item_meta_attrs = {"model": product_models.Item, "fields": item_fields, "primary": True}
     item_body: dict = {"Meta": type("Meta", (), item_meta_attrs)}
     if item_get_queryset is not None:
@@ -237,35 +211,10 @@ _DELETE = (
     "mutation($id: ID!){ deleteItem(id:$id){ "
     "node{ id name category{ name } } errors{ field messages } } }"
 )
-# The connection-child delete selection (Decision 8 step 6 / the delete-snapshot
-# edge case): the payload's node selects a synthesized relation CONNECTION, not a
-# plain forward relation, so the snapshot must materialize the prefetch too.
-_DELETE_WITH_CONNECTION = (
-    "mutation($id: ID!){ deleteItem(id:$id){ "
-    "node{ id name entriesConnection{ edges{ node{ value } } } } "
-    "errors{ field messages } } }"
-)
 
 
 def _item_gid(item_type: type, pk) -> str:
     return global_id_for(item_type, pk)
-
-
-@pytest.mark.django_db
-def test_create_happy_path():
-    """A create returns the object in the ``node`` slot, empty ``errors``, and writes the row."""
-    schema, (CategoryT, _ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "Widget", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"]["name"] == "Widget"
-    assert payload["node"]["category"]["name"] == cat.name
-    assert payload["errors"] == []
-    assert product_models.Item.objects.filter(name="Widget", category=cat).exists()
 
 
 @pytest.mark.django_db
@@ -286,23 +235,6 @@ def test_update_happy_path_partial_leaves_unprovided_unchanged():
 
 
 @pytest.mark.django_db
-def test_delete_happy_path_returns_snapshot_and_removes_row():
-    """A delete returns the pre-deletion snapshot (id preserved) in the slot; the row is gone."""
-    schema, (_CategoryT, ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    item = product_models.Item.objects.create(name="Doomed", category=cat)
-    res = schema.execute_sync(_DELETE, variable_values={"id": _item_gid(ItemT, item.pk)})
-    assert res.errors is None, res.errors
-    node = res.data["deleteItem"]["node"]
-    assert node["name"] == "Doomed"
-    # The deleted node id is preserved for cache eviction: it decodes
-    # to the ORIGINAL pk even though the row is gone. The deletion runs against the
-    # located instance, so Django's delete()-nulls-pk never touches this snapshot.
-    assert relay.GlobalID.from_id(node["id"]).node_id == str(item.pk)
-    assert not product_models.Item.objects.filter(pk=item.pk).exists()
-
-
-@pytest.mark.django_db
 def test_delete_snapshot_materializes_relation_before_delete():
     """The delete snapshot carries the selected relation, loaded before ``delete()``."""
     schema, (_CategoryT, ItemT) = _build_item_schema()
@@ -313,50 +245,6 @@ def test_delete_snapshot_materializes_relation_before_delete():
     # The related ``category`` is accessible on the detached snapshot after the row
     # (and its FK source) is deleted - it was loaded before delete().
     assert res.data["deleteItem"]["node"]["category"]["name"] == cat.name
-
-
-@pytest.mark.django_db
-def test_delete_snapshot_materializes_connection_child_before_delete():
-    """The delete snapshot carries a selected relation CONNECTION's children, loaded before delete.
-
-    The connection-child half of Decision 8 step 6 (the nested-relation half is
-    the row above). ``entriesConnection`` is a synthesized reverse-FK connection
-    on the payload's node type, so materializing it means populating
-    ``_prefetched_objects_cache`` on the located instance BEFORE ``delete()``.
-
-    Distinguishing by construction: ``Entry.item`` is ``on_delete=CASCADE``, so
-    the children are gone from the DB by the time Strawberry resolves the
-    connection. A snapshot that had not force-loaded the prefetch would resolve
-    the connection lazily against the manager and return ZERO edges - so the
-    non-empty edge set can only come from the cache populated pre-delete, and the
-    row fails if the connection-child branch stops materializing.
-    """
-    schema, (_CategoryT, ItemT) = _build_item_schema(with_entries_connection=True)
-    cat = product_models.Category.objects.create(name=_category_name())
-    prop = product_models.Property.objects.create(name="Prop-A", category=cat)
-    other_prop = product_models.Property.objects.create(name="Prop-B", category=cat)
-    item = product_models.Item.objects.create(name="Doomed", category=cat)
-    entry_pks = [
-        product_models.Entry.objects.create(value="first", item=item, property=prop).pk,
-        product_models.Entry.objects.create(value="second", item=item, property=other_prop).pk,
-    ]
-
-    res = schema.execute_sync(
-        _DELETE_WITH_CONNECTION,
-        variable_values={"id": _item_gid(ItemT, item.pk)},
-    )
-
-    assert res.errors is None, res.errors
-    node = res.data["deleteItem"]["node"]
-    assert node["name"] == "Doomed"
-    assert [edge["node"]["value"] for edge in node["entriesConnection"]["edges"]] == [
-        "first",
-        "second",
-    ]
-    # Both the row and its cascaded children are gone: the edges above came from
-    # the pre-delete snapshot, not from a post-delete read.
-    assert not product_models.Item.objects.filter(pk=item.pk).exists()
-    assert not product_models.Entry.objects.filter(pk__in=entry_pks).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -521,24 +409,6 @@ def test_full_clean_validation_error_yields_null_object_envelope():
 
 
 @pytest.mark.django_db
-def test_unique_constraint_caught_by_validate_constraints_keys_all_sentinel():
-    """A duplicate ``(category, name)`` is a ``ValidationError`` (not IntegrityError), keyed ``"__all__"``."""
-    schema, (CategoryT, _ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    product_models.Item.objects.create(name="Dup", category=cat)
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "Dup", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert NON_FIELD_ERROR_KEY in [e["field"] for e in payload["errors"]]
-    # Only one row persists - the duplicate was caught before save().
-    assert product_models.Item.objects.filter(name="Dup", category=cat).count() == 1
-
-
-@pytest.mark.django_db
 def test_partial_update_constraint_collision_keeps_unprovided_co_member(monkeypatch):
     """Updating only ``name`` to a taken value under the same category fails."""
     schema, (_CategoryT, ItemT) = _build_item_schema()
@@ -629,25 +499,6 @@ def test_integrity_error_race_fallback_via_mocked_save():
 
 
 @pytest.mark.django_db
-def test_wrong_type_globalid_yields_field_error_no_cross_model_lookup():
-    """An ``Item`` GlobalID passed to ``categoryId`` -> ``FieldError`` on ``categoryId``."""
-    schema, (_CategoryT, ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    item = product_models.Item.objects.create(name="Existing", category=cat)
-    # An Item GlobalID with the SAME numeric pk as a real Category would silently
-    # succeed under a naive pk strip; the type check must reject it.
-    wrong_gid = global_id_for(ItemT, item.pk)
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "New", "categoryId": wrong_gid}},
-    )
-    assert_mutation_field_error(res, "createItem", "categoryId")
-    # No cross-model coercion happened: no second Item was created under the
-    # (collided) Category pk path.
-    assert product_models.Item.objects.filter(name="New").count() == 0
-
-
-@pytest.mark.django_db
 def test_relation_unresolvable_type_global_id_yields_field_error():
     """A well-formed relation ``GlobalID`` naming an unregistered type -> ``FieldError``.
 
@@ -664,46 +515,6 @@ def test_relation_unresolvable_type_global_id_yields_field_error():
         _CREATE,
         variable_values={"d": {"name": "X", "categoryId": bogus}},
     )
-    assert_mutation_field_error(res, "createItem", "categoryId")
-    assert product_models.Item.objects.filter(name="X").count() == 0
-
-
-@pytest.mark.django_db
-def test_update_uncoercible_pk_in_wellformed_id_is_not_found_no_crash():
-    """A well-formed ``id:`` whose ``node_id`` is not a valid pk literal -> not-found, no crash.
-
-    ``decode_global_id`` validates payload SHAPE only, so a right-type ``ItemT``
-    GlobalID can still carry ``node_id="abc"`` for an integer pk. Unguarded, that
-    bare ``"abc"`` reached ``.get(pk="abc")`` and Django raised a top-level
-    ``ValueError`` (``"Field 'id' expected a number..."``) leaking the pk column
-    type. Now it is coerced through the pk field and treated as not-found - a
-    ``FieldError`` on ``id``, exactly like a missing/hidden row - never a top-level
-    error.
-    """
-    schema, (_CategoryT, ItemT) = _build_item_schema()
-    bad_id = global_id_for(ItemT, "abc")  # well-formed ItemT id, non-numeric node_id
-    res = schema.execute_sync(_UPDATE, variable_values={"id": bad_id, "d": {"name": "X"}})
-    # NOT a top-level GraphQLError - an in-band not-found FieldError on ``id``.
-    assert_mutation_field_error(res, "updateItem", "id")
-
-
-@pytest.mark.django_db
-def test_create_relation_uncoercible_pk_is_field_error_no_crash():
-    """A right-type relation ``GlobalID`` with an uncoercible ``node_id`` -> ``FieldError``.
-
-    A ``CategoryT`` GlobalID carrying ``node_id="abc"`` passes the relation type
-    check (it IS a Category id) but ``"abc"`` is not a valid integer pk. Unguarded it
-    reached ``filter(pk__in=["abc"])`` and raised a top-level ``ValueError``; now it
-    is coerced and mapped to the uniform relation ``FieldError`` on ``categoryId``
-    (identifies no row - "not found"), never a crash. No row is written.
-    """
-    schema, (CategoryT, _ItemT) = _build_item_schema()
-    bad_cat = global_id_for(CategoryT, "abc")
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "X", "categoryId": bad_cat}},
-    )
-    # NOT a top-level GraphQLError - an in-band relation FieldError.
     assert_mutation_field_error(res, "createItem", "categoryId")
     assert product_models.Item.objects.filter(name="X").count() == 0
 
@@ -745,89 +556,6 @@ def test_globalid_relation_override_flows_through_visibility_contract():
     )
     assert_mutation_field_error(res, "createItem", "categoryId")
     assert product_models.Item.objects.filter(name="New").count() == 0
-
-
-@pytest.mark.django_db
-def test_hidden_row_update_is_not_found_no_existence_leak():
-    """An update of a row the target ``get_queryset`` hides -> not-found ``FieldError`` on ``id``."""
-
-    @classmethod
-    def _hide_private(cls, queryset, info, **kwargs):
-        return queryset.filter(is_private=False)
-
-    schema, (_CategoryT, ItemT) = _build_item_schema(item_get_queryset=_hide_private)
-    cat = product_models.Category.objects.create(name=_category_name())
-    hidden = product_models.Item.objects.create(name="Secret", category=cat, is_private=True)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": _item_gid(ItemT, hidden.pk), "d": {"name": "Leak"}},
-    )
-    assert_mutation_field_error(res, "updateItem", "id")
-    # The hidden row was not mutated.
-    hidden.refresh_from_db()
-    assert hidden.name == "Secret"
-
-
-@pytest.mark.django_db
-def test_refetch_skips_visibility_filter_after_authorized_write():
-    """A create of an ``is_private``-shaped row still returns its object.
-
-    The post-write re-fetch is by pk WITHOUT the visibility filter, so an
-    authorized write of a row the ``get_queryset`` would hide still round-trips the
-    actor's own write (non-null payload object).
-    """
-
-    @classmethod
-    def _hide_private(cls, queryset, info, **kwargs):
-        return queryset.filter(is_private=False)
-
-    # Expose ``is_private`` on the input so the create can set it.
-    class CategoryT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Category
-            fields = ("id", "name")
-            primary = True
-
-    ItemT = type(
-        "ItemT",
-        (DjangoType, relay.Node),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {"model": product_models.Item, "fields": ("id", "name"), "primary": True},
-            ),
-            "get_queryset": _hide_private,
-        },
-    )
-
-    class CreateItem(DjangoMutation):
-        class Meta:
-            model = product_models.Item
-            operation = "create"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        create_item = DjangoMutationField(CreateItem)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    cat = product_models.Category.objects.create(name=_category_name())
-    res = schema.execute_sync(
-        "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{ field } } }",
-        variable_values={
-            "d": {
-                "name": "Hidden",
-                "categoryId": global_id_for(CategoryT, cat.pk),
-                "isPrivate": True,
-            },
-        },
-    )
-    assert res.errors is None, res.errors
-    # Even though get_queryset(...) would hide is_private=True rows, the by-pk
-    # re-fetch returns the just-written object.
-    assert res.data["createItem"]["node"]["name"] == "Hidden"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2993,16 +2721,6 @@ def test_write_flavors_share_resolver_entry_factory():
     assert resolvers.resolve_mutation_sync.__name__ == "resolve_sync"
     assert resolve_form_sync.__name__ == "resolve_sync"
     assert resolve_serializer_sync.__name__ == "resolve_sync"
-
-
-def test_integrity_error_field_errors_is_the_shared_constraint_envelope():
-    """The IntegrityError leaf lives in utils so model and serializer saves cannot drift."""
-    from django_strawberry_framework.utils.errors import integrity_error_field_errors
-
-    (error,) = integrity_error_field_errors()
-    assert error.field == NON_FIELD_ERROR_KEY
-    assert error.messages == ["A database constraint was violated."]
-    assert error.codes == ["constraint"]
 
 
 @pytest.mark.django_db

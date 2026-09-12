@@ -15,9 +15,21 @@ from uuid import UUID
 
 import pytest
 from apps.scalars import models
+from django.conf import settings
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql_client import post_graphql as _post_graphql
+
+# The production error policy masks any error carrying an originating
+# exception, and graphql-core reports a custom scalar's literal rejection that
+# way. A row asserting on the rejection REASON opens the policy's pass-through
+# gate with ``DEBUG=True``, dropping the toolbar middleware in the same
+# override because fakeshop wires debug-toolbar behind ``DEBUG``.
+_ERROR_POLICY_PASS_THROUGH = {
+    "DEBUG": True,
+    "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+}
 
 # Sentinel values chosen so each wire format is unambiguous in the response.
 # BigInt boundary values intentionally exceed ``2**53 - 1`` so the
@@ -357,6 +369,73 @@ def test_filter_specimens_by_bigint_range_out_of_range_bound_no_overflow():
     # An explicitly empty range supplies no bounds: keep django-filter's skip
     # (no constraint), returning every row rather than matching nothing.
     assert _labels("signedBig: { range: [] }") == ["keep", "other"]
+
+
+@pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
+@pytest.mark.parametrize("field", ["signedBig", "unsignedBig"], ids=["signed", "unsigned"])
+@pytest.mark.parametrize(
+    ("literal", "reason"),
+    [("true", "BigInt does not accept boolean values"), ("1.9", "BigInt cannot parse float")],
+    ids=["bool", "float"],
+)
+def test_filter_specimens_by_bigint_exact_rejects_non_integer_literal(field, literal, reason):
+    """A ``bool`` / ``float`` literal in a ``BigInt`` filter argument is refused outright.
+
+    Both halves of the converter table entry take their literal through
+    ``scalars.py::_parse_bigint``, which rejects ``bool`` (an ``int`` subclass
+    that would otherwise sneak past the ``int`` check) and ``float`` (which
+    ``int()`` would silently truncate). The refusal happens while the document
+    is validated, before any resolver runs, so ``data`` is ``null`` and no row
+    is served - a coerced ``1`` selecting the seeded row would be the failure.
+
+    graphql-core reports the scalar's own ``ValueError`` as the validation
+    error's original exception, which the production error policy therefore
+    masks; the ``DEBUG`` pass-through is what makes the rejection reason
+    readable here. Under the production policy the same document is still
+    refused, carrying the policy message and a correlation id instead.
+    """
+    _seed_specimen(label="present", signed_big=7, unsigned_big=7)
+
+    response = _post_graphql(
+        f"query {{ allScalarSpecimens(filter: {{ {field}: {{ exact: {literal} }} }}) "
+        "{ label } }",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body.get("errors"), body
+    assert body["data"] is None, body
+    assert reason in body["errors"][0]["message"], body
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field", ["signedBig", "unsignedBig"], ids=["signed", "unsigned"])
+def test_filter_specimens_by_bigint_exact_accepts_decimal_string_literal(field):
+    """The same filter shape accepts a decimal-string literal past the JS safe integer.
+
+    The acceptance half of the rejection row above, on the identical
+    ``exact:`` argument: ``9007199254740993`` (``2**53 + 1``) cannot survive a
+    JSON number, so the decimal string is the supported spelling and it must
+    select exactly the row holding that value.
+    """
+    past_safe_integer = 9007199254740993  # 2**53 + 1
+    _seed_specimen(
+        label="keep",
+        signed_big=past_safe_integer,
+        unsigned_big=past_safe_integer,
+    )
+    _seed_specimen(label="other", signed_big=7, unsigned_big=7)
+
+    response = _post_graphql(
+        f'query {{ allScalarSpecimens(filter: {{ {field}: {{ exact: "{past_safe_integer}" }} }}) '
+        "{ label } }",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    assert body["data"]["allScalarSpecimens"] == [{"label": "keep"}]
 
 
 @pytest.mark.django_db

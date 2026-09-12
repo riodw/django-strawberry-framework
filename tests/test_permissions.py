@@ -37,13 +37,14 @@ Coverage homes for the cascade contract (spec-034):
   * gate-composition pins - here, with connection / node / list pins in
     ``tests/test_connection.py`` / ``test_relay_node_field.py`` /
     ``test_list_field.py``.
-  * live HTTP coverage - ``examples/fakeshop/test_query/test_products_api.py``.
+  * live HTTP coverage - ``examples/fakeshop/test_query/test_products_api.py``
+    (nested traversal narrowing) and
+    ``examples/fakeshop/test_query/test_products_visibility_api.py`` (the
+    cascading target hook's effect on the optimizer's relation plan).
 
 The mutation update/delete lookup-scoping pin (spec-036) is NOT homed here; a
 hidden row must read as not-found with no existence leak, and that is pinned at
-``tests/mutations/test_resolvers.py::test_hidden_row_update_is_not_found_no_existence_leak``
-and
-``tests/mutations/test_permissions.py::test_hidden_row_is_not_found_before_auth_signal_no_existence_leak``.
+``test_products_api.py::test_update_item_anonymous_on_hidden_private_row_is_not_found_before_any_auth_signal``.
 """
 
 import contextlib
@@ -2413,56 +2414,6 @@ def test_cascaded_traversal_adds_zero_queries(django_assert_num_queries):
 
 
 @pytest.mark.django_db
-def test_fk_id_elision_falls_back_for_cascading_target():
-    """A cascading target never FK-id-elides - re-affirms the shipped safety rule.
-
-    FK-id elision (``category { id }`` round-tripping the source FK column without
-    a JOIN) is disabled whenever the target hook must run
-    (``walker.py::_plan_select_relation`` gates on
-    ``not _target_has_custom_get_queryset(target_type)``). A cascading hook is a
-    custom hook, so the relation falls back to a ``Prefetch`` instead of eliding -
-    the inverse of ``test_optimizer_elides_forward_fk_id_only_selection_plan_shape``.
-    This re-affirms the shipped safety rule against the new cascade hook shape
-    (spec-034 Decision 12 / Edge case "FK-id elision interaction").
-    """
-    from django.db.models import Prefetch
-
-    def _exclude_private(cls, qs, info):
-        return apply_cascade_permissions(cls, qs.filter(is_private=False), info)
-
-    category_type = _make_type(
-        "ElCategoryType",
-        Category,
-        get_queryset=_exclude_private,
-        fields=("id", "name"),
-    )
-    item_type = _make_type("ElItemType", Item, fields=("id", "name", "category"))
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[item_type]:  # type: ignore[valid-type]
-            return Item.objects.all()
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    ctx = SimpleNamespace(user=None)
-
-    # ``category { id }`` is the id-only selection that WOULD elide for a plain FK.
-    result = schema.execute_sync("{ allItems { name category { id } } }", context_value=ctx)
-    assert result.errors is None
-    plan = ctx.dst_optimizer_plan
-    # No elision: the cascading target forces a ``Prefetch`` fallback instead.
-    assert plan.fk_id_elisions == ()
-    assert plan.select_related == ()
-    assert len(plan.prefetch_related) == 1
-    assert isinstance(plan.prefetch_related[0], Prefetch)
-    assert plan.prefetch_related[0].prefetch_to == "category"
-    assert category_type.has_custom_get_queryset() is True
-
-
-@pytest.mark.django_db
 def test_strictness_raise_silent_across_cascaded_shape():
     """The cascade composes SQL (never lazy-loads), so strictness ``"raise"`` stays silent.
 
@@ -2731,51 +2682,3 @@ def test_gate_denial_no_existence_leak():
     # Byte-identical denial: same message AND same extensions, hidden-present or not.
     assert str(with_hidden_exc.value) == str(without_hidden_exc.value)
     assert with_hidden_exc.value.extensions == without_hidden_exc.value.extensions
-
-
-@pytest.mark.django_db
-def test_nested_relation_traversal_respects_target_cascade():
-    """A nested relation's target hook cascades via the ``Prefetch`` downgrade (spec-034 Decision 12).
-
-    The connection-DoD's "every edge's nested relations" half at the traversal-result
-    level. The transitivity is exercised over a **to-many** nested relation
-    (``Category -> items``) whose target ``ItemType`` cascades (``_exclude_private``):
-    the optimizer downgrades the relation to a ``Prefetch`` baked with the live
-    ``info``, so each category's nested ``items`` LIST drops the target's hidden rows -
-    a hidden item does not surface through the nested traversal. (A forward
-    *non-nullable* FK to a hidden target is a different shape: there the PARENT row
-    drops via its own cascade rather than the FK nulling - a non-null FK cannot
-    resolve to ``null``. The to-many list is the clean traversal-narrowing shape and
-    matches the DoD's "nested relations" wording.)
-
-    Complementary to the plan-level downgrade pin above (plan shape + child SQL carries
-    the request user); this asserts the narrowed nested ROWS. The query selects exactly
-    the nested relation so it can only take the planned-Prefetch path.
-    """
-    _make_type("NtItemType", Item, get_queryset=_exclude_private, fields=("id", "name"))
-    category_type = _make_type("NtCategoryType", Category, fields=("id", "name", "items"))
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[category_type]:  # type: ignore[valid-type]
-            return Category.objects.order_by("pk")
-
-    finalize_django_types()
-
-    public_cat = Category.objects.create(name="public_cat", is_private=False)
-    Item.objects.create(name="visible_item", category=public_cat, is_private=False)
-    Item.objects.create(name="hidden_item", category=public_cat, is_private=True)
-
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    result = schema.execute_sync(
-        "{ allCategories { name items { name } } }",
-        context_value=SimpleNamespace(user=None),
-    )
-    assert result.errors is None
-    # The category's nested ``items`` list narrows to the target's visible rows; the
-    # hidden item never surfaces through the traversal.
-    assert result.data["allCategories"] == [
-        {"name": "public_cat", "items": [{"name": "visible_item"}]},
-    ]

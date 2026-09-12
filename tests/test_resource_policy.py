@@ -1316,19 +1316,6 @@ def test_a_non_string_query_is_declined_not_scanned(hostile):
     scan_document_text(DEFAULT_RESOURCE_POLICY, hostile)
 
 
-def test_a_malformed_document_is_left_to_the_real_parser():
-    """Swallowing the lexer error keeps the accurate syntax diagnostic."""
-    scan_document_text(DEFAULT_RESOURCE_POLICY, "{ foo(bar: 'single quotes') }")
-
-
-def test_a_document_that_is_both_oversized_and_malformed_is_rejected_on_size():
-    """Size is charged per token, so it fires before the lexer reaches the garbage."""
-    policy = ResourcePolicy(max_document_tokens=3)
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        scan_document_text(policy, "{ a b c d e 'garbage' }")
-    assert caught.value.bound == "max_document_tokens"
-
-
 def test_structural_delimiter_pairs_derivation():
     """_OPEN_TOKEN_KINDS and _CLOSE_TOKEN_KINDS derive from _STRUCTURAL_DELIMITER_PAIRS."""
     assert _STRUCTURAL_DELIMITER_PAIRS == (

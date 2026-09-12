@@ -4,11 +4,11 @@ This file is the detailed layout reference. It exists to preserve the package/te
 
 For install, local development, testing, and the canonical documentation map, start from [`../README.md`][readme].
 
-The upstream trees are captured for reference while shaping `django-strawberry-framework`'s own subpackage layout. Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability).
+The upstream trees are captured for reference while shaping `django-strawberry-framework`'s own subpackage layout. Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability). These three snapshots are hand-captured from the local checkouts named below and are NOT verified by `scripts/build_tree_md.py --check`, which regenerates only the sections from the current-layout heading down; the version recorded beside each source is their provenance.
 
 ## graphene_django
 
-Source: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django`
+Source: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django` (graphene-django 3.2.3, from the installed `dist-info`)
 
 ```bash
 graphene_django/
@@ -77,7 +77,7 @@ graphene_django/
 
 ## strawberry_django
 
-Source: `/Users/riordenweber/projects/strawberry-django-main/strawberry_django`
+Source: `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` (strawberry-django 0.82.1 per its `pyproject.toml`; a source download, not a git checkout)
 
 ```bash
 strawberry_django/
@@ -159,7 +159,7 @@ strawberry_django/
 
 ## django_graphene_filters
 
-Source: `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`
+Source: `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters` (django-graphene-filters 1.0.0, git `9ab2662`)
 
 ```bash
 django_graphene_filters/
@@ -185,7 +185,9 @@ django_graphene_filters/
 └── utils.py
 ```
 
-## django_strawberry_framework (current on-disk layout)
+## django_strawberry_framework (current source layout)
+
+A logical source layout rather than a literal directory listing: every `__init__.py` file (including the package root's, which owns the public exports) and every `__pycache__/`, `migrations/` directory are omitted from the trees below, and each rendered directory is summarized from its own `__init__.py` docstring.
 
 Source: `django_strawberry_framework/`
 
@@ -311,7 +313,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 
 ## django_strawberry_framework (target package layout)
 
-The current package tree merged with every not-yet-existing path linked from a WIP/TODO card in [`KANBAN.md`](../KANBAN.md). Each planned entry names the card that introduces it; backlog cards and DONE-card historical paths are ignored.
+The current package tree merged with every not-yet-existing path linked from a WIP/TODO card. Planned paths are `TrackedPath` rows in the board database (`examples/fakeshop/db.sqlite3`), which is the canonical source; [`KANBAN.md`][kanban] is another rendering of the same rows, so a correction belongs in the database, not in either document. Each planned entry names the card that introduces it; backlog cards and DONE-card historical paths are ignored.
 
 Source: `django_strawberry_framework/ (+ planned card paths)`
 
@@ -348,7 +350,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
 │   ├── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
 │   ├── error_policy.py           # ``DjangoErrorPolicyExtension`` - the response-side enforcement of ``ErrorPolicy``.
-│   ├── graph.py                  # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning
+│   ├── graph.py                  # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
 │   └── resource_policy.py        # ``DjangoResourcePolicyExtension`` - the request-side enforcement of ``ResourcePolicy``.
 ├── fieldset/    # planned by TODO-BETA-059-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
@@ -361,7 +363,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── inputs.py                 # Form-derived ``@strawberry.input`` generation substrate (spec-038).
 │   ├── resolvers.py              # The sync + async form-mutation resolver pipeline (spec-038).
 │   └── sets.py                   # The ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases + ``Meta`` validation + bind.
-├── graph/    # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning
+├── graph/    # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
 ├── management/    # Django management namespace for the framework's ``manage.py`` commands.
 │   └── commands/    # Implementations of the framework's ``manage.py`` commands (``export_schema``, ``inspect_django_type``).
 │       ├── _imports.py           # Import helpers that translate bad management-command paths to ``CommandError``.
@@ -430,7 +432,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── policies.py               # Shared schema-construction policy normalization.
-    ├── predicates.py             # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning
+    ├── predicates.py             # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.
@@ -623,14 +625,12 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │       ├── test_generic_connection.py  # In-process windowed GenericRelation connection acceptance tests.
 │       ├── test_generic_connection_sharded.py  # Sharded (``FAKESHOP_SHARDED=1``) GenericRelation connection alias-late morph test.
 │       ├── test_models.py        # Library model tests for string rendering, relation traversal, and per-shelf title uniqueness.
-│       └── test_schema.py        # Library schema tests for project-schema exposure and declaration-order invariants without HTTP.
+│       └── test_schema.py        # Library schema test for the declaration-order invariant the app deliberately carries.
 ├── products/
-│   └── tests/    # Non-live app tests for products admin, commands, models, schema, and services.
-│       ├── conftest.py           # Shared fixtures for the in-process ``apps.products`` schema tests.
+│   └── tests/    # Non-live app tests for products admin, commands, models, and services.
 │       ├── test_admin.py         # Products admin tests for changelist query-param branches.
 │       ├── test_commands.py      # Products command tests for catalog/user lifecycle and shard seeding.
 │       ├── test_models.py        # Products model tests for example-domain __str__ implementations.
-│       ├── test_schema.py        # Products schema tests for in-process GraphQL execution without HTTP.
 │       └── test_services.py      # Products service tests for Faker discovery, catalog lifecycle, and user lifecycle.
 └── scalars/
     └── tests/    # Non-live app tests for scalar substrate models.
@@ -653,21 +653,21 @@ Source: `examples/fakeshop/test_query/`
 
 ```text
 examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consumer-visible API.
-├── README.md                     # Guide to the fakeshop live GraphQL HTTP acceptance-test tier and its isolation contract.
+├── README.md                     # The manual for writing tests in this repository: where a test goes, what it must prove, how a shortcut test becomes a real one, and what the fakeshop live tier owes every package line it can reach.
 ├── conftest.py                   # Shared fixtures for the fakeshop acceptance (live ``/graphql/``) suites.
 ├── test_auth_api.py              # Live ``/graphql/`` auth API acceptance tests (spec-040).
 ├── test_client_api.py            # Live GraphQL HTTP acceptance tests for the spec-043 test-client family.
-├── test_connection_pagination_api.py  # Live /graphql pagination error containment for connections.
-├── test_debug_extension_api.py   # Live GraphQL HTTP tests for ``DjangoDebugExtension`` (spec-044 Test plan 1-7).
+├── test_connection_pagination_api.py  # Live /graphql pagination error containment and ``totalCount`` gating for connections.
+├── test_debug_extension_api.py   # Live GraphQL HTTP tests for the ``DjangoDebugExtension`` request-visible contract.
 ├── test_debug_toolbar_api.py     # Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.
 ├── test_error_policy_api.py      # Live ``/graphql/`` production-error-policy acceptance tests (spec-048).
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
-├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface (WS-3B).
+├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface.
 ├── test_keyset_api.py            # Live GraphQL HTTP tests for keyset (``Meta.cursor_field``) cursor pagination.
 ├── test_library_api.py           # Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface.
-├── test_list_field_api.py        # Live sync-HTTP contract for ``DjangoListField`` arguments (spec-050 Slice 4).
-├── test_list_field_async_api.py  # Live async-HTTP contract for ``DjangoListField`` (spec-050 Slice 4).
+├── test_list_field_api.py        # Live sync-HTTP contract for ``DjangoListField`` arguments.
+├── test_list_field_async_api.py  # Live async-HTTP contract for ``DjangoListField`` arguments.
 ├── test_multi_db.py              # Live GraphQL HTTP tests for sharded resolver isolation and multi-database debug capture.
 ├── test_mutation_atomicity.py    # Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.
@@ -677,6 +677,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_resource_policy_api.py   # Live ``/graphql/`` execution-resource-policy acceptance tests (spec-047).
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.
+├── test_schema_composition_api.py  # Live ``/graphql/`` proof that fakeshop's composed project schema publishes every app's surface.
 ├── test_single_parent_fastpath_api.py  # Live GraphQL HTTP tests for the single-parent windowed-prefetch fast path.
 ├── test_transport_api.py         # Live ``/graphql/`` transport-boundary acceptance tests (spec-046).
 └── test_uploads_api.py           # Live GraphQL HTTP tests for the spec-037 file/image wire contract.
@@ -727,6 +728,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views (spec-046).
+├── aggregates/    # planned by TODO-BETA-062-0.1.3 - Mirrored package tests for the aggregates subsystem.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
 │   ├── conftest.py               # Shared fixtures for the auth test modules.
@@ -738,13 +740,14 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_init.py              # Package init tests for version metadata and public exports.
 ├── extensions/    # Tests for package Strawberry schema extensions.
 │   └── test_debug.py             # DjangoDebugExtension tests for payload serialization, SQL capture, errors, and execution isolation.
+├── fieldset/    # planned by TODO-BETA-059-0.1.1 - Mirrored package tests for the fieldset subsystem.
 ├── filters/    # Package tests for the FilterSet subsystem.
 │   ├── test_base.py              # Filter primitive tests for typed, list, range, global-ID, and related filters.
 │   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
-│   ├── test_pg_full_text.py      # planned by TODO-BETA-061-0.1.2 - Postgres full-text search filter primitives
-│   ├── test_search_fields.py     # planned by TODO-BETA-060-0.1.2 - `Meta.search_fields` support
+│   ├── test_pg_full_text.py      # planned by TODO-BETA-061-0.1.2 - Postgres full-text search filter primitives.
+│   ├── test_search_fields.py     # planned by TODO-BETA-060-0.1.2 - `Meta.search_fields` support.
 │   ├── test_sets.py              # FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
 │   └── fixtures/    # Fixture modules for filter lazy resolution and cyclic input-generation tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy resolution and self-referential cycle handling.
@@ -753,7 +756,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_inputs.py            # Form-derived input tests for the generated ``<FormClass>Input`` / ``PartialInput`` (spec-038).
 │   ├── test_resolvers.py         # Form-mutation resolver-pipeline tests (spec-038).
 │   └── test_sets.py              # ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038).
-├── graph/    # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning
+├── graph/    # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
 ├── management/    # Package tests for django-strawberry-framework management commands.
 │   ├── test_export_schema.py     # Management command tests for export_schema selector errors, schema validation, and CLI contracts.
 │   ├── test_imports.py           # Tests for management-command import error translation and path validation.
@@ -847,7 +850,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 Source: `examples/fakeshop/`
 
 ```text
-examples/fakeshop/    # A Django + Strawberry GraphQL example project that exercises django-strawberry-framework end-to-end.
+examples/fakeshop/    # A Django project that exercises the shipped surface of django-strawberry-framework end to end, and the tutorial that walks through it.
 ├── graphql_client.py             # Shared live-``/graphql/`` HTTP helpers for the fakeshop acceptance suites.
 ├── manage.py                     # Django command-line entry point for the fakeshop example project.
 ├── schema_reload.py              # Shared complete-reload helper for fakeshop tests that rebuild ``config.schema``.
@@ -982,6 +985,7 @@ It keeps scalar edge cases isolated from richer domain fixtures so converter beh
 
 <!-- Root -->
 [agents]: ../AGENTS.md
+[kanban]: ../KANBAN.md
 [readme]: ../README.md
 
 <!-- docs/ -->

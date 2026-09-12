@@ -850,6 +850,7 @@ The first of two graph foundation cards — the framework-internal graph-plannin
 #### Predicted files
 
 - `django_strawberry_framework/fieldset/` (planned)
+- `tests/fieldset/` (planned)
 
 #### Planning note
 
@@ -1100,6 +1101,7 @@ Coverage-gap audit (2026-07-31): this card also owns the JOINT 0.1.2 release cut
 #### Predicted files
 
 - `django_strawberry_framework/aggregates/` (planned)
+- `tests/aggregates/` (planned)
 
 #### Planning note
 

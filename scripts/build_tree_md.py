@@ -23,7 +23,7 @@ except ModuleNotFoundError:  # imported as ``scripts.build_tree_md`` (repo root 
 
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "TREE.md"
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "django_strawberry_framework"
-DELIMITER = "## django_strawberry_framework (current on-disk layout)"
+DELIMITER = "## django_strawberry_framework (current source layout)"
 COMMENT_COLUMN = 34
 IGNORED_TREE_FILENAMES = frozenset(
     {
@@ -62,14 +62,27 @@ TREE_BRANCH = "\u251c\u2500\u2500 "
 TREE_LAST = "\u2514\u2500\u2500 "
 TREE_PIPE = "\u2502   "
 TREE_SPACE = "    "
-FAKESHOP_APP_NAMES = (
-    "accounts",
-    "glossary",
-    "kanban",
-    "library",
-    "products",
-    "scalars",
-)
+
+
+def fakeshop_app_names(apps_dir: Path) -> tuple[str, ...]:
+    """Return the fakeshop app packages under ``apps_dir`` in rendered order.
+
+    Discovered from the filesystem (every child directory carrying an
+    ``__init__.py``, minus the ignored tree names) rather than echoed from a
+    curated tuple, so a newly installed app cannot be silently left out of the
+    project tree while the freshness check stays green.
+    """
+    return tuple(
+        sorted(
+            child.name
+            for child in apps_dir.iterdir()
+            if child.is_dir()
+            and child.name not in IGNORED_TREE_DIRNAMES
+            and (child / "__init__.py").is_file()
+        ),
+    )
+
+
 TEST_LAYOUT_INTRO = [
     "## Test layout",
     "",
@@ -96,6 +109,7 @@ LINK_DEFINITIONS = """<!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../AGENTS.md
+[kanban]: ../KANBAN.md
 [readme]: ../README.md
 
 <!-- docs/ -->
@@ -517,13 +531,35 @@ def fenced_tree(source: str, tree_lines: list[str]) -> list[str]:
     ]
 
 
+def render_layout_disclosure() -> list[str]:
+    """Return the paragraph naming every node the current trees leave out.
+
+    The rendered trees are a logical source layout, not a literal ``ls -R``: the
+    exclusions are the module-level ``IGNORED_TREE_*`` sets, so the sentence is
+    built from them and cannot drift from what the walker actually skips.
+    """
+    filenames = ", ".join(f"`{name}`" for name in sorted(IGNORED_TREE_FILENAMES))
+    dirnames = ", ".join(f"`{name}/`" for name in sorted(IGNORED_TREE_DIRNAMES))
+    return [
+        "",
+        "A logical source layout rather than a literal directory listing: every "
+        f"{filenames} file (including the package root's, which owns the public "
+        f"exports) and every {dirnames} directory are omitted from the trees below, "
+        "and each rendered directory is summarized from its own `__init__.py` "
+        "docstring.",
+    ]
+
+
 def render_package_tree(package_dir: Path) -> list[str]:
     """Render the current package tree as markdown lines."""
     package_dir = package_dir.resolve()
-    return fenced_tree(
-        f"{package_dir.relative_to(REPO_ROOT)}/",
-        render_tree(package_dir),
-    )
+    return [
+        *render_layout_disclosure(),
+        *fenced_tree(
+            f"{package_dir.relative_to(REPO_ROOT)}/",
+            render_tree(package_dir),
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +579,8 @@ TEST_ROOT_DESCRIPTIONS = {
     ),
 }
 PLANNED_PATH_DESCRIPTIONS = {
+    "tests/aggregates/": "Mirrored package tests for the aggregates subsystem.",
+    "tests/fieldset/": "Mirrored package tests for the fieldset subsystem.",
     "django_strawberry_framework/aggregates/": (
         "Declarative AggregateSet output types with related, permissioned, "
         "selection-aware sync/async statistics."
@@ -572,8 +610,18 @@ class PlannedPath:
 
     @property
     def description(self) -> str:
-        """Return the tree-comment annotation for this planned entry."""
-        summary = PLANNED_PATH_DESCRIPTIONS.get(self.path, self.card_title)
+        """Return the tree-comment annotation for this planned entry.
+
+        Curated and title-derived summaries pass the same one-sentence contract a
+        docstring-derived summary does: a card title arrives without terminal
+        punctuation, so it is normalized before the check rather than copied raw.
+        """
+        summary = PLANNED_PATH_DESCRIPTIONS.get(self.path)
+        if summary is None:
+            summary = self.card_title.strip()
+            if not summary.endswith("."):
+                summary = f"{summary}."
+        assert_single_sentence(Path(self.path), summary)
         return f"planned by {self.card_id} - {summary}"
 
 
@@ -596,8 +644,9 @@ def fetch_planned_paths() -> list[PlannedPath]:
     """
     configure_django()
     from apps.kanban.models import TrackedPath
+    from django.db import transaction
 
-    rows = (
+    queryset = (
         TrackedPath.objects.exclude(state="current")
         .filter(cards__status__key__in=("wip", "todo"))
         .distinct()
@@ -607,6 +656,12 @@ def fetch_planned_paths() -> list[PlannedPath]:
             "cards__target_version__milestone",
         )
     )
+    # The primary query and its prefetches are separate statements. Materializing
+    # both inside one transaction reads them from one SQLite snapshot, so a
+    # concurrent board writer cannot move a card between the two reads and leave a
+    # row with no qualifying owner (``_planned_paths_from_rows`` takes ``min``).
+    with transaction.atomic():
+        rows = list(queryset)
     return _planned_paths_from_rows(rows)
 
 
@@ -765,7 +820,10 @@ def render_target_package_layout(
         "## django_strawberry_framework (target package layout)",
         "",
         "The current package tree merged with every not-yet-existing path linked from "
-        "a WIP/TODO card in [`KANBAN.md`](../KANBAN.md). Each planned entry names the "
+        "a WIP/TODO card. Planned paths are `TrackedPath` rows in the board database "
+        "(`examples/fakeshop/db.sqlite3`), which is the canonical source; "
+        "[`KANBAN.md`][kanban] is another rendering of the same rows, so a correction "
+        "belongs in the database, not in either document. Each planned entry names the "
         "card that introduces it; backlog cards and DONE-card historical paths are "
         "ignored.",
         *fenced_tree(
@@ -903,7 +961,7 @@ def render_fakeshop_project_tree(project_dir: Path) -> list[str]:
         ],
     )
 
-    app_entries = FAKESHOP_APP_NAMES
+    app_entries = fakeshop_app_names(apps_dir)
     for entry, position in iter_tree_positions(app_entries, TREE_SPACE):
         tree_lines.append(
             directory_entry(
@@ -929,7 +987,7 @@ def render_fakeshop_app_details(project_dir: Path) -> list[str]:
     for paragraph in detail_paragraphs(apps_dir / "__init__.py"):
         lines.extend([paragraph, ""])
 
-    for app_name in FAKESHOP_APP_NAMES:
+    for app_name in fakeshop_app_names(apps_dir):
         paragraphs = detail_paragraphs(apps_dir / app_name / "__init__.py")
         if not paragraphs:
             continue

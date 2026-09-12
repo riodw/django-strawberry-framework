@@ -1,13 +1,17 @@
 """Tests for TREE renderer planned descriptions, replacements, and source discovery."""
 
+import re
 from types import SimpleNamespace
 
+import pytest
+
 from scripts.build_tree_md import (
-    FAKESHOP_APP_NAMES,
     REPO_ROOT,
     PlannedPath,
     TargetNode,
+    TreeRenderError,
     _planned_paths_from_rows,
+    fakeshop_app_names,
     remove_target_replacements,
     render_fakeshop_project_tree,
     render_target_tree,
@@ -58,7 +62,38 @@ def test_planned_path_falls_back_to_card_title_without_curated_description() -> 
         card_title="`SomethingNew`",
     )
 
-    assert planned.description == "planned by TODO-BETA-099-0.9.9 - `SomethingNew`"
+    assert planned.description == "planned by TODO-BETA-099-0.9.9 - `SomethingNew`."
+
+
+def test_planned_path_title_fallback_is_normalized_not_double_terminated() -> None:
+    planned = PlannedPath(
+        path="django_strawberry_framework/not_curated/",
+        is_directory=True,
+        card_id="TODO-BETA-099-0.9.9",
+        card_title="Already a sentence.  ",
+    )
+
+    assert planned.description == "planned by TODO-BETA-099-0.9.9 - Already a sentence."
+
+
+def test_planned_path_rejects_a_two_sentence_title_like_any_summary() -> None:
+    planned = PlannedPath(
+        path="django_strawberry_framework/not_curated/",
+        is_directory=True,
+        card_id="TODO-BETA-099-0.9.9",
+        card_title="First sentence. Second sentence",
+    )
+
+    with pytest.raises(TreeRenderError, match="ONE sentence"):
+        _ = planned.description
+
+
+def test_every_curated_planned_description_is_one_sentence() -> None:
+    from scripts.build_tree_md import PLANNED_PATH_DESCRIPTIONS
+
+    for path, summary in PLANNED_PATH_DESCRIPTIONS.items():
+        planned = PlannedPath(path=path, is_directory=True, card_id="X-1", card_title="ignored")
+        assert planned.description == f"planned by X-1 - {summary}"
 
 
 def test_planned_rows_skip_paths_that_already_exist_on_disk() -> None:
@@ -137,10 +172,26 @@ def test_fakeshop_project_tree_discovers_root_helpers_and_every_app() -> None:
         "strategy_schemas.py",
     ):
         assert filename in rendered
-    for app_name in FAKESHOP_APP_NAMES:
+    for app_name in fakeshop_app_names(REPO_ROOT / "examples" / "fakeshop" / "apps"):
         assert f"{app_name}/" in rendered
     for app_source in ("constraints.py", "filters_genre.py", "serializers.py"):
         assert app_source in rendered
+
+
+def test_discovered_fakeshop_apps_equal_the_installed_local_apps() -> None:
+    """The rendered app inventory is the settings' ``apps.*`` list, exactly.
+
+    Read from the settings source rather than a configured Django so the tree
+    renderer's discovery is checked against the project's own declaration, and a
+    seventh app added to either side without the other fails here.
+    """
+    settings_text = (REPO_ROOT / "examples" / "fakeshop" / "config" / "settings.py").read_text(
+        encoding="utf-8",
+    )
+    installed = tuple(sorted(set(re.findall(r'"apps\.(\w+)\.apps\.', settings_text))))
+
+    assert fakeshop_app_names(REPO_ROOT / "examples" / "fakeshop" / "apps") == installed
+    assert installed  # the regex must have found the local apps at all
 
 
 def test_fakeshop_project_tree_excludes_app_local_tests() -> None:

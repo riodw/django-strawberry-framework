@@ -155,6 +155,17 @@ and untracked.
 | `docs/builder/bld-042-integration.md` | 1935 lines | Integration pass — `final-accepted` |
 | `docs/builder/bld-042-final.md` | this file | The final gate |
 
+**Retired 2026-09-12.** The cycle's four per-pass artifacts —
+`docs/builder/bld-042-review-1-spec_reconciliation.md`,
+`docs/builder/bld-042-review-2-code_verification.md`,
+`docs/builder/bld-042-review-3-code_fix.md` and
+`docs/builder/bld-042-integration.md` — were deleted once the cycle closed; this
+plan and `docs/builder/bld-042-final.md` survive it. All four were introduced in
+`50b7d489` and die together, so one retrieval pointer serves them all:
+`git show 50b7d489:docs/builder/<name>`. Every remaining `bld-042-review-*` or
+`bld-042-integration` filename in this file is therefore a **retrieval key, not a
+live path** — nothing below is broken by their absence.
+
 Untracked and gitignored, so they are **not** part of the commit:
 `docs/builder/worker-memory/042-worker-{1,2,3}.md` and
 `docs/builder/temp-tests/042/` (manifests, reports, probe scripts).

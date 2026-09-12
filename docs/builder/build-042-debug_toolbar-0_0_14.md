@@ -309,6 +309,17 @@ Plus, if Cohort B returns `revision-needed` on a real code defect:
 
 - `docs/builder/bld-042-review-3-code_fix.md` (Cohort C — dispatched only then)
 
+**Retired 2026-09-12.** The cycle's four per-pass artifacts —
+`docs/builder/bld-042-review-1-spec_reconciliation.md`,
+`docs/builder/bld-042-review-2-code_verification.md`,
+`docs/builder/bld-042-review-3-code_fix.md` and
+`docs/builder/bld-042-integration.md` — were deleted once the cycle closed; this
+plan and `docs/builder/bld-042-final.md` survive it. All four were introduced in
+`50b7d489` and die together, so one retrieval pointer serves them all:
+`git show 50b7d489:docs/builder/<name>`. Every remaining `bld-042-review-*` or
+`bld-042-integration` filename in this file is therefore a **retrieval key, not a
+live path** — nothing below is broken by their absence.
+
 ## Checklist
 
 - [x] Cohort A: spec reconciliation + rationale extraction (F1–F8, F-minor) -> `docs/builder/bld-042-review-1-spec_reconciliation.md`

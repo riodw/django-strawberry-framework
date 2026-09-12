@@ -309,16 +309,19 @@ Plus, if Cohort B returns `revision-needed` on a real code defect:
 
 - `docs/builder/bld-042-review-3-code_fix.md` (Cohort C — dispatched only then)
 
-**Retired 2026-09-12.** The cycle's four per-pass artifacts —
+**Retired 2026-09-12.** All five per-cycle artifacts —
 `docs/builder/bld-042-review-1-spec_reconciliation.md`,
 `docs/builder/bld-042-review-2-code_verification.md`,
-`docs/builder/bld-042-review-3-code_fix.md` and
-`docs/builder/bld-042-integration.md` — were deleted once the cycle closed; this
-plan and `docs/builder/bld-042-final.md` survive it. All four were introduced in
-`50b7d489` and die together, so one retrieval pointer serves them all:
-`git show 50b7d489:docs/builder/<name>`. Every remaining `bld-042-review-*` or
-`bld-042-integration` filename in this file is therefore a **retrieval key, not a
-live path** — nothing below is broken by their absence.
+`docs/builder/bld-042-review-3-code_fix.md`,
+`docs/builder/bld-042-integration.md` and `docs/builder/bld-042-final.md` — were
+deleted once the cycle closed, and this plan is the only survivor. All five were
+introduced in `50b7d489` and die together, so one retrieval pointer serves them
+all: `git show 50b7d489:docs/builder/<name>`. Every remaining `bld-042-*`
+filename in this file is therefore a **retrieval key, not a live path** — nothing
+below is broken by their absence. What the final gate held that nothing else
+recorded was moved into this plan before it was deleted: `## The cycle's
+instrument failures`, `## The owner rule's provenance, corrected`,
+`## The JS-runtime question` and `## Decided — do not re-raise`.
 
 ## Checklist
 
@@ -519,3 +522,178 @@ The gate therefore runs the read-only half in full —
 `uv run python scripts/check_citations.py` — and runs a **focused** pytest scope
 only if Cohort C lands a source change. Worker 0 surfaces the scoping to the
 maintainer at hand-off rather than recording it as a silent skip.
+
+## The cycle's instrument failures
+
+The most transferable output of this cycle. The maintainer asked for no closeout
+doc edits — `docs/builder/BUILD.md`, `ARTIFACT.md` and the `worker-*.md` role
+files were explicitly fenced out — so this plan is their home; they were written
+in the final gate and moved here when it was retired. Each
+is an occasion where a **first measurement was wrong and only a second instrument
+caught it**; in every case the first read exactly like a clean result.
+
+1. **A `grep -v` content filter used as a path filter deletes exactly the rows
+   whose text mentions the excluded path.** The floor-restatement census dropped
+   `docs/SPECS/appx/spec-042-debug_toolbar-0_0_14-terms.csv` silently, because the
+   filter intended to drop hits *in* a path also dropped every line that merely
+   *names* it. The sweep read as complete. Carried with deferred item 1, whose owner is
+   `TODO-ALPHA-053-0.0.15`, since the next floor bump runs that same census.
+
+2. **A line-anchored grep found 2 of 3 wrapped sites.** The I3 sweep for the
+   published sweep-instruction clause returned two hits, because the middleware's
+   copy and one other wrap the clause across a line. Only a
+   whitespace-normalizing sweep over a **stated** corpus — every tracked file,
+   every untracked non-ignored file, plus the untracked rationale, **744 files** —
+   found all three. Normalize whitespace before matching any clause prose can
+   wrap, and state the corpus with the number.
+
+3. **A link verifier's positive control did not fire, and a control that cannot
+   fail is a passing proof.** The injected `[no-such-ref]` and `#no-such-heading`
+   were appended to a scratch copy *after* the `<!-- LINK DEFINITIONS -->` marker
+   the verifier partitions on, so they were never in the body the verifier reads;
+   neither was reported and the control read as green. Re-run with the injection
+   placed **before** the marker, both were reported, and only then was the real
+   files' green believed. Place a control where the instrument actually looks, and
+   watch it fail before trusting a pass. That verifier was the thing at fault
+   three separate times in this cycle, and the file was right all three.
+
+4. **An absence needle was inert from the day it was written, because upstream
+   wraps the expression across three lines.** The row meant to catch a
+   `document`-level nav lookup named a spelling that occurs **0** times in
+   upstream's asset — upstream splits `document` / `.getElementById(…)` /
+   `.querySelector("small")` across three lines — so the row could never have
+   caught the verbatim paste it existed to catch, while reading green forever. The
+   tightened needle occurs 1 upstream and 0 in the port. **An absence row's needle
+   must be measured in the borrow before the row is believed**; that rule is now
+   in the table's own comment and in the spec's Test 16, stated by mechanism and
+   with no numeral (the table is a population the next editor extends).
+   Inertness, subsumption and derivation are three ways an absence row cannot
+   fail — one symptom, three different instruments.
+
+5. **Five separate named citations in this cycle named the wrong site.** The last
+   was the integration dispatch's own: it stated the falsified
+   `` `.map(([id, panel])` `` spelling "occurs at exactly two standing-doc sites,
+   both routed"; measured over the 744-file corpus, **it occurs at one**. Two
+   *bullets* were routed, in one file, carrying different falsified content. The
+   work was right every time and the population description was not — and a
+   sweeper trusting the description looks for a hit that does not exist, then
+   either invents one or concludes the population is already closed.
+   **Re-derive every routed citation, count and population before acting on it.**
+
+The generalization the five share, and the one worth carrying out of this cycle:
+**a published count of a population nothing gates is a self-falsifying
+instrument** — and so is the instrument that replaces it, unless its own needle is
+audited against the population it points at. M4's fix replaced a false count with
+a sweep instruction, and the instruction's needle could not see the population it
+named. State the corpus or state no number; publish the reproducible delta, not
+the absolute total; and drop the numeral from any list later work extends.
+
+## The owner rule's provenance, corrected
+
+Stated here so the mistake stops propagating: it is `START.md`
+#"Item routed forward w/o NAMED owner dies", under `## Past mistakes`. It is
+**not** in `AGENTS.md` — measured, not recalled: `grep -c 'NAMED owner' AGENTS.md`
+returns **0** both in the working tree and at `git show HEAD:AGENTS.md`. Worker 0's
+dispatches, Cohort C's catalog and the final gate's own dispatch all named
+`AGENTS.md`; the integration pass corrected it, and this is the correction's home.
+
+## The JS-runtime question — a maintainer decision, parked for close-out
+
+Recorded here at the maintainer's explicit instruction (build plan
+`## Maintainer decisions taken mid-cycle` item 2), with **the escalation's own
+reasoning rather than a paraphrase**, because it is a contract-level call and not
+a worker's (`BUILD.md` `### Contract-level findings are escalated as maintainer
+decisions before dispatch`).
+
+Cohort B's escalation, in its own words (`bld-042-review-2-code_verification.md`
+`### Notes for Worker 1`, retired — `git show 50b7d489:docs/builder/<name>`):
+
+> **Escalated (contract-level): the asset has no executing test of any kind.**
+> Every template assertion is a substring check over the file's text, so the
+> suite can prove the guards are *written* and can never prove they *work* — and
+> three of the four documented divergence families exist specifically to survive
+> runtime inputs (null-prototype objects, absent DOM nodes, a shadow root). M2's
+> parametrized split raises the failability count and is the in-scope fix, but it
+> does not change what is being proved. Whether this package should carry a
+> JavaScript runtime for one 89-line asset is a contract-level call, not a
+> worker's. Resolution paths: (a) accept text-identity pinning permanently and
+> say so in the spec, so the next reviewer does not re-raise it; (b) add a
+> minimal DOM harness for this asset alone; (c) narrow the asset so less of it
+> needs guarding.
+
+**What is true after the cycle, and what is not.** M2 is closed: the single node
+id became **57 parametrized rows**, so removing any one template guard now fails
+its own row. That raised failability and changed nothing about what is proved.
+All 57 rows are text-identity predicates over the file on disk. **A green table
+proves the guard's text is present, single-sited and correctly ordered, and says
+nothing about whether the JavaScript runs.** The integration pass narrowed the
+gap in one direction only, and measured rather than argued it: all eight absence
+needles occur exactly once in upstream's asset and never in the port, so the rows
+**do** detect a verbatim paste of upstream's text — and a rewrite of the same hole
+in different words passes every one of them.
+
+**Homed 2026-09-12 on `TODO-BETA-072-0.1.8`** (adversarial non-live test suite),
+so the question carries a named owner now that this plan is archived.
+Path (a) has already been half-taken: the spec now carries
+`## Risks and open questions` #"The bridge asset's guards are pinned by text,
+never by execution.", which states the limit and names the maintainer as the
+risk's owner. What remains is the decision itself.
+
+**What the machine actually has, measured at this gate rather than assumed:**
+
+```shell
+$ node --version
+v24.10.0
+$ node -e 'console.log("typeof CSS =", typeof CSS); console.log("typeof document =", typeof document)'
+typeof CSS = undefined
+typeof document = undefined
+```
+
+`node` is installed, so path (b) is not blocked on a missing runtime — but a bare
+`node` carries **no `CSS` global at all** and no `document`. That matters for
+scoping the decision: even the one guard that is otherwise pure language,
+`CSS.escape(panelId)` with its empty-identifier skip, cannot be exercised under
+`node` as it stands. Path (b) is not "run the file under node"; it is a DOM/CSSOM
+emulator (jsdom or equivalent) as a new dev dependency, for one 89-line asset.
+That cost is the substance of the decision, and it is the maintainer's.
+
+It is also the reason the cycle's hot-path declaration can carry no number: the
+build plan's `Hot-path declaration: none` rests on magnitude and the dev-only
+gate, **not** on "no executable code changed", and no instrument in this
+repository can produce a before/after number for a browser asset.
+
+## Decided — do not re-raise
+
+Four rulings the cycle made and nothing else records. Each was re-verified against
+source on 2026-09-12 before this plan was archived.
+
+1. **The spec's `## Implementation plan` opener is not banned process
+   provenance.** `docs/SPECS/spec-042-debug_toolbar-0_0_14.md` #"for the Worker 0
+   build handoff" names an audience rather than attributing a change, so
+   `AGENTS.md` rule 27's ban does not reach it. Pre-existing at `HEAD`; catalogued
+   so the next reader does not re-decide it.
+2. **A prior cycle's closed artifact carries a warrant this cycle falsified, and
+   its conclusion still stands.** `docs/builder/DONE/build-040-auth_mutations-0_0_13.md`
+   #"Deferred entries 3 and 5 were correctly NOT homed" defers five
+   `spec-042 Revision N` citations on the ground that the spec still carries the
+   revision names and has no rationale companion. **Both premises are now false** —
+   the block moved to the companion and the companion exists — while the
+   conclusion holds, because the rationale preserved the names under
+   `## Round vocabulary` and the spec carries the signpost. That artifact is
+   closed and was not edited; this note exists so a later reader does not
+   re-derive the wrong conclusion from a dead warrant.
+3. **Presence rows that cannot fail alone were measured and deliberately left.**
+   Several `_present` rows in the template contract are subsumed by a sibling
+   pinning the same needle more strictly, so a containment check run table-wide
+   meets them. The disposition now lives where it is needed, in
+   `tests/middleware/test_debug_toolbar.py`'s own table comment, stated by
+   mechanism and without a count (the table is a population later work extends).
+4. **`scripts/prove_failability.py`'s verdict arithmetic has no row-isolation
+   case.** It labels a one-row result `WEAKLY PINNED - revision-needed` because the
+   arithmetic is written for boundary proofs, where one row means one assertion
+   holds a guard. A **row-isolation** proof — "does this row produce a failing id
+   no other row produces" — seeks exactly one row, and a second would falsify it,
+   so the tool's line reads as a finding against a proof that succeeded. Twice in
+   this cycle a pass had to write a paragraph explaining the verdict does not
+   apply. **Homed 2026-09-12 on `TODO-BETA-072-0.1.8`**, beside that card's
+   existing failability-manifest item.

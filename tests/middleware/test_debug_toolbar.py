@@ -692,7 +692,13 @@ _SCRUB_STATEMENT = f"{_SCRUB};"
 # row. What falsifies this: a diverged form whose rows are all presence checks,
 # a post-scrub site no ordering row names, or a guard pinned by an enumeration
 # of the spellings that weaken it where the answer it holds can be measured
-# directly.
+# directly. The same containment rule is deliberately NOT imposed on presence
+# rows. Several plainly state an invariant a stricter sibling already pins - an
+# ordering or adjacency row over the same needle - so they cannot fail on their
+# own, and the only way to make them fail alone is to delete the plain
+# statement of the invariant. Nothing is advertised that the table does not
+# hold and its detection power is identical with or without them, so a
+# containment check run table-wide meets them and should leave them.
 #
 # The names are the pytest ids, so a node-id set stays readable and comparable
 # across runs (an integer index names nothing once the table is reordered).

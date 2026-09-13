@@ -281,10 +281,13 @@ class TestClient(BaseGraphQLTestClient):
         if not files:
             return body
 
-        if not variables:
-            # Explicit raise (not a bare ``assert``) so the guard survives
-            # ``python -O``; the multipart ``map`` needs variable paths to
-            # point at.
+        # Coherence, not truthiness: the multipart ``map`` points into
+        # ``variables.<path>``, so the envelope must carry a ``variables``
+        # member for it to point at. Read the member off the body just built
+        # rather than re-testing ``variables`` - the emission above is the one
+        # owner of when that member exists. Explicit raise (not a bare
+        # ``assert``) so the guard survives ``python -O``.
+        if "variables" not in body:
             raise AssertionError(
                 "query(..., files=...) requires variables= carrying a None placeholder "
                 "at each file's variable path (e.g. variables={'data': {'image': None}} "

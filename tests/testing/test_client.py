@@ -29,7 +29,7 @@ import unittest
 
 import pytest
 from django.http import HttpResponse
-from django.test import override_settings
+from django.test import AsyncClient, Client, override_settings
 
 import django_strawberry_framework
 from django_strawberry_framework import testing as testing_root
@@ -41,9 +41,12 @@ from django_strawberry_framework.testing import (
 )
 
 # ---------------------------------------------------------------------------
-# Recording / canned transport doubles: a recording ``request()`` (or ``post``)
-# override proves TARGET SELECTION and body shape directly, so a mechanics test
-# never depends on a live view. Every test in this file is DB-free.
+# Recording / canned transport doubles: a recording ``post`` stands in for the
+# wrapped Django client, so TARGET SELECTION and body shape are read off what
+# the package's own ``request()`` chose and a mechanics test never depends on a
+# live view. The double stops at the transport seam deliberately - one that
+# overrode ``request()`` would re-implement the selection under test. Every
+# test in this file is DB-free.
 # ---------------------------------------------------------------------------
 
 
@@ -58,27 +61,14 @@ class _CannedJSONResponse(HttpResponse):
         return self._payload
 
 
-class _RecordingTestClient(TestClient):
-    """A ``TestClient`` whose transport records the effective URL and returns canned JSON."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.seen_urls = []
-
-    def request(
-        self,
-        body,
-        headers=None,
-        files=None,
-        *,
-        url=None,
-    ):
-        self.seen_urls.append(url if url is not None else self.path)
-        return _CannedJSONResponse()
-
-
 class _RecordingDjangoClient:
-    """A ``django.test.Client`` stand-in recording ``post`` targets for the mixin probe."""
+    """A ``django.test.Client`` stand-in recording ``post`` targets.
+
+    The transport-level seam: it stands in for the wrapped Django client, so
+    the URL it records is the one the real ``TestClient.request`` chose. A
+    double that overrode ``request()`` itself would re-implement the selection
+    under test and could never detect a change to it.
+    """
 
     def __init__(self):
         self.posts = []
@@ -88,11 +78,42 @@ class _RecordingDjangoClient:
         return _CannedJSONResponse()
 
 
+class _RecordingAsyncTransport:
+    """A ``django.test.AsyncClient`` stand-in whose ``post`` is awaited."""
+
+    def __init__(self):
+        self.posts = []
+
+    async def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        return _CannedJSONResponse()
+
+
+class _BoolFalsyAsyncTransport(_RecordingAsyncTransport):
+    """Falsy through ``__bool__``."""
+
+    def __bool__(self):
+        return False
+
+
+class _LenFalsyAsyncTransport(_RecordingAsyncTransport):
+    """Falsy through an empty ``__len__`` - the other spelling of falsiness."""
+
+    def __len__(self):
+        return 0
+
+
 class _MixinProbe(GraphQLTestMixin):
     """A bare mixin composition proving ``query()`` reads only ``self.client``."""
 
     def __init__(self):
         self.client = _RecordingDjangoClient()
+
+
+class _AltProbe(_MixinProbe):
+    """A mixin probe pinning its endpoint by class attribute (rung 3)."""
+
+    GRAPHQL_URL = "/classattr/"
 
 
 # ---------------------------------------------------------------------------
@@ -134,21 +155,25 @@ def test_constructor_path_outranks_the_settings_key():
 def test_per_call_url_outranks_the_constructor_and_never_persists():
     """Per-call rung: ``query(url=)`` wins for ONE request; ``self.path`` is untouched.
 
-    The recording transport receives ``/percall/`` for the overridden call, the
-    stored ``path`` is unchanged afterward (the non-persistence guarantee), and
-    the next un-overridden call falls back to the constructor path.
+    Driven through the real ``TestClient.request``: the recording transport
+    stands in for the wrapped Django client, so the URL it records is the one
+    ``request()`` itself selected, not one the test re-derived. The overridden
+    call posts to ``/percall/``, the stored ``path`` is unchanged afterward
+    (the non-persistence guarantee), and the next un-overridden call falls back
+    to the constructor path.
     """
-    client = _RecordingTestClient("/constructor/")
+    transport = _RecordingDjangoClient()
+    client = TestClient("/constructor/", client=transport)
 
     res = client.query("{ ok }", url="/percall/")
-    assert client.seen_urls == ["/percall/"]
+    assert [url for url, _ in transport.posts] == ["/percall/"]
     assert client.path == "/constructor/"
     assert isinstance(res, Response)
     assert res.data == {"ok": True}
     assert isinstance(res.response, _CannedJSONResponse)
 
     client.query("{ ok }")
-    assert client.seen_urls == ["/percall/", "/constructor/"]
+    assert [url for url, _ in transport.posts] == ["/percall/", "/constructor/"]
 
 
 # ---------------------------------------------------------------------------
@@ -157,20 +182,46 @@ def test_per_call_url_outranks_the_constructor_and_never_persists():
 # ---------------------------------------------------------------------------
 
 
-def test_files_without_variables_raises_the_placeholder_guard():
-    """``files=`` without variables raises before any request, for ``None`` and ``{}`` alike.
+class _FalsyDict(dict):
+    """A ``dict`` subclass that reads falsy however many keys it carries."""
+
+    def __bool__(self):
+        return False
+
+
+@pytest.mark.parametrize(
+    "variables",
+    [None, {}, _FalsyDict({"file": None})],
+    ids=["none", "empty", "falsy_dict_subclass"],
+)
+def test_files_without_variables_raises_the_placeholder_guard(variables):
+    """``files=`` with no ``variables`` member in the built envelope raises before any request.
 
     The owned ``_build_body``'s explicit ``AssertionError`` (not the engine
-    base's bare ``assert``): the multipart ``map`` needs variable paths to point
-    at, so the guard fires before a request is ever posted - for ``None`` and
-    for an empty dict alike (an empty ``variables`` has no placeholder either,
-    and silently omitting the ``variables`` key while ``map`` points into it
-    would be a spec-invalid multipart envelope).
+    base's bare ``assert``): the multipart ``map`` points into
+    ``variables.<path>``, so an envelope carrying no ``variables`` member has
+    nothing for the map to point at and is refused before a request is ever
+    posted. The member is emitted on truthiness, so ``None`` and ``{}`` are
+    refused alike - and so is a falsy mapping that *does* hold a real
+    placeholder, which is the one shape the per-path walker accepts while the
+    envelope stays spec-invalid. ``match=`` uses the call-level message's own
+    phrase: every walker message also contains the word "placeholder".
     """
-    with pytest.raises(AssertionError, match="placeholder"):
-        TestClient().query("mutation { x }", files={"file": object()})
-    with pytest.raises(AssertionError, match="placeholder"):
-        TestClient().query("mutation { x }", variables={}, files={"file": object()})
+    with pytest.raises(AssertionError, match="requires variables="):
+        TestClient().query("mutation { x }", variables=variables, files={"file": object()})
+
+
+@pytest.mark.asyncio
+async def test_async_files_without_variables_raises_the_same_guard():
+    """The async color shares the owned builder, so the same guard fires before any await.
+
+    ``_build_body`` is called from both ``query()`` colors; only the sync color
+    exercises it in the rows above, so the async color pins it here. The raise
+    happens before the transport is touched, so no request and no database are
+    involved.
+    """
+    with pytest.raises(AssertionError, match="requires variables="):
+        await AsyncTestClient().query("mutation { x }", files={"file": object()})
 
 
 def test_files_placeholder_missing_top_level_path_raises():
@@ -199,13 +250,34 @@ def test_files_placeholder_missing_nested_key_raises():
         )
 
 
-def test_files_placeholder_cannot_descend_into_a_scalar_raises():
-    """A ``files=`` path that descends through a non-container value raises."""
+@pytest.mark.parametrize(
+    ("variables", "key"),
+    [
+        ({"data": "scalar"}, "data.image"),
+        ({"data": 7}, "data.image"),
+        ({"data": None}, "data.image"),
+        ({"data": {"inner": None}}, "data.inner.image"),
+    ],
+    ids=[
+        "str",
+        "int",
+        "none",
+        "nested",
+    ],
+)
+def test_files_placeholder_cannot_descend_into_a_scalar_raises(variables, key):
+    """A ``files=`` path that descends through a non-container value raises.
+
+    Every non-container mid-path value is rejected alike - a string, a number,
+    and the ``None`` placeholder a shallower path would have terminated on. The
+    nested case puts the non-descendable value past the first segment, so the
+    rejection is pinned inside the walk rather than only on its first step.
+    """
     with pytest.raises(AssertionError, match="cannot descend"):
         TestClient().query(
             "mutation($data: SpecInput!) { up }",
-            variables={"data": None},
-            files={"data.image": object()},
+            variables=variables,
+            files={key: object()},
         )
 
 
@@ -270,6 +342,29 @@ def test_files_placeholder_hostile_repr_keeps_assertion_error_boundary():
             variables={"file": _HostileRepr()},
             files={"file": object()},
         )
+
+
+def test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary():
+    """A ``files=`` KEY whose ``repr`` explodes cannot replace the placeholder guard.
+
+    Every rejection branch renders the offending path into its message, so an
+    unprintable key is the argument position that would otherwise let the
+    caller's own exception escape in place of the guard's uniform
+    ``AssertionError`` - the containment the leaf-value row above pins from the
+    other side.
+    """
+
+    class _HostileKey(str):
+        def __repr__(self):
+            raise RuntimeError("repr exploded")
+
+    with pytest.raises(AssertionError, match="no key") as excinfo:
+        TestClient().query(
+            "mutation($file: Upload!) { up }",
+            variables={"other": None},
+            files={_HostileKey("file"): object()},
+        )
+    assert "repr exploded" not in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
@@ -353,23 +448,34 @@ def test_files_placeholder_hostile_len_container_fails_closed(container):
     assert "hostile __len__" not in str(excinfo.value)
 
 
-def test_files_key_shadowing_a_reserved_envelope_field_raises():
+@pytest.mark.parametrize(
+    "reserved",
+    [
+        ("operations",),
+        ("map",),
+        ("operations", "map"),
+    ],
+    ids=["operations", "map", "both"],
+)
+def test_files_key_shadowing_a_reserved_envelope_field_raises(reserved):
     """A ``files=`` key named ``operations`` or ``map`` raises instead of clobbering the envelope.
 
     Each ``files`` key becomes a multipart field name and ``**files`` spreads
     last, so a key colliding with the reserved ``operations`` / ``map`` envelope
     fields would overwrite them and post a corrupt body the server has to
     diagnose. The owned ``_build_body`` rejects it at the source. A valid ``None``
-    placeholder is present at that path, so it is the reserved-field guard firing,
-    not the placeholder walker - and the raise beats any request being posted.
+    placeholder is present at every such path, so it is the reserved-field guard
+    firing, not the placeholder walker - and the raise beats any request being
+    posted. The both-at-once case also pins the message's sorted rendering of
+    every colliding name, so a caller sees all of them in one failure.
     """
-    for reserved in ("operations", "map"):
-        with pytest.raises(AssertionError, match="reserved multipart envelope"):
-            TestClient().query(
-                "mutation($x: Upload!) { up }",
-                variables={reserved: None},
-                files={reserved: object()},
-            )
+    with pytest.raises(AssertionError, match="reserved multipart envelope") as excinfo:
+        TestClient().query(
+            "mutation($x: Upload!) { up }",
+            variables=dict.fromkeys(reserved),
+            files={name: object() for name in reserved},
+        )
+    assert str(sorted(reserved)) in str(excinfo.value)
 
 
 def test_empty_files_dict_is_a_plain_json_post():
@@ -495,6 +601,42 @@ def test_clients_preserve_an_explicit_falsy_transport(client_class):
     assert client.client is supplied
 
 
+def test_async_client_defaults_to_djangos_async_transport():
+    """With no transport supplied, the async twin builds an ``AsyncClient``, not a sync one.
+
+    The default arm of the async selection: the awaited ``post`` the async
+    ``query()`` relies on exists only on Django's async client, so a sync
+    ``Client`` here would await a plain ``HttpResponse``.
+    """
+    client = AsyncTestClient()
+    assert isinstance(client.client, AsyncClient)
+    assert not isinstance(client.client, Client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transport_class",
+    [_BoolFalsyAsyncTransport, _LenFalsyAsyncTransport],
+    ids=["bool_falsy", "len_falsy"],
+)
+async def test_async_client_posts_a_real_query_through_a_falsy_transport(transport_class):
+    """A falsy async transport carries a real awaited operation, whichever way it is falsy.
+
+    Presence, not truthiness, pinned behaviourally rather than by identity: the
+    awaited request has to land on the supplied transport. A truthiness
+    fallback would build a fresh ``AsyncClient`` and post the operation
+    somewhere the test cannot observe, and falsiness has two spellings
+    (``__bool__`` and an empty ``__len__``) that a presence check ignores alike.
+    """
+    transport = transport_class()
+    client = AsyncTestClient("/async/", client=transport)
+
+    res = await client.query("{ ok }")
+
+    assert [url for url, _ in transport.posts] == ["/async/"]
+    assert res.data == {"ok": True}
+
+
 def test_export_surface_is_the_testing_root_not_the_package_root():
     """The six names live on ``testing``'s ``__all__``; the package root has none.
 
@@ -547,27 +689,35 @@ def test_mixin_query_delegates_to_the_test_cases_own_client():
     assert res.data == {"ok": True}
 
 
-def test_mixin_endpoint_rungs_class_attr_settings_and_per_call():
-    """Rungs 1, 3, and 4 through the mixin: per-call > ``GRAPHQL_URL`` > settings key.
+def test_mixin_class_attr_rung_beats_the_settings_key_and_the_default():
+    """Rung 3 through the mixin: ``GRAPHQL_URL`` outranks the settings key and the default.
+
+    One rung per node id, so a rung that stops working is distinguishable from
+    its neighbours rather than hidden behind whichever assertion fires first.
+    """
+    alt = _AltProbe()
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT": "/settings/"}):
+        alt.query("{ ok }")
+    assert alt.client.posts[-1][0] == "/classattr/"
+
+
+def test_mixin_per_call_url_rung_beats_the_class_attr():
+    """Rung 1 through the mixin: a per-call ``url=`` outranks ``GRAPHQL_URL``."""
+    alt = _AltProbe()
+    alt.query("{ ok }", url="/percall/")
+    assert alt.client.posts[-1][0] == "/percall/"
+
+
+def test_mixin_settings_rung_applies_when_the_class_attr_is_unset():
+    """Rung 4 through the mixin: the settings key, read at call time.
 
     The mixin constructs its delegate per call, so a settings override observed
-    mid-class behaves predictably (rung 4 is read at call time, not import time).
+    mid-class applies (the read is at call time, not import time).
     """
-
-    class _AltProbe(_MixinProbe):
-        GRAPHQL_URL = "/classattr/"
-
-    alt = _AltProbe()
-    alt.query("{ ok }")
-    assert alt.client.posts[-1][0] == "/classattr/"  # rung 3 beats settings/default
-
-    alt.query("{ ok }", url="/percall/")
-    assert alt.client.posts[-1][0] == "/percall/"  # rung 1 beats the class attr
-
     plain = _MixinProbe()
     with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT": "/settings/"}):
         plain.query("{ ok }")
-    assert plain.client.posts[-1][0] == "/settings/"  # rung 4 with GRAPHQL_URL unset
+    assert plain.client.posts[-1][0] == "/settings/"
 
 
 # ---------------------------------------------------------------------------

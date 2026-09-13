@@ -509,8 +509,12 @@ def testing_endpoint_setting() -> str:
     ``GraphQLTestMixin.query()`` call, as the lowest rungs of the endpoint
     precedence ladder (per-call ``url=`` > constructor ``path=`` > class-attr
     ``GRAPHQL_URL`` > this setting > default). No validation beyond the shared
-    malformed-dict guard: a wrong endpoint string surfaces as an ordinary 404
-    at request time, where the failure names the actual response.
+    malformed-dict guard: the value is handed to ``django.test.Client.post``
+    unchanged, which coerces it with ``str()`` (so a ``reverse_lazy()``
+    endpoint works and a ``None`` posts to ``/None``), and a wrong value
+    surfaces at request time as whatever the URLconf serves at that path -
+    ordinarily a 404 - through Django's non-JSON ``ValueError`` naming the
+    response's ``Content-Type``.
     """
     return getattr(settings, TESTING_ENDPOINT_KEY, "/graphql/")
 

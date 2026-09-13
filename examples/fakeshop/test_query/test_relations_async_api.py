@@ -32,16 +32,15 @@ supplies its own ``AsyncDjangoGraphQLView`` mount over the app's registered
 types rather than inventing throwaway ones.
 """
 
-import json
-
 import pytest
 import strawberry
 from apps.library import models
 from asgiref.sync import sync_to_async
-from django.test import AsyncClient, override_settings
+from django.test import override_settings
 from django.urls import clear_url_caches, path
 
 from django_strawberry_framework import strawberry_config
+from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 _CURRENT: dict[str, object | None] = {"schema": None}
@@ -92,13 +91,13 @@ async def _post_async(schema, query):
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            response = await AsyncClient().post(
-                "/graphql-async/",
-                data=json.dumps({"query": query}),
-                content_type="application/json",
+            res = await AsyncTestClient().query(
+                query,
+                assert_no_errors=False,
+                url="/graphql-async/",
             )
-        assert response.status_code == 200
-        return response.json()
+        assert res.response.status_code == 200
+        return res.response.json()
     finally:
         _CURRENT["schema"] = None
         clear_url_caches()

@@ -52,7 +52,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
-from django.test import AsyncClient, Client, override_settings
+from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
 from graphql_client import graphql_payload
@@ -62,6 +62,7 @@ from django_strawberry_framework import (
     DjangoSchema,
     strawberry_config,
 )
+from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 pytestmark = pytest.mark.urls(__name__)
@@ -902,23 +903,6 @@ def test_total_input_nodes_are_bounded_across_several_arguments():
 # ---------------------------------------------------------------------------
 
 
-def _multipart(
-    client,
-    mount,
-    query,
-    variables,
-    files,
-):
-    """POST a GraphQL multipart request with ``files`` mapped into ``variables``."""
-    body = {
-        "operations": json.dumps({"query": query, "variables": variables}),
-        "map": json.dumps({name: [path] for name, path in files}),
-    }
-    for name, _ in files:
-        body[name] = SimpleUploadedFile(f"{name}.bin", b"z" * 200)
-    return client.post(mount, data=body)
-
-
 _SPECIMEN = (
     "mutation M($d: MediaSpecimenInput!) { createMediaSpecimen(data: $d) "
     "{ result { label } errors { field messages } } }"
@@ -933,15 +917,18 @@ def test_an_oversized_upload_is_rejected_by_the_policy_not_by_the_body_cap():
     reading it would defeat Django's streaming upload handlers - which is exactly
     why per-file and aggregate upload bytes are the resource policy's job.
     """
-    response = _multipart(
-        Client(),
-        "/rp-uploads/",
+    res = TestClient().query(
         _SPECIMEN,
-        {"d": {"label": "l", "attachment": None, "image": None}},
-        [("0", "variables.d.attachment"), ("1", "variables.d.image")],
+        variables={"d": {"label": "l", "attachment": None, "image": None}},
+        files={
+            "d.attachment": SimpleUploadedFile("attachment.bin", b"z" * 200),
+            "d.image": SimpleUploadedFile("image.bin", b"z" * 200),
+        },
+        assert_no_errors=False,
+        url="/rp-uploads/",
     )
-    assert response.status_code == 200, response.content
-    extensions = _rejection(response.json())
+    assert res.response.status_code == 200, res.response.content
+    extensions = _rejection(res.response.json())
     assert extensions["bound"] in {
         "max_upload_count",
         "max_upload_file_bytes",
@@ -1247,18 +1234,20 @@ def test_sync_and_async_transports_share_one_typed_error_code():
     variables = {"ids": ["x"] * (MAX_NODE_IDS + 1)}
     sync_extensions = _rejection(_post("/rp-values/", _NODES, variables))
 
-    async_client = AsyncClient()
-    response = async_client.post(
-        "/rp-values-async/",
-        data=json.dumps({"query": _NODES, "variables": variables}),
-        content_type="application/json",
+    async_response = _await_response(
+        AsyncTestClient().query(
+            _NODES,
+            variables=variables,
+            assert_no_errors=False,
+            url="/rp-values-async/",
+        ),
     )
-    async_payload = json.loads(_await_response(response).content)
+    async_payload = json.loads(async_response.response.content)
     assert _rejection(async_payload) == sync_extensions
 
 
 def _await_response(coroutine):
-    """Run one ``AsyncClient`` coroutine to completion on a fresh event loop."""
+    """Run one ``AsyncTestClient.query`` coroutine to completion on a fresh event loop."""
     import asyncio
 
     return asyncio.run(_resolve(coroutine))

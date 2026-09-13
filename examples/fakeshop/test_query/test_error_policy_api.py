@@ -1,9 +1,9 @@
 """Live ``/graphql/`` production-error-policy acceptance tests (spec-048).
 
 ``ErrorPolicy`` is a promise about what a REAL client reads out of a REAL
-response, so the category matrix is pinned where a client can see it: over
-``django.test.Client`` against mounts of the package's own Django GraphQL view,
-reading the JSON envelope.
+response, so the category matrix is pinned where a client can see it: over the
+package's own sync and async GraphQL test clients against mounts of its Django
+GraphQL view, reading the JSON envelope.
 
 The matrix is the whole point, and it has exactly three columns (spec-048
 Decision 8):
@@ -55,10 +55,11 @@ from apps.products.services import create_users, seed_data
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
-from django.test import AsyncClient, Client
+from django.test import Client
 from django.test import override_settings as _override_settings
 from django.urls import include, path
 from graphql import GraphQLError
+from graphql_client import post_graphql
 from strawberry import relay
 
 from django_strawberry_framework import (
@@ -67,6 +68,7 @@ from django_strawberry_framework import (
     strawberry_config,
 )
 from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
+from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 pytestmark = pytest.mark.urls(__name__)
@@ -228,14 +230,7 @@ def _post(
     client=None,
 ):
     """POST one GraphQL document to a mount and return ``(response, parsed envelope)``."""
-    body = {"query": query}
-    if variables is not None:
-        body["variables"] = variables
-    response = (client or Client()).post(
-        mount,
-        data=json.dumps(body),
-        content_type="application/json",
-    )
+    response = post_graphql(query, client=client, variables=variables, url=mount)
     assert response.status_code == 200, response.content
     return response, response.json()
 
@@ -258,7 +253,7 @@ def _masked_error(payload, *, key=DEFAULT_ERROR_POLICY.correlation_extension_key
 
 
 def _await_response(coroutine):
-    """Run one ``AsyncClient`` coroutine to completion on a fresh event loop."""
+    """Run one ``AsyncTestClient.query`` coroutine to completion on a fresh event loop."""
     return asyncio.run(_resolve(coroutine))
 
 
@@ -551,12 +546,14 @@ def test_the_sync_and_async_transports_produce_the_same_masked_entry():
     _, sync_payload = _post("/ep/", "{ boom fine }")
     sync_error = _masked_error(sync_payload)
 
-    response = AsyncClient().post(
-        "/ep-async/",
-        data=json.dumps({"query": "{ boom fine }"}),
-        content_type="application/json",
+    async_response = _await_response(
+        AsyncTestClient().query(
+            "{ boom fine }",
+            assert_no_errors=False,
+            url="/ep-async/",
+        ),
     )
-    async_payload = json.loads(_await_response(response).content)
+    async_payload = json.loads(async_response.response.content)
     async_error = _masked_error(async_payload)
 
     assert async_payload["data"] == sync_payload["data"]

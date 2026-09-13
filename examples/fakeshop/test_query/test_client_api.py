@@ -54,17 +54,30 @@ from django_strawberry_framework.testing import (
 # ``/graphql/`` view is, so the GRAPHQL_URL / per-call rungs are proven by a
 # POSITIVE hit on the real schema view, not an exception shape. Inert unless a
 # test overrides ``ROOT_URLCONF`` to this module (``__name__``).
+#
+# The probe URLconf also mounts the project's own ``config.urls`` at the root,
+# so ``/graphql/`` answers under it too: a row that only asserted a clean
+# response would pass whether the request reached ``/alt/`` or fell back to
+# ``/graphql/``. The marker header below is what makes the two distinguishable
+# - only the delegated response carries it.
 # ---------------------------------------------------------------------------
+
+_PROBE_MARKER_HEADER = "X-Probe-Endpoint"
+_PROBE_MARKER_VALUE = "alt"
 
 
 def _alt_graphql_view(request, *args, **kwargs):
-    """Delegate ``/alt/`` to the view ``/graphql/`` currently resolves to.
+    """Delegate ``/alt/`` to the view ``/graphql/`` currently resolves to, marked.
 
     Resolving at request time (not import time) keeps the probe pointed at the
-    schema view the reload fixture just rebuilt.
+    schema view the reload fixture just rebuilt. The response is stamped with
+    the probe marker header so a request that routed here is distinguishable
+    from one that reached the same view at ``/graphql/``.
     """
     match = resolve("/graphql/")
-    return match.func(request, *args, **kwargs)
+    response = match.func(request, *args, **kwargs)
+    response[_PROBE_MARKER_HEADER] = _PROBE_MARKER_VALUE
+    return response
 
 
 urlpatterns = [path("", include("config.urls")), path("alt/", _alt_graphql_view)]
@@ -333,13 +346,17 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
     @override_settings(ROOT_URLCONF=__name__)
     def test_per_call_url_routes_to_the_probe_endpoint(self):
         # Rung 1 end-to-end: a positive hit on the real schema view mounted at
-        # the probe URLconf's ``/alt/``, not an exception shape.
+        # the probe URLconf's ``/alt/``, not an exception shape. The marker
+        # header is what makes the routing observable - ``/graphql/`` answers
+        # under this URLconf too, so a clean response alone would not say which
+        # endpoint served it.
         res = self.query(
             "query Items { allItems(first: 1) { edges { node { name } } } }",
             url="/alt/",
         )
         self.assertResponseNoErrors(res)
         self.assertTrue(res.data["allItems"]["edges"])
+        self.assertEqual(res.response[_PROBE_MARKER_HEADER], _PROBE_MARKER_VALUE)
 
 
 @override_settings(ROOT_URLCONF=__name__)
@@ -353,9 +370,13 @@ class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
         seed_data(1)
 
     def test_class_attr_endpoint_hits_the_real_view(self):
+        # Rung 3: the positive hit plus the marker header, which is what
+        # distinguishes the class attribute having routed the request to
+        # ``/alt/`` from a fall-back to ``/graphql/`` under the same URLconf.
         res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
         self.assertResponseNoErrors(res)
         self.assertTrue(res.data["allItems"]["edges"])
+        self.assertEqual(res.response[_PROBE_MARKER_HEADER], _PROBE_MARKER_VALUE)
 
 
 class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):

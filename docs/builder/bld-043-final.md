@@ -5,6 +5,23 @@ Build plan: `docs/builder/build-043-test_client-0_0_14.md`
 Cohorts gated: A (spec + rationale), B (code verification), C (guard respell + contract text), D (nine live conversions), plus the cross-cohort integration pass
 Status: final-accepted
 
+**Retired 2026-09-13.** The cycle's eight per-pass artifacts —
+`docs/builder/bld-043-review-1-spec_reconciliation.md`,
+`docs/builder/bld-043-review-2-code_verification.md`,
+`docs/builder/bld-043-review-3-code_fix.md`,
+`docs/builder/bld-043-review-4-live_conversion.md`,
+`docs/builder/bld-043-escalation-1-empty_variables_guard.md`,
+`docs/builder/bld-043-escalation-2-endpoint_validation.md`,
+`docs/builder/bld-043-escalation-3-exemption_declarations.md` and
+`docs/builder/bld-043-integration.md` — were deleted once the cycle closed; this
+plan and `docs/builder/bld-043-final.md` survive it. All eight were introduced in
+`974d25b4` and die together, unmodified in between, so one retrieval pointer
+serves them all: `git show 974d25b4:docs/builder/<name>`. Every remaining
+`bld-043-review-*`, `bld-043-escalation-*` or `bld-043-integration` filename in
+this file is therefore a **retrieval key, not a live path** — nothing below is
+broken by their absence. One board row cites the live-conversion artifact and
+carries the same pointer inline (`TODO-ALPHA-053-0.0.15`, scope order 68).
+
 ## Plan (Worker 1)
 
 The last pass before the maintainer takes the tree. `BUILD.md` `## Final test-run

@@ -36,6 +36,8 @@ are genuinely unreachable from the sync ``GraphQLView`` mounted at
 """
 
 import asyncio
+import contextlib
+import copy
 import functools
 import inspect
 import pickle
@@ -77,6 +79,7 @@ from django_strawberry_framework.list_field import (
     _resolve_argument_wire_name,
     _resolver_root_and_info,
     _synthesized_list_signature,
+    _validate_djangotype_target,
 )
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
@@ -4525,3 +4528,126 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
     # A source that is not async-only owes no close on the same exit.
     with pytest.raises(ConfigurationError):
         await _handle_non_queryset_rejections_async([1, 2], args_record, info)
+
+
+# =============================================================================
+# The registry is the one canonical metadata source every factory reads
+# =============================================================================
+
+
+def _swap_definition_attribute(target_type, replacement):
+    """Put ``replacement`` on ``target_type``'s definition attribute, restoring after."""
+    original = target_type.__dict__["__django_strawberry_definition__"]
+    target_type.__django_strawberry_definition__ = replacement
+    try:
+        yield
+    finally:
+        target_type.__django_strawberry_definition__ = original
+
+
+_swap_definition_attribute = contextlib.contextmanager(_swap_definition_attribute)
+
+
+def test_djangolistfield_rejects_a_fabricated_same_origin_definition() -> None:
+    """An object that merely LOOKS like the target's definition is not accepted.
+
+    ``origin is target_type`` proves only that whatever answered the read
+    names this class. Anything can name it. The accepted object must be the
+    exact ``DjangoTypeDefinition`` the registry holds for the target, so a
+    hand-built stand-in carrying a model of its own is rejected at the line
+    that constructed the field - not later, as a Strawberry runtime-type error
+    over a GraphQL type and a Django model that have nothing to do with
+    each other.
+
+    Package-side with its two siblings below: a field whose construction
+    raises never reaches a schema, so no request can express the claim. The
+    accepted path is what the live tier covers, over every shipped list and
+    connection field.
+    """
+
+    class FabricatedTargetType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    fabricated = SimpleNamespace(
+        origin=FabricatedTargetType,
+        model=Item,
+        orderset_class=None,
+        filterset_class=None,
+        interfaces=(),
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField target FabricatedTargetType is not a registered DjangoType",
+    ):
+        with _swap_definition_attribute(FabricatedTargetType, fabricated):
+            DjangoListField(FabricatedTargetType)
+
+
+def test_djangolistfield_rejects_a_copy_of_the_real_definition() -> None:
+    """A faithful COPY of the registered definition is rejected too.
+
+    Equality is not the test; identity is. A copy is a second object that can
+    be mutated independently of the one the registry, the finalizer and the
+    optimizer all read, which is exactly the divergence the one-definition rule
+    exists to prevent - and it would pass any check weaker than ``is``.
+    """
+
+    class CopiedTargetType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    real = CopiedTargetType.__django_strawberry_definition__
+    duplicate = copy.copy(real)
+    assert duplicate is not real
+    assert duplicate.origin is CopiedTargetType
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField target CopiedTargetType is not a registered DjangoType",
+    ):
+        with _swap_definition_attribute(CopiedTargetType, duplicate):
+            DjangoListField(CopiedTargetType)
+
+
+def test_djangolistfield_rejects_a_target_the_registry_has_never_seen() -> None:
+    """A target the registry does not hold is unregistered, and says so.
+
+    The error text promises a REGISTERED target, and registration is a fact
+    about the registry rather than about a class attribute that survives
+    ``unregister``. Construction is the point at which the consumer can still
+    do something about it, so that is where the rejection lands. Package-side
+    because a target with no registration reaches no schema and therefore no
+    request.
+    """
+
+    class DroppedTargetType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    registry.unregister(DroppedTargetType)
+    assert registry.get_definition(DroppedTargetType) is None
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField target DroppedTargetType is not a registered DjangoType",
+    ):
+        DjangoListField(DroppedTargetType)
+
+
+def test_djangolistfield_accepts_and_captures_the_registrys_exact_object() -> None:
+    """The accepted definition IS the registry's object, not an equal one."""
+
+    class CanonicalTargetType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    definition = _validate_djangotype_target(
+        CanonicalTargetType,
+        None,
+        field="DjangoListField",
+    )
+    assert definition is registry.get_definition(CanonicalTargetType)
+    assert definition is CanonicalTargetType.__django_strawberry_definition__

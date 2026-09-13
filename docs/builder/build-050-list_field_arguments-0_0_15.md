@@ -3,7 +3,7 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: implementation complete; default and sharded tiers re-run green at 100% coverage on the fifth review's fixes (figures in [`bld-final.md`][bld-final] `## Fifth implementation review`); floor verification still pending, so the final gate is not green
+Status: implementation complete through the sixth review's metadata-integrity remediation (registry-canonical definitions, optimizer definition threading, terminal ledger closure), and the final gate is green on ONE tree: default 7775 passed / 100.00%, sharded 7792 passed / 100.00%, floor 2397 passed at Python 3.10.19 + Django 5.2.16 + strawberry-graphql 0.316.0, zero failures in any invocation. Figures, scope and commands in [`bld-final.md`][bld-final] `## Sixth implementation review`. The fifth review's invocations are superseded and were never green in the first place - each reached 100% coverage while carrying a failing test, and neither had a floor run
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).

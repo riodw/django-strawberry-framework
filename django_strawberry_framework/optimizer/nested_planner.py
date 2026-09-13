@@ -25,8 +25,8 @@ from graphql import GraphQLError
 from ..keyset import (
     DeclaredCursorState,
     KeysetSeek,
+    declared_cursor_state_for_definition,
     decode_keyset_cursor,
-    resolve_declared_cursor_state,
 )
 from ..utils.connections import (
     ConnectionWindowBounds,
@@ -1058,10 +1058,10 @@ def plan_connection_relation(
     model: type[models.Model],
     enable_only: bool = True,
     resolve_optimizer_hints: Callable[[Any], dict[str, Any]],
-    resolve_relation_target: Callable[[Any, str, Any], type | None],
+    resolve_relation_target: Callable[[Any, str, Any], tuple[type | None, Any | None]],
     response_key_arguments_conflict: Callable[[Any], bool],
     aliased_arguments_diverge: Callable[[Any], bool],
-    target_has_custom_get_queryset: Callable[[type | None], bool],
+    target_has_custom_get_queryset: Callable[[type | None, Any | None], bool],
     resolver_identities_for: Callable[..., tuple[tuple[tuple[str, ...], ...], tuple[str, ...]]],
     build_child_queryset: Callable[..., Any],
     build_prefetch_child_queryset_from_base: Callable[..., Any],
@@ -1075,6 +1075,18 @@ def plan_connection_relation(
     helpers the list path uses (``_build_prefetch_child_queryset`` /
     ``_build_child_queryset``); the only addition is the window applied after
     ``child_plan.apply``.
+
+    Every decision about the relation TARGET spends one resolution.
+    ``resolve_relation_target`` answers with the child definition beside its
+    origin, and that object - never a fresh read of the target class - decides
+    the ``get_queryset`` downgrade, supplies the model the child's visibility
+    seal validates against, and fixes the declared cursor vocabulary the
+    windows derive through. A synthesized relation connection's resolver already
+    takes its definition from the registry at finalization; planning the same
+    field at request time now reads the same one answer, so a target whose
+    metadata changed after acceptance cannot answer the plan differently from
+    the resolver - including on the ``has_custom_get_queryset`` verdict that
+    decides whether the child's visibility hook runs before the window is built.
     """
     plan = OptimizationPlan()
     django_field = field_map.get(relation_field_name)
@@ -1106,8 +1118,12 @@ def plan_connection_relation(
     if hint_is_skip(hints_map.get(relation_field_name)):
         return NestedConnectionPlanResult(plan=plan)
 
-    target_type = resolve_relation_target(definition, relation_field_name, django_field)
-    has_custom_get_queryset = target_has_custom_get_queryset(target_type)
+    target_type, target_definition = resolve_relation_target(
+        definition,
+        relation_field_name,
+        django_field,
+    )
+    has_custom_get_queryset = target_has_custom_get_queryset(target_type, target_definition)
 
     runtime_paths, resolver_identities = resolver_identities_for(
         sel,
@@ -1125,7 +1141,7 @@ def plan_connection_relation(
     # engine, and the connection order is the DECLARED ``cursor_field``
     # rather than the child queryset / model ``Meta.ordering`` (the BACKLOG
     # "enforced matching order" contract - the cursor columns ARE the order).
-    keyset_context = resolve_declared_cursor_state(target_type)
+    keyset_context = declared_cursor_state_for_definition(target_definition)
 
     # (e/f) Slice window(s) from the selection's resolved pagination arguments.
     # Pure (mutates nothing), so resolve BEFORE the child build - a malformed
@@ -1218,6 +1234,7 @@ def plan_connection_relation(
         target_type,
         info,
         has_custom_qs=has_custom_get_queryset,
+        target_model=getattr(target_definition, "model", None),
     )
     if unwindowable_child_queryset_reason(base_queryset) is not None:
         return NestedConnectionPlanResult(plan=plan)

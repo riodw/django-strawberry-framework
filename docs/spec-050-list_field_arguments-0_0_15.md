@@ -2,8 +2,10 @@
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
 Status: in flight (`0.0.15`)
-Revision: 2026-09-04 - implementation remediation complete; full and sharded verification
-pending (`0.0.15`) (revision history moved to
+Revision: 2026-09-13 - metadata-integrity remediation complete (one canonical definition
+across every field factory, the optimizer, and the connection cache; terminal ledger
+closure); full, sharded, and floor verification run clean on one tree (`0.0.15`) (revision
+history moved to
 [`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
 
 Deliberation, rejected alternatives, and this spec's change record live in its companion
@@ -103,6 +105,18 @@ the release wording.
         override only where a separately named legacy behavior genuinely still requires it.
   - [ ] Order input construction continues to use the shipped `OrderSet` factory and orphan
         ledger rather than a list-field-specific input class.
+  - [ ] The shared target validator accepts only the definition the type registry holds for
+        the target, compared by identity; list, connection, and Relay node fields enter
+        through it, and the generated-connection cache verifies the definition that produced
+        each entry on every warm hit.
+  - [ ] The optimizer carries the child definition the relation was resolved through into the
+        nested planner, and no request-time decision about a relation target reads
+        `__django_strawberry_definition__` off the target class.
+  - [ ] Ledger closure is terminal: a descendant holding the copied context can neither
+        publish into nor claim from a closed ledger.
+  - [ ] Package proofs arm a definition-read counter and a decoy definition through a real
+        `DjangoSchema` with the optimizer installed, over cold and warm plans; live proofs
+        cover a planned relation under both the offset and the keyset cursor vocabulary.
 - [ ] **Slice 4 - live acceptance**
   - [ ] A dedicated `examples/fakeshop/test_query/test_list_field_api.py` drives the sync
         surface over `/graphql/`: ordered offset pages, `orderBy` lists,
@@ -586,12 +600,42 @@ its synthesized signature, into both pipelines, and into the resolve-time total 
 (`connection.py::_finalize_queryset`, whose model and `cursor_field` both come from it). The
 keyset vocabulary is fixed at class generation from that definition
 (`keyset.py::declared_cursor_state_for_definition`) rather than derived at first resolve, so the
-cursors a connection mints and the ones it decodes are the ones its class was built with; the
-type-keyed wrapper `keyset.py::resolve_declared_cursor_state` stays for the plan-time nested
-window, which reaches its target through the walker and holds no definition. A Phase-2.5
-synthesized relation connection takes its target's definition from the REGISTRY
-(`registry.py::DjangoTypeRegistry.get_definition`) at finalization and threads it the same way,
-so it never asks the target class at all.
+cursors a connection mints and the ones it decodes are the ones its class was built with. That
+derivation is definition-keyed and single-sited: the plan-time nested window reaches it through
+the child definition the walker resolved the relation through, so there is no type-keyed way in
+at all. A Phase-2.5 synthesized relation connection takes its target's definition from the
+REGISTRY (`registry.py::TypeRegistry.get_definition`) at finalization and threads it the same
+way, so it never asks the target class.
+
+The registry is what "the target's definition" MEANS. `origin is target_type` proves only that
+whatever answered the class read names this class, and anything can name it, so the shared
+validator additionally compares its one contained read by IDENTITY against
+`registry.py::TypeRegistry.get_definition` and accepts nothing else. A fabricated same-origin
+object, a copy of the real definition, and a definition for a type the registry has never seen
+are each rejected with `ConfigurationError` at the line that constructed the field, rather than
+surfacing later as an engine runtime-type error over a GraphQL type and a Django model that are
+unrelated. List, connection, and Relay node fields all enter through that one validator, so
+"registered target" cannot drift by factory. The hostile-read containment is unchanged: a
+metaclass read that raises still becomes the typed unregistered-target rejection.
+
+The generated-connection cache carries the same rule. `connection.py::_connection_type_for`
+keys on target identity, so a warm hit returns a class whose shape, SDL name and keyset
+vocabulary were fixed by whichever definition arrived first; an entry therefore records the
+definition that generated it and a caller arriving with a different one is rejected instead of
+being handed the earlier field's shape beside its own published arguments.
+
+The optimizer plans the same field from the same one answer.
+`optimizer/walker.py::_resolve_relation_target` returns the child definition beside its origin
+rather than collapsing the pair, and the nested planner spends that object on every decision it
+makes about the target: whether the visibility hook runs over the child queryset
+(`optimizer/walker.py::_target_has_custom_get_queryset`), which model that queryset's seals
+validate against (the same `model=` seam, threaded through
+`optimizer/walker.py::_build_child_queryset`), and which cursor vocabulary the window derives
+through. This matters beyond bookkeeping: a relation the walker PLANS is served to the
+generated resolver as already-scoped rows
+(`types/resolvers.py::_optimizer_scoped_relation`), so a plan that answered the hook question
+from a second read and got the wrong answer would build the window from the unscoped default
+manager and the resolver would serve it unfiltered.
 
 The signature builder calls
 [`django_strawberry_framework/orders/__init__.py::order_input_type`][orders-init] with
@@ -817,8 +861,8 @@ For a request carrying any non-null list argument, the color-specific queryset p
    sites,
    [`django_strawberry_framework/utils/querysets.py::_visibility_result_error`][querysets] and
    [`django_strawberry_framework/utils/querysets.py::_prepared_visibility_source`][querysets],
-   each of which renders only the subset it can reach. Those ladders no longer end in an
-   unconditional branch for their last code - `_defect_message` dispatches exhaustively, so a
+   each of which renders only the subset it can reach. Neither ladder ends in an
+   unconditional branch for its last code - `_defect_message` dispatches exhaustively, so a
    code added without an arm self-names as a framework defect rather than mislabelling an
    evaluated-result rejection as an alias mismatch or a wrong-table error. The failure is
    therefore legible rather than silent, but an unarmed code still reaches the schema author
@@ -840,7 +884,7 @@ For a request carrying any non-null list argument, the color-specific queryset p
    answers to. The accepted result is then reconstructed PINNED to that frozen alias. Hint
    comparison remains part of the seal (the candidate's `_db` must equal the snapshot's,
    `None` included, and every hint value must be the SAME OBJECT the snapshot holds, because
-   a router is free to tell two equal tokens apart by identity), but it is no longer what
+   a router is free to tell two equal tokens apart by identity), but it is not what
    carries the attestation. It cannot be: a hint value is an arbitrary consumer object handed
    to the router untouched, and a standard `instance` hint is itself mutable, so an override
    can edit state INSIDE a hint it preserves by identity and change the router's answer
@@ -1323,8 +1367,9 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   disagreement error. The base `_apply_orderings` hands its validated terms to the helper
   through one invocation-scoped ATTESTATION LEDGER
   (`orders/sets.py::_NormalizationLedger`, bound to a `ContextVar` the list pipeline opens
-  around public ordering and the offset guard, resetting the binding AND emptying the ledger in
-  `finally`): when a scope is active the base implementation APPENDS an immutable
+  around public ordering and the offset guard, CLOSING the ledger and then resetting the
+  binding in nested `finally` blocks): when a scope is active the base implementation APPENDS an
+  immutable
   `_AppliedNormalization` naming the orderset class, the input OBJECT, and its terms, and the
   helper CLAIMS the entries matching its own class and input object, then re-normalizes once to
   prove purity. Outside any scope - a connection, a hand-written resolver, any direct public
@@ -1347,6 +1392,16 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   two applicable attestations that DISAGREE fail the claim closed rather than picking one.
   Appends and claims are lock-synchronized, because a copied context genuinely reaches one
   ledger from two threads.
+
+  Closure is TERMINAL, not merely emptying. A descendant created while the scope was live holds
+  the ledger OBJECT through the context it copied and may not resume until after the owning
+  resolution has ended; an emptied-but-open ledger would let it append, claim its own
+  attestation, and keep the input object alive in an orphan context past the resolution the
+  records describe. `close()` therefore sets a tombstone and clears both collections under one
+  lock acquisition, after which publishing is inert and claiming answers nothing - exactly what
+  an application outside any scope already does. Closure runs before the binding reset and in
+  its own `finally`, so a descendant observes the tombstone the moment the scope ends and a
+  failing reset cannot skip it.
 
   The scope is opened only for the request shape whose guard can consume it: an `orderBy`
   arriving WITH a positive `offset` on a field that captured an `OrderSet` to normalize through.
@@ -1448,6 +1503,21 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   arithmetic must not evaluate or recreate it from the target model's default manager.
 - Existing [relation handling][glossary-relation-handling] keeps nested raw-list pagination
   out of this root-only slice; nested pages remain connections.
+- A target whose class attribute answers with a fabricated same-origin object, a copy of the
+  real definition, or a definition for a type the registry no longer holds is rejected at the
+  constructing line, not at schema build. The hostile-read containment is unchanged: a read
+  that raises still becomes the typed unregistered-target rejection.
+- A second connection field over one target holding different metadata is rejected rather
+  than served the warm cache's shape; `registry.unregister` and `registry.clear` still evict
+  the entry, so a fresh registration regenerates rather than collides.
+- A relation target the registry holds WITHOUT a definition keeps the planner's existing
+  class-predicate fallback. `DjangoType.__init_subclass__` registers type and definition in
+  one atomic call, so no real `DjangoType` presents that shape; a bare class registered
+  directly has no definition to read.
+- A descendant task or worker thread that resumes after the ordering scope has exited
+  publishes nothing and claims nothing, so its own active-term check takes the standalone
+  double-normalization path - identical to applying outside any scope. A live descendant
+  inside an open scope keeps the shipped delegation and A/B/B rejection behavior.
 
 ## Test plan
 
@@ -1816,6 +1886,30 @@ not replace either public apply method. List-field tests use instrumented sync a
 public override and to pin the documented double normalization of pure/deterministic
 `_normalize_input` overrides.
 
+Metadata integrity is proven at the boundary it lives on. The validator rows hand the factory
+a fabricated same-origin object, a `copy.copy` of the registered definition, and a target the
+registry has dropped, and assert the typed construction-site rejection for each; a companion
+row asserts the accepted object IS `registry.get_definition(target)`. The cache row warms an
+entry from the real definition, then presents a same-origin replacement carrying
+`connection = {"total_count": True}` and asserts the rejection rather than the earlier shape,
+and that the real definition's entry survives the rejection intact. The optimizer row arms a
+definition-read counter and a decoy over a DIFFERENT MODEL on a relation target, executes a
+nested `items` / `itemsConnection` selection through a real `DjangoSchema` with
+`DjangoOptimizerExtension` installed, and asserts zero reads over both the cold and the warm
+plan - a residual read would move the planned prefetch to another table rather than merely
+raise a counter. The ledger rows delay a descendant past scope exit through both
+`asyncio.create_task` and `contextvars.copy_context()` + a worker thread, and assert the
+closed ledger stays empty, claims nothing, and leaves the descendant's term check on the
+standalone path.
+
+Live coverage takes the same claims to the wire over a PLANNED relation, where the plan is the
+only thing scoping the rows: `examples/fakeshop/test_query/test_products_visibility_api.py`
+asserts that a planned `items` list and a planned `itemsConnection` window both hide the
+target's private rows while costing one item query for the whole page, and
+`examples/fakeshop/test_query/test_keyset_api.py` asserts the same for the keyset vocabulary's
+nested window over `PeriodicalType.issuesConnection`. Each of those rows is proven to fail when
+the planner's custom-`get_queryset` verdict is forced false.
+
 ### Failability and commands
 
 Each SQL test is proven to fail if slice order is reversed, the offset is ignored, the
@@ -2011,8 +2105,17 @@ structural checks, and link/kanban verification prescribed by
       through latest; a local single-interpreter run is evidence, not the contract.
 - [ ] List-field docstring and shipped docs state the argument, cap, order-contract, and
       migration contracts.
+- [ ] The type registry is the one canonical metadata source: every field factory accepts only
+      the definition it holds for the target (by identity), the generated-connection cache
+      proves each warm entry's provenance, and the optimizer plans a relation from the child
+      definition it resolved the relation through - leaving no request-time
+      `__django_strawberry_definition__` read keyed by a target class on the planned path.
+- [ ] Ledger closure is terminal, proven for a descendant task and a worker thread that each
+      resume after the owning scope ended, without regressing live child delegation or the
+      disagreement rejection inside an open scope.
 - [ ] Full implementation suite passes at `fail_under = 100` with formatting and structural
-      checks clean.
+      checks clean; the sharded suite and supported-floor verification are run and recorded on
+      the SAME identified tree, and a run carrying any failing test is not recorded as green.
 - [ ] No version literal, version assertion, package-version glossary row,
       [`pyproject.toml`][pyproject] / `uv.lock` pseudo-bump, or
       [`CHANGELOG.md`][changelog] entry is changed; card 053 owns the joint `0.0.15` cut.

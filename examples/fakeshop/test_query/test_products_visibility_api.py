@@ -1,6 +1,14 @@
-"""Live GraphQL proof that generated relations enforce target visibility themselves."""
+"""Live GraphQL proof that generated relations enforce target visibility themselves.
 
-import json
+Which half of the framework enforces it depends on whether the optimizer PLANNED
+the relation. Unplanned - no optimizer mounted, a consumer-populated prefetch
+cache, a selection the walker declined - and the generated resolver applies the
+hook per parent. Planned, and the resolver stands down
+(``django_strawberry_framework/types/resolvers.py::_optimizer_scoped_relation``)
+because the plan already applied it to the child queryset, which makes the plan
+the sole authority for those rows. Both halves are covered here, each against the
+staff branch that must NOT be scoped.
+"""
 
 import pytest
 import strawberry
@@ -9,14 +17,15 @@ from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import AsyncClient, Client, override_settings
+from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
-from graphql_client import assert_graphql_success
+from graphql_client import assert_graphql_success, post_graphql
 from strawberry import relay
 from strawberry.django.views import GraphQLView
 
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
@@ -58,10 +67,9 @@ def test_unoptimized_relation_hides_private_child_over_http(db):
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            response = Client().post(
-                "/graphql/",
-                data='{"query":"{ categories { items { name } } }"}',
-                content_type="application/json",
+            response = post_graphql(
+                "{ categories { items { name } } }",
+                url="/graphql/",
             )
         assert response.status_code == 200
         payload = response.json()
@@ -98,11 +106,12 @@ async def _post_async_visibility_query():
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            return await AsyncClient().post(
-                "/graphql-async/",
-                data='{"query":"{ categories { items { name } } }"}',
-                content_type="application/json",
+            res = await AsyncTestClient().query(
+                "{ categories { items { name } } }",
+                assert_no_errors=False,
+                url="/graphql-async/",
             )
+            return res.response
     finally:
         _CURRENT["schema"] = None
         clear_url_caches()
@@ -124,11 +133,7 @@ def _post_visibility_query(schema, query):
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            response = Client().post(
-                "/graphql/",
-                data=json.dumps({"query": query}),
-                content_type="application/json",
-            )
+            response = post_graphql(query, url="/graphql/")
         assert response.status_code == 200
         return response.json()
     finally:
@@ -247,11 +252,12 @@ async def test_async_forward_fk_target_visibility_hides_a_private_target_over_ht
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            response = await AsyncClient().post(
-                "/graphql-async/",
-                data=json.dumps({"query": "{ items { name category { name } } }"}),
-                content_type="application/json",
+            res = await AsyncTestClient().query(
+                "{ items { name category { name } } }",
+                assert_no_errors=False,
+                url="/graphql-async/",
             )
+            response = res.response
     finally:
         _CURRENT["schema"] = None
         clear_url_caches()
@@ -381,3 +387,150 @@ def test_cascading_target_hook_blocks_fk_id_elision_over_http():
     assert len(captured.captured_queries) == 2, [
         entry["sql"] for entry in captured.captured_queries
     ]
+
+
+#: The two vocabularies one PLANNED nested relation is selected through. Both ride
+#: the shipped ``allCategories`` root, which the composed schema optimizes, so the
+#: walker plans the relation and records its resolver key - and the generated
+#: relation resolver stands down over rows it trusts the plan to have scoped
+#: (``django_strawberry_framework/types/resolvers.py::_optimizer_scoped_relation``).
+_PLANNED_LIST_QUERY = "{ allCategories(first: 3) { edges { node { name items { name } } } } }"
+_PLANNED_CONNECTION_QUERY = (
+    "{ allCategories(first: 3) { edges { node { name "
+    "itemsConnection(first: 5) { edges { node { name } } } } } } }"
+)
+
+
+def _hide_one_parents_items():
+    """Pin three public parents, hide every item under ONE of them by name.
+
+    Returns ``(hidden_parent, hidden_names)``. Seeded privacy is arbitrary, so all
+    three parents and their items are pinned public first and the hidden rows are
+    the only ones this helper hides.
+    """
+    services.seed_data(2)
+    parent_pks = list(Category.objects.order_by("pk").values_list("pk", flat=True)[:3])
+    assert len(parent_pks) == 3
+    Category.objects.filter(pk__in=parent_pks).update(is_private=False)
+    Item.objects.filter(category_id__in=parent_pks).update(is_private=False)
+    hidden_parent = Category.objects.get(pk=parent_pks[0]).name
+    hidden_names = sorted(
+        Item.objects.filter(category_id=parent_pks[0]).values_list("name", flat=True),
+    )
+    assert hidden_names, "the hidden parent must own items for their absence to mean anything"
+    Item.objects.filter(category_id=parent_pks[0]).update(is_private=True)
+    return hidden_parent, hidden_names
+
+
+def _expected_item_names(*, include_private):
+    """Derive the expected page per parent from the ORM (products rows are Faker-seeded)."""
+    rows = Item.objects.all() if include_private else Item.objects.filter(is_private=False)
+    parents = Category.objects.order_by("pk")[:3]
+    return {
+        parent.name: sorted(rows.filter(category_id=parent.pk).values_list("name", flat=True))
+        for parent in parents
+    }
+
+
+def _planned_item_names(query, *, reader, client=None):
+    """POST ``query``, assert the relation was PLANNED, return ``{parent: sorted names}``.
+
+    ONE ``products_item`` query for the whole page is what "planned" means here: a
+    relation the walker declined costs one read per parent, and its rows are then
+    scoped by the resolver rather than by the plan - the opposite of what these
+    rows measure.
+
+    Pages come back sorted rather than carrying an ``orderBy:``. A generated
+    relation promises WHICH rows, not their order, so sorting is what makes the
+    payload comparison exact without pinning an order the field never offered.
+    """
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(query, client=client)
+    item_queries = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "products_item"' in entry["sql"]
+    ]
+    assert len(item_queries) == 1, item_queries
+    return {
+        edge["node"]["name"]: sorted(reader(edge["node"]))
+        for edge in data["allCategories"]["edges"]
+    }
+
+
+def _list_page(node):
+    return [row["name"] for row in node["items"]]
+
+
+def _connection_page(node):
+    return [edge["node"]["name"] for edge in node["itemsConnection"]["edges"]]
+
+
+@pytest.mark.django_db
+def test_anonymous_planned_list_relation_omits_the_targets_private_rows():
+    """A planned ``items`` prefetch carries the target's visibility scope into its own query.
+
+    The plan is the only thing scoping a planned relation: its resolver stands
+    down, so ``ItemType.get_queryset`` runs exactly once, inside the plan, over the
+    child queryset the walker built - and the walker decides whether to run it at
+    all from the definition it resolved the relation through. A planner that
+    answered that question from a second read and got ``False`` would build the
+    child from the unscoped default manager and serve these rows.
+    """
+    hidden_parent, hidden_names = _hide_one_parents_items()
+
+    pages = _planned_item_names(_PLANNED_LIST_QUERY, reader=_list_page)
+
+    assert pages == _expected_item_names(include_private=False)
+    assert pages[hidden_parent] == []
+    assert not set(hidden_names) & {name for page in pages.values() for name in page}
+
+
+@pytest.mark.django_db
+def test_staff_planned_list_relation_keeps_every_row():
+    """The same planned prefetch returns the hidden rows once the viewer is staff.
+
+    The scoping above is the hook's anonymous branch, not the plan refusing to
+    fetch: the page is still one planned query and it carries every row.
+    """
+    hidden_parent, hidden_names = _hide_one_parents_items()
+    services.create_users(1)
+    client = Client()
+    client.force_login(get_user_model().objects.get(username="staff_1"))
+
+    pages = _planned_item_names(_PLANNED_LIST_QUERY, reader=_list_page, client=client)
+
+    assert pages == _expected_item_names(include_private=True)
+    assert pages[hidden_parent] == hidden_names
+
+
+@pytest.mark.django_db
+def test_anonymous_planned_relation_connection_window_omits_the_targets_private_rows():
+    """The same proof over the connection vocabulary, whose page is one partitioned window.
+
+    ``itemsConnection`` is a synthesized relation connection: every parent's page
+    comes out of a single window over the child queryset the plan built, so the
+    rows it partitions and the rows the hook scoped are one population, derived
+    through one captured child definition.
+    """
+    hidden_parent, hidden_names = _hide_one_parents_items()
+
+    pages = _planned_item_names(_PLANNED_CONNECTION_QUERY, reader=_connection_page)
+
+    assert pages == _expected_item_names(include_private=False)
+    assert pages[hidden_parent] == []
+    assert not set(hidden_names) & {name for page in pages.values() for name in page}
+
+
+@pytest.mark.django_db
+def test_staff_planned_relation_connection_window_keeps_every_row():
+    """The window partitions over every row once the viewer is staff, still in one query."""
+    hidden_parent, hidden_names = _hide_one_parents_items()
+    services.create_users(1)
+    client = Client()
+    client.force_login(get_user_model().objects.get(username="staff_1"))
+
+    pages = _planned_item_names(_PLANNED_CONNECTION_QUERY, reader=_connection_page, client=client)
+
+    assert pages == _expected_item_names(include_private=True)
+    assert pages[hidden_parent] == hidden_names

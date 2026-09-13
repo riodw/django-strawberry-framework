@@ -20,6 +20,7 @@ validation" clause.
 """
 
 import asyncio
+import copy
 import gc
 import warnings
 from collections.abc import Iterable
@@ -2506,7 +2507,7 @@ def test_a_root_connection_reads_the_target_definition_once_on_a_cold_cache():
     reads["armed"] = True
     field = DjangoConnectionField(node)
     assert reads["names"] == ["__django_strawberry_definition__"]
-    conn_type = _connection_type_cache[node]
+    conn_type = _connection_type_cache[node].connection_type
     decoy_slot["decoy"] = decoy.__django_strawberry_definition__
 
     query_cls = strawberry.type(
@@ -2662,3 +2663,153 @@ def test_a_relay_target_with_no_registered_definition_fails_the_synthesized_conn
     registry.register(Item, BareNode, primary=True)
     with pytest.raises(ConfigurationError, match="carries no registered DjangoTypeDefinition"):
         finalize_django_types()
+
+
+@pytest.mark.django_db
+def test_the_optimizer_plans_a_relation_without_reading_the_target_class():
+    """Planning a nested relation spends the walker's resolution, not a fresh read.
+
+    The optimizer plans the same field the finalizer already resolved, and every
+    decision it makes about the TARGET - whether the visibility hook runs over
+    the child queryset, which model that queryset's seal validates against, and
+    which cursor vocabulary the window derives through - comes from the child
+    definition ``related_target_for`` handed back. The target answers with a
+    decoy over a DIFFERENT MODEL from the moment finalization ends, so a
+    residual read would move the planned prefetch to another table rather than
+    merely raise a counter.
+
+    Both plan states are covered: the first execution builds the plan cold, the
+    second serves it from the plan cache. A warm plan must not spend a read
+    discovering that it is warm.
+
+    Package-side because the claim is a read COUNT on a class, which no response
+    shows: the decoy makes a residual read consequential, but only an
+    instrumented metaclass can say whether one happened. The consequence has live
+    siblings - ``examples/fakeshop/test_query/test_products_visibility_api.py``'s
+    planned-relation rows and
+    ``examples/fakeshop/test_query/test_keyset_api.py::test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out``
+    pin the rows a mis-answered plan would serve.
+    """
+    services.seed_data(3)
+    reads = {"armed": False, "names": []}
+    decoy_slot = {"decoy": None}
+
+    class OptimizedParentNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+            name = "OptimizedParentNode"
+            relation_shapes = {"items": "both"}
+            primary = True
+
+    _counting_node_type("OptimizedChildNode", model=Item, decoy_slot=decoy_slot, reads=reads)
+    decoy = type(
+        "OptimizedChildDecoyNode",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": Category,
+                    "fields": ("id", "name"),
+                    "interfaces": (relay.Node,),
+                    "name": "OptimizedChildDecoyNode",
+                    "primary": False,
+                },
+            ),
+        },
+    )
+    # The decoy answers with Category, not Item: a plan built from it would
+    # seed, seal and window the wrong table outright rather than merely differ.
+    assert decoy.__django_strawberry_definition__.model is Category
+
+    finalize_django_types()
+    parent_conn = _connection_type_for(
+        OptimizedParentNode,
+        OptimizedParentNode.__django_strawberry_definition__,
+    )
+    query_cls = strawberry.type(
+        type(
+            "OptimizedQuery",
+            (),
+            {
+                "__annotations__": {"parents": parent_conn},
+                "parents": DjangoConnectionField(OptimizedParentNode),
+            },
+        ),
+    )
+    optimizer = DjangoOptimizerExtension()
+    schema = strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+
+    document = (
+        "{ parents { edges { node { name "
+        "items { name } "
+        "itemsConnection(first: 2) { edges { node { name } } } } } } }"
+    )
+    reads["armed"] = True
+    decoy_slot["decoy"] = decoy.__django_strawberry_definition__
+
+    item_names = set(Item.objects.values_list("name", flat=True))
+    for plan_state in ("cold", "warm"):
+        result = schema.execute_sync(document, context_value={"request": HttpRequest()})
+        assert result.errors is None, (plan_state, result.errors)
+        assert reads["names"] == [], plan_state
+        rows = {
+            row["name"]
+            for parent in result.data["parents"]["edges"]
+            for row in parent["node"]["items"]
+        } | {
+            edge["node"]["name"]
+            for parent in result.data["parents"]["edges"]
+            for edge in parent["node"]["itemsConnection"]["edges"]
+        }
+        assert rows, plan_state
+        assert rows <= item_names, plan_state
+
+
+@pytest.mark.django_db
+def test_a_warm_connection_cache_refuses_alternate_metadata_for_its_target():
+    """A second definition for one target is rejected, not silently served the first shape.
+
+    The cache is keyed on target identity, so a warm hit returns a class whose
+    ``totalCount`` shape, SDL name and keyset vocabulary were fixed by whichever
+    definition arrived first. A caller holding different metadata would get its
+    own published arguments beside somebody else's return class - the exact
+    split answer the one-definition rule forbids. The entry therefore records
+    the definition it was generated from and refuses anything else.
+
+    Package-side for the same reason as the rest of this file's construction
+    rows: presenting two definitions for one target is something a schema author
+    does at construction and a request cannot express.
+    """
+
+    class CacheProvenanceNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CacheProvenanceNode"
+            primary = False
+
+    real = CacheProvenanceNode.__django_strawberry_definition__
+    finalize_django_types()
+    clear_connection_type_cache()
+
+    warm = _connection_type_for(CacheProvenanceNode, real)
+    assert _connection_type_for(CacheProvenanceNode, real) is warm
+    assert "total_count" not in {
+        field.python_name for field in warm.__strawberry_definition__.fields
+    }
+
+    replacement = copy.copy(real)
+    replacement.connection = {"total_count": True}
+    with pytest.raises(ConfigurationError, match="built from a different DjangoTypeDefinition"):
+        _connection_type_for(CacheProvenanceNode, replacement)
+    # And the rejection did not disturb the entry the real definition owns.
+    assert _connection_type_for(CacheProvenanceNode, real) is warm

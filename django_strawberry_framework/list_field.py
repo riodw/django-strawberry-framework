@@ -29,6 +29,7 @@ from .exceptions import (
     _safe_type_name,
     describe_value,
 )
+from .registry import registry
 from .resource_policy import (
     _close_async_iterator,
     bounded_rows,
@@ -81,25 +82,37 @@ def _validate_djangotype_target(
     *,
     field: str,
 ) -> DjangoTypeDefinition:
-    """Run the four shared DjangoType-target constructor guards for a field factory.
+    """Run the shared DjangoType-target constructor guards for a field factory.
 
     Shared by ``DjangoListField`` and ``DjangoConnectionField`` (and any future
     node field). ``field`` is the factory's public name
     (e.g. ``"DjangoListField"``) interpolated into the ``ConfigurationError``
-    messages so each factory's errors name itself. These four constructor-site
+    messages so each factory's errors name itself. These constructor-site
     checks fail at the line that wrote ``<field>(...)`` rather than at
     finalize-time.
 
     Order is load-bearing - each target-type check assumes the previous one
-    passed. The third (own-class registration) check is the strict invariant:
+    passed. The registration check is the strict invariant:
     ``__django_strawberry_definition__`` is assigned by
     ``DjangoType.__init_subclass__`` (``types/base.py::DjangoType.__init_subclass__``)
     only for concrete subclasses carrying their own ``Meta`` with a ``model``.
     The attribute is inherited via MRO, so ``hasattr`` would accept a subclass
     that omits its own ``Meta`` - binding the field to a target whose
     definition, ``Meta.primary`` state, and model belong to the parent.
-    ``definition.origin is target_type`` is the strict own-class invariant
-    (NOT ``hasattr``).
+
+    The attribute answer is not trusted on its own word. ``origin is
+    target_type`` is only the own-class half; the accepted object must ALSO be
+    the exact ``DjangoTypeDefinition`` the registry holds for ``target_type``,
+    compared by IDENTITY. ``__init_subclass__`` registers the definition and
+    assigns the attribute from one value, so the canonical answer and the
+    attribute answer agree for every real target - while a fabricated
+    same-origin lookalike, a copy of a real definition, and a definition for a
+    type the registry has never seen are all rejected here, at the line that
+    constructed the field, instead of surfacing later as a Strawberry
+    runtime-type error over an unrelated model. The registry is the one
+    canonical metadata source every factory reads, so "registered target"
+    cannot mean different things to the list, connection and Relay node
+    entry points.
 
     Every deployment-supplied value in a rejection message renders through the
     guarded helpers (``exceptions.py``): the non-class arm renders
@@ -115,12 +128,12 @@ def _validate_djangotype_target(
     be PROVEN registered, so the failure is the same typed reject (fail
     closed, matching ``forms/inputs.py::_model_column_for``'s posture).
 
-    Raises ``ConfigurationError`` on failure; returns the resolved
-    ``__django_strawberry_definition__`` when all four pass, so the Relay
-    validator consumes the SAME contained read instead of re-reading the
-    attribute directly (a stateful metaclass could answer the first guarded
-    read and detonate a second raw one). The caller runs any factory-specific
-    guards (e.g. the connection field's Relay-Node guard) AFTER this returns.
+    Raises ``ConfigurationError`` on failure; returns the canonical
+    ``DjangoTypeDefinition`` when every guard passes, so the Relay validator
+    consumes the SAME contained read instead of re-reading the attribute
+    directly (a stateful metaclass could answer the first guarded read and
+    detonate a second raw one). The caller runs any factory-specific guards
+    (e.g. the connection field's Relay-Node guard) AFTER this returns.
     """
     if not inspect.isclass(target_type):
         raise ConfigurationError(
@@ -136,7 +149,12 @@ def _validate_djangotype_target(
         # Contained: a metaclass whose __getattr__ raises anything other than
         # AttributeError must reach the typed rejection below, not escape raw.
         definition = None
-    if definition is None or getattr(definition, "origin", None) is not target_type:
+    canonical = registry.get_definition(target_type)
+    if (
+        definition is None
+        or getattr(definition, "origin", None) is not target_type
+        or definition is not canonical
+    ):
         raise ConfigurationError(
             f"{field} target {_safe_class_name(target_type)} is not a registered DjangoType. "
             f"This usually means {_safe_class_name(target_type)}'s `Meta` is missing a `model` "
@@ -154,12 +172,13 @@ def _validate_relay_djangotype_target(
     field: str,
     relay_error_message: str,
 ) -> DjangoTypeDefinition:
-    """Run the four shared DjangoType-target guards plus the Relay-Node-shaped fifth.
+    """Run the shared DjangoType-target guards plus the Relay-Node-shaped one.
 
     The Relay-shaped target guard shared by ``DjangoConnectionField`` and
     ``relay.py::_validate_node_target`` (which backs ``DjangoNodeField`` /
-    ``DjangoNodesField``) -- single-sited. Delegates the
-    four base checks to ``_validate_djangotype_target`` (with the call site's
+    ``DjangoNodesField``) -- single-sited. Delegates the base checks -
+    including the registry-canonicality identity check - to
+    ``_validate_djangotype_target`` (with the call site's
     ``resolver`` seam), then rejects a non-Relay-Node-shaped target.
     ``_is_relay_shaped`` reads the declared ``Meta.interfaces`` (a
     Meta-declared ``relay.Node`` is in ``definition.interfaces`` before Phase

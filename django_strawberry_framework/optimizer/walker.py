@@ -182,14 +182,25 @@ def plan_optimizations(
     return plan.finalize()
 
 
-def plan_relation(field: Any, target_type: type | None, info: Any | None) -> tuple[str, str]:  # noqa: ARG001
+def plan_relation(
+    field: Any,
+    target_type: type | None,
+    info: Any | None,  # noqa: ARG001
+    *,
+    target_definition: Any | None = None,
+) -> tuple[str, str]:
     """Return relation traversal kind without constructing querysets.
 
     ``info`` is unused by this default planner but kept to mirror the
     ``DjangoOptimizerExtension.plan_relation`` override seam, whose subclasses
     may plan on ``info`` - hence the ARG001 noqa rather than dropping the param.
+
+    ``target_definition`` is the walker's captured child definition
+    (``_resolve_relation_target``'s second answer). The walk always supplies
+    it; the public two-value seam may omit it and the predicate falls back to
+    the target's own report.
     """
-    if _target_has_custom_get_queryset(target_type):
+    if _target_has_custom_get_queryset(target_type, target_definition):
         logger.debug(
             "Optimizer: will downgrade %s to Prefetch because %s overrides get_queryset.",
             field.name,
@@ -201,7 +212,27 @@ def plan_relation(field: Any, target_type: type | None, info: Any | None) -> tup
     return ("select", "default")
 
 
-def _target_has_custom_get_queryset(target_type: type | None) -> bool:
+def _target_has_custom_get_queryset(
+    target_type: type | None,
+    target_definition: Any | None = None,
+) -> bool:
+    """Report whether a relation target overrides ``get_queryset``.
+
+    Answers from the CAPTURED definition when the walk resolved one, so the
+    verdict that decides ``select_related`` versus ``Prefetch`` - and, through
+    ``_build_child_queryset``, whether the child's visibility hook runs at all -
+    comes from the same object the relation was resolved through, not from a
+    second request-time read of the target class.
+
+    The class fallback is reached only for a registration the registry holds
+    WITHOUT a definition. ``DjangoType.__init_subclass__`` registers the type
+    and its definition in one atomic call, so no real ``DjangoType`` can
+    present that shape; a bare class registered directly through
+    ``registry.register`` carries no definition to read, and its own report is
+    the only answer there is.
+    """
+    if target_definition is not None:
+        return target_definition.has_custom_get_queryset
     return target_type is not None and target_type.has_custom_get_queryset()
 
 
@@ -336,17 +367,38 @@ def _resolve_relation_target(
     definition: Any | None,
     django_name: str,
     django_field: Any,
-) -> type | None:
-    """Return a relation target type, preferring finalized definition metadata."""
+) -> tuple[type | None, Any | None]:
+    """Return one relation target as ``(origin, definition)``.
+
+    The owner definition's ``related_target_for`` already resolved the child
+    ``DjangoTypeDefinition``; both halves of that one answer are returned
+    together so every later decision about the target - the ``get_queryset``
+    downgrade, the child visibility model, the declared cursor vocabulary -
+    spends this resolution instead of asking the target class again at request
+    time. Collapsing the pair to its ``origin`` here is what forced those
+    re-reads, and a target whose metadata changes between them is exactly the
+    threat the one-definition rule exists for.
+
+    The unresolved-relation fallback stays registry-only and answers in the
+    same shape: the registry's type for the related model plus the registry's
+    definition for that type (``registry.get_definition``, the same canonical
+    lookup ``_has_custom_id_resolver`` uses). A model with no registered type
+    yields ``(None, None)``; a type the registry holds without a definition
+    yields its origin and ``None``, and each consumer degrades on its own
+    documented contract rather than reaching for a class attribute.
+    """
     if definition is not None:
         resolved = definition.related_target_for(django_name)
         if resolved is not None:
             target_definition, _model_field = resolved
-            return target_definition.origin
+            return target_definition.origin, target_definition
     related_model = django_field.related_model
     if related_model is None:
-        return None
-    return registry.get(related_model)
+        return None, None
+    origin = registry.get(related_model)
+    if origin is None:
+        return None, None
+    return origin, registry.get_definition(origin)
 
 
 def _resolve_optimizer_hints(definition: Any | None) -> dict[str, OptimizerHint]:
@@ -361,12 +413,21 @@ def _build_child_queryset(
     target_type: type | None,
     info: Any | None,
     has_custom_qs: bool,
+    *,
+    target_model: type[models.Model] | None = None,
 ) -> Any:
     """Build the queryset used inside a generated ``Prefetch`` object.
 
-    ``has_custom_qs`` is the precomputed value of
-    ``target_type.has_custom_get_queryset()`` from the caller, so the
-    method does not need to be called twice on the prefetch path.
+    ``has_custom_qs`` is the caller's verdict from the captured child
+    definition (``_target_has_custom_get_queryset``), so the question is
+    answered once per relation rather than once per consumer of the answer.
+
+    ``target_model`` is that same definition's model, threaded into the
+    visibility runner's captured-model seam. Without it the runner reads the
+    target class for a model of its own, which is a second request-time
+    definition read on the one path that decides which rows a prefetch may
+    see; with it, both seals of this visibility call validate against the
+    model the relation was resolved through.
 
     The custom ``get_queryset`` visibility hook runs through the shared
     ``utils/querysets.py::apply_type_visibility_sync`` so
@@ -393,6 +454,7 @@ def _build_child_queryset(
             target_type,
             queryset,
             info,
+            model=target_model,
             policy=_UNRECOMPOSED_CHILD_POLICY,
         )
     return queryset
@@ -620,7 +682,11 @@ def _walk_selections(
             type_cls,
             runtime_prefixes,
         )
-        target_type = _resolve_relation_target(definition, django_name, django_field)
+        target_type, target_definition = _resolve_relation_target(
+            definition,
+            django_name,
+            django_field,
+        )
 
         hint = hints_map.get(django_name)
         if hint is not None and _apply_hint(
@@ -630,6 +696,7 @@ def _walk_selections(
             django_name=django_name,
             type_cls=type_cls,
             target_type=target_type,
+            target_definition=target_definition,
             plan=plan,
             prefix=prefix,
             full_path=full_path,
@@ -641,12 +708,18 @@ def _walk_selections(
         ):
             continue
 
-        relation_plan_kind, _ = plan_relation(django_field, target_type, info)
+        relation_plan_kind, _ = plan_relation(
+            django_field,
+            target_type,
+            info,
+            target_definition=target_definition,
+        )
         _dispatch_single_relation(
             prefer_prefetch=relation_plan_kind == "prefetch",
             sel=sel,
             django_field=django_field,
             target_type=target_type,
+            target_definition=target_definition,
             plan=plan,
             prefix=prefix,
             full_path=full_path,
@@ -663,6 +736,7 @@ def _dispatch_single_relation(
     sel: Any,
     django_field: Any,
     target_type: type | None,
+    target_definition: Any | None,
     plan: OptimizationPlan,
     prefix: str,
     full_path: str,
@@ -686,6 +760,7 @@ def _dispatch_single_relation(
             sel,
             django_field,
             target_type,
+            target_definition,
             plan,
             prefix,
             info,
@@ -698,6 +773,7 @@ def _dispatch_single_relation(
             sel,
             django_field,
             target_type,
+            target_definition,
             plan,
             prefix,
             full_path,
@@ -712,6 +788,7 @@ def _plan_select_relation(
     sel: Any,
     django_field: Any,
     target_type: type | None,
+    target_definition: Any | None,
     plan: OptimizationPlan,
     prefix: str,
     full_path: str,
@@ -743,7 +820,7 @@ def _plan_select_relation(
     target_pk_name = django_field.target_pk_name
     if (
         django_field.fk_id_elision_eligible
-        and not _target_has_custom_get_queryset(target_type)
+        and not _target_has_custom_get_queryset(target_type, target_definition)
         and not _has_custom_id_resolver(target_type, target_pk_name)
         and _selected_scalar_names(sel.selections, django_field.related_model, info=info)
         == {target_pk_name}
@@ -772,6 +849,7 @@ def _plan_prefetch_relation(
     sel: Any,
     django_field: Any,
     target_type: type | None,
+    target_definition: Any | None,
     plan: OptimizationPlan,
     prefix: str,
     info: Any | None,
@@ -805,7 +883,7 @@ def _plan_prefetch_relation(
         enable_only=enable_only,
     )
     lookup_path = f"{prefix}{instance_accessor(django_field)}"
-    has_custom_get_queryset = _target_has_custom_get_queryset(target_type)
+    has_custom_get_queryset = _target_has_custom_get_queryset(target_type, target_definition)
     if has_custom_get_queryset:
         plan.cacheable = False
     if django_field.related_model is None:
@@ -826,6 +904,7 @@ def _plan_prefetch_relation(
         sel,
         django_field,
         target_type,
+        target_definition,
         plan,
         info,
         runtime_paths,
@@ -872,6 +951,7 @@ def _build_prefetch_child_queryset(
     sel: Any,
     django_field: Any,
     target_type: type | None,
+    target_definition: Any | None,
     parent_plan: OptimizationPlan,
     info: Any | None,
     runtime_paths: tuple[tuple[str, ...], ...],
@@ -891,6 +971,7 @@ def _build_prefetch_child_queryset(
         target_type,
         info,
         has_custom_qs=has_custom_get_queryset,
+        target_model=getattr(target_definition, "model", None),
     )
     return _build_prefetch_child_queryset_from_base(
         sel,
@@ -944,6 +1025,7 @@ def _apply_hint(
     django_name: str,
     type_cls: type | None,
     target_type: type | None,
+    target_definition: Any | None,
     plan: OptimizationPlan,
     prefix: str,
     full_path: str,
@@ -1048,10 +1130,11 @@ def _apply_hint(
                 "use OptimizerHint.prefetch_related() or OptimizerHint.prefetch(obj) instead.",
             )
         _dispatch_single_relation(
-            prefer_prefetch=_target_has_custom_get_queryset(target_type),
+            prefer_prefetch=_target_has_custom_get_queryset(target_type, target_definition),
             sel=sel,
             django_field=django_field,
             target_type=target_type,
+            target_definition=target_definition,
             plan=plan,
             prefix=prefix,
             full_path=full_path,
@@ -1067,6 +1150,7 @@ def _apply_hint(
             sel=sel,
             django_field=django_field,
             target_type=target_type,
+            target_definition=target_definition,
             plan=plan,
             prefix=prefix,
             full_path=full_path,

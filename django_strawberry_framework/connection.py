@@ -47,7 +47,7 @@ import types
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import Any, ClassVar, Generic, NamedTuple, TypeVar
 
 import strawberry
 from django.db import models
@@ -59,7 +59,7 @@ from strawberry.types import Info, get_object_definition
 from strawberry.utils.await_maybe import AwaitableOrValue
 from strawberry.utils.inspect import in_async_context
 
-from .exceptions import _safe_type_name
+from .exceptions import ConfigurationError, _safe_class_name, _safe_type_name
 from .keyset import (
     CursorColumn,
     DeclaredCursorState,
@@ -1293,7 +1293,22 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
         )
 
 
-_connection_type_cache: dict[type, type] = {}
+class _CachedConnectionType(NamedTuple):
+    """One generated connection class beside the definition that generated it.
+
+    The cache is keyed on ``target_type`` identity, but the class SHAPE and the
+    keyset vocabulary baked into it come from a definition, so the entry
+    carries that definition as its provenance. A warm hit is served only to a
+    caller holding the same object; anything else is a target whose metadata
+    changed after a class was generated for it, which no cached shape can
+    honestly answer.
+    """
+
+    definition: Any
+    connection_type: type
+
+
+_connection_type_cache: dict[type, _CachedConnectionType] = {}
 
 
 def clear_connection_type_cache() -> None:
@@ -1303,8 +1318,9 @@ def clear_connection_type_cache() -> None:
     ``registry.clear()`` (the documented registry reset) so a registry-clearing
     test or fixture also drops the generated ``<TypeName>Connection`` classes,
     rather than accumulating dead identity-keyed entries across schema reloads.
-    The cache is keyed on ``target_type`` identity,
-    so a stale entry is never *wrong* - this clear is hygiene, not correctness.
+    Each entry records the definition it was generated from and
+    ``_connection_type_for`` verifies that provenance on every warm hit, so a
+    surviving entry can only ever be served to the definition that produced it.
     """
     _connection_type_cache.clear()
 
@@ -1344,10 +1360,6 @@ def _generate_connection_class(
     """
 
     def _populate(namespace: dict) -> None:
-        # The node type rides the generated class (no annotation, so
-        # Strawberry never surfaces it) - the optimizer's window handoff reads
-        # it back to identify which type a page's rows belong to.
-        namespace["_dst_node_type"] = target_type
         # The keyset vocabulary is FIXED HERE, from the captured definition,
         # not derived at first resolve from the target class: the cursors a
         # connection mints and the ones it decodes are the ones the class was
@@ -1394,8 +1406,8 @@ def _build_total_count_connection(target_type: type, definition: Any) -> type:
         # Opt this variant into the count half of the INHERITED
         # ``DjangoConnection.resolve_connection`` rather than re-declaring the
         # method: the dispatch and its upstream signature stay single-sited.
-        # Deliberately unannotated (like ``_dst_node_type``) so Strawberry never
-        # reads it as a field of the generated class.
+        # Deliberately unannotated (like ``_dst_keyset_state``) so Strawberry
+        # never reads it as a field of the generated class.
         namespace["_resolves_total_count"] = True
 
     # ``description=None`` keeps the opted variant's shipped description-less
@@ -1473,14 +1485,27 @@ def _connection_type_for(target_type: type, definition: Any) -> type:
     the generated name is unique and regeneration is avoided.
 
     ``definition`` is the caller's captured read - the connection field factory's
-    own, or the finalizer's registry lookup for a synthesized relation. A cold
-    cache generates the class from it and a warm cache reads nothing, so the
-    connection SHAPE and the field's published arguments can never come from two
-    different answers.
+    own (validated against the registry by
+    ``list_field.py::_validate_djangotype_target``), or the finalizer's registry
+    lookup for a synthesized relation. A cold cache generates the class from it
+    and records it as the entry's provenance; a warm cache is served only when
+    the caller holds that SAME object. So the connection shape, the keyset
+    vocabulary baked into the class, and the field's published arguments can
+    never come from two different answers - not across one field, and not
+    across two fields over one target. A caller arriving with different
+    same-origin metadata is rejected at construction rather than silently
+    handed the first field's shape.
     """
     cached = _connection_type_cache.get(target_type)
     if cached is not None:
-        return cached
+        if cached.definition is not definition:
+            raise ConfigurationError(
+                f"{_safe_class_name(target_type)} already has a generated connection class "
+                "built from a different DjangoTypeDefinition. One node type has exactly one "
+                "connection shape; a second definition for the same target would publish "
+                "arguments that its connection class does not carry.",
+            )
+        return cached.connection_type
 
     connection_options = definition.connection
     if connection_options and connection_options.get("total_count"):
@@ -1501,7 +1526,7 @@ def _connection_type_for(target_type: type, definition: Any) -> type:
             definition,
             description=DjangoConnection.__strawberry_definition__.description,
         )
-    _connection_type_cache[target_type] = connection_type
+    _connection_type_cache[target_type] = _CachedConnectionType(definition, connection_type)
     return connection_type
 
 

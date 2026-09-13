@@ -2014,6 +2014,7 @@ def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
             django_name="category",
             type_cls=ItemType,
             target_type=None,
+            target_definition=None,
             plan=plan,
             prefix="",
             full_path="category",

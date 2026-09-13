@@ -37,8 +37,8 @@ from django_strawberry_framework.connection import (
 )
 from django_strawberry_framework.keyset import (
     cursor_columns_for,
+    declared_cursor_state_for_definition,
     order_fingerprint,
-    resolve_declared_cursor_state,
 )
 from django_strawberry_framework.optimizer.nested_planner import (
     _extend_only_projection,
@@ -102,20 +102,23 @@ def test_keyset_connection_context_is_none_for_offset_types():
     assert _keyset_connection_context(connection_type) is None
 
 
-def test_resolve_declared_cursor_state_resolves_the_declared_vocabulary():
+def test_declared_cursor_state_for_definition_resolves_the_declared_vocabulary():
     issue_type = _make_issue_type()
-    state = resolve_declared_cursor_state(issue_type)
+    definition = issue_type.__django_strawberry_definition__
+    state = declared_cursor_state_for_definition(definition)
     assert state is not None
-    assert state.definition is issue_type.__django_strawberry_definition__
+    assert state.definition is definition
     assert state.cursor_field == ISSUE_ORDER
     assert state.columns == cursor_columns_for(Issue, ISSUE_ORDER)
     assert state.fingerprint == order_fingerprint(ISSUE_ORDER)
 
 
-def test_resolve_declared_cursor_state_none_without_cursor_field():
+def test_declared_cursor_state_for_definition_none_without_cursor_field():
     plain_type = make_django_type("PlainIssueNode2", Issue, ("id", "number"))
-    assert resolve_declared_cursor_state(plain_type) is None
-    assert resolve_declared_cursor_state(None) is None
+    assert (
+        declared_cursor_state_for_definition(plain_type.__django_strawberry_definition__) is None
+    )
+    assert declared_cursor_state_for_definition(None) is None
 
 
 # =============================================================================
@@ -530,7 +533,7 @@ class _FakeInfo:
 def test_keyset_window_slice_from_arguments_arms():
     issue_type = _make_issue_type("KeysetWalkerSliceNode")
     finalize_django_types()
-    state = resolve_declared_cursor_state(issue_type)
+    state = declared_cursor_state_for_definition(issue_type.__django_strawberry_definition__)
     assert state is not None
     columns, fingerprint = state.columns, state.fingerprint
     info = _FakeInfo()

@@ -15,7 +15,9 @@ newest-first mixed-direction shape) and ``PeriodicalType.issuesConnection``
 - a cursor outlives a ``SECRET_KEY`` rotation that declares the old key in
   ``SECRET_KEY_FALLBACKS``, and dies with one that does not;
 - cursors are permission-aware by construction: a staff-minted cursor
-  replays for an anonymous viewer over only the rows that viewer can see.
+  replays for an anonymous viewer over only the rows that viewer can see;
+- the nested window itself is scoped by the target hook the plan applied, so a
+  keyset page is partitioned over the viewer's rows and counted on them.
 
 Cursors are always MINTED then round-tripped - never pinned as literals -
 because the payload is authenticated-encrypted opaque bytes (the codec contract).
@@ -753,3 +755,75 @@ def test_nested_keyset_omitted_first_caps_at_relay_max_results():
     assert len(after_page["edges"]) == 100
     assert after_page["pageInfo"]["hasNextPage"] is True
     assert after_page["pageInfo"]["hasPreviousPage"] is True
+
+
+@pytest.mark.django_db
+def test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out():
+    """The keyset window is built from the SAME definition that answered the hook.
+
+    ``PeriodicalType.issuesConnection`` is a synthesized relation connection in
+    keyset mode: the walker decides whether ``IssueType.get_queryset`` runs over
+    the child queryset, then derives the window's cursor vocabulary - columns,
+    ordering, fingerprint - from the target's declared ``cursor_field``. Both
+    answers come from the child definition the relation was resolved through, so
+    a keyset page cannot be partitioned over a population its visibility hook
+    never saw.
+
+    The embargoed issue is the newest one in its partition, so under the
+    declared newest-first order it would be the FIRST edge of that page and the
+    page's ``endCursor`` would point at a row the viewer may not see. It is
+    absent, the partition count is the viewer's, and the whole page is still one
+    batched query - the planned window, not a per-parent fallback.
+    """
+    astronomy, _botany, _empty = _seed_periodicals()
+    models.Issue.objects.create(
+        periodical=astronomy,
+        number=6,
+        title="Embargoed #6",
+        embargoed=True,
+    )
+
+    with CaptureQueriesContext(connection) as ctx:
+        by_name = _nested_by_periodical(first=2)
+    issue_queries = [q["sql"] for q in ctx.captured_queries if 'FROM "library_issue"' in q["sql"]]
+    assert len(issue_queries) == 1, issue_queries
+
+    astro = by_name["Astronomy Weekly"]
+    assert _titles(astro) == ["Astro #5", "Astro #4"]
+    assert astro["totalCount"] == 5
+    assert by_name["Botany Monthly"]["totalCount"] == 3
+
+
+@pytest.mark.django_db
+def test_nested_keyset_window_keeps_embargoed_rows_for_staff():
+    """The same window returns the embargoed issue first once the viewer is staff.
+
+    The absence above is ``IssueType.get_queryset``'s non-staff branch running
+    inside the plan, not the window declining to reach the row: under the declared
+    newest-first order the embargoed issue leads its partition here, and the
+    partition count is the staff viewer's.
+    """
+    astronomy, _botany, _empty = _seed_periodicals()
+    models.Issue.objects.create(
+        periodical=astronomy,
+        number=6,
+        title="Embargoed #6",
+        embargoed=True,
+    )
+    user_model = get_user_model()
+    staff = user_model.objects.create_user(username="nested-staff", password="pw", is_staff=True)
+    client = TestClient()
+    with client.login(staff):
+        with CaptureQueriesContext(connection) as ctx:
+            payload = client.query(NESTED_QUERY, variables={"first": 2}).response.json()
+    assert payload.get("errors") is None, payload
+    by_name = {
+        edge["node"]["name"]: edge["node"]["issuesConnection"]
+        for edge in payload["data"]["allLibraryPeriodicalsConnection"]["edges"]
+    }
+    issue_queries = [q["sql"] for q in ctx.captured_queries if 'FROM "library_issue"' in q["sql"]]
+    assert len(issue_queries) == 1, issue_queries
+
+    astro = by_name["Astronomy Weekly"]
+    assert _titles(astro) == ["Embargoed #6", "Astro #5"]
+    assert astro["totalCount"] == 6

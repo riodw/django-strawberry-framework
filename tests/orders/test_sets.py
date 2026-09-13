@@ -30,6 +30,7 @@ from graphql import GraphQLError
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import Ordering, OrderSet, RelatedOrder
+from django_strawberry_framework.orders import sets as sets_module
 from django_strawberry_framework.orders.factories import OrderArgumentsFactory
 from django_strawberry_framework.orders.inputs import (
     _field_specs,
@@ -37,6 +38,8 @@ from django_strawberry_framework.orders.inputs import (
 )
 from django_strawberry_framework.orders.sets import (
     _ORDER_NORMALIZATION_CAPTURE,
+    _AppliedNormalization,
+    _NormalizationLedger,
     _validate_normalized_terms,
     capture_applied_order_normalization,
 )
@@ -2515,3 +2518,161 @@ def test_orderset_normalize_input_validation_contract():
         match=r"InvalidDirectionOrder\._normalize_input returned invalid term",
     ):
         InvalidDirectionOrder._input_has_active_terms([{"title": "ASC"}])
+
+
+# =============================================================================
+# Closure is terminal: a descendant that outlives the resolution finds a tombstone
+# =============================================================================
+#
+# Package-side with the rest of the ledger rows. The subject is an
+# invocation-scoped transport reached only through a ContextVar, and the state
+# under test is what a descendant finds there AFTER the resolution that owned it
+# has returned its response - there is no request left to observe it from. The
+# ordering behaviour the ledger serves is live in
+# ``examples/fakeshop/test_query/test_list_field_api.py``.
+
+
+def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
+    """A delayed child's apply finds a closed ledger and attests nowhere.
+
+    ``asyncio.create_task`` inside a live scope hands the child a context that
+    binds the same ledger OBJECT, and the child may not resume until after the
+    parent has left. Emptying the ledger on exit is not enough on its own: the
+    child would append into the same object and claim its own attestation from
+    a resolution that has already ended, keeping the input alive in an orphan
+    context and turning that context's later term check into an attested one.
+    Closure is therefore terminal, and the child's application behaves exactly
+    like one made outside any scope at all - three normalizations for the
+    standalone double-normalization path, nothing recorded.
+
+    The must-not is the live-scope behaviour above: a descendant created and run
+    INSIDE an open scope still publishes and is still claimed, so the tombstone
+    closes the orphan window without closing the delegation the ledger exists
+    for.
+    """
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class OutlivingOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        normalize_count = 0
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            cls.normalize_count += 1
+            return super()._normalize_input(input_value)
+
+    OutlivingInput = OrderArgumentsFactory(OutlivingOrder).arguments
+    order_input = [OutlivingInput(title=Ordering.ASC)]
+    released = asyncio.Event()
+    observed: dict[str, object] = {}
+
+    async def child():
+        await released.wait()
+        # Inside the child's own copied context the binding is still the parent's
+        # ledger object - which is precisely why emptying it would not be enough.
+        ledger = _ORDER_NORMALIZATION_CAPTURE.get()
+        assert ledger is not None
+        await OutlivingOrder.apply_async(order_input, Book.objects.all(), info)
+        observed["records_after_apply"] = list(ledger._records)
+        observed["claim"] = ledger.claim(OutlivingOrder, order_input)
+        observed["active"] = OutlivingOrder._input_has_active_terms(order_input)
+
+    async def parent():
+        with capture_applied_order_normalization():
+            # Created INSIDE the live scope, so the task's copied context binds
+            # the ledger; it does not run until the scope is long gone.
+            task = asyncio.create_task(child())
+        released.set()
+        await task
+
+    asyncio.run(parent())
+
+    assert observed["records_after_apply"] == []
+    assert observed["claim"] is None
+    assert observed["active"] is True
+    # One normalization for the apply, then the standalone path's two.
+    assert OutlivingOrder.normalize_count == 3
+
+
+def test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
+    """The same tombstone through ``copy_context()`` and a real worker thread.
+
+    The thread handoff is the shape ``sync_to_async`` takes, and a worker can
+    outlive the resolution that spawned it just as a task can. It reaches the
+    same closed ledger through the same copied binding.
+    """
+    info = SimpleNamespace(context={"request": HttpRequest()})
+
+    class OutlivingWorkerOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    WorkerInput = OrderArgumentsFactory(OutlivingWorkerOrder).arguments
+    worker_input = [WorkerInput(title=Ordering.ASC)]
+
+    with capture_applied_order_normalization():
+        copied = contextvars.copy_context()
+        ledger = _ORDER_NORMALIZATION_CAPTURE.get()
+        assert ledger is not None
+    # The scope is over; the copied context still binds the same object.
+    assert copied[_ORDER_NORMALIZATION_CAPTURE] is ledger
+
+    def apply_in_worker():
+        copied.run(OutlivingWorkerOrder.apply_sync, worker_input, Book.objects.all(), info)
+
+    worker = threading.Thread(target=apply_in_worker)
+    worker.start()
+    worker.join()
+
+    assert ledger._records == []
+    assert ledger.claim(OutlivingWorkerOrder, worker_input) is None
+    assert _ORDER_NORMALIZATION_CAPTURE.get() is None
+
+
+def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch):
+    """Closure runs first and in its own ``finally``; a broken reset cannot skip it.
+
+    The tombstone is what descendants observe, so it must be set even when
+    tearing the binding down fails. The reset failure itself still propagates -
+    it is a real defect, not something to swallow - but it propagates from a
+    ledger that is already closed.
+    """
+    real = sets_module._ORDER_NORMALIZATION_CAPTURE
+
+    class _ResetFails:
+        """Delegates the binding, refuses to tear it down."""
+
+        def get(self):
+            return real.get()
+
+        def set(self, value):
+            return real.set(value)
+
+        def reset(self, token):
+            real.reset(token)
+            raise RuntimeError("reset failed")
+
+    monkeypatch.setattr(sets_module, "_ORDER_NORMALIZATION_CAPTURE", _ResetFails())
+
+    class ResetFailureOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    ResetInput = OrderArgumentsFactory(ResetFailureOrder).arguments
+    order_input = [ResetInput(title=Ordering.ASC)]
+    escaped: dict[str, object] = {}
+
+    with pytest.raises(RuntimeError, match="reset failed"):
+        with capture_applied_order_normalization():
+            escaped["ledger"] = sets_module._ORDER_NORMALIZATION_CAPTURE.get()
+
+    ledger = escaped["ledger"]
+    assert isinstance(ledger, _NormalizationLedger)
+    ledger.publish(_AppliedNormalization(ResetFailureOrder, order_input, ()))
+    assert ledger._records == []
+    assert ledger.claim(ResetFailureOrder, order_input) is None

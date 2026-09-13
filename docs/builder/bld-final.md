@@ -8,7 +8,7 @@ Cycle artifacts: [`bld-slice-1-argument_normalization.md`][bld-s1],
 [`bld-slice-4-live_acceptance.md`][bld-s4],
 [`bld-slice-5-documentation_fold_in.md`][bld-s5],
 [`bld-integration.md`][bld-int].
-Status: review-fixes-applied 2026-09-11 — fifth review's fixes landed; default and sharded pytest tiers re-run on them (figures under `## Fifth implementation review`). Every earlier gate figure in this file is SUPERSEDED by those code changes and is kept only as the historical record of the tier it measured. Floor verification has not been re-run against this tree, so the final gate is NOT green
+Status: gate-green 2026-09-13 — the sixth review's metadata-integrity fixes landed and the full gate ran clean on one tree (HEAD `96b9e047` plus this round's working-tree changes): default **7775 passed / 40 skipped / 100.00%**, sharded **7792 passed / 37 skipped / 100.00%**, floor **2397 passed / 2 skipped** at Python 3.10.19 + Django 5.2.16 + strawberry-graphql 0.316.0, zero failures anywhere; figures and scope under `## Sixth implementation review`. Every EARLIER gate figure in this file is SUPERSEDED by the sixth round's code changes and kept only as the historical record of the tier it measured — in particular, neither fifth-review invocation was green (each reached 100% coverage while carrying a failing test, which is evidence about coverage and not a passing suite) and neither had a floor run
 
 ## Artifact shape: one Worker 1 pass
 
@@ -388,8 +388,8 @@ What landed:
 - `keyset.py::declared_cursor_state_for_definition` is the definition-keyed derivation;
   `_generate_connection_class` fixes `_dst_keyset_state` in the class namespace, so
   `_keyset_connection_context` reads a value decided at generation instead of resolving one from
-  the node type at first request. `resolve_declared_cursor_state` stays as the type-keyed
-  wrapper the plan-time nested window uses.
+  the node type at first request. (The sixth review retired the type-keyed wrapper this round
+  left standing for the plan-time nested window - see `## Sixth implementation review`.)
 - `types/finalizer.py` resolves a synthesized relation connection's target definition ONCE from
   `registry.get_definition(target_type)` and threads it into `_connection_type_for` and
   `_build_relation_connection_resolver`, so that path never reads the target class at all. A
@@ -515,6 +515,149 @@ the connection thread-through, the generation-time keyset vocabulary and the reg
 relation path), Decision 4's bound table gains the exact-boolean opt-in rule, the normalization
 bullet is rewritten around the attestation ledger and why a slot cannot satisfy both halves, and
 Test-plan item 22 states the raw-byte oracle for EVERY legacy row including the combined one.
+
+## Sixth implementation review — fixes applied 2026-09-13, gate pending
+
+The review at `96b9e047` accepted the fifth round's list/connection factory read-once fix, the
+child-delegated order attestation, the exact-boolean trusted bound and the combined raw-response
+oracle, and found three architectural defects plus two documentation/maintenance ones. All five
+have landed.
+
+### P1-1 — the optimizer now plans from the captured child definition
+
+The nested planner asked the target CLASS for its metadata at request time, three ways: the
+injected `_target_has_custom_get_queryset` (through `DjangoType.has_custom_get_queryset`),
+`resolve_declared_cursor_state(target_type)`, and `_build_child_queryset`'s visibility call with
+no `model=` seam. A real `DjangoSchema` probe with the optimizer installed and a read counter
+armed only for execution recorded two reads on the minimum default-hook case.
+
+The escalation was real and is now pinned live. A relation the walker PLANS is served to the
+generated resolver as already-scoped rows (`types/resolvers.py::_optimizer_scoped_relation`), so
+a planner that answered the `get_queryset` question wrongly would build the child from the
+unscoped default manager and the resolver would stand down over it. Forcing
+`_target_has_custom_get_queryset` to `False` leaks private rows through the shipped
+`allCategories { items }` and `allCategories { itemsConnection }` documents and embargoed issues
+through `PeriodicalType.issuesConnection`.
+
+- `optimizer/walker.py::_resolve_relation_target` returns `(origin, definition)` instead of
+  collapsing `related_target_for`'s pair. The unresolved-relation fallback answers in the same
+  shape from `registry.get(related_model)` + `registry.get_definition(origin)` — the lookup
+  `_has_custom_id_resolver` already used.
+- `_target_has_custom_get_queryset` takes the captured definition and reads
+  `definition.has_custom_get_queryset`. The class predicate survives only for a registration
+  the registry holds WITHOUT a definition, which `DjangoType.__init_subclass__` cannot produce
+  (it registers both atomically) and which ~80 package-test stubs registered through
+  `registry.register` do produce.
+- `_build_child_queryset` takes `target_model=` and threads it into the visibility runner's
+  existing captured-model seam, so both seals of the child's visibility call validate against
+  the model the relation was resolved through.
+- `plan_relation` keeps its public three-value seam and gains a keyword-only
+  `target_definition=`; the walk always supplies it.
+- The definition rides `_dispatch_single_relation`, `_plan_select_relation`,
+  `_plan_prefetch_relation`, `_build_prefetch_child_queryset` and `_apply_hint`, so the list
+  path spends the same one answer the connection path does.
+- `nested_planner.py::plan_connection_relation` derives its keyset context through
+  `declared_cursor_state_for_definition(target_definition)`. With that, `keyset.py`'s type-keyed
+  `resolve_declared_cursor_state` wrapper had no production caller and is deleted; its two
+  package tests were retargeted at the definition-keyed function.
+
+### P1-2 — the registry is the one canonical metadata source
+
+`_validate_djangotype_target` proved only `issubclass(DjangoType)` and `origin is target_type`.
+A probe assigned a `SimpleNamespace(origin=child, model=Item, orderset_class=None)` to an
+unregistered child's definition attribute and `DjangoListField(child)` accepted it; a second
+probe warmed the connection cache from one definition and got that class back for a same-origin
+replacement declaring `connection = {"total_count": True}`.
+
+- The validator now also compares its one contained read by IDENTITY against
+  `registry.get_definition(target_type)`. Fabricated same-origin objects, copies of the real
+  definition, and targets the registry has dropped are all rejected at the constructing line.
+  The hostile-read containment is untouched. List, connection and Relay node fields all enter
+  through this one validator (`_validate_relay_djangotype_target` delegates), so the definition
+  of "registered target" cannot drift by factory.
+- `connection.py::_connection_type_cache` holds `_CachedConnectionType(definition,
+  connection_type)` and `_connection_type_for` verifies provenance on every warm hit, raising
+  `ConfigurationError` rather than serving the first field's shape beside a second field's
+  published arguments. `registry.unregister`'s eviction and `clear_connection_type_cache` are
+  unchanged.
+
+### P2-1 — ledger closure is terminal
+
+`_NormalizationLedger.close()` cleared both collections but left the object usable, so a task or
+worker thread holding the copied context could resume after the scope ended, append, and claim
+its own attestation. The ledger gained a `_closed` tombstone set with both clears under ONE lock
+acquisition; `publish` and `claim` are inert afterwards, matching an application made outside any
+scope. `capture_applied_order_normalization` closes in its own `finally` BEFORE resetting the
+binding, so a descendant observes the tombstone immediately and a failing reset cannot skip
+closure.
+
+### P3-1 — `_dst_node_type` removed
+
+The generated connection class wrote `_dst_node_type` and claimed the optimizer's window handoff
+read it back. Nothing read it. The slot and both comments referring to it are gone; the keyset
+slot `_dst_keyset_state`, which IS read, stays.
+
+### P3-2 — the glossary's two incompatible no-`totalCount` return types
+
+`Meta.connection` said a false opt-in uses `DjangoConnection[T]` without the field, while
+`DjangoConnection` correctly says the field never hands the schema the generic base. Corrected in
+the glossary DB and re-rendered. The same pass folded the registry-canonical rule into
+`DjangoListField` and `DjangoConnectionField`.
+
+### Proofs added
+
+| Claim | Row | Fails when |
+| --- | --- | --- |
+| Planning reads no target class | `tests/test_connection.py::test_the_optimizer_plans_a_relation_without_reading_the_target_class` | `_resolve_relation_target` returns `None` for the definition (3 residual reads, cold plan) |
+| Planned list relation is scoped | `examples/fakeshop/test_query/test_products_visibility_api.py::test_anonymous_planned_list_relation_omits_the_targets_private_rows` | `_target_has_custom_get_queryset` forced `False` |
+| Planned connection window is scoped | `examples/fakeshop/test_query/test_products_visibility_api.py::test_anonymous_planned_relation_connection_window_omits_the_targets_private_rows` | same |
+| Keyset window is scoped | `examples/fakeshop/test_query/test_keyset_api.py::test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out` | same |
+| Fabricated / copied / dropped definitions rejected | `tests/test_list_field.py::test_djangolistfield_rejects_a_fabricated_same_origin_definition` and its two siblings | the `definition is not canonical` clause removed |
+| Accepted object is the registry's | `tests/test_list_field.py::test_djangolistfield_accepts_and_captures_the_registrys_exact_object` | — (positive control) |
+| Warm cache refuses alternate metadata | `tests/test_connection.py::test_a_warm_connection_cache_refuses_alternate_metadata_for_its_target` | provenance check removed |
+| Closed ledger stays closed (task) | `tests/orders/test_sets.py::test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger` | tombstone removed |
+| Closed ledger stays closed (thread) | `tests/orders/test_sets.py::test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger` | tombstone removed |
+| Closure precedes the reset | `tests/orders/test_sets.py::test_a_failing_binding_reset_still_leaves_the_ledger_closed` | tombstone removed, or the nested `finally` flattened |
+
+Each failing-when column was executed: the mutation applied, the row run, the mutation reverted,
+and the restore verified by byte compare. The node-id list was read, not counted - forcing
+`_target_has_custom_get_queryset` false also fails the shipped
+`test_cascading_target_hook_blocks_fk_id_elision_over_http`, which pins the same predicate's
+FK-id-elision arm.
+
+Each anonymous row above carries a staff sibling
+(`test_staff_planned_list_relation_keeps_every_row`,
+`test_staff_planned_relation_connection_window_keeps_every_row`,
+`test_nested_keyset_window_keeps_embargoed_rows_for_staff`) proving the scoping is the hook's
+non-staff branch and not the plan refusing to fetch. Those are CONTROLS, not boundary proofs:
+they stay green under the mutation, by design.
+
+### Gate
+
+Run on ONE tree: HEAD `96b9e047` plus this round's working-tree changes. Every invocation below
+carried ZERO failures; a run with a failing test is not recorded here as green.
+
+- `uv run ruff format --check .` - 444 files already formatted. `uv run ruff check .` - all checks passed.
+- `uv run python scripts/check_trailing_commas.py --check <changed paths>` - clean.
+- `uv run python scripts/check_citations.py` - OK, 995 citations resolve (825 in 442 `.py`
+  files, 170 in `KANBAN.md`).
+- `uv run python scripts/check_kanban_anchors.py` - OK, 76 card anchors unique, no collision
+  with the 146 glossary anchors.
+- `uv run python scripts/build_kanban_tracked_path_constants.py --check` - exit 0.
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-050-...md` - OK, 43 terms.
+- `uv run pytest` - **7775 passed, 40 skipped**, coverage **100.00%** (`fail_under = 100` met).
+- `FAKESHOP_SHARDED=1 uv run pytest` - **7792 passed, 37 skipped**, coverage **100.00%**.
+- Floor verification - Python **3.10.19**, Django **5.2.16**, strawberry-graphql **0.316.0** in
+  a throwaway venv outside the repo. Focused scope covers every Strawberry-internals and
+  queryset-compilation seam this round touched: `tests/base/test_init.py`,
+  `tests/test_list_field.py`, `tests/test_connection.py`, `tests/test_relay_connection.py`,
+  `tests/test_keyset_connection.py`, `tests/orders/test_sets.py`,
+  `tests/utils/test_querysets.py`, `tests/optimizer/`, `tests/test_relay_node_field.py`,
+  `tests/test_registry.py`, `tests/types/`, and the four live modules
+  (`test_list_field_api.py`, `test_list_field_async_api.py`,
+  `test_products_visibility_api.py`, `test_keyset_api.py`). **2397 passed, 2 skipped**,
+  `--no-cov`. The shared `.venv` was read afterwards and is unmutated (Django 6.1,
+  strawberry-graphql 0.324.0); `uv.lock` and `pyproject.toml` carry no diff.
 
 <!-- LINK DEFINITIONS -->
 

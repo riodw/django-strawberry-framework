@@ -283,13 +283,15 @@ class DeclaredCursorState:
 def declared_cursor_state_for_definition(definition: Any) -> DeclaredCursorState | None:
     """Derive the declared keyset vocabulary from a ``DjangoTypeDefinition``.
 
-    The DEFINITION-keyed derivation; :func:`resolve_declared_cursor_state` is
-    its type-keyed wrapper, and the two are genuinely different questions. A
-    surface that already holds its target's definition (the connection class
-    generated for a field) asks this one, so the cursor vocabulary a connection
-    mints and decodes with is fixed by the same object that fixed its name and
-    its sidecar arguments. ``None`` when the definition carries no declaration
-    (or is not one) - the offset vocabulary applies.
+    The one derivation, and it is DEFINITION-keyed because every caller holds a
+    captured definition: the connection class generated for a field takes its
+    own, and the plan-time nested window takes the child definition the walker
+    resolved the relation through. Cursor vocabulary is therefore fixed by the
+    same object that fixed the connection's name and its sidecar arguments, and
+    plan-time decode and resolve-time mint share columns and fingerprint by
+    construction (the cross-strategy byte-parity invariant). ``None`` when the
+    definition carries no declaration (or is not one) - the offset vocabulary
+    applies.
     """
     cursor_field = getattr(definition, "cursor_field", None)
     if cursor_field is None:
@@ -299,23 +301,6 @@ def declared_cursor_state_for_definition(definition: Any) -> DeclaredCursorState
         cursor_field=cursor_field,
         columns=cursor_columns_for(definition.model, cursor_field),
         fingerprint=order_fingerprint(cursor_field),
-    )
-
-
-def resolve_declared_cursor_state(target_type: Any) -> DeclaredCursorState | None:
-    """Resolve one DjangoType's declared ``Meta.cursor_field`` state.
-
-    The TYPE-keyed wrapper over :func:`declared_cursor_state_for_definition`,
-    for the callers that hold only the type: the plan-time nested window
-    (``optimizer/nested_planner.py``'s keyset context) reaches its target
-    through the walker, not through a field factory. Plan-time decode and
-    resolve-time mint therefore still share columns and fingerprint by
-    construction (the cross-strategy byte-parity invariant) - one derivation,
-    two ways in. ``None`` when the type carries no declaration (or is not a
-    DjangoType) - the offset vocabulary applies.
-    """
-    return declared_cursor_state_for_definition(
-        getattr(target_type, "__django_strawberry_definition__", None),
     )
 
 

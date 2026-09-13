@@ -115,28 +115,48 @@ class _NormalizationLedger:
     The lock is not decoration: ``asgiref``'s ``sync_to_async`` runs the
     wrapped callable in a worker thread carrying a COPY of this context, so two
     threads can genuinely reach one ledger.
+
+    Closure is TERMINAL. A descendant created while the scope was live keeps
+    this object through the context it copied, and it may resume after the
+    owning resolution has ended; the closed flag makes every later publication
+    and every later claim inert, so the ledger cannot regain invocation state
+    -- or hold an input object alive -- past the resolution it belongs to.
     """
 
-    __slots__ = ("_claimed", "_lock", "_records")
+    __slots__ = (
+        "_claimed",
+        "_closed",
+        "_lock",
+        "_records",
+    )
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._records: list[_AppliedNormalization] = []
         self._claimed: list[tuple[type, Any]] = []
+        self._closed = False
 
     def publish(self, record: _AppliedNormalization) -> None:
-        """Append one attestation. Never replaces or removes another."""
+        """Append one attestation. Never replaces or removes another.
+
+        A publication after closure is dropped, which is exactly what a public
+        ``apply_*`` outside any scope already does.
+        """
         with self._lock:
+            if self._closed:
+                return
             self._records.append(record)
 
     def claim(self, orderset_class: type, input_value: Any) -> _NormalizedTerms | None:
         """Claim the terms attested for this exact class and input object.
 
-        Returns ``None`` when nothing applicable was published, or when this
-        pair was already claimed in this resolution. Raises when two applicable
-        attestations disagree.
+        Returns ``None`` when nothing applicable was published, when this pair
+        was already claimed in this resolution, or when the ledger is closed.
+        Raises when two applicable attestations disagree.
         """
         with self._lock:
+            if self._closed:
+                return None
             for claimed_class, claimed_input in self._claimed:
                 if claimed_class is orderset_class and claimed_input is input_value:
                     return None
@@ -159,13 +179,17 @@ class _NormalizationLedger:
         return first
 
     def close(self) -> None:
-        """Drop every attestation and claim when the resolution ends.
+        """Mark the ledger terminal and drop every attestation and claim.
 
         The scope resets its binding on both exits, but a child task or worker
-        thread may still hold this object through a context it copied earlier;
-        emptying it means no invocation state outlives the invocation.
+        thread may still hold this object through a context it copied earlier.
+        Emptying alone would let such a descendant repopulate the object and
+        claim from it after the resolution ended, so the tombstone and the two
+        clears are set under ONE lock acquisition: a descendant either observes
+        the open ledger in full or the closed one, never a half-cleared one.
         """
         with self._lock:
+            self._closed = True
             self._records.clear()
             self._claimed.clear()
 
@@ -188,9 +212,12 @@ def capture_applied_order_normalization() -> Iterator[None]:
     anywhere, the consumer's context object is never written or cleared, and a
     concurrent resolution that opened its own scope has its own ledger.
 
-    The binding is reset AND the ledger emptied in ``finally``, so neither a
+    The ledger is CLOSED and the binding reset in ``finally``, so neither a
     rejected request nor a child task that outlived the resolution can carry a
-    record into the next one.
+    record into the next one. Closure runs first and the reset runs in its own
+    ``finally``: a descendant holding the copied context observes the tombstone
+    the moment the scope ends, and a failing reset still cannot leave the
+    ledger open.
 
     The scope yields nothing: the ledger is reached only through the
     ``ContextVar``, so no caller can retain a handle to it by taking the
@@ -201,8 +228,10 @@ def capture_applied_order_normalization() -> Iterator[None]:
     try:
         yield
     finally:
-        _ORDER_NORMALIZATION_CAPTURE.reset(token)
-        ledger.close()
+        try:
+            ledger.close()
+        finally:
+            _ORDER_NORMALIZATION_CAPTURE.reset(token)
 
 
 def _record_applied_normalization(
@@ -215,7 +244,9 @@ def _record_applied_normalization(
     Appends; it can never displace another application's attestation, so a
     delegating override that applies in a child task publishes to the ledger
     its parent will claim from, while an unrelated application in that same
-    child appends under its own identity and is never claimed.
+    child appends under its own identity and is never claimed. A descendant
+    that outlives the resolution reaches a CLOSED ledger, whose publish is
+    inert - identical to applying outside any scope at all.
     """
     ledger = _ORDER_NORMALIZATION_CAPTURE.get()
     if ledger is not None:

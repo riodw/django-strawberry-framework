@@ -1,4 +1,4 @@
-"""In-process wiring + error-mapping tests for the kanban GraphQL mutation surface (WS-3B).
+"""In-process wiring + error-mapping tests for the kanban GraphQL mutation surface.
 
 Executed against the composed project ``config.schema`` via ``execute_sync`` with a
 real GraphQL document (per AGENTS.md), never by calling resolver methods directly.

@@ -614,7 +614,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │   └── tests/    # Non-live app tests for kanban commands, services, signals, and board invariants.
 │       ├── test_commands.py      # Kanban command tests for the merged ``import_card_files`` workflow.
 │       ├── test_migrations.py    # Kanban data-migration contract tests.
-│       ├── test_mutations.py     # In-process wiring + error-mapping tests for the kanban GraphQL mutation surface (WS-3B).
+│       ├── test_mutations.py     # In-process wiring + error-mapping tests for the kanban GraphQL mutation surface.
 │       ├── test_services.py      # Kanban service tests for card resolution, creation, tracked paths, validation, and rollback.
 │       ├── test_services_gaps.py # Service-layer gap coverage for branches the main service suite leaves open.
 │       ├── test_signals.py       # Kanban signal tests for dependencies, done-card guards, blocking, and ordering.

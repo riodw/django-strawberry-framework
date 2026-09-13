@@ -37,14 +37,26 @@ this cycle's scope.
 `docs/builder/bld-043-escalation-1-empty_variables_guard.md`,
 `docs/builder/bld-043-escalation-2-endpoint_validation.md`,
 `docs/builder/bld-043-escalation-3-exemption_declarations.md` and
-`docs/builder/bld-043-integration.md` — were deleted once the cycle closed; this
-plan and `docs/builder/bld-043-final.md` survive it. All eight were introduced in
-`974d25b4` and die together, unmodified in between, so one retrieval pointer
-serves them all: `git show 974d25b4:docs/builder/<name>`. Every remaining
-`bld-043-review-*`, `bld-043-escalation-*` or `bld-043-integration` filename in
-this file is therefore a **retrieval key, not a live path** — nothing below is
-broken by their absence. One board row cites the live-conversion artifact and
-carries the same pointer inline (`TODO-ALPHA-053-0.0.15`, scope order 68).
+`docs/builder/bld-043-integration.md` — were deleted once the cycle closed, and
+`docs/builder/bld-043-final.md` followed them; **this plan is the cycle's one
+surviving file**, archived under `docs/builder/DONE/`.
+
+**Two death commits, so two pointers** (`START.md`: the earlier commit holds a
+stale copy of whatever outlived it). The eight per-pass artifacts were introduced
+in `974d25b4` and died together in `c536fdc3`, unmodified in between, so one
+pointer serves them all: `git show 974d25b4:docs/builder/<name>`. The final gate
+outlived them, was edited in `c536fdc3` to carry their retirement note, and dies
+in the commit that archives this plan — so its pointer is the **later** commit:
+`git show c536fdc3:docs/builder/bld-043-final.md`. Everything the final gate held
+that no other file recorded was folded into this plan first: the thirteen
+instrument failures under `## The cycle's instrument failures, consolidated` and
+the gate itself under `## Final gate`.
+
+Every remaining `bld-043-review-*`, `bld-043-escalation-*`, `bld-043-integration`
+or `bld-043-final` filename in this file is therefore a **retrieval key, not a
+live path** — nothing below is broken by their absence. One board row cites the
+live-conversion artifact and carries its pointer inline
+(`TODO-ALPHA-053-0.0.15`, scope order 68).
 
 ## Cycle framing
 
@@ -463,31 +475,113 @@ observable — measured, not argued: the wide-scope mutation added zero rows);
 production line it tests; **M4** nine raw-post sites missing their exemption
 declaration. Plus L1–L3.
 
-## The cycle's instrument failures
+## The cycle's instrument failures, consolidated
 
-Recorded because each produced a clean-looking reading that was wrong, and the
-next cycle stands where this one did.
+**Folded in from the retired `bld-043-final.md`
+(`git show c536fdc3:docs/builder/bld-043-final.md`).** This section absorbs the
+two places this plan recorded them while the cycle ran: its own three-item list
+under this heading, and `## Instrument failure, continued: a published node count
+that moved under its author`, whose content is item 5 below and whose closing
+"five instrument failures" the count derived here supersedes. Nothing else in the
+tree records them, and they are this cycle's most transferable output: **every one
+was caught only by a second instrument**, and several were committed *inside* a
+section whose own subject was measurement.
 
-1. **Worker 0's F3 dispatch table graded prose with the code's vocabulary.** The
-   recovery dispatch asserted two of F3's six behaviour families were still
-   unlanded, on the strength of `grep -c 'list, tuple'` and `grep -c 'unreadable'`
-   returning 0 against the spec. Both were **already landed** — the spec's prose
-   read "both lists and tuples" and "an array whose length cannot be read", which
-   is how a contract should be written and is exactly what those greps cannot
-   see. This is `BUILD.md` `## Claims are proven mechanically`'s named failure —
-   "a long grep phrase samples a claim's vocabulary rather than establishing its
-   population" — committed by the dispatcher, in a table handed to a worker as
-   fact. It cost nothing only because the dispatch also said to re-derive rather
-   than trust the table, and Cohort A did.
+The integration pass's item 9 said "Nine now" and listed nine. Counting the
+members rather than trusting the headline — this cycle's own repeated lesson, and
+`BUILD.md`'s named failure — the population is **eleven**: the nine below, plus
+**two the numbered list drops**, marked `†`. Both are real, both are already
+written down somewhere in the cycle, and both fall out of every published count.
+
+1. **Worker 0's F3 dispatch table graded prose with the code's vocabulary.** It
+   asserted two of F3's six behaviour families were unlanded on the strength of
+   `grep -c 'list, tuple'` and `grep -c 'unreadable'` returning 0 against the
+   spec. Both were already landed — the spec read "both lists and tuples" and "an
+   array whose length cannot be read", which is how a contract *should* be written
+   and is exactly what those greps cannot see. `BUILD.md`'s named failure,
+   committed by the dispatcher, in a table handed to a worker as fact. Caught only
+   because the dispatch also said to re-derive.
 2. **A pre-flight gate reading went stale inside its own cycle.** Pre-flight
-   recorded `check_spec_glossary` → `OK: 22 terms` and the recovery dispatch
-   repeated it. By then the partial pass had moved spec text and the gate was
-   **failing**; the recovery agent found it red. A gate result is evidence for
-   the tree that produced it, and a crashed pass in between invalidates it.
-3. **A green `git status` is not proof a crashed proof-runner left nothing
-   behind.** It happened to be true here, but the check that established it was
-   the mutation-marker sweep plus three independent byte-identity instruments —
-   not the dirty list.
+   recorded `check_spec_glossary` → `OK: 22 terms`; by the time the recovery agent
+   inherited it, a partial pass had moved spec text and the gate was **failing**.
+   A gate result is evidence for the tree that produced it.
+3. **Cohort B's `.post(`-blind live-tier census** missed a
+   `client.generic("POST", ...)` site — a textual sweep over one spelling of a
+   population with several.
+4. **The same census counted a ninth *file* outside its own stated population**,
+   found by escalation 3 rebuilding the census AST-first from `os.listdir` with an
+   asserted population size.
+5. **Cohort D's planner's live node count moved under its author.** The concurrent
+   spec-050 session appended two rows to `test_products_visibility_api.py`
+   mid-pass (8 → 10 nodes, four-file total 85 → 87). `START.md`'s self-falsifying
+   instrument in its purest form — a live count of a population the counter is
+   editing, in a tree a second session is also editing. The fix was to instruct
+   the builder to verify "post-edit count equals its own pre-edit baseline", never
+   to match a published number. Its sibling: "84 nodes" was a count of `def test_`
+   lines where a node count is `--collect-only` output; the two differ silently
+   (85, because one row is parametrized).
+6. **A `variables={}` census blind to a positional argument.** It swept keyword
+   spellings and reported 0 occurrences; the one real site passes it positionally.
+7. **"15 callers" that is 17** — the count of a None-passing *subset* promoted to
+   the count of the population.
+8. **"Two helpers forward under `is not None`" — there is one.** Found by the
+   paragraph's own author after the review had already corrected 6 and 7 in it:
+   three published figures in one paragraph, all three wrong, under the headline
+   "measured not assumed". A reviewer's finding list is a sample of a paragraph's
+   defects, not its census.
+9. **Cohort D's `### Notes for Worker 1` item 7 premise** ("D8 is the first live
+   row driving `TestClient._assert_file_placeholders`") — false: an AST sweep of
+   all 26 `files=` call sites in both test trees found three earlier live drivers,
+   all clean at HEAD. Its *conclusion* survives and gets stronger. It was also the
+   one Cohort D note that Cohort C's "discharged item by item" list did not name,
+   which is the tell: a discharge list that skips an item is often skipping the one
+   whose premise did not hold.
+
+`†` 10. **Cohort C's enumeration, built expressly so the deferred pass "cannot
+miss one", had three holes** — and the reviewer found only one of them. Re-deriving
+the population from scratch turned up the Test-plan/DoD `retained raw client.post`
+pair (making the exemption family four sites, not two) and — found by no pass —
+`## Test plan` scenario 8 describing `_RecordingTestClient`, the double the same
+cohort **deleted**, as the current mechanism. The hole no vocabulary sweep could
+reach was a *mechanism description*: a deletion's stranded sites are described,
+not named. Treat a reviewer's "your list has a hole" as a verdict on the
+**instrument**, and re-derive the whole population rather than patching the named
+line. Named in the integration pass's item 9 prose but standing outside its count.
+
+`†` 11. **A green `git status` is not proof a crashed proof-runner left nothing
+behind.** It happened to be true, but what established it was a mutation-marker
+sweep plus three independent byte-identity instruments — not the dirty list.
+Recorded in the build plan's own `## The cycle's instrument failures` as item 3,
+then silently dropped when that section was renumbered to five.
+
+`†` 12. **Post-gate, 2026-09-13: catalog item 2's four-file population was
+three.** `test_debug_toolbar_api.py` has no raw post; escalation 3's `.get(`
+census (23 sites, 4 files) was folded into the `.post(` / `.generic(` item by
+file name, and every later pass inherited the file list without re-running the
+grep it was built from. Caught by re-grepping `.post(\|.generic(` per file
+before homing.
+
+`†` 13. **Post-gate, 2026-09-13: "five async bodies across four live modules"
+undercounted the modules.** `test_kanban_mutations_api.py` holds a committed
+`AsyncTestClient()` site at HEAD that no cohort's census reached, because every
+census was run over the four files Cohort D was converting. The near-copy count
+(five) survives; the module count and the "sixth site is the only other one"
+framing do not. Caught by `grep -c 'AsyncTestClient()'` over the whole directory
+rather than the write set.
+
+With 12 and 13 the population is **thirteen**.
+
+**The shape they share.** Six of the eleven (1, 3, 4, 5, 6, 7) are a *sample of a
+claim's vocabulary* mistaken for its *population*; three (2, 5, 11) are a reading
+that was true when taken and false when used; and the two most expensive to catch
+(9, 10) are false *premises* and *descriptions* rather than false facts — which is
+why the integration pass, the only pass that reads the whole diff at once, is
+where they surfaced. A further pattern worth carrying: `START.md`'s partial-claim
+residual fired repeatedly this cycle — a recommended replacement sentence was
+itself the defect on **three** separate occasions, at up to the third level down
+(Worker 3's fix to Worker 2's text, corrected by Worker 1). `BUILD.md`'s "a
+prescribed fix is a hypothesis, never an instruction" held every time it was
+tested.
 
 ## Maintainer escalations (contract-level, dispatched for investigation)
 
@@ -692,9 +786,11 @@ including the three its own premises got wrong, corrected above.
    and it must not be left unhomed (`AGENTS.md` `## Past mistakes`: an item
    routed forward without a named owner dies). Homing it needs a KANBAN DB edit,
    which the same fence excludes. **Carried to the maintainer as the cycle's one
-   genuinely undischargeable item**, and recorded in `bld-043-final.md`'s
-   `### Deferred work catalog` with this reasoning so the next reader inherits
-   the constraint rather than the omission.
+   genuinely undischargeable item**. It is now **homed** on
+   `TODO-ALPHA-053-0.0.15` (scope order 68), bound to the async-helper decision
+   because the bullet's correct text depends on that decision's outcome, with
+   `TODO-ALPHA-056-0.0.17` named as its fallback home; the reasoning travelled
+   with it, so the next reader inherits the constraint rather than the omission.
 2. **Cohorts C and D share the three `worker-memory/043-worker-{1,2,3}.md`
    files.** Not a partition defect: `BUILD.md` `### Worker memory` scopes the
    notebook **per role**, not per cohort, so two concurrent Worker 1s sharing
@@ -703,23 +799,6 @@ including the three its own premises got wrong, corrected above.
    the one place information moves between them without passing through an
    artifact. Neither cohort's correctness depends on it here, and D's planner
    appended rather than consolidating at the cap, which is the right handling.
-
-## Instrument failure, continued: a published node count that moved under its author
-
-Cohort D's planner published a collected-node count, then caught the **concurrent
-spec-050 session appending two rows to `test_products_visibility_api.py` mid-pass**
-— moving the file to 10 nodes and the total from 85 to 87. The plan was corrected
-to instruct Worker 2 to verify "post-edit count equals its own pre-edit baseline"
-rather than match any published number.
-
-This is `START.md`'s self-falsifying instrument in its purest form — a live count
-of a population the counter is editing, in a tree a second session is also
-editing — and it is the fourth instrument failure this cycle (after Worker 0's
-prose-graded-with-code-vocabulary F3 table, the stale pre-flight gate reading, and
-Cohort B's `.post(`-blind census that missed a `client.generic("POST", ...)`).
-Escalation 3 separately found that same census counted a ninth *file* that was
-outside its own stated population. **Five instrument failures, every one caught
-only by a second instrument.**
 
 ## Concurrent-session files that will reach the final gate
 
@@ -793,3 +872,51 @@ delivery-table row and the `## Risks` fallback clause), and an explicit warning
 **not** to write "no live file claims the hand-built-multipart class" —
 `test_products_api.py` carries three live exemplars, and maintainer Decision 3
 licenses dropping class (d) alone.
+
+## Final gate
+
+**Folded in from the retired `bld-043-final.md`
+(`git show c536fdc3:docs/builder/bld-043-final.md`), which recorded it and which
+nothing else does.** Run by Worker 1 from the repo root in the shared `.venv`, in
+the order `BUILD.md` `## Final test-run gate` gives, **once** — no re-run to
+"check" a flake. No `--cov*` flag was passed and no coverage figure was read
+(`BUILD.md` `## Coverage is the maintainer's gate, not a worker's tool`);
+`--no-cov` is required because `pytest.ini`'s `addopts` auto-applies `--cov`.
+
+| # | Command as run | Result |
+| --- | --- | --- |
+| 1 | `uv run pytest --no-cov` | **PASS**, exit 0 — `7775 passed, 40 skipped` |
+| 2a | `uv run python examples/fakeshop/manage.py check` | **PASS**, exit 0 |
+| 2b | `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` | **PASS**, exit 0 |
+| 3a | `uv run ruff format --check .` | **PASS**, exit 0 (444 files) |
+| 3b | `uv run ruff check .` | **PASS**, exit 0 |
+| 3c | `git diff --check` | **PASS**, exit 0 |
+| 4 | Floor verification | **`none` declared, `none` owed** — scope declared in this plan's preamble on the module's runtime position, confirmed honored by the integration pass; no floor venv built, the shared `.venv` unmutated |
+
+Zero failures, zero collection or setup errors, across all four test trees in one
+invocation. `FAILED` and `ERROR` occur **0 times** in the captured log, counted as
+occurrences over the log rather than read off the summary line. No attribution
+work was owed: no row failed, so nothing was recorded-and-escalated or routed.
+Public surface unchanged — `git diff` on `django_strawberry_framework/__init__.py`
+and `testing/__init__.py` were both empty. Every cohort artifact's `Status:` was
+walked: A `final-accepted`, B `revision-needed` (correct and terminal — see
+`### Why Cohort B's box stays unticked`), C, D and the integration pass
+`final-accepted`.
+
+**Final status: `final-accepted`.**
+
+### Two gate readings worth carrying, neither of them about this cycle
+
+1. **`git diff --check` cannot see untracked files.** It compares the working tree
+   against the index, so every artifact a cycle creates is invisible to it and a
+   green result reads wider than it is. Closed here on a second instrument:
+   `git diff --check HEAD`, `git diff --cached --check`, and a per-file
+   `git diff --no-index --check /dev/null <path>` over every path from
+   `git ls-files --others --exclude-standard`.
+2. **The suite's two instruments disagree by two, and the difference is real.**
+   The per-worker progress stream carries 7775 `PASSED` + 38 `SKIPPED` = 7813,
+   exactly the collected item count, while the summary line reports 40 skipped.
+   The gap is collection-time skipping that emits no progress line (the sharded /
+   Postgres-gated modules). Load-bearing fact identical on both readings and on
+   the exit code: **0 failed, 0 errored.** Recorded because a number that does not
+   reconcile is worth a sentence, not a silent rounding.

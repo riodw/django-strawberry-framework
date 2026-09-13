@@ -264,6 +264,7 @@ Each produced a clean-looking pass while measuring nothing. Check instrument bef
 - **Green checker = evidence only for what it reads.** Two gates agreeing ≠ corroboration when one can't see the other's failure. State instrument input before trusting output; state PATTERN as parameter of any published figure.
 - **Enumerate, never grep-count, before writing.** Assert every site exists before touching any; partial match aborts w/ nothing written.
 - **Retiring a per-cycle artifact strands inbound refs.** Same pass: de-link to code span keeping prose, or retarget standing pointer at `git show <commit>:<path>`. Re-audit orphaned defs / undefined refs.
+- **Two death commits ⇒ two pointers.** Earlier commit holds a stale copy of whatever outlived it. Archived path may also name an earlier cycle's deleted file — say which.
 
 ## Style Rio cares about
 

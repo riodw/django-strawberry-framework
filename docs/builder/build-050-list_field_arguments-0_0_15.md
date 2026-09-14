@@ -3,7 +3,7 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: implementation complete through the seventh review's offset-guard and async-cleanup remediation (effective-order selection at the non-zero-offset guard, pre-iteration source cleanup at the shared async bounding seam, custom-hook metadata proof, live seed-call placement, stale prose). The final gate is OWED: this round changed production code, so the sixth round's green figures (default 7775 / sharded 7792 / floor 2397, zero failures) describe the tree before it and are kept as history. Figures, scope and commands in [`bld-final.md`][bld-final] `## Sixth implementation review`; what this round changed is under `## Seventh implementation review`
+Status: implementation complete through the eighth review's cleanup-precedence and proof-determinism remediation (control signals propagate out of async cleanup instead of becoming notes, the client window seam moved below the exported raw-list bound, a deterministic async deadline handoff, an executor-safe effective-order witness, cold/warm plan-cache assertions spelled apart, module description without frozen counts). The final gate is OWED: these rounds changed production code, so the sixth round's green figures (default 7775 / sharded 7792 / floor 2397, zero failures) describe the tree before them and are kept as history. Figures, scope and commands in [`bld-final.md`][bld-final] `## Sixth implementation review`; what the later rounds changed is under `## Seventh implementation review` and `## Eighth implementation review`
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).

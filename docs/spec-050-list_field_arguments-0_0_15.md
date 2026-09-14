@@ -2,12 +2,16 @@
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
 Status: in flight (`0.0.15`)
-Revision: 2026-09-13 - offset-guard and async-cleanup remediation complete (the non-zero-offset
-guard classifies the ONE ordering Django's compiler selects; the shared async bounding seam
-owns cleanup for a source its own deadline rejects) on top of the metadata-integrity round
-(one canonical definition across every field factory, the optimizer, and the connection cache;
-terminal ledger closure). The gate is owed again: full, sharded, and floor verification ran
-clean on one tree before this round's production changes (`0.0.15`) (revision history moved to
+Revision: 2026-09-13 - cleanup-precedence and proof-determinism remediation complete (a
+control signal raised during async cleanup propagates instead of becoming a note; the client
+window seam is package-private beneath the exported raw-list bound; the async deadline and
+effective-order proofs carry deterministic witnesses) on top of the offset-guard and
+async-cleanup round (the non-zero-offset guard classifies the ONE ordering Django's compiler
+selects; the shared async bounding seam owns cleanup for a source its own deadline rejects)
+and the metadata-integrity round (one canonical definition across every field factory, the
+optimizer, and the connection cache; terminal ledger closure). The gate is owed: full,
+sharded, and floor verification ran clean on one tree before these rounds' production changes
+(`0.0.15`) (revision history moved to
 [`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
 
 Deliberation, rejected alternatives, and this spec's change record live in its companion
@@ -949,13 +953,24 @@ is not adopted on intuition: it requires that evidence, and until then the full 
 every overridable public method. What the list field must not do under any circumstance is
 duplicate the seal's state reads locally in order to skip it.
 
-The implementation extends
-[`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy] and its
+The client window is applied by the one raw-list bounding seam rather than sliced locally in
+[`django_strawberry_framework/list_field.py`][list-field]. It is NOT added to the exported
+helper's signature. `offset` / `limit` are values the seam cannot check: a window wider than
+the request's own ceiling would silently widen the bound
+[`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy] advertises
+to everyone who imports it, and the argument normalizer is already the single owner of that
+check, rejecting an out-of-range value with a typed, argument-named error before any of it
+reaches the seam. So the coordinate-bearing seam is package-private, and the exported helper
+and its
 [`django_strawberry_framework/resource_policy.py::bounded_rows_async`][resource-policy]
-sibling with optional validated `offset` / `limit` values rather than slicing locally in
-[`django_strawberry_framework/list_field.py`][list-field]. `bounded_rows` remains the one
-raw-list bound for root and relation lists; callers without client arguments take its exact
-existing branch. *Alternatives rejected: see the [rationale][rationale-d5] (a fresh
+sibling delegate to it with no window - keeping their advertised bound unconditionally true
+for a direct caller, and growing no second ceiling with a second error contract. That private
+seam remains the one raw-list window implementation for root and relation lists; callers
+without client arguments take its exact existing branch. [`spec-047`][spec-047]'s invariant
+that the exported pair is the only raw-list bound is read through this delegation:
+[`django_strawberry_framework/resource_policy.py::_raw_list_bound`][resource-policy] stays the
+one place a limit is derived, and the private seam is the body those two names run, not a
+second bound beside them. *Alternatives rejected: see the [rationale][rationale-d5] (a fresh
 pagination helper).*
 
 Async queryset completion needs one additional representation boundary.
@@ -1213,8 +1228,9 @@ before any field wrapper runs.
 If an async-only source is rejected for supplied ordering or nonzero offset before it reaches
 `bounded_rows_async`, the list pipeline obtains its iterator and invokes/awaits `aclose` when
 that optional method exists without calling `__anext__`. The `ListArgumentError` remains the
-primary exception; failure to obtain or close the iterator is attached as a diagnostic note.
-This uses the same package-private cleanup utility and primary-error precedence as
+primary exception; failure to obtain or close the iterator is attached as a diagnostic note,
+and every such note names the seam that produced it, because more than one reaches the shared
+utility. This uses the same package-private cleanup utility and primary-error precedence as
 `bounded_rows_async`, so rejection cannot leak a generator or grow a second cleanup policy.
 The close is owed on every rejecting exit, including when constructing the
 `ListArgumentError` itself fails (malformed schema metadata behind the wire-name lookup): that
@@ -1233,6 +1249,15 @@ through the one existing deadline check: no second clock read is added, and no c
 catch is placed in the list field, where the other callers of the shared bounding seam would
 stay exposed. `limit: 0` is included, because the empty-window short-circuit sits downstream of
 the clock and so never gets to perform the close it promises on a healthy request.
+
+Primary-error precedence stops at ordinary failures. Cleanup runs while a useful error is
+already on its way out, so a cleanup `Exception` is demoted to a note on it; a `BaseException`
+that is not an `Exception` is not a cleanup diagnostic at all but a control signal addressed
+to the task - cancellation, interrupt, interpreter exit - and it propagates instead. Demoting
+one would let a cancelled request finish carrying an ordinary field error, reporting a
+completed operation to a client whose task was torn down with the source still being closed.
+Both cleanup seams share the one rule, and the primary error stays reachable as the signal's
+`__context__`.
 
 The symmetric SYNC contract is deliberately DECLINED in this card, and declining it is stated
 rather than left as an implied promise. A retained sync generator consumed through
@@ -1367,7 +1392,7 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
 
 | Slice | Files | Delta |
 |---|---|---|
-| 1 | [`django_strawberry_framework/list_field.py`][list-field], [`django_strawberry_framework/resource_policy.py`][resource-policy], [`django_strawberry_framework/__init__.py`][package-init] | Synthesized list signature; error-lazy schema-derived wire names; normalized list arguments with independent supplied/window/order fields; `ListArgumentError` plus its root export; window-aware extension of the one raw-list bounding seam; shared async-iterator cleanup; no-argument fast path. |
+| 1 | [`django_strawberry_framework/list_field.py`][list-field], [`django_strawberry_framework/resource_policy.py`][resource-policy], [`django_strawberry_framework/__init__.py`][package-init] | Synthesized list signature; error-lazy schema-derived wire names; normalized list arguments with independent supplied/window/order fields; `ListArgumentError` plus its root export; a package-private window seam beneath the one exported raw-list bound; shared async-iterator cleanup that keeps control signals out of its note path; no-argument fast path. |
 | 2 | [`django_strawberry_framework/list_field.py`][list-field], [`django_strawberry_framework/orders/sets.py`][orders-sets], [`django_strawberry_framework/utils/querysets.py`][querysets], [`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize`][optimizer-extension] | Sync/async Meta-order pipeline, OrderSet-owned active-term detection, post-apply and combined-query guards, async-only queryset completion adapter, optimizer preservation, combined offset/limit application. |
 | 3 | [`tests/test_list_field.py`][test-list-field], [`tests/test_resource_policy.py`][test-resource-policy], [`tests/orders/test_sets.py`][test-orders-sets], [`tests/base/test_init.py`][test-base-init] | Construction/direct-call mechanics, naming fallback, `ListArgumentError` pickle round trip, active-term/override call-count, post-apply validator arms, exact iterator consumption/cleanup precedence, model-order state, query low/high marks, and removal of adapter-masking async-unsafe setup where HTTP cannot isolate the mechanic. |
 | 4 | Planned `examples/fakeshop/test_query/test_list_field_api.py` and `examples/fakeshop/test_query/test_list_field_async_api.py`, [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy], [`examples/fakeshop/test_query/test_multi_db.py`][fakeshop-test-multi-db], [`examples/fakeshop/apps/kanban/constants.py`][fakeshop-kanban-constants] | Dogfood arguments on the three existing shipped Branch list fields from a dedicated sync suite, mount exceptional fields only in test-local schemas, cover ordered pages/visibility/caps/errors/naming/sync-async shapes/routing/SQL, and regenerate tracked paths after both new files enter the index. No new field is added to the shipped library schema. |
@@ -1377,11 +1402,14 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
 
 - [`django_strawberry_framework/resource_policy.py::effective_bound`][resource-policy]
   remains the only field/policy ceiling rule.
-- [`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy] and
+- One package-private window seam per execution color is the only raw-list window
+  implementation, and
+  [`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy] and
   [`django_strawberry_framework/resource_policy.py::bounded_rows_async`][resource-policy]
-  remain the only raw-list window implementation. Relation-list callers pass no client
-  window and retain current behavior. Their iterator-close/error-note logic is extracted to
-  one package-private utility that LIVES BESIDE THEM, below every caller: the list pipeline
+  are coordinate-free delegations to it rather than a second body. Relation-list callers pass
+  no client window and retain current behavior. The iterator-close/error-note logic is
+  extracted to one package-private utility that LIVES BESIDE THEM, below every caller: the
+  list pipeline
   rejecting an async-only source before bounding, and the bounding seam's own deadline/row
   rejection, which abandons a source the resolver has already produced. Neither may restate the
   acquisition, diagnostic-note or close policy, and no second cleanup implementation is
@@ -1510,6 +1538,9 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
 - An offset beyond the available row count returns `[]` when it remains within policy.
 - `trusted_max_rows=True` with no `max_rows` remains inert, matching shipped behavior.
 - `trusted_max_rows=True, max_rows=P+N` widens returned rows but not accepted offset.
+- The exported `bounded_rows` / `bounded_rows_async` take no `offset` or `requested_limit`;
+  supplying either is a `TypeError` from the signature itself. The client window rides only
+  on the package-private seam beneath them, behind the argument normalizer's ceiling check.
 - Empty and all-null order inputs do not satisfy the explicit-order branch; an independently
   effective stable model default may still satisfy the guard.
 - A model `Meta.ordering = []` is not active; a non-empty non-random tuple is active only
@@ -1551,7 +1582,9 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   reached, iteration errors, or the source is otherwise stopped/rejected early. A naturally
   exhausted iterator is deliberately left alone. Cleanup failure precedence stays exactly as
   [`django_strawberry_framework/resource_policy.py::bounded_rows_async`][resource-policy]
-  currently specifies.
+  currently specifies, for ordinary `Exception` failures. A control signal raised during
+  cleanup - `asyncio.CancelledError` and the other non-`Exception` `BaseException` values -
+  propagates rather than becoming a note, at either cleanup seam.
 - `limit: 0` guarantees framework-owned work only: after the resolver returns, no source
   advancement and no row-fetch query occurs. It consumes no lazy sync or async iterable item
   and still invokes `aclose` when available. It is not a guarantee of zero database work - the
@@ -1753,15 +1786,31 @@ the shipped SDL.
     supersedes the dormant random term, and the captured SQL carries the id order and the
     raised low mark. Each is paired with its control - a stable model default under the same
     no-op override, and a stable explicit order under a superseding random `extra` ordering -
-    so neither verdict can be produced by a guard that simply always answers one way. The
-    exact precedence mechanics stay in the package tier, which is where a term can be planted
-    in a collection the compiler will not select.
+    so neither verdict can be produced by a guard that simply always answers one way. Both
+    colorings owe the SQL witness, not just the sync one: three rows put the expected name at
+    the requested offset often enough that a re-shuffled result set can return it by chance,
+    so the returned row alone cannot say the random term stayed dormant. The async coloring
+    cannot read the sync suite's `CaptureQueriesContext`, which sits on the sync side of the
+    [async SQL-capture boundary][glossary-async-sql-capture-boundary]; it takes the same
+    observable one layer in, at the compiler, where the statement is built in whichever thread
+    builds it. The must-not half of that witness reads the vendor-independent PREFIX of the
+    random function,
+    because Django spells it `RAND()` on SQLite and MySQL and `RANDOM()` on PostgreSQL: an
+    assertion written against the PostgreSQL spelling alone is blind on the tier the default
+    suite runs. The exact precedence mechanics stay in the package tier, which is where a term
+    can be planted in a collection the compiler will not select.
 28. A live async request whose deadline expires after its resolver has obtained an async-only
     source closes that source exactly once and advances it zero times, for the default window
     and for `limit: 0` alike, with the complete `execution_deadline_seconds` extensions on the
-    rejection. The witness is the externally counted iterator of the rows above, never an
-    async generator's body `finally`. The package tier carries the same claim at the bounding
-    seam itself, plus the failing-close arm where the resource error must stay primary and
+    rejection. The boundary is a contract, not a race: the configured budget is wide enough
+    that nothing in the request can reach it, and the expiry is handed over by an `async def`
+    resolver that records its iterator, awaits, and only then ends the budget - so the rejected
+    request has crossed the async handoff the claim is about, and the row asserts the resolver
+    reached that await. A budget small enough that the request is merely expected to outrun it
+    would pass on a synchronous return and prove nothing about the await. The witness is the
+    externally counted iterator of the rows above, never an async generator's body `finally`.
+    The package tier carries the same claim at the bounding seam itself against a directly
+    expired deadline, plus the failing-close arm where the resource error must stay primary and
     complete with the cleanup failure attached as a note; the natural-exhaustion control, in
     which the iterator is deliberately NOT closed, is retained beside them.
 29. The captured-definition proof is parametrized over hook flavour and relation vocabulary,
@@ -1772,8 +1821,25 @@ the shipped SDL.
     otherwise hide the other's regression. The custom-hook rows require the hook to have RUN
     and require zero definition reads. The default-hook rows keep the cross-request plan-cache
     case and assert the transition explicitly - hits, misses and size - because a plan
-    carrying a hook is deliberately not cacheable, and calling a second execution "warm"
-    without reading those counters would pass equally well if caching had stopped.
+    carrying a hook is deliberately not cacheable, and calling a second request "warm" without
+    reading those counters would pass equally well if caching had stopped. The cold and warm
+    requests are asserted apart rather than iterated in a body loop: a loop collapses both
+    states into one node id, so a failure in the second is reported as the first and neither
+    state can be removed on its own to prove the row can fail.
+30. Cancellation arriving during async cleanup stays observable. A package-tier row cancels
+    the task while `aclose` is suspended, after the source has already raised, and requires
+    the task to end cancelled with nothing written onto the source error - the shape that
+    would otherwise have let the request finish reporting an ordinary field error. Its twin
+    covers the pre-iteration cleanup seam, where an acquisition interrupted by cancellation
+    propagates instead of annotating the rejection. The ordinary-failure rows stay beside them
+    unchanged: an `Exception` raised by cleanup is still demoted to a note.
+31. The exported raw-list bound takes no client window. A package-tier row, parametrized over
+    both colors and both coordinates, passes `offset` and then `requested_limit` to the
+    exported helper under a two-row policy and requires a `TypeError` from the signature
+    itself, with the same helper's no-window call beside it still returning the two
+    policy-bounded rows. The list field reaches the window through the package-private seam,
+    so no caller of the exported names can widen the bound they advertise by supplying
+    coordinates.
 
 Every test-local sync/async schema mount uses the established module-level current-schema
 holder under `override_settings(ROOT_URLCONF=...)`, resets that holder and Django's URL caches
@@ -2039,9 +2105,9 @@ structural checks, and link/kanban verification prescribed by
   `ResourcePolicy` and bounding-helper docstrings so returned/accepted-skip ceilings are not
   described as a total database scan guarantee. That rewrite must preserve the
   `execution_deadline_seconds` docstring's enumeration of cooperative seams, which names
-  `bounded_rows` in both raw-list spellings; the helpers gain client coordinates in this card
-  but do not stop being deadline seams, so the enumeration stays true rather than being
-  rewritten around.
+  `bounded_rows` in both raw-list spellings; the client coordinates this card adds land on the
+  private seam beneath them and neither helper stops being a deadline seam, so the enumeration
+  stays true rather than being rewritten around.
 - [`docs/GLOSSARY.md`][glossary] (DB-backed) - update `DjangoListField`, `OrderSet`, and
   execution resource policy bodies. The card's three planned entries -
   [`ListArgumentError`][glossary-listargumenterror], the
@@ -2188,9 +2254,13 @@ structural checks, and link/kanban verification prescribed by
       bounded without over-consuming beyond the accepted window. Leak-free early-exit cleanup
       is promised for ASYNC-ONLY sources on every exit that abandons the source, argument
       rejection and deadline rejection alike, through one shared cleanup utility that sits
-      below both callers; a retained sync generator is documented and tested as
-      still suspended after truncation, and the symmetric sync contract is deliberately
-      deferred.
+      below both callers and demotes only an ordinary `Exception` to a note on the primary
+      error, letting a control signal propagate; a retained sync generator is documented and
+      tested as still suspended after truncation, and the symmetric sync contract is
+      deliberately deferred.
+- [ ] The exported `bounded_rows` / `bounded_rows_async` signatures carry no client window;
+      the coordinate-bearing seam is package-private, called only by the list field and by
+      the exported pair, and the exported names are tested to refuse both coordinates.
 - [ ] Async queryset results complete over `AsyncDjangoGraphQLView` through an async-only
       adapter, with optimizer-on/off parity and no `DJANGO_ALLOW_ASYNC_UNSAFE` override.
 - [ ] Live HTTP coverage exercises ordered paging, `orderBy`, visibility, cap interplay, and

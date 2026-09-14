@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Any
 
 import pytest
@@ -22,7 +23,9 @@ from apps.library import schema as library_schema
 from apps.library.orders import BranchOrder
 from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.core.exceptions import EmptyResultSet
 from django.db import models
+from django.db.models.sql.compiler import SQLCompiler
 from django.test import AsyncClient, override_settings
 from django.urls import clear_url_caches, path
 
@@ -34,8 +37,12 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.orders import Ordering, OrderSet
-from django_strawberry_framework.resource_policy import RESOURCE_LIMIT_ERROR_CODE
+from django_strawberry_framework.resource_policy import (
+    DST_RESOURCE_DEADLINE,
+    RESOURCE_LIMIT_ERROR_CODE,
+)
 from django_strawberry_framework.schema import DjangoSchema
+from django_strawberry_framework.utils.context import stash_on_context
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 _CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
@@ -446,9 +453,9 @@ async def test_async_generator_natural_exhaustion_does_not_call_aclose():
     assert holder["it"].aclose_called == 0
 
 
-#: Small enough that it has always passed by the time a resolver runs, which is
-#: what makes a deadline rejection assertable without a sleep.
-_PASSED_DEADLINE_SECONDS = 0.000_001
+#: Wide enough that nothing in the request can reach it on its own, so the only
+#: thing that can end this budget is the resolver's own handoff below.
+_UNREACHABLE_DEADLINE_SECONDS = 30
 
 
 @pytest.mark.django_db(transaction=True)
@@ -458,13 +465,20 @@ _PASSED_DEADLINE_SECONDS = 0.000_001
     ids=["default-window", "limit-zero"],
 )
 async def test_async_deadline_rejection_closes_the_source_it_never_advanced(arguments):
-    """A budget spent before the bounding seam still closes the iterator the resolver returned.
+    """A budget that ends while the resolver awaits still closes the source it returned.
 
-    The resolver hands its source over first and the clock is read second, so a
-    deadline rejection lands holding an iterator nobody will ever see again. It
-    has produced no item, but an async source can own an open external resource
-    from the moment it is constructed, so the rejection owes it exactly one
-    ``aclose`` and no advance.
+    The resolver produces its source first and the bounding seam reads the clock
+    second, so a deadline that ends between those two points lands holding an
+    iterator nobody will ever see again. It has produced no item, but an async
+    source can own an open external resource from the moment it is constructed,
+    so the rejection owes it exactly one ``aclose`` and no advance.
+
+    The budget is ended by the resolver, after it awaits across the async
+    boundary the claim is about - not by a deadline small enough that the request
+    is expected to outrun it. A configured budget nothing else can reach makes
+    the verdict the pipeline's rather than the machine's, and the await is what
+    puts the expiry on the far side of the handoff a synchronous return never
+    crosses.
 
     ``limit: 0`` takes the same path: the empty-window short-circuit sits
     downstream of the clock, so the close it promises on a healthy request has to
@@ -475,11 +489,14 @@ async def test_async_deadline_rejection_closes_the_source_it_never_advanced(argu
         for i in range(3)
     ]
 
-    holder: dict[str, _ClosableAsyncIterator | None] = {"it": None}
+    holder: dict[str, Any] = {"it": None, "awaited": False}
 
-    def _resolver(root, info):
+    async def _resolver(root, info):
         it = _ClosableAsyncIterator(branches)
         holder["it"] = it
+        await asyncio.sleep(0)
+        holder["awaited"] = True
+        stash_on_context(info.context, DST_RESOURCE_DEADLINE, time.monotonic() - 1)
         return it
 
     @strawberry.type
@@ -492,17 +509,18 @@ async def test_async_deadline_rejection_closes_the_source_it_never_advanced(argu
     schema = DjangoSchema(
         query=_DeadlineQuery,
         config=strawberry_config(),
-        resource_policy={"execution_deadline_seconds": _PASSED_DEADLINE_SECONDS},
+        resource_policy={"execution_deadline_seconds": _UNREACHABLE_DEADLINE_SECONDS},
     )
 
     payload = await _post_async(schema, "{ branches%s { name } }" % arguments)
 
+    assert holder["awaited"] is True, "the resolver never reached its await"
     assert payload["data"] is None, payload
     extensions = payload["errors"][0]["extensions"]
     assert extensions["code"] == RESOURCE_LIMIT_ERROR_CODE, extensions
     assert extensions["bound"] == "execution_deadline_seconds", extensions
-    assert extensions["limit"] == 1, extensions
-    assert extensions["charged"] == 2, extensions
+    assert extensions["limit"] == _UNREACHABLE_DEADLINE_SECONDS, extensions
+    assert extensions["charged"] == _UNREACHABLE_DEADLINE_SECONDS + 1, extensions
     assert holder["it"] is not None
     assert holder["it"].next_count == 0
     assert holder["it"].aclose_called == 1
@@ -561,6 +579,12 @@ _ASYNC_OFFSET_WITH_ACTIVE_ORDER = (
     "{ branches(orderBy: [{ city: ASC }], offset: 1, limit: 1) { name } }"
 )
 
+#: Django spells a random order ``RAND()`` on SQLite and MySQL and ``RANDOM()`` on
+#: PostgreSQL (``django/db/models/functions/math.py::Random``), so the prefix is
+#: what an emitted-order assertion can read on every tier this suite runs under.
+#: Neither the table nor a column here contains it.
+_RANDOM_ORDER_SQL = "RAND"
+
 
 async def _seed_three_branches_async():
     for name in ("Alpha", "Bravo", "Charlie"):
@@ -573,6 +597,39 @@ def _offset_guard_schema():
         branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
 
     return DjangoSchema(query=_OffsetGuardQuery, config=strawberry_config())
+
+
+def _record_branch_sql(monkeypatch) -> list[str]:
+    """Record every branch statement the request compiles, whichever thread runs it.
+
+    ``CaptureQueriesContext`` watches one connection object, and the async
+    pipeline hands its ORM work to a ``sync_to_async`` executor thread holding a
+    different one - so the sync suite's instrument reads empty here for reasons
+    that have nothing to do with the ordering under test. Recording at the
+    compiler is the same observable taken one layer in: the statement is captured
+    where it is built, which is inside whichever thread ends up building it.
+
+    A query Django compiles to "no rows possible" never reaches the database and
+    carries no ordering, so it is skipped rather than recorded. Only the plain
+    SELECT compiler is read: compiling a write compiler a second time re-runs its
+    pre-SQL setup, which for a multi-table update executes a SELECT and rewrites
+    the query's own filter, so an instrument must not ask one for its SQL.
+    """
+    recorded: list[str] = []
+    original_execute_sql = SQLCompiler.execute_sql
+
+    def _recording_execute_sql(self, *args, **kwargs):
+        if type(self) is SQLCompiler:
+            try:
+                sql = self.as_sql()[0]
+            except EmptyResultSet:
+                sql = ""
+            if "library_branch" in sql:
+                recorded.append(sql)
+        return original_execute_sql(self, *args, **kwargs)
+
+    monkeypatch.setattr(SQLCompiler, "execute_sql", _recording_execute_sql)
+    return recorded
 
 
 @pytest.mark.django_db(transaction=True)
@@ -592,12 +649,14 @@ async def test_async_offset_rejects_a_random_model_default(monkeypatch):
         return queryset
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_apply_unchanged))
+    branch_sql = _record_branch_sql(monkeypatch)
 
     payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
 
     err = payload["errors"][0]
     assert err["extensions"]["reason"] == "order_required"
     assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == [], branch_sql
 
 
 @pytest.mark.django_db(transaction=True)
@@ -605,7 +664,11 @@ async def test_async_offset_accepts_extra_ordering_over_a_dormant_random_order(m
     """The async twin of the acceptance half: a superseded ``"?"`` cannot reject the offset.
 
     ``extra`` ordering wins over ``query.order_by`` in the compiler, so the page
-    comes back in id order and the dormant random term never reaches SQL.
+    comes back in id order and the dormant random term never reaches SQL. The
+    returned row alone cannot say that: three rows in a re-shuffled result set
+    put ``Bravo`` at the requested offset often enough to keep a broken guard
+    green, so the emitted statement is what carries the claim - it has to order
+    by ``id`` and mention no randomness at all.
     """
     await _seed_three_branches_async()
 
@@ -613,11 +676,44 @@ async def test_async_offset_accepts_extra_ordering_over_a_dormant_random_order(m
         return queryset.order_by("?").extra(order_by=["id"])
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_extra_supersedes_random))
+    branch_sql = _record_branch_sql(monkeypatch)
 
     payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
 
     assert "errors" not in payload, payload
     assert payload["data"]["branches"] == [{"name": "Bravo"}]
+    assert len(branch_sql) == 1, branch_sql
+    statement = branch_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+    assert "ORDER BY" in statement, statement
+    assert '"ID"' in statement or "(ID)" in statement, statement
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_rejects_extra_random_ordering_over_a_stable_order(monkeypatch):
+    """The control for the acceptance above: the same precedence, opposite verdict.
+
+    ``extra`` ordering supersedes an explicit ``order_by`` whichever way the two
+    are spelled, so a stable order standing behind a random ``extra`` term is the
+    dormant one. Without this row an acceptance could be produced by a guard that
+    stopped reading ``extra_order_by`` altogether and simply trusted the explicit
+    collection.
+    """
+    await _seed_three_branches_async()
+
+    async def _random_extra_supersedes_stable(cls, order_input, queryset, info, **kwargs):
+        return queryset.order_by("name").extra(order_by=["?"])
+
+    monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_random_extra_supersedes_stable))
+    branch_sql = _record_branch_sql(monkeypatch)
+
+    payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == [], branch_sql
 
 
 # ---------------------------------------------------------------------------

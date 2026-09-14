@@ -206,7 +206,10 @@ Spec: [Decision 5][spec-050-d5].
   consumer router mid-validation; intent equality (`_db` plus `_hints`) is stricter,
   deterministic, and dispatches no consumer code.
 - **A fresh pagination helper that calls `bounded_rows` and then slices:** Rejected because it
-  would either double-slice or apply offset after truncating the source.
+  would either double-slice or apply offset after truncating the source. The shipped seam runs
+  the other way: `bounded_rows` delegates down to the private window seam, which slices once
+  with the bound already known, and nothing sits above the exported helper re-slicing its
+  output.
 - **In-coroutine list materialization (`many_resolver` pattern):** The generated relation resolver
   in `many_resolver` materializes inside its own coroutine (`[row async for row in bounded]`) and
   hands graphql-core a plain list. That is correct for a relation, which is a leaf of an

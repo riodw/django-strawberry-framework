@@ -34,6 +34,7 @@ where they matter. What is left here is the surface a request cannot express:
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import math
 import pickle
@@ -64,6 +65,8 @@ from django_strawberry_framework.resource_policy import (
     ResourceLimitExceeded,
     ResourcePolicy,
     _cleanup_rejected_async_iterable,
+    _windowed_rows,
+    _windowed_rows_async,
     bounded_rows,
     bounded_rows_async,
     check_deadline,
@@ -618,6 +621,35 @@ def test_bounded_rows_honours_a_trusted_widening():
     ]
 
 
+@pytest.mark.parametrize("color", ["sync", "async"], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "coordinate",
+    ["offset", "requested_limit"],
+    ids=["offset", "requested-limit"],
+)
+async def test_the_exported_raw_list_bound_takes_no_client_window(color, coordinate):
+    """A client page window is not on the exported surface, so an importer cannot widen it.
+
+    A supplied window is a claim the bounding seam cannot check, and the one that
+    matters here is the wide one: a caller asking for more rows than the request
+    policy allows would get them, from the helper whose whole contract is that
+    nothing a caller passes can widen its bound. The argument normalizer owns
+    that check and rejects an over-ceiling value with a typed, argument-named
+    error long before the private window seam sees it, so the pair stays off this
+    signature.
+    """
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    if color == "sync":
+        with pytest.raises(TypeError):
+            bounded_rows(list(range(10)), info, **{coordinate: 10})
+        assert bounded_rows(list(range(10)), info) == [0, 1]
+        return
+    with pytest.raises(TypeError):
+        await bounded_rows_async(list(range(10)), info, **{coordinate: 10})
+    assert await bounded_rows_async(list(range(10)), info) == [0, 1]
+
+
 async def test_bounded_rows_async_closes_after_the_effective_prefix():
     class Rows:
         def __init__(self):
@@ -867,7 +899,7 @@ async def test_bounded_rows_async_keeps_the_deadline_primary_when_the_close_fail
     info.context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
 
     with pytest.raises(ResourceLimitExceeded) as caught:
-        await bounded_rows_async(
+        await _windowed_rows_async(
             BrokenCleanupRows(),
             info,
             requested_limit=requested_limit,
@@ -900,7 +932,9 @@ async def test_cleanup_rejected_async_iterable_notes_an_iterator_acquisition_fai
         primary,
         caller="bounded_rows_async",
     )
-    assert any("Iterator acquisition failed" in note for note in primary.__notes__)
+    assert any(
+        "bounded_rows_async iterator acquisition failed" in note for note in primary.__notes__
+    )
     assert any("aiter exploded" in note for note in primary.__notes__)
 
 
@@ -927,6 +961,66 @@ async def test_cleanup_rejected_async_iterable_survives_an_unannotatable_error()
         caller="bounded_rows_async",
     )
     assert not hasattr(primary, "__notes__")
+
+
+async def test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_task():
+    """A cancellation arriving while ``aclose`` runs outranks the source error it interrupts.
+
+    Every other cleanup failure is demoted to a note so the source error stays
+    primary. A cancellation is not a cleanup failure: it is the request being
+    torn down, and demoting it would let the task finish with an ordinary field
+    error, telling the client the operation completed while the source was still
+    being closed.
+    """
+    closing = asyncio.Event()
+    source_error = ValueError("source failed")
+
+    class CancelledDuringCleanupRows:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise source_error
+
+        async def aclose(self):
+            closing.set()
+            await asyncio.sleep(3600)
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    task = asyncio.ensure_future(bounded_rows_async(CancelledDuringCleanupRows(), info))
+    await closing.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled() is True
+    # The cancellation was not written onto the source error as a diagnostic,
+    # which is the shape that would have left the task uncancelled.
+    assert not getattr(source_error, "__notes__", [])
+
+
+async def test_cleanup_rejected_async_iterable_lets_a_cancelled_acquisition_through():
+    """Acquisition interrupted by cancellation propagates instead of annotating the rejection.
+
+    The pre-iteration cleanup runs while a rejection is already on its way out,
+    so an ordinary acquisition failure becomes a note on it. A control signal
+    reaching the same seam means the task is going away, and the caller has to
+    see that rather than a rejection reporting a completed request.
+    """
+
+    class CancellingAsyncIterable:
+        def __aiter__(self):
+            raise asyncio.CancelledError
+
+    primary = GraphQLError("rejected")
+    with pytest.raises(asyncio.CancelledError):
+        await _cleanup_rejected_async_iterable(
+            CancellingAsyncIterable(),
+            primary,
+            caller="bounded_rows_async",
+        )
+    assert not getattr(primary, "__notes__", [])
 
 
 async def test_bounded_rows_async_preserves_none():
@@ -968,10 +1062,10 @@ def test_bounded_rows_slices_with_offset_and_requested_limit():
     stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
 
     data = list(range(10))
-    assert bounded_rows(data, info, offset=2, requested_limit=3) == [2, 3, 4]
-    assert bounded_rows(data, info, offset=None, requested_limit=3) == [0, 1, 2]
+    assert _windowed_rows(data, info, offset=2, requested_limit=3) == [2, 3, 4]
+    assert _windowed_rows(data, info, offset=None, requested_limit=3) == [0, 1, 2]
     # When requested_limit is None, the policy limit (10) bounds the window:
-    assert bounded_rows(data, info, offset=7, requested_limit=None) == [7, 8, 9]
+    assert _windowed_rows(data, info, offset=7, requested_limit=None) == [7, 8, 9]
 
 
 def test_bounded_rows_slices_unsliceable_iterable_with_offset_and_requested_limit():
@@ -982,7 +1076,7 @@ def test_bounded_rows_slices_unsliceable_iterable_with_offset_and_requested_limi
         def __iter__(self):
             return iter(range(10))
 
-    assert bounded_rows(_Rows(), info, offset=3, requested_limit=4) == [
+    assert _windowed_rows(_Rows(), info, offset=3, requested_limit=4) == [
         3,
         4,
         5,
@@ -1000,12 +1094,12 @@ def test_bounded_rows_zero_window_does_not_advance_generator():
         yield 2
 
     g = _gen()
-    assert bounded_rows(g, info, offset=0, requested_limit=0) == []
+    assert _windowed_rows(g, info, offset=0, requested_limit=0) == []
     # Generator has NOT been advanced:
     assert next(g) == 1
 
     # Also test sliceable sequence with zero window
-    assert bounded_rows([1, 2, 3], info, offset=1, requested_limit=0) == []
+    assert _windowed_rows([1, 2, 3], info, offset=1, requested_limit=0) == []
 
 
 async def test_bounded_rows_async_slices_with_offset_and_requested_limit():
@@ -1029,7 +1123,7 @@ async def test_bounded_rows_async_slices_with_offset_and_requested_limit():
     stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
     rows = Rows()
 
-    assert await bounded_rows_async(rows, info, offset=2, requested_limit=3) == [2, 3, 4]
+    assert await _windowed_rows_async(rows, info, offset=2, requested_limit=3) == [2, 3, 4]
     assert rows.closed is True
 
 
@@ -1055,7 +1149,7 @@ async def test_bounded_rows_async_zero_window_closes_without_next():
     stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
     rows = Rows()
 
-    assert await bounded_rows_async(rows, info, offset=0, requested_limit=0) == []
+    assert await _windowed_rows_async(rows, info, offset=0, requested_limit=0) == []
     assert rows.next_called is False
     assert rows.closed is True
 
@@ -1154,7 +1248,7 @@ def test_bounded_rows_window_parameter_matrix(
     items = list(range(30))
     source = source_factory(items)
 
-    result = bounded_rows(
+    result = _windowed_rows(
         source,
         info,
         declared,
@@ -1178,7 +1272,7 @@ async def test_bounded_rows_async_positive_offset_arithmetic():
         for i in range(20):
             yield i
 
-    res = await bounded_rows_async(_gen(), info, offset=5, requested_limit=4)
+    res = await _windowed_rows_async(_gen(), info, offset=5, requested_limit=4)
     assert res == [
         5,
         6,
@@ -1202,7 +1296,7 @@ def test_bounded_rows_declined_sync_cleanup_resumable():
     stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
 
     g = _sync_gen()
-    result = bounded_rows(g, info, offset=2, requested_limit=3)
+    result = _windowed_rows(g, info, offset=2, requested_limit=3)
     assert result == [2, 3, 4]
     assert finally_ran is False
 
@@ -1250,14 +1344,14 @@ def test_bounded_rows_unsliceable_iterable_exact_consumption(monkeypatch):
 
     # requested_limit=0 must return [] without constructing islice or advancing
     c0 = CountedUnsliceable(10)
-    assert bounded_rows(c0, info, offset=2, requested_limit=0) == []
+    assert _windowed_rows(c0, info, offset=2, requested_limit=0) == []
     assert c0.next_calls == 0
     assert islice_calls == 0
 
     # positive window consumes exactly offset + returned rows and never the next item
     c1 = CountedUnsliceable(10)
     islice_calls = 0
-    res = bounded_rows(c1, info, offset=2, requested_limit=3)
+    res = _windowed_rows(c1, info, offset=2, requested_limit=3)
     assert res == [2, 3, 4]
     assert islice_calls == 1
     assert c1.next_calls == 5
@@ -1302,7 +1396,7 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix():
 
     # 1. Zero limit acquires and closes once with zero advances
     src_zero = TrackedAsyncIterable([1, 2, 3])
-    res_zero = await bounded_rows_async(src_zero, info, offset=0, requested_limit=0)
+    res_zero = await _windowed_rows_async(src_zero, info, offset=0, requested_limit=0)
     assert res_zero == []
     assert src_zero.iter_acquired == 1
     assert src_zero.anext_calls == 0
@@ -1318,28 +1412,28 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix():
             5,
         ],
     )
-    res_stop = await bounded_rows_async(src_stop, info, offset=1, requested_limit=2)
+    res_stop = await _windowed_rows_async(src_stop, info, offset=1, requested_limit=2)
     assert res_stop == [2, 3]
     assert src_stop.anext_calls == 3
     assert src_stop.aclose_calls == 1
 
     # 3. Source holding EXACTLY offset + limit rows (2 rows, offset=1, limit=1)
     src_exact = TrackedAsyncIterable([10, 20])
-    res_exact = await bounded_rows_async(src_exact, info, offset=1, requested_limit=1)
+    res_exact = await _windowed_rows_async(src_exact, info, offset=1, requested_limit=1)
     assert res_exact == [20]
     assert src_exact.anext_calls == 2
     assert src_exact.aclose_calls == 1
 
     # 4. Source holding FEWER rows than offset + limit: naturally exhausts, does NOT close
     src_fewer = TrackedAsyncIterable([10])
-    res_fewer = await bounded_rows_async(src_fewer, info, offset=1, requested_limit=2)
+    res_fewer = await _windowed_rows_async(src_fewer, info, offset=1, requested_limit=2)
     assert res_fewer == []
     assert src_fewer.anext_calls == 2
     assert src_fewer.aclose_calls == 0
 
     # 5. Offset overshoot that naturally exhausts does not close
     src_over = TrackedAsyncIterable([1, 2])
-    res_over = await bounded_rows_async(src_over, info, offset=5, requested_limit=2)
+    res_over = await _windowed_rows_async(src_over, info, offset=5, requested_limit=2)
     assert res_over == []
     assert src_over.anext_calls == 3
     assert src_over.aclose_calls == 0
@@ -1347,14 +1441,14 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix():
     # 6. Source failure + cleanup failure keeps source primary with one note
     src_both_fail = TrackedAsyncIterable([1, 2, 3], fail_at=2, fail_close=True)
     with pytest.raises(ValueError, match="Source failure") as exc_info:
-        await bounded_rows_async(src_both_fail, info, offset=0, requested_limit=3)
+        await _windowed_rows_async(src_both_fail, info, offset=0, requested_limit=3)
     notes = getattr(exc_info.value, "__notes__", [])
     assert any("bounded_rows_async iterator cleanup failed" in str(n) for n in notes)
 
     # 7. Cleanup-only failure remains primary
     src_clean_fail = TrackedAsyncIterable([1, 2, 3], fail_close=True)
     with pytest.raises(RuntimeError, match="Cleanup failure"):
-        await bounded_rows_async(src_clean_fail, info, offset=0, requested_limit=2)
+        await _windowed_rows_async(src_clean_fail, info, offset=0, requested_limit=2)
 
 
 def test_bounded_rows_shared_policy_seams_spy(monkeypatch):
@@ -1386,7 +1480,7 @@ def test_bounded_rows_shared_policy_seams_spy(monkeypatch):
     # Coordinate-bearing call: calls each seam once before source advance
     check_deadline_calls = 0
     effective_bound_calls = 0
-    res = bounded_rows([1, 2, 3], info, offset=1, requested_limit=1)
+    res = _windowed_rows([1, 2, 3], info, offset=1, requested_limit=1)
     assert res == [2]
     assert check_deadline_calls == 1
     assert effective_bound_calls == 1

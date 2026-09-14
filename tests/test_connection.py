@@ -2792,11 +2792,10 @@ def test_the_optimizer_plans_a_relation_without_reading_the_target_class(
     Both hook flavours run because they need different halves of the capture: a
     hook-less target never enters the visibility runner, while a hook-bearing one
     does and must find the captured model already there. Both plan states are
-    covered too, and the cache counters say which one each execution was: a
-    hook-less plan is cacheable and the second request reuses the entry, while a
-    plan carrying a hook is deliberately not cached and is rebuilt. Calling a
-    second execution "warm" without reading those counters would pass just as
-    well if caching had stopped altogether.
+    covered too, and the cold and warm requests are asserted apart, each against
+    the cache counters that say which state it ran in. Calling a second request
+    "warm" without reading those counters would pass just as well if caching had
+    stopped altogether.
 
     Package-side because the claim is a read COUNT on a class, which no response
     shows: the decoy makes a residual read consequential, but only an instrumented
@@ -2821,27 +2820,44 @@ def test_the_optimizer_plans_a_relation_without_reading_the_target_class(
     assert optimizer.cache_info().size == 0, optimizer.cache_info()
 
     item_names = set(Item.objects.values_list("name", flat=True))
-    for execution, expected_cache in enumerate(
-        [(0, 1, 0), (0, 2, 0)] if custom_hook else [(0, 1, 1), (1, 1, 1)],
-    ):
-        result = schema.execute_sync(document, context_value={"request": HttpRequest()})
-        assert result.errors is None, (execution, result.errors)
-        assert reads["names"] == [], execution
-        info = optimizer.cache_info()
-        assert (info.hits, info.misses, info.size) == expected_cache, (execution, info)
-        rows = {
-            name
-            for parent in result.data["parents"]["edges"]
-            for name in _relation_page(parent["node"], vocabulary)
-        }
-        assert rows, execution
-        assert rows <= item_names, execution
+    # A hook-less plan is cacheable, so its second request is a hit on the stored
+    # entry; a plan carrying a hook is deliberately not cached and is rebuilt.
+    cold_cache, warm_cache = ((0, 1, 0), (0, 2, 0)) if custom_hook else ((0, 1, 1), (1, 1, 1))
+
+    cold_rows, cold_counters = _planned_relation_request(schema, optimizer, document, vocabulary)
+    assert reads["names"] == [], reads["names"]
+    assert cold_counters == cold_cache, cold_counters
+    assert cold_rows, cold_rows
+    assert cold_rows <= item_names, cold_rows
+
+    warm_rows, warm_counters = _planned_relation_request(schema, optimizer, document, vocabulary)
+    assert reads["names"] == [], reads["names"]
+    assert warm_counters == warm_cache, warm_counters
+    assert warm_rows == cold_rows, (warm_rows, cold_rows)
 
     if custom_hook:
         # The hook has to have RUN for its request to say anything about the
         # model the runner was handed: a hook that never fired would report zero
         # reads because nothing consulted the target at all.
         assert hook_calls == [Item, Item], hook_calls
+
+
+def _planned_relation_request(
+    schema,
+    optimizer,
+    document,
+    vocabulary,
+):
+    """Run one planned request; report its child names and the plan cache counters after it."""
+    result = schema.execute_sync(document, context_value={"request": HttpRequest()})
+    assert result.errors is None, result.errors
+    info = optimizer.cache_info()
+    rows = {
+        name
+        for parent in result.data["parents"]["edges"]
+        for name in _relation_page(parent["node"], vocabulary)
+    }
+    return rows, (info.hits, info.misses, info.size)
 
 
 def _relation_page(node, vocabulary):

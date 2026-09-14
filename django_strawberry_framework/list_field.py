@@ -32,8 +32,8 @@ from .exceptions import (
 from .registry import registry
 from .resource_policy import (
     _cleanup_rejected_async_iterable,
-    bounded_rows,
-    bounded_rows_async,
+    _windowed_rows,
+    _windowed_rows_async,
     effective_bound,
     policy_from_info,
     validate_collection_bound,
@@ -957,7 +957,7 @@ def _execute_queryset_pipeline_sync(
 ) -> Any:
     if not args_record.any_argument_supplied:
         post_vis_qs = apply_type_visibility_sync(target_type, source, info, model=model)
-        bounded = bounded_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
+        bounded = _windowed_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
         return wrap_async_queryset_adapter(bounded) if is_async_context else bounded
 
     post_vis_qs = apply_type_visibility_sync(
@@ -986,7 +986,7 @@ def _execute_queryset_pipeline_sync(
 
         _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
 
-    bounded = bounded_rows(
+    bounded = _windowed_rows(
         post_order_qs,
         info,
         max_rows,
@@ -1010,7 +1010,7 @@ async def _execute_queryset_pipeline_async(
 ) -> Any:
     if not args_record.any_argument_supplied:
         post_vis_qs = await apply_type_visibility_async(target_type, source, info, model=model)
-        bounded = bounded_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
+        bounded = _windowed_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
         return wrap_async_queryset_adapter(bounded)
 
     post_vis_qs = await apply_type_visibility_async(
@@ -1039,7 +1039,7 @@ async def _execute_queryset_pipeline_async(
 
         _check_nonzero_offset_guard(post_order_qs, args_record, orderset_class, info)
 
-    bounded = bounded_rows(
+    bounded = _windowed_rows(
         post_order_qs,
         info,
         max_rows,
@@ -1194,7 +1194,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     info,
                     orderset_class=orderset_class,
                 )
-            return await bounded_rows_async(
+            return await _windowed_rows_async(
                 source,
                 info,
                 max_rows,
@@ -1292,7 +1292,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 )
                 if rejection is not None:
                     raise rejection
-                return bounded_rows(
+                return _windowed_rows(
                     source,
                     info,
                     max_rows,

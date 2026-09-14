@@ -481,7 +481,7 @@ def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -
     return effective_bound(policy_from_info(info).max_list_rows, declared, trusted=trusted)
 
 
-def bounded_rows(
+def _windowed_rows(
     result: Any,
     info: Any,
     declared: int | None = None,
@@ -490,34 +490,24 @@ def bounded_rows(
     requested_limit: int | None = None,
     trusted: bool = False,
 ) -> Any:
-    """Apply the request's raw-list row bound to whatever a collection resolver produced.
+    """Bound a raw list and window it to coordinates the caller has already validated.
 
-    The one place a raw (non-Relay) list is bounded, shared by the root
-    ``DjangoListField`` and by the generated many-side relation resolvers, so
-    both spellings of "a list of rows with no cursor" carry the same ceiling.
-    The bound is the tighter of ``ResourcePolicy.max_list_rows`` and the field's
-    own ``declared`` maximum unless the field declared ``trusted=True``.
+    The seam under ``bounded_rows``: the same ceiling, plus the ``offset`` /
+    ``requested_limit`` pair a ``DjangoListField`` request carries. ``offset``
+    defines the skip (``start``, defaulting to 0) and ``requested_limit`` the
+    returned-row window (defaulting to the effective ``limit``); together they
+    name the slice ``start:stop`` where ``stop = start + window``. Those bounds
+    are an accepted-coordinate ceiling on skipped and returned items, not a
+    guarantee on total physical rows scanned by the underlying database query.
 
-    When client coordinate parameters are provided, ``offset`` defines the skip
-    (``start``, defaulting to 0) and ``requested_limit`` defines the returned-row
-    window (assumed prevalidated by the caller; defaulting to the effective
-    ``limit``). The window defines the slice ``start:stop`` (where ``stop = start + window``).
-    These bounds define an accepted-coordinate ceiling on skipped and returned items,
-    not a guarantee on total physical rows scanned by the underlying database query.
-
-    It is applied by SLICING, so a ``QuerySet`` carries the bound into SQL as
-    ``LIMIT`` / ``OFFSET`` and is never evaluated unbounded; a value that is
-    already a materialized sequence (a consumer resolver's return, or Django's
-    prefetch cache) is truncated in Python, which cannot un-fetch those rows but
-    does stop the response from serializing them. Non-row collections follow standard
-    Python slice semantics: sequences like ``str`` or ``bytes`` are sliced directly,
-    while mappings (e.g. ``dict``) fall back via ``itertools.islice`` to return a
-    sliced list of keys.
-
-    A raw list is the one collection shape Relay pagination does not bound, so
-    this is the only thing between a client and the whole table. It is
-    unconditional: there is no argument or configuration that turns it off, only
-    values that make it larger.
+    Package-private because a coordinate pair is a claim this seam cannot check:
+    a window wider than the request's own ceiling would silently widen the bound
+    ``bounded_rows`` advertises to everyone who imports it.
+    ``list_field.py::_normalize_list_arguments`` is the single owner of that
+    check - it rejects a non-integer, negative, or over-ceiling value with the
+    typed, argument-named error a client can act on, before any of it reaches
+    here - so the exported helper stays coordinate-free and unconditionally
+    bounded rather than growing a second ceiling with a second error contract.
     """
     limit = _raw_list_bound(info, declared, trusted=trusted)
     if result is None:
@@ -552,6 +542,78 @@ def bounded_rows(
         return list(islice(result, start, stop))
 
 
+def bounded_rows(
+    result: Any,
+    info: Any,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> Any:
+    """Apply the request's raw-list row bound to whatever a collection resolver produced.
+
+    The one place a raw (non-Relay) list is bounded, shared by the root
+    ``DjangoListField`` and by the generated many-side relation resolvers, so
+    both spellings of "a list of rows with no cursor" carry the same ceiling.
+    The bound is the tighter of ``ResourcePolicy.max_list_rows`` and the field's
+    own ``declared`` maximum unless the field declared ``trusted=True``. It is an
+    accepted-row ceiling on what the response can carry, not a guarantee on total
+    physical rows scanned by the underlying database query.
+
+    It is applied by SLICING, so a ``QuerySet`` carries the bound into SQL as
+    ``LIMIT`` and is never evaluated unbounded; a value that is already a
+    materialized sequence (a consumer resolver's return, or Django's prefetch
+    cache) is truncated in Python, which cannot un-fetch those rows but does
+    stop the response from serializing them. Non-row collections follow standard
+    Python slice semantics: sequences like ``str`` or ``bytes`` are sliced directly,
+    while mappings (e.g. ``dict``) fall back via ``itertools.islice`` to return a
+    sliced list of keys.
+
+    A raw list is the one collection shape Relay pagination does not bound, so
+    this is the only thing between a client and the whole table. It is
+    unconditional: there is no argument or configuration that turns it off, only
+    values that make it larger. Nothing a caller passes here can widen it - the
+    client page coordinates a ``DjangoListField`` request carries ride on
+    ``_windowed_rows``, below this surface and behind that field's own
+    validation.
+    """
+    return _windowed_rows(result, info, declared, trusted=trusted)
+
+
+def _attach_cleanup_note(primary_error: BaseException, note: str) -> None:
+    """Record a cleanup diagnostic on an error that is already being propagated.
+
+    ``BaseException.add_note`` is 3.11+, and cleanup runs inside ``finally``
+    blocks: on the 3.10 support floor the resulting ``AttributeError`` would
+    REPLACE the error this call exists to preserve. Writing the ``__notes__``
+    list the note protocol is built on is what ``add_note`` does on 3.11+ (same
+    list, same traceback rendering) and is the only form that carries the
+    diagnostic across the whole supported range.
+
+    The note is an attachment, never a failure of its own: a hostile note
+    surface on the primary error (an unreadable or unassignable ``__notes__``)
+    must not mask the error the caller is already propagating.
+    """
+    try:
+        notes = [*getattr(primary_error, "__notes__", ())]
+        notes.append(note)
+        primary_error.__notes__ = notes
+    except Exception:
+        pass
+
+
+def _is_cleanup_diagnostic(error: BaseException) -> bool:
+    """Say whether a cleanup failure may be demoted to a note on the primary error.
+
+    Only an ordinary ``Exception`` may. ``CancelledError``, ``KeyboardInterrupt``,
+    ``SystemExit`` and ``GeneratorExit`` are control signals addressed to the
+    task, not diagnostics about a source: demoting one would let a cancelled
+    request finish as an ordinary field error, reporting a completed operation
+    to a client whose task was torn down mid-cleanup. They keep precedence over
+    the primary error, which stays reachable as their ``__context__``.
+    """
+    return isinstance(error, Exception)
+
+
 async def _close_async_iterator(
     iterator: Any,
     *,
@@ -560,38 +622,23 @@ async def _close_async_iterator(
 ) -> None:
     """Safely invoke ``iterator.aclose()`` if present.
 
-    When ``primary_error`` is provided (iteration failed), cleanup errors are
-    attached to ``primary_error.__notes__`` rather than replacing the primary error.
-    When ``primary_error`` is None (iteration completed normally or short-circuited),
-    cleanup errors are propagated directly.
+    When ``primary_error`` is provided (iteration failed), ordinary cleanup
+    errors are attached to ``primary_error.__notes__`` rather than replacing the
+    primary error. When ``primary_error`` is None (iteration completed normally
+    or short-circuited), cleanup errors are propagated directly. A control
+    signal raised by ``aclose`` propagates either way.
     """
     try:
         close = getattr(iterator, "aclose", None)
         if close is not None:
             await close()
     except BaseException as close_error:
-        if primary_error is None:
+        if primary_error is None or not _is_cleanup_diagnostic(close_error):
             raise
-        # ``BaseException.add_note`` is 3.11+, and this runs inside a
-        # ``finally``: on the 3.10 support floor the resulting
-        # ``AttributeError`` would REPLACE the source error, masking
-        # exactly the failure this branch exists to preserve. Writing
-        # the ``__notes__`` list the note protocol is built on is what
-        # ``add_note`` does on 3.11+ (same list, same traceback
-        # rendering) and is the only form that carries the diagnostic
-        # across the whole supported range.
-        try:
-            notes = [*getattr(primary_error, "__notes__", ())]
-            notes.append(
-                f"{caller} iterator cleanup failed: {close_error!r}",
-            )
-            primary_error.__notes__ = notes
-        except Exception:
-            # The note is a diagnostic attachment, never a failure of
-            # its own: a hostile note surface on the source error (an
-            # unreadable or unassignable ``__notes__``) must not mask
-            # the source error the caller is already propagating.
-            pass
+        _attach_cleanup_note(
+            primary_error,
+            f"{caller} iterator cleanup failed: {close_error!r}",
+        )
 
 
 async def _cleanup_rejected_async_iterable(
@@ -612,17 +659,20 @@ async def _cleanup_rejected_async_iterable(
     consumer call that can fail, and when it does the failure becomes a note on
     the rejection rather than the error the caller sees - the same posture
     ``_close_async_iterator`` takes for a failing ``aclose``, and for the same
-    reason: the caller is already propagating the useful failure.
+    reason: the caller is already propagating the useful failure. Both notes
+    name ``caller``, because more than one seam reaches this one and a note that
+    cannot say which produced it describes nothing. A control signal raised by
+    acquisition is not that kind of failure and propagates.
     """
     try:
         iterator = aiter(iterable)
     except BaseException as aiter_err:
-        try:
-            notes = [*getattr(primary_error, "__notes__", ())]
-            notes.append(f"Iterator acquisition failed: {aiter_err!r}")
-            primary_error.__notes__ = notes
-        except Exception:
-            pass
+        if not _is_cleanup_diagnostic(aiter_err):
+            raise
+        _attach_cleanup_note(
+            primary_error,
+            f"{caller} iterator acquisition failed: {aiter_err!r}",
+        )
         return
     await _close_async_iterator(
         iterator,
@@ -631,7 +681,7 @@ async def _cleanup_rejected_async_iterable(
     )
 
 
-async def bounded_rows_async(
+async def _windowed_rows_async(
     result: Any,
     info: Any,
     declared: int | None = None,
@@ -640,37 +690,22 @@ async def bounded_rows_async(
     requested_limit: int | None = None,
     trusted: bool = False,
 ) -> Any:
-    """Apply a raw-list row bound to a result that may be async-iterable.
+    """Bound a possibly async-iterable result and window it to validated coordinates.
 
-    ``graphql-core`` accepts ``AsyncIterable`` list results and materializes
-    them during async completion. A synchronous ``bounded_rows`` call cannot
-    slice an async generator, however, so an async field must consume only its
-    bounded prefix before returning the result to GraphQL. Synchronous
-    iterables (including Django ``QuerySet`` objects, which expose both
-    protocols) stay on ``bounded_rows`` so lazy querysets retain their SQL
-    ``LIMIT`` instead of being materialized through the async iterator.
-
-    For async-only iterables, coordinates define an accepted-coordinate and
-    returned-row ceiling rather than a database row-scan guarantee: the helper
-    discards exactly ``offset`` items, collects at most ``window`` items
-    (where ``window`` is prevalidated ``requested_limit``, defaulting to the
-    effective limit), and closes the iterator early without over-requesting
-    subsequent items. Synchronous iterables fall back to ``bounded_rows``,
-    preserving standard Python slice semantics (including character/byte slicing
-    for ``str``/``bytes`` and key-slicing fallback for mappings).
-
-    When the prefix ends early, the iterator is closed. A cleanup failure is
-    raised when iteration itself succeeded; when iteration already failed, the
-    source error remains primary and the cleanup failure is attached as a note
-    rather than masking the useful failure.
-
-    The deadline and row bound are read here, after the resolver has already
-    produced its source, so a rejection at that read abandons an async-only
-    source the same way an early prefix end does and owes it the same close.
-    The rejection keeps precedence over anything acquisition or closure raises.
+    The async seam under ``bounded_rows_async``, carrying the same client page
+    coordinates ``_windowed_rows`` does and behind the same caller-owned
+    validation. For async-only iterables the coordinates define an
+    accepted-coordinate and returned-row ceiling rather than a database
+    row-scan guarantee: the helper discards exactly ``offset`` items, collects at
+    most ``window`` items (where ``window`` is the prevalidated
+    ``requested_limit``, defaulting to the effective limit), and closes the
+    iterator early without over-requesting subsequent items. Synchronous
+    iterables fall back to ``_windowed_rows``, preserving standard Python slice
+    semantics (including character/byte slicing for ``str``/``bytes`` and
+    key-slicing fallback for mappings).
     """
     if not is_async_only_iterable(result):
-        return bounded_rows(
+        return _windowed_rows(
             result,
             info,
             declared,
@@ -724,6 +759,42 @@ async def bounded_rows_async(
                 caller="bounded_rows_async",
             )
     return rows
+
+
+async def bounded_rows_async(
+    result: Any,
+    info: Any,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> Any:
+    """Apply a raw-list row bound to a result that may be async-iterable.
+
+    ``graphql-core`` accepts ``AsyncIterable`` list results and materializes
+    them during async completion. A synchronous ``bounded_rows`` call cannot
+    slice an async generator, however, so an async field must consume only its
+    bounded prefix before returning the result to GraphQL. Synchronous
+    iterables (including Django ``QuerySet`` objects, which expose both
+    protocols) stay on ``bounded_rows`` so lazy querysets retain their SQL
+    ``LIMIT`` instead of being materialized through the async iterator.
+
+    When the prefix ends early, the iterator is closed. A cleanup failure is
+    raised when iteration itself succeeded; when iteration already failed, the
+    source error remains primary and an ordinary cleanup failure is attached as
+    a note rather than masking the useful failure. A cancellation arriving
+    during cleanup is not demoted that way: it keeps precedence, so a torn-down
+    request cannot report itself as an ordinary field error.
+
+    The deadline and row bound are read here, after the resolver has already
+    produced its source, so a rejection at that read abandons an async-only
+    source the same way an early prefix end does and owes it the same close.
+    The rejection keeps precedence over anything acquisition or closure raises.
+
+    Like ``bounded_rows``, this surface carries no client page coordinates:
+    ``_windowed_rows_async`` is where a validated ``offset`` / ``limit`` pair
+    narrows the window further.
+    """
+    return await _windowed_rows_async(result, info, declared, trusted=trusted)
 
 
 def validate_collection_bound(declared: Any, *, field: str) -> None:

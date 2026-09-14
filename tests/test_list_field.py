@@ -1,37 +1,38 @@
 """DjangoListField tests for validation, resolvers, visibility, optimization, sidecars, and permissions.
 
-Spec: ``docs/SPECS/spec-020-list_field-0_0_7.md``.
+Specs: ``docs/SPECS/spec-020-list_field-0_0_7.md`` for the field itself and
+``docs/spec-050-list_field_arguments-0_0_15.md`` for its ``offset`` / ``limit`` /
+``orderBy`` argument surface.
 
 Package tests; system-under-test is ``django_strawberry_framework``
-(``AGENTS.md #"Package source lives in django_strawberry_framework"``). The file
-is the flat single-file Layer-3 module's mirror per ``docs/TREE.md #"test_list_field.py       # DjangoListField (single-file Layer-3 module)"``.
+(``AGENTS.md #"Package source in"``). What this module owns is the part of the
+field a real fakeshop query cannot express: constructor and signature shape, cap
+arithmetic, direct-call runtime rejections, helper mechanics, model-ordering
+state, no-argument SQL parity, and the async resolver arms Strawberry's sync
+execution refuses outright. Wire-reachable behavior belongs in the live tier
+instead, under ``examples/fakeshop/test_query/README.md #"Live-first, both verdicts, and the must-not."``
 
-Holds the validation cluster (5 tests) and the behavior
-cluster (17 tests) - 22 total. Three of them cover real bug fixes -
-the own-class-registration guard (rejects a ``DjangoType`` subclass that omits
-its own ``Meta``), the async-callable-object detection (detects
-``async def __call__`` at construction time so the coroutine return
-doesn't bypass the async visibility pipeline), and the
-``functools.partial``-wrapped async-callable-*instance* detection
-(``is_async_callable`` now unwraps ``partial.func`` before the
-``__call__`` async check - without it that resolver was misclassified as
-sync and skipped ``get_queryset``). The fourth is a contract pin for
-``functools.partial``-wrapped async *functions*:
-``inspect.iscoroutinefunction`` looks through ``functools.partial``
-natively (3.8+), so the first branch already routes them; the test pins
-the end-to-end behavior.
+Two things decide what stays here rather than being promoted:
 
-The spec's inventory at ``docs/SPECS/spec-020-list_field-0_0_7.md #"Optional ``resolver=`` constructor argument that overrides the default body"`` calls out
-"``Manager``/``QuerySet``" together for the consumer-resolver returns;
-both arms are load-bearing (the field wrapper owns the
-``Manager -> QuerySet`` coercion; the optimizer's downstream coercion is
-a safety net, not a substitute). The **sync** ``Manager``-return arm
-lives in ``examples/fakeshop/test_query/test_library_api.py::
-test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http``
-per the live-HTTP-first rule at ``examples/fakeshop/test_query/README.md #"**Coverage rule.**"``;
-the **async** ``Manager``-return arm stays here because async resolvers
-are genuinely unreachable from the sync ``GraphQLView`` mounted at
-``/graphql/`` (Strawberry's sync execution rejects them with
+Construction-time classification is invisible in a response. Own-class
+registration (a ``DjangoType`` subclass that omits its own ``Meta``), the
+``async def __call__`` instance, and the ``functools.partial``-wrapped async
+callable are all sorted into their arm before any request runs, and a resolver
+misclassified as sync silently skips ``get_queryset`` - which looks exactly like
+a target carrying no visibility hook. The partial-wrapped async FUNCTION is
+pinned beside them for the opposite reason: ``inspect.iscoroutinefunction``
+looks through ``functools.partial`` natively, so the first branch already routes
+it and the pin is what says so.
+
+The spec names ``Manager``/``QuerySet`` together for consumer-resolver returns
+(``docs/SPECS/spec-020-list_field-0_0_7.md #"constructor argument that overrides the default body"``),
+and both arms are load-bearing: the field wrapper owns the ``Manager ->
+QuerySet`` coercion, and the optimizer's downstream coercion is a safety net
+rather than a substitute. The SYNC ``Manager``-return arm is live, at
+``examples/fakeshop/test_query/test_library_api.py::
+test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http``;
+the ASYNC one stays here because an async resolver is genuinely unreachable from
+the sync ``GraphQLView`` mounted at ``/graphql/`` (Strawberry rejects it with
 ``RuntimeError: GraphQL execution failed to complete synchronously``).
 """
 
@@ -3942,9 +3943,9 @@ def test_list_field_declined_sync_cleanup_generator_suspended():
         any_argument_supplied=True,
     )
 
-    from django_strawberry_framework.resource_policy import bounded_rows
+    from django_strawberry_framework.resource_policy import _windowed_rows
 
-    res = bounded_rows(g, info, offset=args_record.offset, requested_limit=args_record.limit)
+    res = _windowed_rows(g, info, offset=args_record.offset, requested_limit=args_record.limit)
     assert res == [2, 3, 4]
     assert finally_ran is False
 
@@ -3956,7 +3957,7 @@ def test_list_field_declined_sync_cleanup_generator_suspended():
 
 async def test_list_field_async_source_exact_versus_fewer_rows():
     """Distinguish accepted-stop close from natural exhaustion on async source."""
-    from django_strawberry_framework.resource_policy import bounded_rows_async
+    from django_strawberry_framework.resource_policy import _windowed_rows_async
 
     class CountedAsyncIter:
         def __init__(self, count):
@@ -3981,13 +3982,13 @@ async def test_list_field_async_source_exact_versus_fewer_rows():
 
     # Exact rows (offset=1, limit=2, items=3): reaches stop, calls aclose
     exact_src = CountedAsyncIter(3)
-    res_exact = await bounded_rows_async(exact_src, info, offset=1, requested_limit=2)
+    res_exact = await _windowed_rows_async(exact_src, info, offset=1, requested_limit=2)
     assert res_exact == [2, 3]
     assert exact_src.aclose_calls == 1
 
     # Fewer rows (offset=1, limit=5, items=2): naturally exhausts, does NOT call aclose
     fewer_src = CountedAsyncIter(2)
-    res_fewer = await bounded_rows_async(fewer_src, info, offset=1, requested_limit=5)
+    res_fewer = await _windowed_rows_async(fewer_src, info, offset=1, requested_limit=5)
     assert res_fewer == [2]
     assert fewer_src.aclose_calls == 0
 

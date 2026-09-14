@@ -8,7 +8,7 @@ Cycle artifacts: [`bld-slice-1-argument_normalization.md`][bld-s1],
 [`bld-slice-4-live_acceptance.md`][bld-s4],
 [`bld-slice-5-documentation_fold_in.md`][bld-s5],
 [`bld-integration.md`][bld-int].
-Status: gate OWED — the seventh review's offset-guard and async-cleanup fixes landed on 2026-09-13 and changed production code, so every figure below is superseded and no gate has been run against the current tree; the maintainer has not yet requested test execution for this round. The last green gate was the sixth round's, on HEAD `96b9e047` plus that round's working-tree changes: default **7775 passed / 40 skipped / 100.00%**, sharded **7792 passed / 37 skipped / 100.00%**, floor **2397 passed / 2 skipped** at Python 3.10.19 + Django 5.2.16 + strawberry-graphql 0.316.0, zero failures anywhere; figures and scope under `## Sixth implementation review`. Every EARLIER gate figure in this file is superseded too and kept only as the historical record of the tier it measured — in particular, neither fifth-review invocation was green (each reached 100% coverage while carrying a failing test, which is evidence about coverage and not a passing suite) and neither had a floor run
+Status: gate OWED — the seventh review's offset-guard and async-cleanup fixes and the eighth review's cleanup-precedence, seam-visibility and proof-determinism fixes landed on 2026-09-13 and changed production code, so every figure below is superseded and no gate has been run against the current tree; the maintainer has not yet requested test execution for these rounds. The last green gate was the sixth round's, on HEAD `96b9e047` plus that round's working-tree changes: default **7775 passed / 40 skipped / 100.00%**, sharded **7792 passed / 37 skipped / 100.00%**, floor **2397 passed / 2 skipped** at Python 3.10.19 + Django 5.2.16 + strawberry-graphql 0.316.0, zero failures anywhere; figures and scope under `## Sixth implementation review`. Every EARLIER gate figure in this file is superseded too and kept only as the historical record of the tier it measured — in particular, neither fifth-review invocation was green (each reached 100% coverage while carrying a failing test, which is evidence about coverage and not a passing suite) and neither had a floor run
 
 ## Artifact shape: one Worker 1 pass
 
@@ -767,6 +767,177 @@ round.
 Owed. This round changed `list_field.py`, `resource_policy.py`, four test modules and two live
 modules, so the sixth round's figures above do not describe it. `uv run ruff format .` and
 `uv run ruff check --fix .` are clean on the current tree; nothing else has been run.
+## Eighth implementation review — fixes applied 2026-09-13, gate owed
+
+The review at HEAD `d727a256` closed the seventh round's ordering-precedence, deadline-source
+cleanup, captured-model and live-seeding findings. It found one production lifecycle defect,
+two proof gaps, and two repository-contract issues. All five have landed, plus one instrument
+defect found while proving them. No gate has been run for this round.
+
+### P2-1 — a control signal is no longer demoted to a cleanup note
+
+`_close_async_iterator` and `_cleanup_rejected_async_iterable` both caught `BaseException` and,
+whenever a primary error already existed, turned the caught value into a note. That swallowed
+`asyncio.CancelledError`: a task cancelled while `aclose()` was suspended finished carrying the
+source's `ValueError`, was no longer marked cancelled, and reported the cancellation only as
+text.
+
+The rule now lives in one predicate, `resource_policy.py::_is_cleanup_diagnostic`: an ordinary
+`Exception` raised by cleanup is demotable, a `BaseException` that is not an `Exception` is a
+control signal and propagates. Both seams ask it; the primary error stays reachable as the
+signal's `__context__`. The note-writing block the two seams had each spelled out is now
+`resource_policy.py::_attach_cleanup_note`, so the 3.10-floor rationale for writing
+`__notes__` by hand is stated once.
+
+### P2-2 — the async deadline row no longer races the request
+
+The row configured `execution_deadline_seconds = 0.000_001` and used a SYNCHRONOUS resolver, so
+it relied on the request taking more than a microsecond between the policy stash and the
+bounding seam, and never executed an await after the iterator was built.
+
+It now configures a 30-second budget nothing in the request can reach, and an `async def`
+resolver records its iterator, awaits, and only then writes an expired deadline onto the
+context. The rejection is therefore the pipeline's verdict rather than the machine's, and it
+lands on the far side of the async handoff the claim is about. The row asserts the resolver
+reached that await, keeps both window ids, and keeps the zero-advance / one-close / complete
+`limit` + `charged` assertions (now `30` / `31`).
+
+### P2-3 — the async acceptance row now carries an effective-order witness
+
+`test_async_offset_accepts_extra_ordering_over_a_dormant_random_order` asserted only that the
+returned row was `Bravo`. With three rows, a re-shuffled result set produces that often enough
+to keep a broken pipeline green.
+
+`CaptureQueriesContext` cannot serve as the witness here: it watches one connection object and
+the async pipeline compiles inside a `sync_to_async` executor thread holding another. The suite
+takes the same observable one layer in, wrapping `SQLCompiler.execute_sql` to record the
+statement where it is built, whichever thread builds it. The acceptance row now asserts exactly
+one branch statement carrying `OFFSET 1`, an `id` order, and no random term; the rejection row
+asserts no branch statement at all; and a third row was added as the stable-order control
+(`extra(order_by=["?"])` superseding `order_by("name")` must still reject), matching the sync
+suite's pairing.
+
+### P3-1 — the exported bounding helpers no longer take a client window
+
+`bounded_rows` / `bounded_rows_async` are exported, and their new `offset` / `requested_limit`
+parameters were documented as "assumed prevalidated by the caller". A direct importer could
+therefore pass `requested_limit=10` under `max_list_rows=2` and get ten rows out of the helper
+whose contract is that nothing a caller passes can widen its bound.
+
+The coordinate-bearing seam moved below the export: `resource_policy.py::_windowed_rows` and
+`resource_policy.py::_windowed_rows_async` hold the implementation, and the two exported
+helpers are coordinate-free delegations. `list_field.py` calls the private seams at all six of
+its bounding sites, so the field module has exactly one window seam name per color, and
+`types/resolvers.py` keeps calling the public pair. The alternative — validating coordinates
+inside the seam — was rejected: `list_field.py::_normalize_list_arguments` already owns that
+check and answers it with the typed, argument-named error a client can act on, and a second
+ceiling with a second error contract is what the card's DRY obligations forbid.
+
+### P3-2 — two test-contract repairs
+
+The captured-definition proof looped over its cold and warm executions in one body, collapsing
+both plan states into one node id. The two requests are now issued and asserted apart through
+`tests/test_connection.py::_planned_relation_request`, with the cache transition preserved and
+each state's counters named before the request that produces them.
+
+`tests/test_list_field.py`'s module docstring claimed 22 tests in a module holding 126. It now
+describes what the module owns and why each part of it stays package-side, with no counts.
+Three of its four `#"substring"` citations named text that no longer exists (and one named
+`docs/TREE.md`'s rendering of this very docstring); all are re-cited against text present in
+the tree, and the docstring's FIRST line is unchanged so `docs/TREE.md` still renders it.
+
+### Instrument defect found while proving the above
+
+`assert "RANDOM" not in branch_sql[0].upper()` — the sync suite's must-not, added last round —
+cannot fail on the tier the default suite runs. Django spells a random order `RAND()` on SQLite
+and MySQL and `RANDOM()` only on PostgreSQL
+(`django/db/models/functions/math.py::Random`). Mutation M4 below served a page ordered by
+`RAND()` and the assertion passed. Both suites now read the vendor-independent prefix through a
+named constant carrying the reason.
+
+### Proofs added or repaired
+
+| Claim | Row | Fails when |
+| --- | --- | --- |
+| Cancellation during cleanup reaches the task | `tests/test_resource_policy.py::test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_task` | the cleanup seam treats every `BaseException` as demotable |
+| …and at the pre-iteration seam | `tests/test_resource_policy.py::test_cleanup_rejected_async_iterable_lets_a_cancelled_acquisition_through` | the acquisition catch notes a control signal instead of re-raising |
+| The exported bound takes no client window | `tests/test_resource_policy.py::test_the_exported_raw_list_bound_takes_no_client_window` (4 ids) | the coordinate pair is put back on the exported signature |
+| Deadline ends across the resolver's own await | `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_deadline_rejection_closes_the_source_it_never_advanced` (both ids) | the `_raw_list_bound` rejection is not routed through the cleanup utility |
+| Superseded dormant `"?"` never reaches SQL (async) | `…::test_async_offset_accepts_extra_ordering_over_a_dormant_random_order` | the selected-ordering classifier stops reading `extra_order_by`, or the emitted order is random |
+| Superseding extra `"?"` still rejects (async) | `…::test_async_offset_rejects_extra_random_ordering_over_a_stable_order` | — (control; flipped by the same mutation) |
+| Cold and warm plan states asserted apart | `tests/test_connection.py::test_the_optimizer_plans_a_relation_without_reading_the_target_class` (4 ids) | either state's counter tuple is dropped |
+
+### Failability runs
+
+Each mutation was applied, probed with a non-pytest script, reverted, and byte-compared with
+`cmp` (all four reported identical).
+
+- **M1** `_is_cleanup_diagnostic` -> `return True`. The cancelled task finished with
+  `ValueError: source failed` and the note
+  `bounded_rows_async iterator cleanup failed: CancelledError()` — the reviewer's exact
+  reproduction.
+- **M2** the `_cleanup_rejected_async_iterable` call removed from the async window seam. Both
+  live deadline ids reported `aclose=0` while still rejecting.
+- **M3** the `extra_order_by` branch removed from `list_field.py::_selected_ordering`. The async
+  acceptance row rejected (`order_required`, no SQL) AND the new stable-order control was served
+  — one mutation, both verdicts.
+- **M4** the offset guard neutered and the seal's rebuild made to drop `extra_order_by`. The
+  request was SERVED with `ORDER BY RAND() ASC LIMIT 1 OFFSET 1`, returning `Alpha` — a page in
+  a re-shuffled order that the row-value assertion alone would pass one time in three. This is
+  the run that exposed the `"RANDOM"` instrument defect above.
+
+Every other claim in this round was reproduced against the current tree through non-pytest
+probes: a live async request over `AsyncDjangoGraphQLView` for all five async rows, a task-cancel
+harness for the cleanup precedence, and a direct-call check for the exported signatures. The rows
+themselves have not been executed: no `pytest` invocation has been made this round.
+
+### Audit of the review's own findings, and the sweep for missed siblings
+
+Each finding was re-derived before being accepted. All five hold: the cancellation swallow was
+reproduced end to end (M1), the `bounded_rows(range(10), offset=0, requested_limit=10)` bypass
+is exactly what the coordinate branch computes under `max_list_rows=2`, and the three test
+contracts were true of the rows as they stood. Two of the findings understated their own root
+cause, and both residuals are fixed here:
+
+- **The must-not P2-3 asked for already existed and could not fail.** The sync suite's
+  `assert "RANDOM" not in ...`, added the previous round, is blind on SQLite — the tier the
+  default suite runs. Adding an async twin of a broken assertion would have shipped the gap in
+  two places. Both now read the vendor-independent prefix.
+- **The SQL instrument P2-3 called for is itself a landmine if written naively.** Recording at
+  `SQLCompiler.execute_sql` means calling `as_sql()` a second time, and
+  `SQLUpdateCompiler.as_sql` re-runs `pre_sql_setup`, which executes a SELECT and rewrites the
+  query's own filter. The helper records only when `type(self) is SQLCompiler` — the exact class
+  a plain SELECT compiles through, confirmed by probe.
+
+One residual of P2-1's own fix: `_cleanup_rejected_async_iterable` threaded `caller` through but
+spent it only on the close note, so an acquisition-failure note could not say which of the two
+seams produced it. Both notes name their seam now.
+
+Sweeps run for siblings of each finding, all clean:
+
+| Sweep | Population | Result |
+| --- | --- | --- |
+| Swallowing `except BaseException` in an async function | 120 swallowing handlers package-wide | every one of the 31 in async code already carries an `except (asyncio.CancelledError, KeyboardInterrupt, SystemExit): raise` guard; the 89 without one are all sync hostile-input hardening (`_safe_type_name`, `describe_value`, `safe_truthy`) with no await point |
+| Query-capture instruments inside async tests | every async `test_*` in the repo | none besides the row under review — no other async SQL assertion was silently reading an empty capture |
+| Module docstrings carrying a frozen test count | every docstring in the four test trees | `tests/test_list_field.py` was the only one |
+| `for` loop over asserted states in a test body | 17 in this card's six modules | 16 are censuses over equivalent inputs (the "quantify over the file's own closed set" idiom); the flagged one was the only sequential loop whose second iteration's expected value depended on the first having run |
+| The 1-microsecond deadline idiom | `test_resource_policy_api.py`, `tests/forms/test_resolvers.py` | both sync, both separated from the seam by a full parse-and-validate rather than one resolver return; the "never crosses an await" half of P2-2 does not apply to either |
+
+One finding is left DELIBERATELY unfixed and is out of this card's scope. The package now spells
+"a control signal is not a cleanup diagnostic" two ways: `consumers.py` enumerates three types in
+31 guard clauses, `resource_policy.py::_is_cleanup_diagnostic` asks whether the error is an
+`Exception` at all. The predicate form is the stricter of the two — it also covers `GeneratorExit`
+and anything added to the hierarchy later — but rewriting 31 `consumers.py` sites from inside
+this card would be scope creep. The Channels router card (`DONE-041`) is closed, so the item is
+homed as a Scope bullet on `TODO-ALPHA-053` (boundary hardening and system-wide DRY squeeze),
+beside that card's two existing `consumers.py` items.
+
+### Gate
+
+Owed. This round changed `resource_policy.py`, `list_field.py`, three package test modules and
+two live modules, so no figure in this file describes it. `uv run ruff format .` and
+`uv run ruff check --fix .` are clean on the current tree; nothing else has been run.
+
 
 <!-- LINK DEFINITIONS -->
 

@@ -376,6 +376,12 @@ query {
 }
 """
 
+#: Django spells a random order ``RAND()`` on SQLite and MySQL and ``RANDOM()`` on
+#: PostgreSQL (``django/db/models/functions/math.py::Random``), so the prefix is
+#: what an emitted-order assertion can read on every tier this suite runs under.
+#: Neither the table nor a column here contains it.
+_RANDOM_ORDER_SQL = "RAND"
+
 
 @pytest.mark.django_db
 def test_shipped_branches_offset_rejects_a_random_model_default(monkeypatch):
@@ -416,8 +422,9 @@ def test_shipped_branches_offset_accepts_a_stable_model_default(monkeypatch):
     assert "errors" not in payload, payload
     assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
     assert len(branch_sql) == 1
-    assert "OFFSET 1" in branch_sql[0].upper()
-    assert "RANDOM" not in branch_sql[0].upper()
+    statement = branch_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
 
 
 @pytest.mark.django_db
@@ -447,8 +454,9 @@ def test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_or
     assert "errors" not in payload, payload
     assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
     assert len(branch_sql) == 1
-    assert "OFFSET 1" in branch_sql[0].upper()
-    assert "RANDOM" not in branch_sql[0].upper()
+    statement = branch_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
 
 
 @pytest.mark.django_db
@@ -1345,14 +1353,14 @@ def _install_parity_probes(monkeypatch) -> dict[str, int]:
         "get_queryset",
         classmethod(_tracking_get_queryset),
     )
-    original_bounded_rows = list_field_module.bounded_rows
+    original_windowed_rows = list_field_module._windowed_rows
 
-    def _recording_bounded_rows(result, info, declared=None, **kwargs):
-        bounded = original_bounded_rows(result, info, declared, **kwargs)
+    def _recording_windowed_rows(result, info, declared=None, **kwargs):
+        bounded = original_windowed_rows(result, info, declared, **kwargs)
         _PARITY_CAPTURE["current_marks"] = _query_marks(bounded)
         return bounded
 
-    monkeypatch.setattr(list_field_module, "bounded_rows", _recording_bounded_rows)
+    monkeypatch.setattr(list_field_module, "_windowed_rows", _recording_windowed_rows)
     return counters
 
 

@@ -39,7 +39,9 @@ from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.orders import Ordering, OrderSet
 from django_strawberry_framework.resource_policy import (
     DST_RESOURCE_DEADLINE,
+    DST_RESOURCE_POLICY,
     RESOURCE_LIMIT_ERROR_CODE,
+    ResourcePolicy,
 )
 from django_strawberry_framework.schema import DjangoSchema
 from django_strawberry_framework.utils.context import stash_on_context
@@ -254,7 +256,14 @@ async def test_async_queryset_completion_async_def_queryset_resolver():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_queryset_completion_optimizer_on_and_off():
+@pytest.mark.parametrize("with_optimizer", [False, True], ids=["plain", "optimized"])
+async def test_async_queryset_completion_windows_the_same_rows(with_optimizer):
+    """Each schema configuration owns a node, and both assert the SAME literal rows.
+
+    Asserting the two payloads equal each other would go green whenever they are
+    wrong together, and puts two configurations behind one node id. Naming the
+    rows instead makes each configuration independently falsifiable.
+    """
     await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="Bravo", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="Charlie", city="Boston")
@@ -263,15 +272,19 @@ async def test_async_queryset_completion_optimizer_on_and_off():
     class _BranchQuery:
         branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
 
-    schema_plain = DjangoSchema(query=_BranchQuery, config=strawberry_config())
+    # A factory over a singleton, never a constructing lambda: Strawberry runs a
+    # non-instance entry once per operation, which would hand every request a
+    # cold plan cache (spec-029 Decision 3).
     optimizer = DjangoOptimizerExtension()
-    schema_opt = DjangoSchema(
+    schema = DjangoSchema(
         query=_BranchQuery,
         config=strawberry_config(),
-        extensions=[lambda: optimizer],
+        extensions=[lambda: optimizer] if with_optimizer else None,
     )
 
-    query = """
+    payload = await _post_async(
+        schema,
+        """
     query {
       branches(
         orderBy: [{ city: ASC }, { id: ASC }]
@@ -281,13 +294,11 @@ async def test_async_queryset_completion_optimizer_on_and_off():
         name
       }
     }
-    """
-    payload_plain = await _post_async(schema_plain, query)
-    payload_opt = await _post_async(schema_opt, query)
+    """,
+    )
 
-    assert "errors" not in payload_plain, payload_plain
-    assert "errors" not in payload_opt, payload_opt
-    assert payload_plain["data"] == payload_opt["data"]
+    assert "errors" not in payload, payload
+    assert payload["data"]["branches"] == [{"name": "Alpha"}, {"name": "Bravo"}]
 
 
 # ---------------------------------------------------------------------------
@@ -526,30 +537,124 @@ async def test_async_deadline_rejection_closes_the_source_it_never_advanced(argu
     assert holder["it"].aclose_called == 1
 
 
+#: Long enough that the request cannot reach it on its own, short enough that
+#: the resolver's own sleep below clears it by a wide margin.
+_SHORT_DEADLINE_SECONDS = 0.2
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_a_resolver_cannot_widen_the_row_bound_through_the_context():
+    """``info.context`` is the consumer's, so the bound cannot live there.
+
+    Every resolver in the request can write ``DST_RESOURCE_POLICY``. If the
+    bounding seam read the request's policy back from that key, a resolver would
+    hand itself a wider ``max_list_rows`` - and the ``offset`` ceiling derived
+    from the same field - for the rest of the operation, without ever passing
+    ``ResourcePolicy.narrowed``. The write happens after a real ``await``, so
+    the widening attempt is on the far side of the async boundary from the seam
+    that answers it.
+    """
+    for i in range(5):
+        await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
+
+    holder: dict[str, Any] = {"awaited": False}
+
+    async def _resolver(root, info):
+        await asyncio.sleep(0)
+        holder["awaited"] = True
+        stash_on_context(info.context, DST_RESOURCE_POLICY, ResourcePolicy(max_list_rows=5))
+        return library_models.Branch.objects.order_by("name")
+
+    @strawberry.type
+    class _WideningQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolver,
+        )
+
+    schema = DjangoSchema(
+        query=_WideningQuery,
+        config=strawberry_config(),
+        resource_policy={"max_list_rows": 2},
+    )
+
+    payload = await _post_async(schema, "{ branches { name } }")
+
+    assert holder["awaited"] is True, "the resolver never reached its await"
+    assert "errors" not in payload, payload
+    assert [row["name"] for row in payload["data"]["branches"]] == ["B0", "B1"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context():
+    """A budget that ended while the resolver awaited cannot be pushed back out.
+
+    The resolver sleeps well past its own configured deadline and then writes a
+    far-future instant under ``DST_RESOURCE_DEADLINE``. The sleep is what makes
+    the expiry the pipeline's verdict rather than the machine's: it is longer
+    than the budget by a multiple, so the only way this row goes green on a
+    widened deadline is if the seam trusted the key the resolver wrote.
+    """
+    for i in range(3):
+        await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
+
+    holder: dict[str, Any] = {"awaited": False}
+
+    async def _resolver(root, info):
+        await asyncio.sleep(_SHORT_DEADLINE_SECONDS * 3)
+        holder["awaited"] = True
+        stash_on_context(info.context, DST_RESOURCE_DEADLINE, time.monotonic() + 3600)
+        return library_models.Branch.objects.order_by("name")
+
+    @strawberry.type
+    class _ReprieveQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolver,
+        )
+
+    schema = DjangoSchema(
+        query=_ReprieveQuery,
+        config=strawberry_config(),
+        resource_policy={"execution_deadline_seconds": _SHORT_DEADLINE_SECONDS},
+    )
+
+    payload = await _post_async(schema, "{ branches { name } }")
+
+    assert holder["awaited"] is True, "the resolver never reached its await"
+    assert payload["data"] is None, payload
+    extensions = payload["errors"][0]["extensions"]
+    assert extensions["code"] == RESOURCE_LIMIT_ERROR_CODE, extensions
+    assert extensions["bound"] == "execution_deadline_seconds", extensions
+    assert extensions["limit"] == 1, extensions
+
+
 # ---------------------------------------------------------------------------
 # 10. Async error transport and naming
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_error_transport_and_naming():
-    # 1. auto_camel_case=False
+async def test_async_a_rejection_names_the_argument_in_the_schema_spelling():
+    """Under ``auto_camel_case=False`` the error must name ``offset``, not a camel form."""
+
     @strawberry.type
     class _SnakeQuery:
         branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
 
-    snake_schema = DjangoSchema(
-        query=_SnakeQuery,
-        config=strawberry_config(auto_camel_case=False),
-    )
-    p_snake = await _post_async(
-        snake_schema,
+    payload = await _post_async(
+        DjangoSchema(query=_SnakeQuery, config=strawberry_config(auto_camel_case=False)),
         "{ branches(order_by: [{ id: null }], offset: 1) { name } }",
     )
-    assert p_snake["errors"][0]["extensions"]["argument"] == "offset"
-    assert p_snake["errors"][0]["extensions"]["reason"] == "order_required"
 
-    # 2. Cleanup failure in aclose does not displace the primary error
+    assert payload["errors"][0]["extensions"]["argument"] == "offset"
+    assert payload["errors"][0]["extensions"]["reason"] == "order_required"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_a_failing_aclose_does_not_displace_the_argument_rejection():
+    """The rejection the client can act on stays primary when cleanup also fails."""
+
     class _FailingAcloseIterator(_ClosableAsyncIterator):
         async def aclose(self):
             await super().aclose()
@@ -566,13 +671,15 @@ async def test_async_error_transport_and_naming():
             resolver=lambda root, info: _FailingAcloseIterator(branches),
         )
 
-    schema_clean = DjangoSchema(query=_CleanupFailQuery, config=strawberry_config())
-    p_fail = await _post_async(schema_clean, "{ branches(offset: 1) { name } }")
-    # Primary LIST_ARGUMENT_INVALID error must be preserved
-    assert "errors" in p_fail
-    err = p_fail["errors"][0]
-    assert err["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
-    assert err["extensions"]["reason"] == "order_required"
+    payload = await _post_async(
+        DjangoSchema(query=_CleanupFailQuery, config=strawberry_config()),
+        "{ branches(offset: 1) { name } }",
+    )
+
+    assert "errors" in payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
+    assert error["extensions"]["reason"] == "order_required"
 
 
 _ASYNC_OFFSET_WITH_ACTIVE_ORDER = (
@@ -727,9 +834,149 @@ _BRANCH_ORDER_ASYNC_SHAPE_PREFIX = (
 )
 
 
+class _AsyncDeferredFilterQuerySet(models.QuerySet):
+    """A queryset SUBCLASS, which is what makes an unresolved deferred filter untrusted."""
+
+
+class _ResidualAwaitable:
+    """An awaitable returned by an already-awaited seam, which nothing will await."""
+
+    def __await__(self):
+        return iter(())
+
+
+async def _async_combined(cls, order_input, queryset, info, **kwargs):
+    return queryset.filter(name="A").union(queryset.filter(name="B"))
+
+
+async def _async_evaluated(cls, order_input, queryset, info, **kwargs):
+    async for _row in queryset:
+        pass
+    return queryset
+
+
+async def _async_materialized(cls, order_input, queryset, info, **kwargs):
+    return [branch async for branch in queryset]
+
+
+async def _async_projection(cls, order_input, queryset, info, **kwargs):
+    return queryset.values("name")
+
+
+async def _async_wrong_model(cls, order_input, queryset, info, **kwargs):
+    return library_models.Book.objects.all()
+
+
+async def _async_sliced(cls, order_input, queryset, info, **kwargs):
+    return queryset.order_by("name")[:1]
+
+
+async def _async_in_place_routing(cls, order_input, queryset, info, **kwargs):
+    queryset._hints = {"tenant": 2}
+    return queryset
+
+
+async def _async_untrusted(cls, order_input, queryset, info, **kwargs):
+    candidate = _AsyncDeferredFilterQuerySet(model=library_models.Branch)
+    candidate._deferred_filter = (False, (), {"name": "A"})
+    return candidate
+
+
+def _async_non_awaitable(cls, order_input, queryset, info, **kwargs):
+    return queryset
+
+
+async def _async_residual(cls, order_input, queryset, info, **kwargs):
+    return _ResidualAwaitable()
+
+
+#: One row per defect class the post-``OrderSet`` seal names over the async view:
+#: ``(override, expected message start, required substrings)``. The last two
+#: rows are the async protocol itself rather than the result shape - a sync
+#: override of an async seam, and a seam that hands back a second awaitable.
+_MALFORMED_APPLY_ASYNC_ROWS = (
+    (
+        "combined",
+        _async_combined,
+        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "combined defect",
+        (),
+    ),
+    (
+        "evaluated",
+        _async_evaluated,
+        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "evaluated defect",
+        (),
+    ),
+    (
+        "materialized-list",
+        _async_materialized,
+        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "type defect",
+        (),
+    ),
+    (
+        "projection",
+        _async_projection,
+        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "projection defect",
+        (),
+    ),
+    (
+        "wrong-model",
+        _async_wrong_model,
+        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "table defect",
+        (),
+    ),
+    (
+        "sliced",
+        _async_sliced,
+        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "sliced defect",
+        (),
+    ),
+    (
+        "routing-rewritten-in-place",
+        _async_in_place_routing,
+        "BranchOrder.apply_async changed database routing intent",
+        ("got db=None, hints={'tenant': 2}",),
+    ),
+    (
+        "unresolved-deferred-filter",
+        _async_untrusted,
+        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "untrusted defect",
+        ("carries an unresolved deferred filter",),
+    ),
+    (
+        "sync-override-of-an-async-seam",
+        _async_non_awaitable,
+        "BranchOrder.apply_async",
+        ("returned a non-awaitable value",),
+    ),
+    (
+        "residual-awaitable",
+        _async_residual,
+        "BranchOrder.apply_async",
+        ("returned a residual awaitable value",),
+    ),
+)
+
+
 @pytest.mark.django_db(transaction=True)
-async def test_async_holder_branches_post_orderset_seals(monkeypatch):
-    """Every malformed ``apply_async`` result names its exact defect over the async view."""
+@pytest.mark.parametrize(
+    ("override", "message_start", "substrings"),
+    [row[1:] for row in _MALFORMED_APPLY_ASYNC_ROWS],
+    ids=[row[0] for row in _MALFORMED_APPLY_ASYNC_ROWS],
+)
+async def test_async_holder_branches_a_malformed_apply_async_result_names_its_own_defect(
+    monkeypatch,
+    override,
+    message_start,
+    substrings,
+):
+    """Every malformed ``apply_async`` result names its exact defect, on its own node.
+
+    ``apply_async`` is a distinct executable seam from ``apply_sync``, so each
+    defect class owes a proof on this colour too - and, being independent
+    boundaries, each owes its own node id rather than a place in a matrix where
+    an early failure stops the rest from running.
+    """
     await sync_to_async(library_models.Branch.objects.create)(name="A", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="B", city="Boston")
 
@@ -740,118 +987,19 @@ async def test_async_holder_branches_post_orderset_seals(monkeypatch):
         )
 
     schema = DjangoSchema(query=_BranchQuery, config=strawberry_config())
-    query = "{ allLibraryBranches(orderBy: [{ city: ASC }]) { name } }"
+    monkeypatch.setattr(BranchOrder, "apply_async", classmethod(override))
 
-    async def _run(override) -> str:
-        monkeypatch.setattr(BranchOrder, "apply_async", classmethod(override))
-        payload = await _post_async(schema, query, extra_settings=_ERROR_POLICY_PASS_THROUGH)
-        assert payload["data"] is None
-        return payload["errors"][0]["message"]
-
-    # 1. Combined return (union)
-    async def _malicious_apply_combined(cls, order_input, queryset, info, **kwargs):
-        return queryset.filter(name="A").union(queryset.filter(name="B"))
-
-    message = await _run(_malicious_apply_combined)
-    assert message.startswith(_BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "combined defect")
-
-    # 2. Evaluated: the override iterated the queryset and returned the SAME cached object.
-    async def _malicious_apply_evaluated(cls, order_input, queryset, info, **kwargs):
-        async for _row in queryset:
-            pass
-        return queryset
-
-    message = await _run(_malicious_apply_evaluated)
-    assert message.startswith(_BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "evaluated defect")
-
-    # 3. A materialized list is a non-queryset ``type`` defect, distinct from row 2.
-    async def _malicious_apply_list(cls, order_input, queryset, info, **kwargs):
-        return [b async for b in queryset]
-
-    message = await _run(_malicious_apply_list)
-    assert message.startswith(_BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "type defect")
-
-    # 4. Projection return (values)
-    async def _malicious_apply_proj(cls, order_input, queryset, info, **kwargs):
-        return queryset.values("name")
-
-    message = await _run(_malicious_apply_proj)
-    assert message.startswith(_BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "projection defect")
-
-    # 4b. Wrong model return (Book queryset instead of Branch)
-    async def _malicious_apply_model(cls, order_input, queryset, info, **kwargs):
-        return library_models.Book.objects.all()
-
-    message = await _run(_malicious_apply_model)
-    assert message.startswith(_BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "table defect")
-
-    # 4c. Sliced after ordering.
-    async def _malicious_apply_sliced(cls, order_input, queryset, info, **kwargs):
-        return queryset.order_by("name")[:1]
-
-    message = await _run(_malicious_apply_sliced)
-    assert message.startswith(_BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "sliced defect")
-
-    # 4d. Routing rewritten in place on the received queryset, compared against the
-    #     pre-call snapshot rather than the mutated object.
-    async def _malicious_apply_in_place_routing(cls, order_input, queryset, info, **kwargs):
-        queryset._hints = {"tenant": 2}
-        return queryset
-
-    message = await _run(_malicious_apply_in_place_routing)
-    assert message.startswith("BranchOrder.apply_async changed database routing intent")
-    assert "got db=None, hints={'tenant': 2}" in message
-
-    # 4e. A queryset SUBCLASS carrying an unresolved deferred filter - a predicate
-    #     not yet baked into the query. Django leaves one only on an EXACT plain
-    #     queryset, so a subclass holding one cannot be rebuilt and fails closed.
-    class _DeferredFilterQuerySet(models.QuerySet):
-        pass
-
-    async def _malicious_apply_untrusted(cls, order_input, queryset, info, **kwargs):
-        candidate = _DeferredFilterQuerySet(model=library_models.Branch)
-        candidate._deferred_filter = (False, (), {"name": "A"})
-        return candidate
-
-    message = await _run(_malicious_apply_untrusted)
-    assert message.startswith(_BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "untrusted defect")
-    assert "carries an unresolved deferred filter" in message
-
-    # 5. A sync override of apply_async violates the public async protocol.
-    def _malicious_apply_non_awaitable(cls, order_input, queryset, info, **kwargs):
-        return queryset
-
-    monkeypatch.setattr(
-        BranchOrder,
-        "apply_async",
-        classmethod(_malicious_apply_non_awaitable),
-    )
-    p_non_awaitable = await _post_async(
+    payload = await _post_async(
         schema,
         "{ allLibraryBranches(orderBy: [{ city: ASC }]) { name } }",
         extra_settings=_ERROR_POLICY_PASS_THROUGH,
     )
-    assert "returned a non-awaitable value" in p_non_awaitable["errors"][0]["message"]
 
-    # 6. Awaiting apply_async once must not leave a second awaitable behind.
-    class _ResidualAwaitable:
-        def __await__(self):
-            return iter(())
-
-    async def _malicious_apply_residual(cls, order_input, queryset, info, **kwargs):
-        return _ResidualAwaitable()
-
-    monkeypatch.setattr(
-        BranchOrder,
-        "apply_async",
-        classmethod(_malicious_apply_residual),
-    )
-    p_residual = await _post_async(
-        schema,
-        "{ allLibraryBranches(orderBy: [{ city: ASC }]) { name } }",
-        extra_settings=_ERROR_POLICY_PASS_THROUGH,
-    )
-    assert "returned a residual awaitable value" in p_residual["errors"][0]["message"]
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
 
 
 class _NestedTenantRouter:
@@ -1012,12 +1160,16 @@ def _build_context_schema() -> DjangoSchema:
     return DjangoSchema(query=_ContextQuery, config=strawberry_config())
 
 
-_ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str], ...] = (
+#: ``(id, control query, ordered query)`` - one entry per collection surface
+#: whose ordering could leave a trace on the consumer's context.
+_ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str, str], ...] = (
     (
+        "list",
         "{ branches(limit: 1) { name } }",
         "{ branches(orderBy: [{ city: ASC }], offset: 1, limit: 1) { name } }",
     ),
     (
+        "connection",
         "{ genres { edges { node { name } } } }",
         "{ genres(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
     ),
@@ -1025,44 +1177,71 @@ _ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str], ...] = (
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_ordering_leaves_the_consumer_context_exactly_as_found():
-    """Async ordered lists and connections add nothing to ``info.context`` a control does not."""
+@pytest.mark.parametrize(
+    ("control_query", "ordered_query"),
+    [row[1:] for row in _ORDERED_CONTEXT_REQUESTS],
+    ids=[row[0] for row in _ORDERED_CONTEXT_REQUESTS],
+)
+async def test_async_ordering_leaves_the_consumer_context_exactly_as_found(
+    control_query,
+    ordered_query,
+):
+    """An async ordered surface adds nothing to ``info.context`` its control does not.
+
+    The list and the connection reach the order-normalization handoff by
+    different paths, so each owns a node: a leak on one must not be masked by the
+    other's arm failing first.
+    """
     for name in ("Alpha", "Bravo"):
         await sync_to_async(library_models.Branch.objects.create)(name=name, city="Boston")
     await sync_to_async(library_models.Genre.objects.create)(name="Fiction")
     schema = _build_context_schema()
 
-    for control_query, ordered_query in _ORDERED_CONTEXT_REQUESTS:
-        observed: dict[str, Any] = {}
-        for label, query in (("control", control_query), ("ordered", ordered_query)):
-            marker = object()
-            _CONTEXT_CAPTURE.clear()
-            _CONTEXT_CAPTURE["marker"] = marker
-            payload = await _post_async(schema, query, view_class=_CapturingAsyncContextView)
-            assert "errors" not in payload, (label, payload)
-            context = _CONTEXT_CAPTURE["context"]
-            assert context.consumer_marker is marker
-            observed[label] = set(vars(context))
-        assert observed["ordered"] == observed["control"], observed
+    observed: dict[str, Any] = {}
+    for label, query in (("control", control_query), ("ordered", ordered_query)):
+        marker = object()
+        _CONTEXT_CAPTURE.clear()
+        _CONTEXT_CAPTURE["marker"] = marker
+        payload = await _post_async(schema, query, view_class=_CapturingAsyncContextView)
+        assert "errors" not in payload, (label, payload)
+        context = _CONTEXT_CAPTURE["context"]
+        assert context.consumer_marker is marker
+        observed[label] = set(vars(context))
+    assert observed["ordered"] == observed["control"], observed
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_ordering_succeeds_on_a_context_that_forbids_writes():
-    """A write-refusing context still serves async ordered lists and connections."""
+@pytest.mark.parametrize(
+    "ordered_query",
+    [row[2] for row in _ORDERED_CONTEXT_REQUESTS],
+    ids=[row[0] for row in _ORDERED_CONTEXT_REQUESTS],
+)
+async def test_async_ordering_succeeds_on_a_context_that_forbids_writes(ordered_query):
+    """A write-refusing context still serves each async ordered surface."""
     for name in ("Alpha", "Bravo"):
         await sync_to_async(library_models.Branch.objects.create)(name=name, city="Boston")
     await sync_to_async(library_models.Genre.objects.create)(name="Fiction")
     schema = _build_context_schema()
 
-    for _control_query, ordered_query in _ORDERED_CONTEXT_REQUESTS:
-        payload = await _post_async(schema, ordered_query, view_class=_FrozenAsyncContextView)
-        assert "errors" not in payload, payload
-    p_list = await _post_async(
+    payload = await _post_async(schema, ordered_query, view_class=_FrozenAsyncContextView)
+
+    assert "errors" not in payload, payload
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_a_frozen_context_still_returns_the_windowed_rows():
+    """The positive control: refusing the stash must not quietly empty the window."""
+    for name in ("Alpha", "Bravo"):
+        await sync_to_async(library_models.Branch.objects.create)(name=name, city="Boston")
+    schema = _build_context_schema()
+
+    payload = await _post_async(
         schema,
         "{ branches(orderBy: [{ city: ASC }], offset: 1, limit: 1) { name } }",
         view_class=_FrozenAsyncContextView,
     )
-    assert p_list["data"]["branches"] == [{"name": "Bravo"}]
+
+    assert payload["data"]["branches"] == [{"name": "Bravo"}]
 
 
 # ---------------------------------------------------------------------------

@@ -84,7 +84,8 @@ from ..resource_policy import (
     DST_RESOURCE_POLICY,
     ResourceLimitExceeded,
     ResourcePolicy,
-    stash_resource_policy,
+    begin_resource_budget,
+    end_resource_budget,
 )
 from ..utils.context import (
     restored_context_keys,
@@ -985,7 +986,14 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         )
 
     def on_operation(self) -> Iterator[None]:
-        """Publish the policy, charge the document, and restore nested context state."""
+        """Arm the policy, charge the document, and restore nested execution state.
+
+        Two scopes, closed in the order they were opened: the published context
+        mirror is restored by ``restored_context_keys``, and the armed budget -
+        the value the enforcement seams actually read - is disarmed by its own
+        token, so a nested execution restores the outer operation's budget
+        rather than leaving the inner one armed.
+        """
         policy = self._resolved_policy()
         context = self.execution_context.context
         # The absent-vs-``None`` distinction and the put-it-back-on-exception
@@ -995,9 +1003,12 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         # round trip, one ``is`` comparison away from restoring a key that was
         # never set.
         with restored_context_keys(context, DST_RESOURCE_POLICY, DST_RESOURCE_DEADLINE):
-            stash_resource_policy(context, policy)
-            scan_document_text(policy, self.execution_context.query)
-            yield
+            token = begin_resource_budget(context, policy)
+            try:
+                scan_document_text(policy, self.execution_context.query)
+                yield
+            finally:
+                end_resource_budget(token)
 
     def on_execute(self) -> Iterator[None]:
         """Charge the validated document's shape and every argument value, then execute."""

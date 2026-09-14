@@ -3,7 +3,7 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: implementation complete through the eighth review's cleanup-precedence and proof-determinism remediation (control signals propagate out of async cleanup instead of becoming notes, the client window seam moved below the exported raw-list bound, a deterministic async deadline handoff, an executor-safe effective-order witness, cold/warm plan-cache assertions spelled apart, module description without frozen counts). The final gate is OWED: these rounds changed production code, so the sixth round's green figures (default 7775 / sharded 7792 / floor 2397, zero failures) describe the tree before them and are kept as history. Scope, figures and the standing evidence are in `## Final gate record` below.
+Status: implementation complete through the ninth review's request-budget and numeric-domain remediation (the operation's policy and deadline are armed for the operation rather than read back from the consumer-writable request context, which may now narrow the deadline and nothing else; a non-finite deadline is refused rather than read as a distant future; every policy bound and field-declared `max_rows` is an exact built-in, so no consumer dunder reaches the derived deadline or a rendered rejection; each bundled live claim was given its own node id). The final gate is GREEN on one tree - default 7849, sharded 7866, both at 100.00% package coverage, focused floor 444. Scope, figures and the standing evidence are in `## Final gate record` below.
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).
@@ -80,10 +80,8 @@ Status: implementation complete through the eighth review's cleanup-precedence a
         wording, and `CHANGELOG.md` to card 053's joint cut; `pyproject.toml` and `uv.lock`
         have no duplicate root-package version to bump.
 - [x] **Cross-slice integration pass (Worker 1)**
-- [ ] **Final test-run gate (Worker 1)** — the sixth round's gate is superseded by the seventh
-      round's production changes; rerun format, lint, structural and link checks, the default and
-      sharded suites at 100% package coverage, and supported-floor verification on ONE identified
-      tree; the floor scope and the last measured figures are in `## Final gate record` below
+- [x] **Final test-run gate (Worker 1)** — run on ONE tree, the working tree at `ab98d240`;
+      figures in `## Final gate record` below
 
 ## Final gate record (folded in from `bld-final.md` before its deletion)
 
@@ -96,11 +94,32 @@ gate narratives are NOT restated here: every fix they describe is in the commit 
 it, in one of the spec's five homes, or in the code's own docstrings. What follows is what
 nothing else in the tree records.
 
-**The gate is OWED.** No `pytest` invocation has been made since the tree changed. The last
-green run measured HEAD `96b9e047` plus that round's working-tree changes: default **7775
-passed / 40 skipped / 100.00%**, sharded **7792 passed / 37 skipped / 100.00%**, floor **2397
-passed / 2 skipped**. Three later rounds changed production code, so those figures describe a
-tree that no longer exists and are kept only as the record of the tier they measured.
+**The gate, measured.** One tree: the working tree at HEAD `ab98d240`, carrying the ninth
+round's production changes (the operation budget moved off the request context onto an armed
+`ContextVar`, the bound domain narrowed to exact built-in types, the non-finite deadline
+refusal) and the live-node split that gave each bundled claim its own node id.
+
+| Tier | Command | Result |
+|---|---|---|
+| format / lint | `uv run ruff format .`, `uv run ruff check --fix .` | clean |
+| structural + link | `uvx pre-commit run --files <changed>` | 6 hooks Passed |
+| citations | `scripts/check_citations.py --check` | 1008 resolve (830 in 441 `.py`, 178 in `KANBAN.md`) |
+| default | `uv run pytest` | **7849 passed / 40 skipped / 100.00%** |
+| sharded | `FAKESHOP_SHARDED=1 uv run pytest` | **7866 passed / 37 skipped / 100.00%** |
+| floor | focused scope, Python 3.10.19 / Django 5.2.16 / strawberry 0.316.0 | **444 passed** |
+
+The floor run is the focused scope for the seam this round touched - the resource-policy
+budget and the two list-field surfaces that read it - rather than the thirteen-path scope
+recorded below, which belongs to the slices that declared it: `tests/test_resource_policy.py`,
+`tests/test_list_field.py`, `examples/fakeshop/test_query/test_list_field_api.py`,
+`examples/fakeshop/test_query/test_list_field_async_api.py`. The load-bearing floor question
+was whether the armed budget survives the `sync_to_async` hand-off on 3.10, since a per-thread
+authority would read back empty there and fall open to the context; the row asserting it passes
+at the floor.
+
+The superseded figures this record previously carried - default 7775, sharded 7792, floor 2397,
+measured at HEAD `96b9e047` - described a tree that no longer exists and are dropped rather
+than kept beside the ones above.
 
 ### Floor-verification scope
 

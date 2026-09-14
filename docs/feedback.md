@@ -1,200 +1,259 @@
-# Adversarial implementation re-review: spec 050
+# Adversarial implementation review: spec 050 (fresh pass)
 
-Date: 2026-09-13
+Date: 2026-09-14. Reviewed revision `ab98d240` and the current working tree against
+the [specification][spec-050], [GOAL.md][goal], [AGENTS.md][agents], [START.md][start], and the
+live-test rules in [the fakeshop test guide][live-readme]. The comparison also covered the local
+[Strawberry-Django pagination implementation][strawberry-pagination], the installed
+Graphene-Django fields, and the [cookbook schema][cookbook-schema] shape named by the project
+instructions. Those upstream projects are migration references only; this package's Meta-first API
+remains the contract under review.
+
+No pytest command was run. The repository instructions reserve pytest for an explicit request,
+and the current build record itself says the post-remediation default, sharded, and supported-floor
+gates are still owed. The behavioral evidence below comes from source inspection and small,
+non-pytest probes run against the current checkout.
 
 ## Verdict
 
-**Not accepted yet.** The previous ordering-precedence, deadline-source cleanup, captured-model,
-and live-seeding findings are closed in the current tree. This pass found one production
-lifecycle defect, two material proof gaps, and two lower-priority repository-contract issues.
-
-The reviewed revision is `d727a256` (`fix(spec-050): judge the offset guard on the order Django
-compiles, and close a source its own deadline rejects`). The working tree also contains unrelated
-dirty `spec-047` / builder documentation; those files were not changed. No pytest command was
-run, in accordance with [AGENTS.md][agents]. The behavioral checks below are from source
-inspection and small, non-pytest probes; the earlier recorded full-suite figures are not treated
-as fresh evidence because this revision changed production code.
-
-The architectural comparison also covered the local Strawberry-Django implementation, the
-installed Graphene-Django reference, and the cookbook `recipes/schema.py` shape named by the
-project instructions; their cursor/offset behavior is treated as migration context, not as a
-substitute for this package's Meta-first contract.
+**Not accepted yet.** The latest round closes the earlier routing, async cancellation, deterministic
+async-deadline-test, effective-order-witness, exported-helper-coordinate, and definition-threading
+concerns. Two production boundary defects remain: resolver code can replace either request-side
+resource-policy seam, and hostile numeric subclasses can escape the typed resource-policy errors.
+The test plan also still bundles independent claims into single nodes, and the final gate has not
+been rerun after the latest production changes.
 
 ## Findings
 
-### P2-1 — cleanup can swallow task cancellation when a source error is already primary
+### P1-1 — the cooperative budget is mutable consumer state and can be widened or cleared
 
-Location: [`resource_policy.py::_close_async_iterator`][resource-policy] and
-[`resource_policy.py::_cleanup_rejected_async_iterable`][resource-policy].
+The extension publishes both the frozen policy and a derived absolute deadline through the
+consumer-owned `info.context` (the shape-agnostic dispatch in
+[`utils/context.py`][context-utils]) in
+[`DjangoResourcePolicyExtension.on_operation`][resource-extension] via
+[`stash_resource_policy`][resource-policy]. Both exported keys are writable by resolver code:
+`policy_from_info` accepts any `ResourcePolicy` currently stashed under `DST_RESOURCE_POLICY`,
+while [`check_deadline`][resource-policy] trusts the scalar currently stored under
+`DST_RESOURCE_DEADLINE`. Neither seam proves that its value is the one established at operation
+start or that the two values still agree.
 
-Both helpers catch `BaseException` and, whenever a primary exception already exists, turn the
-caught value into a diagnostic note. That includes `asyncio.CancelledError` (and
-`KeyboardInterrupt` / `SystemExit`). Consequently, if iteration raises first and cancellation
-arrives while `aclose()` is awaiting, the task finishes with the source error, is no longer marked
-cancelled, and the cancellation is only a note.
+This is directly exploitable by ordinary resolver code in two independent ways. A minimal probe
+stashed `ResourcePolicy(execution_deadline_seconds=0.001)`, replaced `DST_RESOURCE_DEADLINE` with
+`time.monotonic() + 3600`, and called `check_deadline`; the check returned normally even though the
+configured budget had already been exceeded by the time the next seam was reached. Replacing the
+key with `None` has the same effect. A second probe stashed a policy with `max_list_rows=5`, then
+had the resolver replace `DST_RESOURCE_POLICY` with `ResourcePolicy(max_list_rows=999)`; the same
+bounded list seam returned 999 rows instead of 5. The frozen object is immutable, but the actual
+request budget is not: every resolve-time bound derived through `policy_from_info` can be widened
+by replacing the context value, bypassing `narrowed()` entirely.
 
-I reproduced this without pytest using an async iterator whose `__anext__` raises `ValueError`
-and whose `aclose` waits. Cancelling the task while `aclose` was suspended produced:
+That contradicts spec-047's “one immutable budget” and spec-050's deadline wording: a consumer
+resolver can make the request start more work after its budget rather than merely narrow it. It is
+also not limited to malicious code; a pre-existing application context key or a middleware/resolver
+that reuses a generic string key can accidentally disable or widen the guard for the rest of the
+operation. The deadline mutation is the small half of this finding; `DST_RESOURCE_POLICY` is the
+larger seam because it carries `max_list_rows`, `max_page_size`, and every document, value, and
+rejection limit consulted at resolve time.
 
-```text
-ValueError source
-notes ['bounded_rows_async iterator cleanup failed: CancelledError()']
-cancelled False
-```
+**Root-cause correction:** move the authoritative policy and deadline to request-internal state that
+resolver code cannot replace (for example, an execution-context-owned immutable budget capsule or a
+private context-local token), and have `policy_from_info` / `check_deadline` validate that capsule
+rather than trusting consumer-writable values. If the public context seams must remain for
+compatibility, make their contents opaque framework tokens, keep the policy and absolute deadline
+private, and reject a token whose identity or policy binding does not match the operation. Revisit
+spec-047 Decision 2's context-only alternative analysis; the current design has context seams
+without an authenticity boundary.
 
-That is unsafe for an async GraphQL request: a client disconnect or server shutdown can be
-silently converted into a field error while cleanup is still incomplete. The same broad catch in
-the pre-rejection helper has the analogous risk. Ordinary cleanup failures should remain notes
-when a useful primary error exists, but cancellation and process-control exceptions must not be
-suppressed.
+**Required proofs:** add live async HTTP rows where a resolver awaits, attempts to move the deadline
+into the future, clears it, installs a non-finite deadline, and replaces the policy with a wider
+`ResourcePolicy`; each must still enforce the operation-start policy at a collection seam and return
+`RESOURCE_LIMIT_EXCEEDED` with the configured `limit`/`charged` values. Keep the existing
+context-restoration tests so the fix does not leak state into an outer execution.
 
-**Required correction:** preserve the primary-error precedence for ordinary `Exception` cleanup
-failures, while re-raising `asyncio.CancelledError` (and other `BaseException` control signals)
-after making the best safe cleanup attempt. Add a unit test that cancels during `aclose()` after a
-source exception and asserts that cancellation remains observable; keep the existing ordinary
-failure-note tests.
+### P2-1 — hostile numeric subclasses escape typed resource-policy boundaries
 
-### P2-2 — the async deadline regression is timing-racy and does not cross an async resolver await
+The positive-integer validator in [`resource_policy.py::_require_positive_int`][resource-policy]
+accepts `int` subclasses and immediately evaluates `value < 1`. A hostile subclass can raise from
+that comparison, replacing the promised `ConfigurationError` with a raw exception. The same helper
+is used by `validate_collection_bound`, so a hostile
+[`list_field.py::DjangoListField`][list-field] `max_rows=...` declaration has the same
+construction-site escape.
 
-Location: [`test_async_deadline_rejection_closes_the_source_it_never_advanced`][async-list-tests].
+The narrowing path has a second copy of the problem: [`ResourcePolicy.narrowed`][resource-policy]
+compares the preserved override value with `>` after `replace(...)`. A hostile positive subclass
+can therefore raise a raw exception while the code is deciding whether a valid narrowing widens the
+bound. More subtly, a benign-comparison subclass can pass construction and remain stored on the
+frozen policy. When any bound rejects, `_ValueBudget._reject` passes that original object to
+`ResourceLimitExceeded`; its f-strings and `extensions` payload format both `limit` and `charged`,
+so a hostile `__format__` hook can turn any resource rejection into a raw `RuntimeError`, not just a
+deadline-expiry error. Finally, a valid `float` subclass can survive `_is_valid_deadline`; its
+reflected `__radd__` can even make `time.monotonic() + deadline` become `nan` during
+[`stash_resource_policy`][resource-policy], so an accepted policy can silently disarm its own
+deadline before `check_deadline` runs.
 
-The test sets `_PASSED_DEADLINE_SECONDS = 0.000_001` and uses a synchronous resolver:
-
-```python
-def _resolver(root, info):
-    it = _ClosableAsyncIterator(branches)
-    holder["it"] = it
-    return it
-```
-
-It therefore relies on the request taking more than one microsecond between policy stashing and
-the bounding seam. That is overwhelmingly likely, but it is not a deterministic contract. More
-importantly, the specification's claim is that the deadline expires *while the consumer resolver
-awaits after obtaining the source*; this test never executes an async resolver or an await after
-the iterator is constructed. A regression in the async-await handoff could remain green while
-this test still observes the ordinary synchronous-return path.
-
-**Required correction:** make the boundary deterministic. Use a controllable monotonic clock (or
-an explicit test-only deadline handoff) and an `async def` resolver that records the iterator,
-awaits across the controlled boundary, then returns it. Exercise both the default window and
-`limit: 0`, and retain the zero-advance / one-close / complete-extension assertions. The package
-unit test already uses a directly expired deadline; the live test needs the same determinism at
-the resolver-await boundary.
-
-### P2-3 — async effective-order acceptance has no must-not assertion for dormant randomness
-
-Location: [`test_async_offset_accepts_extra_ordering_over_a_dormant_random_order`][async-list-tests]
-and the corresponding requirement in [`spec-050`][spec-050].
-
-The test asserts only that the returned row is `Bravo`. It does not inspect SQL or any equivalent
-effective-order state. The random ordering is therefore not proven dormant on the async path: a
-regression that leaves `?` effective can still return `Bravo` by chance (the fixture has three
-rows), and async SQL capture is normally empty because ORM work runs in a `sync_to_async`
-executor thread. The synchronous twin does assert the filtered SQL, but that does not prove the
-async pipeline's independent call site.
-
-Definition 27 requires the effective-order acceptance to be pinned in both colorings and says the
-captured SQL carries the deterministic `id` order. Either the async test needs an executor-safe
-SQL/state witness (for example, an instrumented apply seam that records the selected
-`extra_order_by`/`order_by` state before returning, plus the exact row), or the specification must
-explicitly relax its async SQL wording and state the replacement observable. Keep an async
-rejection control and a stable-order control so the row cannot be produced by a one-way guard.
-
-### P3-1 — the exported bounding helper trusts unvalidated coordinate arguments
-
-Location: [`resource_policy.py::bounded_rows`][resource-policy] and
-[`resource_policy.py::bounded_rows_async`][resource-policy].
-
-The new `requested_limit` / `offset` parameters are documented as “assumed prevalidated by the
-caller”, and the helpers are exported from `resource_policy.__all__`. A direct caller can therefore
-bypass the request policy:
+Current probes produced:
 
 ```text
-ResourcePolicy(max_list_rows=2), bounded_rows(range(10), offset=0, requested_limit=10)
-=> all ten rows
+ResourcePolicy(max_list_rows=BombInt(5))                  -> RuntimeError: lt bomb
+ResourcePolicy(max_list_rows=2).narrowed(max_list_rows=BombInt(3))
+                                                          -> RuntimeError: lt bomb
+expired policy with CeilBomb(1.0)                        -> RuntimeError: ceil bomb
+ResourcePolicy(max_list_rows=FmtInt(2)); rejected bound -> RuntimeError: format bomb
+accepted float subclass stashed; derived deadline    -> nan; check_deadline passed
 ```
 
-`DjangoListField` correctly validates these coordinates before calling the helpers, so this is not
-a current GraphQL-field bypass. It is nevertheless a public-module footgun and makes the helper's
-own advertised bound false for callers who import it directly.
+The existing hostile-deadline test in [`tests/test_resource_policy.py`][test-resource-policy] only
+covers a subclass whose comparison raises during construction; it does not cover a valid subclass
+reaching narrowing or expired-error rendering. The direct list-argument boundary in
+[`tests/test_list_field.py`][test-list-field] is hardened with exact-int checks, but the policy and
+field configuration boundaries are not.
 
-**Required correction:** either make the coordinate-bearing seam package-private and remove it
-from the public export/documentation, or validate the supplied coordinates against the effective
-policy inside the seam (with the same typed error contract). Do not leave a public resource-bound
-primitive whose caller can silently widen the bound.
+**Root-cause correction:** canonicalize policy and field-bound numerics to exact built-in values at
+the construction boundary, or reject all numeric subclasses with a typed `ConfigurationError`
+before any comparison, arithmetic, or formatting. Store only built-in `int` / `float` values on a
+policy and on field configuration so `narrowed`, deadline arithmetic, and GraphQL error
+serialization cannot dispatch consumer dunders. This boundary canonicalization closes the
+reflected-`__radd__` deadline case and the error-rendering case at the same time; adding scattered
+`try` blocks around every later comparison is an inconsistent and incomplete containment posture.
+Add package tests for hostile integer construction, hostile integer narrowing, a valid hostile float
+that reaches expiry and deadline derivation, a hostile `max_rows` declaration, and a valid
+comparison-but-hostile-format bound that reaches each relevant rejection family. The tests must
+assert the typed error, not merely that “some exception” was raised.
 
-### P3-2 — added/retained tests violate the repository's test-contract rules
+### P2-2 — non-finite deadline values in the exported context key fail open
 
-Two concrete issues remain under [AGENTS.md][agents] and the live-test manual
-[`examples/fakeshop/test_query/README.md`][live-readme]:
+[`check_deadline`][resource-policy] checks only `isinstance(deadline, (int, float))` and then
+compares it with `time.monotonic()`. It does not apply the same finiteness rule that
+`ResourcePolicy.__post_init__` applies to configured deadlines. A numeric value manually placed in
+the consumer context as `float("nan")` or `float("inf")` therefore returns without a rejection:
 
-- [`tests/test_connection.py::test_the_optimizer_plans_a_relation_without_reading_the_target_class`][test-connection]
-  loops over the cold and warm executions in one test body. The manual's one-node rule requires
-  explicit assertions or separately identified cases; a failure in the second execution is hidden
-  behind one node id and failability cannot remove either state independently.
-- [`tests/test_list_field.py`][test-list-field] still claims in its module docstring that it holds
-  22 tests (five validation plus 17 behavior), while the current module contains 126 test
-  functions and now owns substantially different spec-050 mechanics. That description is not an
-  authoritative inventory and conflicts with the repository's “test docstring = invariant” rule.
+```text
+DST_RESOURCE_DEADLINE = nan   -> check_deadline passed
+DST_RESOURCE_DEADLINE = inf   -> check_deadline passed
+DST_RESOURCE_DEADLINE = -inf  -> ResourceLimitExceeded
+```
 
-**Required correction:** spell out the cold and warm assertions without a body loop (or split them
-into independently identified tests while preserving the cache transition), and rewrite the stale
-module description to describe the actual ownership without frozen test counts.
+The key is exported and consumer-writable, which makes this the observable half of P1-1 rather than
+an academic constructor case. The premise that a configured policy cannot create these values is
+also false: an accepted `float` subclass with a reflected `__radd__` can turn the
+`time.monotonic() + deadline` result into `nan` inside `stash_resource_policy`; the policy is
+accepted, its derived deadline is `nan`, and the expired check passes. A malformed numeric stash is
+neither “absent” nor “non-numeric”; treating it as a future deadline silently disables a guard whose
+documented stance is fail closed.
 
-## Closed checks from the preceding pass
+**Required correction:** canonicalize the deadline field to an exact built-in `float` before
+deriving the absolute deadline; this closes both the reflected-subclass and construction-boundary
+holes. Once the authoritative deadline state is protected as described above, also reject any
+numeric value in a compatibility seam that is not finite before comparing it. Add direct tests for
+`nan`, `+inf`, and `-inf`, an accepted hostile float whose derived deadline would otherwise be
+`nan`, and a live mutation control proving a resolver cannot install any of them to bypass the
+configured budget.
 
-- [`list_field.py::_selected_ordering`][list-field] now follows Django compiler precedence:
-  `extra_order_by`, explicit `order_by`, then an enabled model default. Both random-term and
-  model-default predicates use that selected state, so dormant random terms no longer reject a
-  stable page and random model defaults no longer pass.
-- [`resource_policy.py::bounded_rows_async`][resource-policy] routes deadline rejection through
-  the shared pre-iteration cleanup helper, including `limit: 0`, while preserving the resource
-  error and its extensions when ordinary cleanup fails.
-- [`tests/test_connection.py::test_the_optimizer_plans_a_relation_without_reading_the_target_class`][test-connection]
-  now runs through `DjangoSchema`, separately exercises list and connection vocabularies, and
-  includes a custom visibility hook so the captured model is actually consumed by the planner.
-- The new live catalog rows seed through their approved helper as their first executable
-  statement; the async suite uses transaction-enabled database markers and does not enable
-  `DJANGO_ALLOW_ASYNC_UNSAFE`.
+### P2-3 — the final verification gate is explicitly still owed
 
-## Verification boundary
+The current [build record][build-050] and the specification both state that the last green figures
+were measured before the latest production changes and that the default, `FAKESHOP_SHARDED=1`, and
+supported-floor runs must be rerun. The build plan still has its final test-run item unchecked. No
+fresh coverage, sharded routing, structural, or floor result can therefore be used as evidence that
+the cancellation, routing, and deadline changes preserve the repository's 100% package gate.
 
-The package's prior full/default, sharded, and floor figures are historical: the current revision
-changed `list_field.py`, `resource_policy.py`, and their tests after those runs. A fresh gate is
-still required after the P2 items are corrected. This review intentionally did not modify the
-concurrent `spec-047` or builder files and did not run pytest.
+This is a release-blocking evidence gap, not a request to paper over failures with a test-only
+change. After the two production corrections, rerun the required format/lint/structural checks and
+the three identified test tiers on one identified tree; record exit status and exact counts in the
+build artifact. Until that happens, “implementation complete” is not an independently verified
+claim.
+
+### P3-1 — live test nodes still bundle independent claims contrary to the repository contract
+
+The live guide requires one claim per node id and says to parametrize rather than loop. The current
+spec-050 suites still combine failures that can regress independently:
+
+- [`test_shipped_branches_coercion_failures_and_integral_floats`][sync-list-tests] loops over
+  string, boolean, and float variables, then adds a float literal and an integral-float success
+  case under one node.
+- [`test_shipped_branches_empty_order_and_permission_precedence`][sync-list-tests] asserts two
+  different empty-order forms and a permission-precedence form in one node.
+- [`test_shipped_branches_error_precedence_pairs`][sync-list-tests] carries three unrelated
+  precedence claims (numeric ordering, materialized source, and pre-sliced source) in one node.
+- [`test_holder_branches_post_orderset_malformed_result_matrix`][sync-list-tests] drives ten
+  malformed `OrderSet` results through one helper/test body; a failure in an early arm prevents the
+  remaining defect classes from running.
+- The async sibling repeats the pattern in
+  [`test_async_queryset_completion_optimizer_on_and_off`][async-list-tests],
+  [`test_async_error_transport_and_naming`][async-list-tests], and the context-preservation rows.
+- [`test_async_holder_branches_post_orderset_seals`][async-list-tests] is a numbered five-defect
+  `apply_async` matrix in one node, the exact async twin of
+  `test_holder_branches_post_orderset_malformed_result_matrix`.
+
+An AST census of the two live modules finds 14 loop-in-test-body cases without parametrization.
+Several are legitimate seeding, SQL, or census loops, so the rule is not “split every loop”;
+independent behavioral claims must still own distinct node ids. The async holder matrix above is a
+clear missed case under that rule.
+
+These are not equivalent-data censuses: each arm protects a different boundary or precedence rule.
+One-node bundling weakens failability accounting and makes a green row unable to show which claim
+would fail when its boundary is removed.
+
+**Required correction:** split distinct invariants into separately named tests, or use
+`pytest.mark.parametrize(..., ids=[...])` so every case has its own node id. Keep the exact GraphQL
+error/SQL assertions with the case that owns them; retain a must-not control beside each scoped
+positive claim.
+
+## Closed checks from this pass
+
+The following earlier concerns were re-checked and are not open findings:
+
+- [`utils/querysets.py::_snapshot_routing_intent`][querysets] resolves an effective alias before a
+  public `OrderSet` override and the accepted seal is pinned to that alias; in-place routing edits
+  no longer move the completed read.
+- Async cleanup now demotes only ordinary `Exception` failures; cancellation and other control
+  `BaseException` signals propagate from both cleanup seams.
+- The live async deadline row crosses an actual resolver `await`, uses a wide deterministic budget,
+  and proves zero advancement plus exactly one close for the default and zero-limit windows.
+- The async effective-order row records compiler-built SQL, so dormant random terms are not accepted
+  on a lucky row value alone.
+- `bounded_rows` and `bounded_rows_async` no longer accept client coordinates; the private window
+  seam is the only coordinate-bearing path.
+- The optimizer's nested planner, synthesized relation connections, and connection cache now carry
+  the captured registry definition rather than re-reading the target class at request time.
+- The spec's DRY paragraph intentionally says argument-bearing visibility uses `reject-combined` at
+  both source and result seals; the adjacent em-dash clause supplies the message-arm requirement.
+  This wording was re-read against the implementation and is not a finding.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../AGENTS.md
-[start]: ../START.md
 [goal]: ../GOAL.md
+[start]: ../START.md
 
 <!-- docs/ -->
 [spec-050]: spec-050-list_field_arguments-0_0_15.md
-[live-readme]: ../examples/fakeshop/test_query/README.md
 
 <!-- docs/SPECS/ -->
-[spec-020]: SPECS/spec-020-list_field-0_0_7.md
-[spec-030]: SPECS/spec-030-connection_field-0_0_9.md
 
 <!-- docs/builder/ -->
-[build-050]: builder/build-050-list_field_arguments-0_0_15.md
+[build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
+[context-utils]: ../django_strawberry_framework/utils/context.py
 [list-field]: ../django_strawberry_framework/list_field.py
+[querysets]: ../django_strawberry_framework/utils/querysets.py
+[resource-extension]: ../django_strawberry_framework/extensions/resource_policy.py
 [resource-policy]: ../django_strawberry_framework/resource_policy.py
 
 <!-- tests/ -->
-[test-connection]: ../tests/test_connection.py
 [test-list-field]: ../tests/test_list_field.py
+[test-resource-policy]: ../tests/test_resource_policy.py
 
 <!-- examples/ -->
 [async-list-tests]: ../examples/fakeshop/test_query/test_list_field_async_api.py
+[live-readme]: ../examples/fakeshop/test_query/README.md
+[sync-list-tests]: ../examples/fakeshop/test_query/test_list_field_api.py
 
 <!-- scripts/ -->
 
 <!-- .venv/ -->
 
 <!-- External -->
+[cookbook-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+[strawberry-pagination]: ../../strawberry-django-main/strawberry_django/pagination.py

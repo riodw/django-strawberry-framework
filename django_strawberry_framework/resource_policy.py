@@ -24,11 +24,16 @@ Three properties are contractual:
 construction (``schema.py::DjangoSchema``), so an invalid deployment fails at
 startup and no resolver re-reads or re-validates a setting per request.
 
-**Immutable and threaded through the request context.** The resolved policy is
-stashed under ``DST_RESOURCE_POLICY`` at the start of every operation, mirroring
-the optimizer's ``DST_OPTIMIZER_*`` context seam, and read back by
-``policy_from_info``. The object is a frozen dataclass, so a resolver cannot
-widen the request's own budget by mutating it.
+**Immutable and armed for the whole operation.** The resolved policy is armed as
+the operation's authoritative budget by ``begin_resource_budget`` and read back
+by ``policy_from_info`` and ``check_deadline``. The object is a frozen
+dataclass, so a resolver cannot widen the request's own budget by mutating it,
+and the authority is a ``ContextVar`` rather than a request-context key, so a
+resolver cannot widen it by REPLACING it either. The same call publishes the
+policy and its derived deadline under ``DST_RESOURCE_POLICY`` /
+``DST_RESOURCE_DEADLINE``, mirroring the optimizer's ``DST_OPTIMIZER_*`` context
+seam; those keys are a consumer-readable mirror, and no enforcement seam trusts
+them while a budget is armed.
 
 **Narrowing-only per field.** ``effective_bound`` is how a field applies its own
 declared maximum: the tighter of the field's value and the request policy wins.
@@ -49,6 +54,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, fields, replace
 from itertools import islice
 from typing import Any
@@ -69,11 +75,13 @@ __all__ = (
     "RESOURCE_LIMIT_ERROR_CODE",
     "ResourceLimitExceeded",
     "ResourcePolicy",
+    "begin_resource_budget",
     "bounded_rows",
     "bounded_rows_async",
     "check_deadline",
     "clear_resource_context",
     "effective_bound",
+    "end_resource_budget",
     "policy_from_info",
     "resolve_resource_policy",
     "stash_resource_policy",
@@ -153,21 +161,28 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
 def _is_valid_deadline(value: Any) -> bool:
     """Whether ``value`` sits in the deadline domain (``None`` is decided by the caller).
 
-    The comparison is contained because the value is deployment-supplied: a
-    numeric SUBCLASS whose ``__le__`` / ``__gt__`` raises is a hostile
-    configuration object, and letting that raise escape ``__post_init__``
-    would replace the typed ``ConfigurationError`` every invalid deadline
-    receives with a raw ``RuntimeError`` out of schema construction.
+    The type test is EXACT, not ``isinstance``. The value is
+    deployment-supplied, and a numeric SUBCLASS is a hostile configuration
+    object whose dunders are consumer code the policy would then carry
+    everywhere it uses the deadline: a raising ``__le__`` / ``__gt__`` replaces
+    the typed ``ConfigurationError`` with a raw error out of schema
+    construction, a raising ``__ceil__`` / ``__format__`` replaces the typed
+    ``ResourceLimitExceeded`` with one out of a collection resolver, a lying
+    ``__float__`` answers this very check for a value it does not hold, and a
+    reflected ``__radd__`` - which takes priority over ``float``'s own - turns
+    ``stash_resource_policy``'s ``time.monotonic() + deadline`` into ``nan``,
+    silently disarming the deadline of a policy that was accepted. Admitting
+    only the built-in types is what keeps every later comparison, conversion,
+    arithmetic and format on a value the package owns.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) is not int and type(value) is not float:
         return False
     try:
         return math.isfinite(value) and value > 0
-    except Exception:
-        # ``isfinite`` overflows on a huge int, and a hostile numeric SUBCLASS
-        # can raise from its own comparison dunder: either way the value cannot
-        # be classified as a positive number of seconds, so the domain check
-        # answers False and the typed rejection fires at the caller.
+    except OverflowError:
+        # ``isfinite`` overflows converting a huge int, which is therefore not
+        # classifiable as a positive number of seconds: the domain check answers
+        # False and the typed rejection fires at the caller.
         return False
 
 
@@ -176,11 +191,20 @@ def _require_positive_int(value: Any, label: str) -> None:
 
     The package's bound-domain rule, stated once for the two spellings of the
     same rule: a ``ResourcePolicy`` field validated at construction and a
-    field-declared collection bound validated at its factory line. ``True`` is
-    rejected on purpose - ``isinstance(True, int)`` is ``True``, and a bound of
-    ``True`` would silently become ``1``.
+    field-declared collection bound validated at its factory line.
+
+    The type test is EXACT, which is what rejects ``True``
+    (``isinstance(True, int)`` is ``True``, and a bound of ``True`` would
+    silently become ``1``) and equally what keeps a hostile ``int`` subclass out
+    of a policy. A subclass whose ``__lt__`` raises would replace this typed
+    rejection with a raw error; worse, one whose ``__lt__`` answers normally
+    would be STORED, and every later use of the bound then dispatches consumer
+    dunders - ``narrowed``'s ``>`` comparison, and the ``limit`` / ``charged``
+    values ``ResourceLimitExceeded`` formats into the message and ``extensions``
+    of every rejection the bound drives. Admitting only the built-in type is
+    what keeps those on values the package owns.
     """
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+    if type(value) is not int or value < 1:
         raise ConfigurationError(
             f"{label} must be a positive integer; got {describe_value(value)}.",
         )
@@ -393,15 +417,121 @@ def resolve_resource_policy(explicit: ResourcePolicy | Mapping[str, Any] | None)
     )
 
 
-def stash_resource_policy(context: Any, policy: ResourcePolicy) -> None:
-    """Publish ``policy`` (and its derived deadline) onto the request context."""
+@dataclass(frozen=True)
+class _RequestBudget:
+    """One operation's authoritative budget: its policy and its absolute deadline.
+
+    Both are established once, at ``on_operation`` entry, and travel together so
+    that no seam can read a deadline derived from a policy other than the one it
+    is about to enforce.
+    """
+
+    policy: ResourcePolicy
+    deadline: float | None
+
+
+#: The budget in force for the CURRENT operation, or ``None`` when nothing armed
+#: one here.
+#:
+#: The published ``DST_RESOURCE_*`` keys cannot be the authority, because they
+#: live on the CONSUMER's ``info.context`` and every resolver in the request can
+#: write it. Replacing ``DST_RESOURCE_DEADLINE`` with a future scalar disarms
+#: ``check_deadline``; replacing ``DST_RESOURCE_POLICY`` with a wider
+#: ``ResourcePolicy`` widens ``max_list_rows`` - both the returned-row bound and
+#: the accepted ``offset`` ceiling ``list_field.py`` derives from it - and
+#: ``max_page_size``, for the rest of the operation and without passing
+#: ``narrowed``. Neither needs hostile intent: an application context key or a
+#: middleware that reuses a generic string name collides just as effectively.
+#:
+#: A ``ContextVar`` is not reachable by writing the request context, is scoped
+#: per task under asyncio and per thread otherwise, and propagates across
+#: ``sync_to_async`` / ``async_to_sync``, so it is armed wherever the package's
+#: own collection seams run. The ``ContextVar``-over-stash idiom is the
+#: optimizer's (``optimizer/_context.py``'s ``_active_strictness``), adopted for
+#: the same reason: a per-execution answer a context stash cannot be trusted to
+#: give.
+#:
+#: The published keys stay exactly as spec-047 shipped them, as a mirror a
+#: consumer can read; they are also the fallback for a caller that publishes a
+#: policy without arming one (a direct ``stash_resource_policy``, or a plain
+#: ``strawberry.Schema`` with no extension), which is a context no resolver of
+#: this package's is running inside.
+_active_budget: ContextVar[_RequestBudget | None] = ContextVar(
+    "django_strawberry_framework_resource_budget",
+    default=None,
+)
+
+
+def _absolute_deadline(policy: ResourcePolicy) -> float | None:
+    """The monotonic instant ``policy``'s budget ends, or ``None`` for no deadline.
+
+    ``execution_deadline_seconds`` is an exact built-in by construction
+    (:func:`_is_valid_deadline`), so this addition is plain ``float``
+    arithmetic and cannot be redirected through a consumer's ``__radd__``.
+    """
+    seconds = policy.execution_deadline_seconds
+    return None if seconds is None else time.monotonic() + seconds
+
+
+def _publish_budget_mirror(context: Any, policy: ResourcePolicy, deadline: float | None) -> None:
+    """Write the consumer-readable mirror of a budget onto the request context."""
     stash_on_context(context, DST_RESOURCE_POLICY, policy)
-    deadline = policy.execution_deadline_seconds
-    stash_on_context(
-        context,
-        DST_RESOURCE_DEADLINE,
-        None if deadline is None else time.monotonic() + deadline,
-    )
+    stash_on_context(context, DST_RESOURCE_DEADLINE, deadline)
+
+
+def stash_resource_policy(context: Any, policy: ResourcePolicy) -> None:
+    """Publish ``policy`` (and its derived deadline) onto the request context.
+
+    The consumer-readable mirror, and only that. :func:`begin_resource_budget`
+    is what arms the budget the enforcement seams actually read; a caller that
+    publishes without arming leaves the seams on their fallback, which reads
+    this mirror back.
+    """
+    _publish_budget_mirror(context, policy, _absolute_deadline(policy))
+
+
+def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:
+    """Arm ``policy`` as this operation's budget and publish it; returns the reset token.
+
+    One derived absolute deadline reaches both the armed budget and the
+    published mirror, so the authority and the mirror cannot disagree about when
+    the operation's budget ends. :func:`end_resource_budget` closes the scope,
+    restoring whatever budget an enclosing operation had armed.
+    """
+    deadline = _absolute_deadline(policy)
+    _publish_budget_mirror(context, policy, deadline)
+    return _active_budget.set(_RequestBudget(policy, deadline))
+
+
+def end_resource_budget(token: Any) -> None:
+    """Disarm the budget armed by :func:`begin_resource_budget`."""
+    _active_budget.reset(token)
+
+
+def _effective_deadline(armed: float | None, mirror: Any) -> Any:
+    """The tighter of the operation's own deadline and a consumer-written one.
+
+    The narrowing rule the rest of the module already states for bounds
+    (``effective_bound``, ``ResourcePolicy.narrowed``), applied to the one piece
+    of budget state a consumer can write: a resolver that stashes an EARLIER
+    instant under ``DST_RESOURCE_DEADLINE`` is shortening its own request, which
+    it is always entitled to do; one that stashes a later instant, clears the
+    key, or writes a value no comparison can order is asking to run past the
+    budget the operation started with, which no caller is entitled to. The armed
+    value is the ceiling either way, so the seam cannot be widened by anything
+    reachable from ``info.context``.
+    """
+    if not isinstance(mirror, (int, float)) or isinstance(mirror, bool):
+        return armed
+    if armed is None:
+        return mirror
+    try:
+        return mirror if mirror < armed else armed
+    except Exception:
+        # A hostile numeric SUBCLASS cannot be ordered against the armed
+        # deadline, so it cannot be shown to narrow it: the operation keeps the
+        # deadline it started with rather than adopting an unorderable one.
+        return armed
 
 
 def clear_resource_context(context: Any) -> None:
@@ -413,11 +543,20 @@ def clear_resource_context(context: Any) -> None:
 def policy_from_info(info: Any) -> ResourcePolicy:
     """Return the request's policy, or the package default when none was published.
 
+    The armed budget outranks the published mirror, and is consulted without
+    reference to ``info`` at all: a resolver that rewrites ``DST_RESOURCE_POLICY``
+    to widen ``max_list_rows`` for the rest of its own operation changes nothing
+    that any bound reads. The mirror answers only where no budget is armed,
+    which is a context none of this package's collection seams runs inside.
+
     Fail-closed by construction: the miss path returns
     ``DEFAULT_RESOURCE_POLICY``, never ``None``. A field consulting the policy is
     therefore always bounded, including under a plain ``strawberry.Schema`` that
     never installed the extension, and never needs a ``None`` branch of its own.
     """
+    budget = _active_budget.get()
+    if budget is not None:
+        return budget.policy
     value = get_context_value(getattr(info, "context", None), DST_RESOURCE_POLICY)
     return value if isinstance(value, ResourcePolicy) else DEFAULT_RESOURCE_POLICY
 
@@ -426,11 +565,18 @@ def check_deadline(info: Any) -> None:
     """Raise if the operation's optional wall-clock deadline has already passed.
 
     Cooperative and called at the collection resolvers' pre-query seam, which is
-    the last point before the request hands work to the database. Guarding the
-    *answer* rather than a spelling of the input: only a stashed deadline that is
-    a real number arms the check, so an absent, cleared, or non-numeric stash
-    leaves the request running rather than rejecting it, and a stashed deadline
-    that HAS passed always rejects.
+    the last point before the request hands work to the database. The armed
+    budget is the ceiling: a resolver may SHORTEN its own request by stashing an
+    earlier instant under ``DST_RESOURCE_DEADLINE``, and cannot lengthen or
+    clear it (:func:`_effective_deadline`). Where no budget is armed, the
+    published mirror is all there is and answers alone.
+
+    Guarding the *answer* rather than a spelling of the input: only a deadline
+    that is a real number leaves the request running, so an absent, cleared, or
+    non-numeric one leaves it running rather than rejecting it, while a deadline
+    that has passed - and equally one that is numeric but NOT FINITE, which no
+    configured policy can derive and which no comparison can certify the request
+    is inside - always rejects.
 
     The rejection reports the CONFIGURED budget, never the clock: ``limit`` is
     the policy's own ``execution_deadline_seconds`` and ``charged`` is one second
@@ -441,20 +587,24 @@ def check_deadline(info: Any) -> None:
     timestamp is worse than useless - it reads as a bound the deployment never
     configured.
     """
-    deadline = get_context_value(getattr(info, "context", None), DST_RESOURCE_DEADLINE)
+    budget = _active_budget.get()
+    mirror = get_context_value(getattr(info, "context", None), DST_RESOURCE_DEADLINE)
+    deadline = mirror if budget is None else _effective_deadline(budget.deadline, mirror)
     if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         return
     try:
-        expired = time.monotonic() >= deadline
+        expired = not math.isfinite(deadline) or time.monotonic() >= deadline
     except Exception:
-        # A numeric SUBCLASS whose comparisons raise is a hostile stash shape:
-        # the seam cannot certify the request inside its budget, so it fails
-        # closed on the same typed path a passed deadline takes rather than
-        # leaking the raw arithmetic error out of a collection resolver.
+        # A numeric SUBCLASS whose conversion or comparison raises is a hostile
+        # mirror shape: the seam cannot certify the request inside its budget,
+        # so it fails closed on the same typed path a passed deadline takes
+        # rather than leaking the raw arithmetic error out of a collection
+        # resolver.
         expired = True
     if not expired:
         return
-    configured = policy_from_info(info).execution_deadline_seconds
+    source = budget.policy if budget is not None else policy_from_info(info)
+    configured = source.execution_deadline_seconds
     # A stashed deadline whose policy carries none is only reachable by writing
     # the key by hand: reject (the deadline HAS passed) and say the budget is
     # unknown rather than inventing a number for it.

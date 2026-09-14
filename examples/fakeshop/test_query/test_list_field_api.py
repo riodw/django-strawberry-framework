@@ -544,36 +544,65 @@ def test_shipped_branches_limit_bounds_rejected():
 # ---------------------------------------------------------------------------
 
 
+_LIMIT_VARIABLE_QUERY = """
+query($lim: Int) {
+  allLibraryBranchesViaListField(limit: $lim) {
+    name
+  }
+}
+"""
+
+
 @pytest.mark.django_db
-def test_shipped_branches_coercion_failures_and_integral_floats():
+@pytest.mark.parametrize(
+    "bad_value",
+    ["one", True, 1.5],
+    ids=["string", "boolean", "non-integral-float"],
+)
+def test_shipped_branches_a_limit_variable_outside_int_is_refused_before_sql(bad_value):
+    """Each coercion family owns its node: they fail at different layers.
+
+    A string and a boolean are refused by variable coercion, a non-integral
+    float by the integral check beside it. Sharing one node would let the first
+    regression hide the other two, and the must-not half - that no resolver SQL
+    runs - is the claim each of them is really making.
+    """
     library_models.Branch.objects.create(name="Alpha", city="Boston")
 
-    query_var = """
-    query($lim: Int) {
-      allLibraryBranchesViaListField(limit: $lim) {
-        name
-      }
-    }
-    """
-    for bad_val in ("one", True, 1.5):
-        with CaptureQueriesContext(connection) as ctx:
-            payload = graphql_payload(query_var, variables={"lim": bad_val})
-        assert "errors" in payload
-        # No resolver SQL executed
-        assert len(ctx.captured_queries) == 0
-
-    # Float literal in document
     with CaptureQueriesContext(connection) as ctx:
-        payload_lit = graphql_payload(
-            "{ allLibraryBranchesViaListField(limit: 1.5) { name } }",
-        )
-    assert "errors" in payload_lit
+        payload = graphql_payload(_LIMIT_VARIABLE_QUERY, variables={"lim": bad_value})
+
+    assert "errors" in payload
     assert len(ctx.captured_queries) == 0
 
-    # Integral float variable coerces to int 1 and succeeds
-    payload_int_float = graphql_payload(query_var, variables={"lim": 1.0})
-    assert "errors" not in payload_int_float, payload_int_float
-    assert len(payload_int_float["data"]["allLibraryBranchesViaListField"]) == 1
+
+@pytest.mark.django_db
+def test_shipped_branches_a_float_limit_literal_is_refused_before_sql():
+    """The document-literal path does not pass through variable coercion at all."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    with CaptureQueriesContext(connection) as ctx:
+        payload = graphql_payload(
+            "{ allLibraryBranchesViaListField(limit: 1.5) { name } }",
+        )
+
+    assert "errors" in payload
+    assert len(ctx.captured_queries) == 0
+
+
+@pytest.mark.django_db
+def test_shipped_branches_an_integral_float_limit_variable_coerces_and_runs():
+    """The positive control for the rejections above.
+
+    Without it they would all still pass if ``limit`` refused every float, which
+    is a different contract from refusing the ones that are not whole numbers.
+    """
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    payload = graphql_payload(_LIMIT_VARIABLE_QUERY, variables={"lim": 1.0})
+
+    assert "errors" not in payload, payload
+    assert len(payload["data"]["allLibraryBranchesViaListField"]) == 1
 
 
 @pytest.mark.django_db
@@ -741,24 +770,35 @@ def test_holder_presliced_configuration_error_under_pass_through():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_empty_order_and_permission_precedence():
-    # Empty order input does not satisfy nonzero offset order requirement
-    p_empty = graphql_payload(
-        "{ allLibraryBranchesViaListField(orderBy: [], offset: 1) { name } }",
-    )
-    assert p_empty["errors"][0]["extensions"]["reason"] == "order_required"
+@pytest.mark.parametrize(
+    "order_by",
+    ["[]", "[{ id: null }]"],
+    ids=["empty-list", "all-null-term"],
+)
+def test_shipped_branches_an_ordering_with_no_terms_does_not_satisfy_an_offset(order_by):
+    """Two different spellings of "supplied but empty", each its own regression.
 
-    # All-null terms do not satisfy it
-    p_null_term = graphql_payload(
-        "{ allLibraryBranchesViaListField(orderBy: [{ id: null }], offset: 1) { name } }",
+    An empty list never reaches term normalization; a list whose only term is
+    all-null reaches it and comes back with nothing. One node could not say
+    which of the two stopped answering ``order_required``.
+    """
+    payload = graphql_payload(
+        f"{{ allLibraryBranchesViaListField(orderBy: {order_by}, offset: 1) {{ name }} }}",
     )
-    assert p_null_term["errors"][0]["extensions"]["reason"] == "order_required"
+    assert payload["errors"][0]["extensions"]["reason"] == "order_required"
 
-    # Anonymous user sending staff-gated 'name' order + offset: 1 hits permission first
-    p_perm = graphql_payload(
+
+@pytest.mark.django_db
+def test_shipped_branches_an_order_permission_denial_precedes_the_order_requirement():
+    """A staff-gated term under an anonymous user answers permission, not ordering.
+
+    A precedence claim between two rejections is independent of whether either
+    rejection fires on its own, so it owns a node rather than riding beside them.
+    """
+    payload = graphql_payload(
         "{ allLibraryBranchesViaListField(orderBy: [{ name: ASC }], offset: 1) { name } }",
     )
-    assert p_perm["errors"][0]["extensions"]["code"] == "ORDER_PERMISSION_DENIED"
+    assert payload["errors"][0]["extensions"]["code"] == "ORDER_PERMISSION_DENIED"
 
 
 @pytest.mark.django_db
@@ -793,15 +833,19 @@ def test_shipped_branches_aggregate_order_no_distinct_in_sql():
 
 
 @pytest.mark.django_db
-def test_shipped_branches_error_precedence_pairs():
-    # 1. offset: -1, limit: -1 -> negative precedes limit
-    p_both = graphql_payload(
+def test_shipped_branches_a_negative_offset_is_named_before_a_negative_limit():
+    """Two invalid arguments in one request; the rejection names the first."""
+    payload = graphql_payload(
         "{ allLibraryBranchesViaListField(offset: -1, limit: -1) { name } }",
     )
-    assert p_both["errors"][0]["extensions"]["reason"] == "negative"
-    assert p_both["errors"][0]["extensions"]["argument"] == "offset"
+    assert payload["errors"][0]["extensions"]["reason"] == "negative"
+    assert payload["errors"][0]["extensions"]["argument"] == "offset"
 
-    # 2. Materialized field with orderBy + offset: 1 -> queryset_required precedes order_required
+
+@pytest.mark.django_db
+def test_shipped_branches_a_materialized_source_is_named_before_the_order_requirement():
+    """A list cannot be ordered OR offset; the source defect is the answer."""
+
     @strawberry.type
     class _MatQuery:
         branches_materialized: list[library_schema.BranchType] = DjangoListField(
@@ -809,14 +853,17 @@ def test_shipped_branches_error_precedence_pairs():
             resolver=lambda root, info: list(library_models.Branch.objects.all()),
         )
 
-    schema = DjangoSchema(query=_MatQuery, config=strawberry_config())
-    p_mat = _post_sync(
-        schema,
+    payload = _post_sync(
+        DjangoSchema(query=_MatQuery, config=strawberry_config()),
         "{ branchesMaterialized(orderBy: [{ city: ASC }], offset: 1) { name } }",
     )
-    assert p_mat["errors"][0]["extensions"]["reason"] == "queryset_required"
+    assert payload["errors"][0]["extensions"]["reason"] == "queryset_required"
 
-    # 3. Presliced with orderBy under pass-through -> presliced source seal precedes order
+
+@pytest.mark.django_db
+def test_shipped_branches_a_presliced_source_is_named_before_the_ordering_runs():
+    """A source that already took its own window is sealed before ordering touches it."""
+
     @strawberry.type
     class _PreQuery:
         branches_presliced: list[library_schema.BranchType] = DjangoListField(
@@ -824,14 +871,13 @@ def test_shipped_branches_error_precedence_pairs():
             resolver=lambda root, info: library_models.Branch.objects.all()[:2],
         )
 
-    schema_pre = DjangoSchema(query=_PreQuery, config=strawberry_config())
-    p_pre = _post_sync(
-        schema_pre,
+    payload = _post_sync(
+        DjangoSchema(query=_PreQuery, config=strawberry_config()),
         "{ branchesPresliced(orderBy: [{ city: ASC }]) { name } }",
         extra_settings=_ERROR_POLICY_PASS_THROUGH,
     )
-    assert p_pre["data"] is None
-    assert "sliced" in p_pre["errors"][0]["message"].lower()
+    assert payload["data"] is None
+    assert "sliced" in payload["errors"][0]["message"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -917,133 +963,176 @@ _BRANCH_ORDER_SHAPE_PREFIX = (
 )
 
 
-@pytest.mark.django_db
-def test_holder_branches_post_orderset_malformed_result_matrix(monkeypatch):
-    """Every malformed ``apply_sync`` result the seal can reach live names its exact defect.
+class _DeferredFilterQuerySet(models.QuerySet):
+    """A queryset SUBCLASS, which is what makes an unresolved deferred filter untrusted.
 
-    Each row runs a real ``/graphql/`` request against the shipped field with the
-    override in place, asserts the exact rejection it must produce rather than the
-    sentence the rows share, and captures SQL so a row that must not execute proves
-    it did not.
+    Django leaves a ``_deferred_filter`` only on an EXACT plain queryset, so a
+    subclass carrying one is not that artifact and the seal cannot faithfully
+    rebuild the predicate it names.
     """
-    library_models.Branch.objects.create(name="A", city="Boston")
-    query = "{ allLibraryBranchesViaListField(orderBy: [{ city: ASC }]) { name } }"
 
-    def _run(override):
-        monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(override))
-        with (
-            override_settings(**_ERROR_POLICY_PASS_THROUGH),
-            CaptureQueriesContext(connection) as ctx,
-        ):
-            payload = graphql_payload(query)
-        assert payload["data"] is None
-        branch_sql = [
-            q["sql"] for q in ctx.captured_queries if "library_branch" in q["sql"].lower()
-        ]
-        return payload["errors"][0]["message"], branch_sql
 
-    # 1. Evaluated: the override executed the query and returned the SAME, now-cached
-    #    queryset. The seal names ``evaluated`` and the framework issued no second query.
-    def _evaluated(
-        cls,
-        order_input,
-        queryset,
-        info,
-    ):
-        list(queryset)
-        return queryset
+async def _awaitable_queryset(queryset):
+    return queryset
 
-    message, branch_sql = _run(_evaluated)
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "evaluated defect")
-    assert len(branch_sql) == 1
 
-    # 2. A materialized list is not a QuerySet at all: a ``type`` defect, distinct from row 1.
-    message, branch_sql = _run(lambda cls, order_input, queryset, info: list(queryset))
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "type defect")
-    assert len(branch_sql) == 1
+def _override_in_place_routing(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    queryset._hints = {"tenant": 2}
+    return queryset
 
-    # 3. ``None`` is the other non-queryset shape.
-    message, branch_sql = _run(lambda cls, order_input, queryset, info: None)
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "type defect")
-    assert branch_sql == []
 
-    # 4. Projection.
-    message, branch_sql = _run(lambda cls, order_input, queryset, info: queryset.values("name"))
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "projection defect")
-    assert branch_sql == []
+def _override_evaluated(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    list(queryset)
+    return queryset
 
-    # 5. Wrong model.
-    message, branch_sql = _run(
+
+def _override_untrusted(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    candidate = _DeferredFilterQuerySet(model=library_models.Branch)
+    candidate._deferred_filter = (False, (), {"name": "A"})
+    return candidate
+
+
+#: One row per defect class the post-``OrderSet`` seal can name live:
+#: ``(override, expected message start, required substrings, resolver queries)``.
+#: The query count is the must-not half - a defect the seal catches before the
+#: window is taken must leave the database untouched, and the two rows that do
+#: issue one prove the count is measured rather than assumed.
+_MALFORMED_APPLY_SYNC_ROWS = (
+    (
+        "evaluated",
+        _override_evaluated,
+        _BRANCH_ORDER_SHAPE_PREFIX + "evaluated defect",
+        (),
+        1,
+    ),
+    (
+        "materialized-list",
+        lambda cls, order_input, queryset, info: list(queryset),
+        _BRANCH_ORDER_SHAPE_PREFIX + "type defect",
+        (),
+        1,
+    ),
+    (
+        "none",
+        lambda cls, order_input, queryset, info: None,
+        _BRANCH_ORDER_SHAPE_PREFIX + "type defect",
+        (),
+        0,
+    ),
+    (
+        "projection",
+        lambda cls, order_input, queryset, info: queryset.values("name"),
+        _BRANCH_ORDER_SHAPE_PREFIX + "projection defect",
+        (),
+        0,
+    ),
+    (
+        "wrong-model",
         lambda cls, order_input, queryset, info: library_models.Book.objects.all(),
-    )
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "table defect")
-    assert branch_sql == []
-
-    # 6. Sliced after ordering: the window is the framework's to take, once.
-    message, branch_sql = _run(
+        _BRANCH_ORDER_SHAPE_PREFIX + "table defect",
+        (),
+        0,
+    ),
+    (
+        "sliced",
         lambda cls, order_input, queryset, info: queryset.order_by("name")[:1],
-    )
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "sliced defect")
-    assert branch_sql == []
-
-    # 7. Combined.
-    message, branch_sql = _run(
+        _BRANCH_ORDER_SHAPE_PREFIX + "sliced defect",
+        (),
+        0,
+    ),
+    (
+        "combined",
         lambda cls, order_input, queryset, info: queryset.filter(name="A").union(
             queryset.filter(name="B"),
         ),
-    )
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "combined defect")
-    assert branch_sql == []
-
-    # 8. A sync override returning an awaitable violates the sync protocol; the
-    #    awaitable is disposed rather than left un-awaited.
-    async def _later(queryset):
-        return queryset
-
-    message, branch_sql = _run(lambda cls, order_input, queryset, info: _later(queryset))
-    assert message.startswith(
+        _BRANCH_ORDER_SHAPE_PREFIX + "combined defect",
+        (),
+        0,
+    ),
+    (
+        "awaitable-in-sync",
+        lambda cls, order_input, queryset, info: _awaitable_queryset(queryset),
         "BranchOrder.apply_sync returned an awaitable in a sync resolver context.",
-    )
-    assert branch_sql == []
+        (),
+        0,
+    ),
+    (
+        "routing-rewritten-in-place",
+        _override_in_place_routing,
+        "BranchOrder.apply_sync changed database routing intent",
+        ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
+        0,
+    ),
+    (
+        "unresolved-deferred-filter",
+        _override_untrusted,
+        _BRANCH_ORDER_SHAPE_PREFIX + "untrusted defect",
+        ("carries an unresolved deferred filter",),
+        0,
+    ),
+)
 
-    # 9. Routing rewritten IN PLACE on the queryset the override was handed, then
-    #    returned as-is: compared against the pre-call snapshot, not the mutated object.
-    def _in_place_routing(
-        cls,
-        order_input,
-        queryset,
-        info,
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "override",
+        "message_start",
+        "substrings",
+        "resolver_queries",
+    ),
+    [row[1:] for row in _MALFORMED_APPLY_SYNC_ROWS],
+    ids=[row[0] for row in _MALFORMED_APPLY_SYNC_ROWS],
+)
+def test_holder_branches_a_malformed_apply_sync_result_names_its_own_defect(
+    monkeypatch,
+    override,
+    message_start,
+    substrings,
+    resolver_queries,
+):
+    """Each malformed ``apply_sync`` result names its exact defect, on its own node.
+
+    The defect classes are independent boundaries in the seal, so a regression in
+    an early one must not stop the later ones from running. Every row runs a real
+    ``/graphql/`` request against the shipped field with the override in place,
+    asserts the rejection it specifically must produce rather than the sentence
+    the rows share, and captures SQL so a row that must not reach the database
+    proves it did not.
+    """
+    library_models.Branch.objects.create(name="A", city="Boston")
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(override))
+
+    with (
+        override_settings(**_ERROR_POLICY_PASS_THROUGH),
+        CaptureQueriesContext(connection) as ctx,
     ):
-        queryset._hints = {"tenant": 2}
-        return queryset
+        payload = graphql_payload(
+            "{ allLibraryBranchesViaListField(orderBy: [{ city: ASC }]) { name } }",
+        )
 
-    message, branch_sql = _run(_in_place_routing)
-    assert message.startswith("BranchOrder.apply_sync changed database routing intent")
-    assert "expected db=None, hints={}" in message
-    assert "got db=None, hints={'tenant': 2}" in message
-    assert branch_sql == []
-
-    # 10. A queryset SUBCLASS carrying an unresolved deferred filter: a predicate
-    #     not yet baked into the query, which the seal cannot faithfully rebuild.
-    #     Django leaves one only on an EXACT plain queryset, so a subclass holding
-    #     one is not that artifact and fails closed as ``untrusted``.
-    class _DeferredFilterQuerySet(models.QuerySet):
-        pass
-
-    def _untrusted(
-        cls,
-        order_input,
-        queryset,
-        info,
-    ):
-        candidate = _DeferredFilterQuerySet(model=library_models.Branch)
-        candidate._deferred_filter = (False, (), {"name": "A"})
-        return candidate
-
-    message, branch_sql = _run(_untrusted)
-    assert message.startswith(_BRANCH_ORDER_SHAPE_PREFIX + "untrusted defect")
-    assert "carries an unresolved deferred filter" in message
-    assert branch_sql == []
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
+    branch_sql = [q["sql"] for q in ctx.captured_queries if "library_branch" in q["sql"].lower()]
+    assert len(branch_sql) == resolver_queries, branch_sql
 
 
 @pytest.mark.django_db
@@ -1719,13 +1808,16 @@ def _build_context_schema() -> DjangoSchema:
     return DjangoSchema(query=_ContextQuery, config=strawberry_config())
 
 
-_ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str], ...] = (
-    # (control without ordering, the same field with public ordering applied)
+#: ``(id, control query, ordered query)`` - one entry per collection surface
+#: whose ordering could leave a trace on the consumer's context.
+_ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str, str], ...] = (
     (
+        "list",
         "{ branches(limit: 1) { name } }",
         "{ branches(orderBy: [{ city: ASC }], offset: 1, limit: 1) { name } }",
     ),
     (
+        "connection",
         "{ genres { edges { node { name } } } }",
         "{ genres(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
     ),
@@ -1733,12 +1825,22 @@ _ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str], ...] = (
 
 
 @pytest.mark.django_db
-def test_holder_ordering_leaves_the_consumer_context_exactly_as_found():
-    """An ordered list or connection adds nothing to ``info.context`` a control request does not.
+@pytest.mark.parametrize(
+    ("control_query", "ordered_query"),
+    [row[1:] for row in _ORDERED_CONTEXT_REQUESTS],
+    ids=[row[0] for row in _ORDERED_CONTEXT_REQUESTS],
+)
+def test_holder_ordering_leaves_the_consumer_context_exactly_as_found(
+    control_query,
+    ordered_query,
+):
+    """An ordered surface adds nothing to ``info.context`` its control request does not.
 
     The order-normalization handoff is task-local, so the context object holds the
     same attribute set after an ordered request as after the same field without
     ordering, and a consumer attribute set before execution survives by identity.
+    The list and the connection reach that handoff by different paths, so each
+    owns a node rather than sharing one that stops at the first leak.
     """
     client = _staff_client()
     for name in ("Alpha", "Bravo"):
@@ -1746,23 +1848,27 @@ def test_holder_ordering_leaves_the_consumer_context_exactly_as_found():
     library_models.Genre.objects.create(name="Fiction")
     schema = _build_context_schema()
 
-    for control_query, ordered_query in _ORDERED_CONTEXT_REQUESTS:
-        observed: dict[str, Any] = {}
-        for label, query in (("control", control_query), ("ordered", ordered_query)):
-            marker = object()
-            _CONTEXT_CAPTURE.clear()
-            _CONTEXT_CAPTURE["marker"] = marker
-            payload = _post_sync(schema, query, client=client, view_class=_CapturingContextView)
-            assert "errors" not in payload, (label, payload)
-            context = _CONTEXT_CAPTURE["context"]
-            assert context.consumer_marker is marker
-            observed[label] = set(vars(context))
-        assert observed["ordered"] == observed["control"], observed
+    observed: dict[str, Any] = {}
+    for label, query in (("control", control_query), ("ordered", ordered_query)):
+        marker = object()
+        _CONTEXT_CAPTURE.clear()
+        _CONTEXT_CAPTURE["marker"] = marker
+        payload = _post_sync(schema, query, client=client, view_class=_CapturingContextView)
+        assert "errors" not in payload, (label, payload)
+        context = _CONTEXT_CAPTURE["context"]
+        assert context.consumer_marker is marker
+        observed[label] = set(vars(context))
+    assert observed["ordered"] == observed["control"], observed
 
 
 @pytest.mark.django_db
-def test_holder_ordering_succeeds_on_a_context_that_forbids_writes():
-    """A context refusing every write still serves ordered lists and connections.
+@pytest.mark.parametrize(
+    "ordered_query",
+    [row[2] for row in _ORDERED_CONTEXT_REQUESTS],
+    ids=[row[0] for row in _ORDERED_CONTEXT_REQUESTS],
+)
+def test_holder_ordering_succeeds_on_a_context_that_forbids_writes(ordered_query):
+    """A context refusing every write still serves each ordered surface.
 
     Nothing in public ordering, the offset guard, or the post-order seal asks the
     consumer context to accept a value or to give one up.
@@ -1773,13 +1879,24 @@ def test_holder_ordering_succeeds_on_a_context_that_forbids_writes():
     library_models.Genre.objects.create(name="Fiction")
     schema = _build_context_schema()
 
-    for _control_query, ordered_query in _ORDERED_CONTEXT_REQUESTS:
-        payload = _post_sync(schema, ordered_query, client=client, view_class=_FrozenContextView)
-        assert "errors" not in payload, payload
-    p_list = _post_sync(
+    payload = _post_sync(schema, ordered_query, client=client, view_class=_FrozenContextView)
+
+    assert "errors" not in payload, payload
+
+
+@pytest.mark.django_db
+def test_holder_a_frozen_context_still_returns_the_windowed_rows():
+    """The positive control: refusing the stash must not quietly empty the window."""
+    client = _staff_client()
+    for name in ("Alpha", "Bravo"):
+        library_models.Branch.objects.create(name=name, city="Boston")
+    schema = _build_context_schema()
+
+    payload = _post_sync(
         schema,
         "{ branches(orderBy: [{ name: ASC }], offset: 1, limit: 1) { name } }",
         client=client,
         view_class=_FrozenContextView,
     )
-    assert p_list["data"]["branches"] == [{"name": "Bravo"}]
+
+    assert payload["data"]["branches"] == [{"name": "Bravo"}]

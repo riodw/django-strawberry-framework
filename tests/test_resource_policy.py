@@ -35,6 +35,7 @@ where they matter. What is left here is the surface a request cannot express:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import math
 import pickle
@@ -67,11 +68,13 @@ from django_strawberry_framework.resource_policy import (
     _cleanup_rejected_async_iterable,
     _windowed_rows,
     _windowed_rows_async,
+    begin_resource_budget,
     bounded_rows,
     bounded_rows_async,
     check_deadline,
     clear_resource_context,
     effective_bound,
+    end_resource_budget,
     policy_from_info,
     resolve_resource_policy,
     stash_resource_policy,
@@ -554,6 +557,231 @@ def test_a_hostile_deadline_subclass_fails_closed_instead_of_crashing_the_seam()
     assert caught.value.bound == "execution_deadline_seconds"
     assert caught.value.limit == 0
     assert "unknown" in caught.value.message
+
+
+def test_a_benign_comparison_int_subclass_is_still_refused_a_policy_field():
+    """Rejecting only the subclasses that DETONATE would store the quiet ones.
+
+    A subclass whose ``<`` answers normally passes a value check and is then
+    carried by the policy into every later use of the bound: ``narrowed``'s
+    comparison, and the ``limit`` / ``charged`` values every
+    ``ResourceLimitExceeded`` formats into its message and ``extensions``. The
+    domain is therefore the built-in type, not "an int that behaves today".
+    """
+
+    class QuietInt(int):
+        def __format__(self, spec):
+            raise RuntimeError("hostile __format__ detonated")
+
+    with pytest.raises(ConfigurationError, match="max_list_rows must be a positive integer"):
+        ResourcePolicy(max_list_rows=QuietInt(2))
+    with pytest.raises(ConfigurationError, match="probe max_rows must be a positive integer"):
+        validate_collection_bound(QuietInt(2), field="probe max_rows")
+
+
+def test_a_hostile_int_subclass_narrowing_a_bound_is_typed_rejected():
+    """The narrowing comparison runs on values the policy owns, so it cannot detonate."""
+
+    class HostileInt(int):
+        def __gt__(self, other):
+            raise RuntimeError("hostile __gt__ detonated")
+
+        def __lt__(self, other):
+            raise RuntimeError("hostile __lt__ detonated")
+
+    with pytest.raises(ConfigurationError, match="max_list_rows must be a positive integer"):
+        ResourcePolicy(max_list_rows=2).narrowed(max_list_rows=HostileInt(3))
+
+
+def test_a_float_subclass_cannot_reach_the_derived_deadline_arithmetic():
+    """A reflected ``__radd__`` wins over ``float``'s, so it must never be stored.
+
+    ``stash_resource_policy`` derives the absolute deadline as
+    ``time.monotonic() + seconds``. Python gives a SUBCLASS's reflected operand
+    priority, so a subclass that survived construction could hand that addition
+    back a ``nan`` - and a ``nan`` deadline compares false against every clock
+    reading, silently disarming the budget of a policy the deployment believes
+    it configured.
+    """
+
+    class PoisonFloat(float):
+        def __radd__(self, other):
+            return math.nan
+
+    with pytest.raises(ConfigurationError, match="execution_deadline_seconds"):
+        ResourcePolicy(execution_deadline_seconds=PoisonFloat(0.001))
+
+    context: dict[str, Any] = {}
+    stash_resource_policy(context, ResourcePolicy(execution_deadline_seconds=0.001))
+    assert math.isfinite(context[DST_RESOURCE_DEADLINE])
+
+
+@pytest.mark.parametrize(
+    "written",
+    [math.nan, math.inf, -math.inf],
+    ids=["nan", "infinity", "negative-infinity"],
+)
+def test_a_non_finite_deadline_with_no_budget_armed_fails_closed(written):
+    """No configured policy derives these, and no comparison can certify them.
+
+    A ``nan`` is neither absent nor non-numeric: it compares false against every
+    clock reading, so treating it as an ordinary future instant is how a guard
+    whose documented stance is fail-closed ends up permitting the request.
+    """
+    context = {DST_RESOURCE_DEADLINE: written}
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        check_deadline(SimpleNamespace(context=context))
+    assert caught.value.bound == "execution_deadline_seconds"
+
+
+# ---------------------------------------------------------------------------
+# The armed budget
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _armed(context: Any, policy: ResourcePolicy) -> Any:
+    """Run the body with ``policy`` armed as the operation budget, as the extension does."""
+    token = begin_resource_budget(context, policy)
+    try:
+        yield
+    finally:
+        end_resource_budget(token)
+
+
+def test_an_armed_budget_outranks_a_policy_a_resolver_writes_over_it():
+    """The published key is a mirror; replacing it does not move any bound.
+
+    ``info.context`` belongs to the consumer, so every resolver in the request
+    can write ``DST_RESOURCE_POLICY``. If that key were the authority, a
+    resolver could hand itself a wider ``max_list_rows`` - and with it the
+    ``offset`` ceiling ``list_field.py`` derives from the same field - for the
+    rest of the operation without ever passing ``narrowed``.
+    """
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(max_list_rows=5)):
+        context[DST_RESOURCE_POLICY] = ResourcePolicy(max_list_rows=999)
+        assert policy_from_info(info).max_list_rows == 5
+        assert len(bounded_rows(list(range(1000)), info)) == 5
+
+
+def test_a_policy_written_without_arming_one_still_answers():
+    """The mirror is the fallback where nothing armed a budget.
+
+    A plain ``strawberry.Schema`` that never installed the extension, and a
+    direct ``stash_resource_policy`` call, both leave the seams on this path -
+    a context none of the package's own collection resolvers runs inside.
+    """
+    context: dict[str, Any] = {}
+    stash_resource_policy(context, ResourcePolicy(max_list_rows=5))
+    assert policy_from_info(SimpleNamespace(context=context)).max_list_rows == 5
+
+
+@pytest.mark.parametrize(
+    "written",
+    [None, math.nan, math.inf],
+    ids=["cleared", "nan", "infinity"],
+)
+def test_an_armed_deadline_cannot_be_widened_or_cleared_from_the_context(written):
+    """A resolver cannot buy itself more wall clock by writing the deadline key."""
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(execution_deadline_seconds=0.001)):
+        time.sleep(0.01)
+        context[DST_RESOURCE_DEADLINE] = written
+        with pytest.raises(ResourceLimitExceeded) as caught:
+            check_deadline(info)
+    assert caught.value.bound == "execution_deadline_seconds"
+    assert caught.value.limit == 1
+
+
+def test_deleting_the_deadline_key_outright_does_not_disarm_the_budget():
+    """Absent is not "no deadline" while a budget is armed; it is no narrowing."""
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(execution_deadline_seconds=0.001)):
+        time.sleep(0.01)
+        del context[DST_RESOURCE_DEADLINE]
+        with pytest.raises(ResourceLimitExceeded):
+            check_deadline(info)
+
+
+def test_a_resolver_may_shorten_its_own_request():
+    """The positive control for the narrowing rule, and what the live async row rides.
+
+    Without it the widening refusals above would still pass if the seam simply
+    ignored the context key, which would take a legitimate consumer narrowing
+    with it.
+    """
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(execution_deadline_seconds=30)):
+        check_deadline(info)
+        context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
+        with pytest.raises(ResourceLimitExceeded) as caught:
+            check_deadline(info)
+    assert caught.value.limit == 30
+
+
+def test_a_narrowing_deadline_arrives_where_the_operation_configured_none():
+    """A budget armed with no deadline still honours a consumer that sets one."""
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy()):
+        check_deadline(info)
+        context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
+        with pytest.raises(ResourceLimitExceeded) as caught:
+            check_deadline(info)
+    assert "unknown" in caught.value.message
+
+
+def test_an_unorderable_written_deadline_leaves_the_armed_ceiling_standing():
+    """A value that cannot be ordered against the budget cannot be shown to narrow it."""
+
+    class HostileFloat(float):
+        def __lt__(self, other):
+            raise RuntimeError("hostile __lt__ detonated")
+
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(execution_deadline_seconds=30)):
+        context[DST_RESOURCE_DEADLINE] = HostileFloat(time.monotonic() - 1)
+        check_deadline(info)
+
+
+def test_ending_a_budget_restores_the_one_it_was_opened_inside():
+    """A nested execution must hand the outer operation its own budget back."""
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(max_list_rows=3)):
+        with _armed(context, ResourcePolicy(max_list_rows=2)):
+            assert policy_from_info(info).max_list_rows == 2
+        assert policy_from_info(info).max_list_rows == 3
+    # Outside every armed scope the seams fall back to the published mirror,
+    # whose cleanup belongs to the extension's ``restored_context_keys`` rather
+    # than to the budget token.
+    assert policy_from_info(info).max_list_rows == 2
+    clear_resource_context(context)
+    assert policy_from_info(info) is DEFAULT_RESOURCE_POLICY
+
+
+async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread():
+    """The bound must not evaporate where a resolver hands work to the executor.
+
+    ``sync_to_async`` runs its callable in a worker thread, which is exactly
+    where a per-thread stash would read back empty; the ``ContextVar`` is copied
+    into that thread, so the seam there enforces the operation's own policy
+    rather than falling back to a context the resolver can write.
+    """
+    from asgiref.sync import sync_to_async
+
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(max_list_rows=7)):
+        context[DST_RESOURCE_POLICY] = ResourcePolicy(max_list_rows=999)
+        rows = await sync_to_async(lambda: bounded_rows(list(range(100)), info))()
+    assert len(rows) == 7
 
 
 # ---------------------------------------------------------------------------

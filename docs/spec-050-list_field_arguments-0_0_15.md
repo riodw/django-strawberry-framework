@@ -1840,6 +1840,26 @@ the shipped SDL.
     policy-bounded rows. The list field reaches the window through the package-private seam,
     so no caller of the exported names can widen the bound they advertise by supplying
     coordinates.
+32. The request's budget is not reachable from the request's own context. Two live async rows
+    have a resolver cross a real `await` and then write `info.context`: one replaces
+    `DST_RESOURCE_POLICY` with a policy wider than the schema's and requires the response to
+    carry the schema's row count, the other pushes `DST_RESOURCE_DEADLINE` into the far future
+    after sleeping past a budget it was given and requires the `execution_deadline_seconds`
+    rejection anyway. Both write AFTER the await, so the widening attempt sits on the far side
+    of the async handoff from the seam that answers it. The package tier carries the arms a
+    request cannot express: a cleared key, a `nan` and an `inf` deadline, the narrowing
+    positive control that keeps the refusals from passing on a seam that merely ignores the
+    key, a nested arm proving the inner budget's end restores the outer one, and an arm reading
+    the bound from inside a `sync_to_async` worker thread - the place a per-thread authority
+    would read back empty and fall open to the context.
+33. A policy bound is an exact built-in or it is not a policy. Package-tier rows require a
+    typed `ConfigurationError` for an `int` subclass whose comparison is BENIGN - the arm that
+    a detonating-subclass test passes without covering, and the one whose value would be stored
+    and then formatted into every rejection that bound drives - for a hostile subclass reaching
+    `narrowed()`, for the same value declared as a field's `max_rows`, and for a `float`
+    subclass whose reflected `__radd__` would otherwise turn the derived absolute deadline into
+    `nan`. The last row asserts the derived deadline of an ordinary policy is finite beside it,
+    so the rejection is not standing in for a seam that derives nothing.
 
 Every test-local sync/async schema mount uses the established module-level current-schema
 holder under `override_settings(ROOT_URLCONF=...)`, resets that holder and Django's URL caches
@@ -2225,6 +2245,16 @@ structural checks, and link/kanban verification prescribed by
       completion adapter; SDL gains arguments.
 - [ ] Limit is accepted through the effective policy/field/trusted ceiling and rejected
       above it; offset is accepted through request `max_list_rows` and rejected above it.
+- [ ] The ceiling both of those read is the budget the operation started with, not a value
+      the request can rewrite: a resolver that replaces `DST_RESOURCE_POLICY` on `info.context`
+      changes neither the returned-row bound nor the `offset` ceiling derived from the same
+      field, and one that pushes `DST_RESOURCE_DEADLINE` forward or clears it does not outlive
+      its budget. A resolver writing an EARLIER deadline still shortens its own request; a
+      numeric deadline that is not finite is refused rather than read as a distant future.
+- [ ] A bound stored on a `ResourcePolicy`, and a field's declared `max_rows`, is an exact
+      built-in `int` (or `float` for the deadline); every numeric subclass is refused with a
+      typed `ConfigurationError` before any comparison, arithmetic or formatting runs, so no
+      consumer dunder can reach the derived deadline or a rejection's rendered `limit`.
 - [ ] Negative and over-ceiling values raise `ListArgumentError` with stable extensions;
       active schema naming determines `argument`; actual GraphQL `Int` coercion failures
       perform no SQL, while integral float variables retain graphql-core's standard coercion.

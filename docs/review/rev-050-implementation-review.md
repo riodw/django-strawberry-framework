@@ -102,7 +102,7 @@ that were threaded while one seam kept re-reading.
 
 Code is symmetric by reading; these are proof gaps against the review's literal list, each of which
 was requested and each of which is currently claimed as discharged in
-[bld-final][bld-final] `## Fifth implementation review`:
+`bld-final.md` (deleted at close; readable at `63a132be`) `## Fifth implementation review`:
 
 - **Warm cache.** `test_a_root_connection_on_a_warm_cache_reads_the_definition_once_too`
   (`tests/test_connection.py:2534-2559`) constructs two fields and stops: no schema build, no
@@ -147,7 +147,7 @@ if a real reader is named and cited.
 
 ### P3-2 (still open) - spec homes and build record disagree with each other and with the code
 
-Checked by a full read of the working-tree spec, [bld-final][bld-final], [build-050][build-050] and
+Checked by a full read of the working-tree spec, `bld-final.md`, [build-050][build-050] and
 the `docs/GLOSSARY.md` hunk (population: 4 files; counts below are `grep -c`, after a first `rg -c`
 sweep returned 0 for terms the file demonstrably contains - state the instrument before trusting it).
 
@@ -373,8 +373,7 @@ Swept over the 4302 added lines of the 17 in-scope files, with HEAD attribution 
 <!-- docs/SPECS/ -->
 
 <!-- docs/builder/ -->
-[bld-final]: ../builder/bld-final.md
-[build-050]: ../builder/build-050-list_field_arguments-0_0_15.md
+[build-050]: ../builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
 

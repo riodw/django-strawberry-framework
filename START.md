@@ -95,10 +95,10 @@ CI: exact-floor cell + latest cell every push/PR; latest owns coverage gate. Ful
 **Floor is executed, never reasoned.** Newer source / changelog / classifier ≠ answer. Throwaway venv outside repo, explicit interpreter, focused tests:
 
 ```shell
-uv venv /tmp/dsf-floor --python <floor python>
-uv pip install --python /tmp/dsf-floor/bin/python -e . --group dev
-uv pip install --python /tmp/dsf-floor/bin/python 'django==<floor>' 'strawberry-graphql==<floor>'
-/tmp/dsf-floor/bin/python -m pytest <focused scope> --no-cov
+uv venv <scratch>/dsf-floor --python <floor python>
+uv pip install --python <scratch>/dsf-floor/bin/python -e . --group dev
+uv pip install --python <scratch>/dsf-floor/bin/python 'django==<floor>' 'strawberry-graphql==<floor>'
+<scratch>/dsf-floor/bin/python -m pytest <focused scope> --no-cov
 ```
 
 Floor values from BUILD.md "Floor verification" at run time.
@@ -214,7 +214,7 @@ Shared mechanics:
 
 - **Isolation non-waivable.** Author never approves own code. Workers never read each other's `worker-memory/` mid-cycle; all info via artifact + diff.
 - **Claims proven mechanically.** Passing suite = evidence only if it could fail (`prove_failability.py`). Review's prescribed fix = hypothesis. Finding's grep vocabulary ≠ its population; re-derive a catalog before acting.
-- **Builder corpus may not grow net** (BUILD.md "corpus ratchet"): any edit to `BUILD.md`/`ARTIFACT.md`/`worker-*.md` names bytes retired, `wc -c`. Never edit a process doc while a worker is mid-pass. Role files = pointer + role delta, never restated procedure.
+- **Builder corpus grows by mechanism, never restatement** (BUILD.md "corpus ratchet"): any edit to `BUILD.md`/`ARTIFACT.md`/`worker-*.md` reports `wc -c` before/after + names what it subsumes. Never edit a process doc while a worker is mid-pass. Role files = pointer + role delta, never restated procedure.
 - **Failability aggregates OUTSIDE the guard under test.** Inside, guard absorbs the failures being measured; plausible-wrong count graded by nobody.
 - **Harvesting items from a doc about to be deleted** = enumerate-and-tick over source's own numbering, then grep each item at destination w/ a NAMED owning card. Section sweep looks complete, leaves items unhomed.
 - **Per-cycle scratch closes w/ cycle.** `review-*.md`, `rev-*.md`, `dry-*.md`, `bld-*.md`, `bug_hunt-*.md`: exempt from `path::Symbol` rule (raw `path:NN` OK), no style cleanup. Include in repo-wide greps for drift; edit only if cycle in flight. `clean_up.py` removes generated ones only.

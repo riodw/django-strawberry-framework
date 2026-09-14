@@ -2,17 +2,17 @@
 
 Worker 3 reviews one builder's implementation of one unit of work — a spec slice, or one cohort of a review round under Worker 0's declared ownership partition. It does not edit source (one failability-proof carve-out, in "Scope"), does not edit the spec, and does not mark the build-plan checkbox.
 
-Worker 3 runs as a fresh subagent per review or re-review pass; its only carry-forward is `docs/builder/worker-memory/worker-3.md` (`docs/builder/BUILD.md` `## Subagent dispatch and worker memory`). The dispatch is intentional: Worker 3 has cycle-spanning history of what it has accepted before, but **no in-context memory of *this* cycle's implementation reasoning**. A worker cannot review its own code.
+Worker 3 runs as a fresh subagent per review or re-review pass; its only carry-forward is `docs/builder/worker-memory/<NNN>-worker-3.md` (this card's `<NNN>`, from the plan's `Scratch:` line) (`docs/builder/BUILD.md` `## Subagent dispatch and worker memory`). The dispatch is intentional: Worker 3 has cycle-spanning history of what it has accepted before, but **no in-context memory of *this* cycle's implementation reasoning**. A worker cannot review its own code.
 
 ## Required reading
 
-Read the docs marked `yes` in the **Worker 3** column of `docs/builder/BUILD.md` `## Required reading per worker`. Worker 2's diff and the relevant source files and tests are the cycle inputs you compare against the slice artifact. **Forbidden reads:** `docs/builder/worker-memory/worker-0.md`, `worker-1.md`, `worker-2.md` — the artifact and diff are the contract, and if the artifact does not explain enough to review the diff, that is a review finding.
+Read the docs marked `yes` in the **Worker 3** column of `docs/builder/BUILD.md` `## Required reading per worker`. Worker 2's diff and the relevant source files and tests are the cycle inputs you compare against the slice artifact. **Forbidden reads:** `docs/builder/worker-memory/<NNN>-worker-0.md`, `<NNN>-worker-1.md`, `<NNN>-worker-2.md`, any other card's memory files — the artifact and diff are the contract, and if the artifact does not explain enough to review the diff, that is a review finding.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
 ## Scope
 
-Worker 3 may edit the current `docs/builder/bld-*.md` artifact (appending review sections only), temp test files under `docs/builder/temp-tests/<slice>/`, and `docs/builder/worker-memory/worker-3.md`.
+Worker 3 may edit the current `docs/builder/bld-*.md` artifact (appending review sections only), temp test files under `docs/builder/temp-tests/<NNN>/<slice>/`, and `docs/builder/worker-memory/<NNN>-worker-3.md`.
 
 Worker 3 must not:
 
@@ -29,8 +29,8 @@ Worker 3 must not:
 2. Compare implementation against the spec and plan. The Plan's `### Spec slice checklist (verbatim)` — in a review round, the `### Dispatched findings checklist` — is the unit's contract: walk every `- [ ]` box and confirm the diff addresses it, or that the artifact already records a deferral. A sub-check the diff does not address, with no recorded deferral, is a Medium finding.
 3. Review DRY first: duplicated logic, repeated literals, repeated error shapes, misplaced helpers, parallel data flows.
 4. Review correctness, ORM behavior, async/sync behavior, optimizer cooperation, cache/request-state safety, typing, and tests.
-5. Run `scripts/review_inspect.py` with `--output-dir docs/shadow` when `BUILD.md` requires it (see "Static helper use").
-6. Create temp tests under `docs/builder/temp-tests/<slice>/` only when they help verify behavior during review.
+5. Run `scripts/review_inspect.py` with `--output-dir <scratch>/inspect` when `BUILD.md` requires it (see "Static helper use").
+6. Create temp tests under `docs/builder/temp-tests/<NNN>/<slice>/` only when they help verify behavior during review.
 7. Append a `Review (Worker 3)` section, or `Review (Worker 3, pass N)` on re-review; set `Status:` to `review-accepted` or `revision-needed`; append a memory entry only when the pass reaches an accepted state.
 
 **Test staleness.** `BUILD.md` `### Test staleness a focused run cannot see` is canonical. Worker 3's delta: run its grep and sweep **independently**, never against the slice's enumerated file list — the tree it missed is by definition the one that cannot appear in the diff you are reading.
@@ -149,13 +149,13 @@ In one such round, three cohorts independently added rejection paths and control
 
 ## Static helper use
 
-Run `scripts/review_inspect.py` with `--output-dir docs/shadow` in each case listed for Worker 3 in `docs/builder/BUILD.md` `### When to run the helper during build`, and whenever you need repeated-literal or import-boundary evidence for a DRY finding. Record every skip and its reason in the artifact.
+Run `scripts/review_inspect.py` with `--output-dir <scratch>/inspect` in each case listed for Worker 3 in `docs/builder/BUILD.md` `### When to run the helper during build`, and whenever you need repeated-literal or import-boundary evidence for a DRY finding. Record every skip and its reason in the artifact.
 
 Cite original source-file line numbers, and never cite shadow-file line numbers in review feedback — `BUILD.md` `### Output files, and why their line numbers are NOT canonical` explains what the shadow strips and why its numbering diverges. Use the shadow only to understand control flow.
 
 ## Temp test rules
 
-Temp tests live under `docs/builder/temp-tests/<slice>/` and are gitignored. Use them to prove review suspicions quickly. If a temp test catches a real behavior bug or important edge case, record it as a Medium or High finding and tell Worker 2 to promote it to the permanent suite under the correct `AGENTS.md` test tree. Record the disposition in the artifact. Do not leave temp tests as the only proof of shipped behavior.
+Temp tests live under `docs/builder/temp-tests/<NNN>/<slice>/` and are gitignored. Use them to prove review suspicions quickly. If a temp test catches a real behavior bug or important edge case, record it as a Medium or High finding and tell Worker 2 to promote it to the permanent suite under the correct `AGENTS.md` test tree. Record the disposition in the artifact. Do not leave temp tests as the only proof of shipped behavior.
 
 ## Review artifact requirements
 

@@ -1,6 +1,6 @@
 # Build artifact contract
 
-This file is the **artifact contract** referenced by [BUILD.md][build-md]: `BUILD.md` defines the build process, this file defines the file that process writes. Every build-cycle artifact — `bld-slice-<N>-<short_slug>.md`, `bld-review-<R>-<short_slug>.md`, `bld-integration.md`, `bld-final.md` under `docs/builder/` — starts as a copy of the fenced template below and accumulates the full back-and-forth for that slice or cohort. The artifact is the contract that flows between workers: everything inter-worker happens through this file plus the working-tree diff, and the `Status:` line defined here is what Worker 0 reads to drive dispatch. It is a standing doc, tracked alongside `BUILD.md` and the four `worker-*.md` role files; the per-cycle artifacts it governs are not.
+This file is the **artifact contract** referenced by [BUILD.md][build-md]: `BUILD.md` defines the build process, this file defines the file that process writes. Every build-cycle artifact — the `docs/builder/bld-<NNN>-*.md` files named by `BUILD.md` `## Build artifact naming`, the only place their names are defined — starts as a copy of the fenced template below and accumulates the full back-and-forth for that slice or cohort. The artifact is the contract that flows between workers: everything inter-worker happens through this file plus the working-tree diff, and the `Status:` line defined here is what Worker 0 reads to drive dispatch. It is a standing doc, tracked alongside `BUILD.md` and the four `worker-*.md` role files; the per-cycle artifacts it governs are not.
 
 ## Status field ownership
 
@@ -155,10 +155,10 @@ If the slice's diff includes documentation, release metadata, KANBAN movement, o
 - version strings, shipped/planned statuses, and card IDs match the active spec and the package version after the slice
 - moved KANBAN cards are removed from their old section and appear in the target section exactly once
 - Markdown links introduced or moved by the slice point at existing files or documented future files
-- active-spec archival, if planned, preserves the historical record and leaves the live follow-up source of truth in the durable doc named by the spec
+- no slice archives or moves the spec: `docs/SPECS/NEXT.md` Step 8 owns archival, so a diff that relocates `docs/spec-<NNN>-*` is a finding (`BUILD.md` `### Spec stays at its working location`)
 - when the slice copies verbatim text from the spec (e.g. KANBAN card bodies, CHANGELOG entries, GLOSSARY.md entry text), confirm character-for-character via `diff` against the spec source; for fenced-code drop-ins where the inner fence backtick count matches the outer, confirm the outer fence used four backticks (or another non-conflicting form) so markdown rendering is intact
 - no obsolete "coming soon", "planned", or old-version wording remains in files the slice deliberately updated
-- when the slice regenerates a **script-rendered** doc (a tree/index rendered from source module docstrings), confirm the feeding docstrings carry no **staging** language — "planned", "Slice N", "after Slice N", `TODO(` — that would render now-shipped behavior as unbuilt; the docstring fix and the regenerate land in the SAME change (a hand-edit of the generated doc is reverted by the next render). Distinguish staging docstrings (scrub) from provenance comments citing a spec as design rationale (keep, per `AGENTS.md` "shipped behavior folds into `docs/TREE.md`")
+- when the slice regenerates a **script-rendered** doc (a tree/index rendered from source module docstrings), confirm the feeding docstrings carry no **staging** language — "planned", "Slice N", "after Slice N", `TODO(` — that would render now-shipped behavior as unbuilt; the docstring fix and the regenerate land in the SAME change (a hand-edit of the generated doc is reverted by the next render). Distinguish staging docstrings (scrub) from provenance comments citing a spec as design rationale (keep, per `AGENTS.md` "shipped behavior folds into")
 
 If the slice does not touch those surfaces, write `Not applicable; slice did not modify docs/release/KANBAN/archive surfaces.`.
 

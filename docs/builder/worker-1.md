@@ -2,19 +2,19 @@
 
 Worker 1 turns one spec slice into an implementation plan, keeps the active spec accurate, and performs final verification after Worker 3 accepts the implementation. It is the only role allowed to edit the active spec.
 
-Worker 1 runs as a fresh subagent invocation per planning, integration, and final-verification pass; its only carry-forward is `docs/builder/worker-memory/worker-1.md` (`docs/builder/BUILD.md` `## Subagent dispatch and worker memory`).
+Worker 1 runs as a fresh subagent invocation per planning, integration, and final-verification pass; its only carry-forward is `docs/builder/worker-memory/<NNN>-worker-1.md` (this card's `<NNN>`, from the plan's `Scratch:` line) (`docs/builder/BUILD.md` `## Subagent dispatch and worker memory`).
 
 ## Required reading
 
 The docs marked `yes` in the **Worker 1** column of the Required reading per worker table in `docs/builder/BUILD.md`. For planning, also the source, tests, and docs the slice names. For integration and final verification, every prior `docs/builder/bld-*.md` artifact — the strict-reading rule in `docs/builder/BUILD.md` `## Cross-slice integration pass` allows no "as needed". Optional when relevant: `TODAY.md`, `BACKLOG.md`, `docs/README.md`, `docs/TREE.md`, `examples/fakeshop/test_query/README.md`.
 
-**Forbidden reads.** Never `docs/builder/worker-memory/worker-0.md`, `worker-2.md`, or `worker-3.md`.
+**Forbidden reads.** Never `docs/builder/worker-memory/<NNN>-worker-0.md`, `<NNN>-worker-2.md`, `<NNN>-worker-3.md`, or any other card's memory files.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
 ## Scope
 
-May edit: the current `docs/builder/bld-slice-<N>-<slug>.md` artifact; `docs/builder/bld-integration.md`; `docs/builder/bld-final.md`; the active spec file, and only when implementation reveals a gap, conflict, or necessary correction; `CHANGELOG.md` only when the active spec includes changelog work or the maintainer authorizes it; `docs/builder/worker-memory/worker-1.md`.
+May edit: the current `docs/builder/bld-<NNN>-slice-<N>-<slug>.md` artifact; `docs/builder/bld-<NNN>-integration.md`; `docs/builder/bld-<NNN>-final.md`; the active spec file, and only when implementation reveals a gap, conflict, or necessary correction; `CHANGELOG.md` only when the active spec includes changelog work or the maintainer authorizes it; `docs/builder/worker-memory/<NNN>-worker-1.md`.
 
 Must not:
 
@@ -36,7 +36,7 @@ Stale status lines compound across slices. Per-spawn is cheap; catching them onl
 2. Read the active build plan and target slice, the spec section for the slice, and any referenced decisions.
 3. Read existing source/tests/docs around the slice until you can place the change in the most DRY location. Verify every symbol, field, method, fixture, and path the spec names for this slice exists in the codebase OR is explicitly a prior-slice deliverable; flag any spec-vs-codebase gap under `### Notes for Worker 1 (spec reconciliation)` and resolve it (in-plan or by spec edit) before the plan is done.
 4. Run `### Package-wide helper inventory before helper planning` before proposing any new helper, shared constant, validation branch, coercion utility, or test helper; record the outcome in `### DRY analysis`.
-5. Run `scripts/review_inspect.py` with `--output-dir docs/shadow` where `docs/builder/BUILD.md` `### When to run the helper during build` requires it.
+5. Run `scripts/review_inspect.py` with `--output-dir <scratch>/inspect` where `docs/builder/BUILD.md` `### When to run the helper during build` requires it.
 6. Create or update the slice artifact on the template and section shape in `docs/builder/ARTIFACT.md` — never an invented shape — and set `Status: planned` once the plan is written.
 7. Fill `## Plan (Worker 1)`: `### DRY analysis` (see `### DRY analysis shape`); `### Implementation steps` with paths and line anchors where practical, marked pin-at-write-time per `docs/builder/ARTIFACT.md`; `### Test additions / updates` including temp-test opportunities for Worker 3.
 8. Copy the spec's nested sub-bullets for this slice from `## Slice checklist` verbatim into `### Spec slice checklist (verbatim)` — exact text, nested sub-bullets, inline citations — every box `- [ ]`. Worker 2 ticks them during the build pass and Worker 1 audits the ticks at final verification (`docs/builder/ARTIFACT.md` carries the discipline). A **review round** has no spec `## Slice checklist`: write a `### Dispatched findings checklist` in the same position instead, exactly as `docs/builder/BUILD.md` `### Dispatched findings checklist` specifies for Worker 1.
@@ -54,7 +54,7 @@ Every planning pass refreshes a shallow AST inventory of the **whole package** �
 Preferred command from the repository root:
 
 ```shell
-mkdir -p docs/shadow && uv run python - <<'PY' > docs/shadow/helper-inventory.md
+mkdir -p <scratch>/inspect && uv run python - <<'PY' > <scratch>/inspect/helper-inventory.md
 import ast
 from pathlib import Path
 
@@ -102,7 +102,7 @@ for path in sorted(root.rglob("*.py")):
 PY
 ```
 
-`scripts/review_inspect.py --all --output-dir docs/shadow` covers the same surface in more detail (imports, hotspots, repeated literals); prefer it when the pass also needs the repeated-literal or import signal, and read only its **Symbols** sections for inventory purposes.
+`scripts/review_inspect.py --all --output-dir <scratch>/inspect` covers the same surface in more detail (imports, hotspots, repeated literals); prefer it when the pass also needs the repeated-literal or import signal, and read only its **Symbols** sections for inventory purposes.
 
 The inventory is an index, not a substitute for source reading — module paths, functions, classes, methods, signatures, first docstring lines. Read the specific source around any candidate before citing or planning against it.
 
@@ -212,7 +212,7 @@ If DRY opportunities remain, do not accept the slice: record the finding and set
 
 ## Integration pass
 
-After all spec slices are checked, produce `docs/builder/bld-integration.md`, running the required reading, the cross-artifact shadow comparisons, the staged-anchor sweep, and the full cross-slice check list in `docs/builder/BUILD.md` `## Cross-slice integration pass`. Worker 1's delta:
+After all spec slices are checked, produce `docs/builder/bld-<NNN>-integration.md`, running the required reading, the cross-artifact shadow comparisons, the staged-anchor sweep, and the full cross-slice check list in `docs/builder/BUILD.md` `## Cross-slice integration pass`. Worker 1's delta:
 
 Before recommending a consolidation, grep the candidate's **readers** across `django_strawberry_framework/`, `tests/`, and `examples/`. A flagged "constant/helper pair" can be **dead code** (zero readers) rather than a live duplication, and the higher-quality fix is then delete-and-trim, not extract-a-shared-source. Confirm the duplication is live before designing the shared shape.
 
@@ -220,7 +220,7 @@ If consolidation is needed, record the work, ask Worker 0 to dispatch Worker 2 a
 
 ## Final test-run gate
 
-Produce `docs/builder/bld-final.md`. Run every command in `docs/builder/BUILD.md` `## Final test-run gate`, in the order given there, and record each one's pass/fail in the artifact. Worker 1's delta:
+Produce `docs/builder/bld-<NNN>-final.md`. Run every command in `docs/builder/BUILD.md` `## Final test-run gate`, in the order given there, and record each one's pass/fail in the artifact. Worker 1's delta:
 
 - A lint/format/diff failure blocks `final-accepted` unless a pre-flight baseline exception was recorded in the build plan's preamble. Tool-induced drift a slice's Worker 2 should have owned routes back through that slice's loop like any `pytest` failure.
 - **Floor-verification confirmation** for every declared scope (`### Floor verification scope`): confirm each was actually run at the floor in an isolated venv, and record the venv, the resolved Django / Python / strawberry-graphql versions, and the result. If no pass ran it, run it here or set `revision-needed` — never close the gate on an unrun floor claim. If the build declared none, write `No floor-verification scope declared.`.

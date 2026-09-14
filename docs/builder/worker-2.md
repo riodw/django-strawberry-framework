@@ -1,10 +1,10 @@
 # Worker 2: builder / implementer
 
-Worker 2 implements one build artifact at a time. It does not decide the slice is complete: Worker 3 reviews the implementation and Worker 1 performs final verification. It runs as a fresh subagent per build or re-build pass, and its only carry-forward is `docs/builder/worker-memory/worker-2.md` (`docs/builder/BUILD.md` `## Subagent dispatch and worker memory`).
+Worker 2 implements one build artifact at a time. It does not decide the slice is complete: Worker 3 reviews the implementation and Worker 1 performs final verification. It runs as a fresh subagent per build or re-build pass, and its only carry-forward is `docs/builder/worker-memory/<NNN>-worker-2.md` (this card's `<NNN>`, from the plan's `Scratch:` line) (`docs/builder/BUILD.md` `## Subagent dispatch and worker memory`).
 
 ## Required reading
 
-Read the docs marked `yes` in the **Worker 2** column of `docs/builder/BUILD.md` `## Required reading per worker`, plus the source files and tests named by the active slice artifact. **Forbidden reads:** `docs/builder/worker-memory/worker-0.md`, `worker-1.md`, `worker-3.md`, and the spec's `-rationale.md` companion — the slice artifact is the contract from Worker 1 and Worker 3.
+Read the docs marked `yes` in the **Worker 2** column of `docs/builder/BUILD.md` `## Required reading per worker`, plus the source files and tests named by the active slice artifact. **Forbidden reads:** `docs/builder/worker-memory/<NNN>-worker-0.md`, `<NNN>-worker-1.md`, `<NNN>-worker-3.md`, any other card's memory files, and the spec's `-rationale.md` companion — the slice artifact is the contract from Worker 1 and Worker 3.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -12,7 +12,7 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 
 Worker 2 may edit:
 
-- source, tests, and docs required by the current artifact, and `docs/builder/worker-memory/worker-2.md`
+- source, tests, and docs required by the current artifact, and `docs/builder/worker-memory/<NNN>-worker-2.md`
 - `CHANGELOG.md` only when the active spec explicitly includes changelog work or the maintainer authorizes it through the artifact
 - the current `docs/builder/bld-*.md` artifact: appending build-report sections, AND ticking `- [x]` the `### Spec slice checklist (verbatim)` boxes — or, in a review round, the `### Dispatched findings checklist` boxes — whose contract landed in the current pass
 
@@ -31,7 +31,7 @@ Worker 2 must not:
 1. Read your memory file, the artifact's `Plan (Worker 1)` section, any Worker 3 findings from prior passes, and the active spec section for the slice.
 2. Inspect the target source and tests.
 3. Implement the plan in the most DRY readable shape available.
-4. Add or update permanent tests per `AGENTS.md` test placement, promoting any Worker 3 temp test that should become permanent out of `docs/builder/temp-tests/` into the correct test tree.
+4. Add or update permanent tests per `AGENTS.md` test placement, promoting any Worker 3 temp test that should become permanent out of `docs/builder/temp-tests/<NNN>/` into the correct test tree.
 5. Run `uv run ruff format` then `uv run ruff check --fix` **on the files this pass touched — never on `.`**. A repo-wide write-mode run reformats files outside the slice, and that churn is not yours to revert: this tree can carry a concurrent session's uncommitted work, so a `git checkout -- path` to tidy it destroys someone else's change. The final gate's `ruff format --check .` is read-only and stays repo-wide.
 6. Run `git status --short` after both ruff invocations and classify every modified file per `docs/builder/ARTIFACT.md` `### Validation run`. Every one must be slice-intended. Anything else is a **stop-and-report**, never a revert — see step 5.
 7. Do not run `pytest` unless the artifact instructs a focused run; Worker 1 owns the normal test gates. A focused run is always **without** `--cov*` flags and only confirms pass/fail of the assertions you wrote, never chases coverage. Three runs sit outside that rule: the **failability self-proof**, owed for every new boundary this pass adds whether or not the artifact names it; **floor verification**, when the plan's declaration assigns this slice to you; and the **test-staleness full sweep**, owed before `Status: built` when the slice changes a model field set or a wire shape (`## Apply-changes verification scope`).
@@ -86,7 +86,7 @@ Before adding logic, check whether an existing helper already owns the responsib
 
 ## Static helper use
 
-Use `scripts/review_inspect.py` when the plan or prior review asks for it, always with `--output-dir docs/shadow`. Record any shadow-file or overview use in `### Notes for Worker 3`, and cite original source-file line numbers, never shadow-file line numbers (`BUILD.md` `### Output files, and why their line numbers are NOT canonical`).
+Use `scripts/review_inspect.py` when the plan or prior review asks for it, always with `--output-dir <scratch>/inspect`. Record any shadow-file or overview use in `### Notes for Worker 3`, and cite original source-file line numbers, never shadow-file line numbers (`BUILD.md` `### Output files, and why their line numbers are NOT canonical`).
 
 ## Build report requirements
 

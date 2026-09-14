@@ -11,7 +11,7 @@
 - Coverage source is `django_strawberry_framework` only; example apps and tests run end to end but stay outside the fail_under gate
 - `fail_under = 100` in pyproject.toml `[tool.coverage.report]`; CI gates every push and PR
 - `pragma: no cover` only for branches unreachable under the test runner
-- Add tests in the same change as code; sweep all three test trees for orphan imports when removing code
+- Add tests in the same change as code; sweep all four test trees for orphan imports when removing code
 - No pytest after edits; run only when explicitly asked (then `uv run pytest`)
 - Run `uv run ruff format .` and `uv run ruff check --fix .` after every edit
 - Line length 99 (`line-length = 99`; E501 graced to 110 via `[tool.ruff.lint.pycodestyle] max-line-length = 110` for lines the formatter cannot break); trailing-comma explode-at-threshold layout (threshold 4, 2 for any models.py), markdown link scaffold, JSON/GraphQL brace explosion and ASCII-only .py source all enforced by `scripts/check_trailing_commas.py` (auto-fix by default; pre-commit + CI `--check`; reads line length from pyproject.toml at runtime) — full rules in its docstring; ruff COM812 only adds commas to already-multi-line constructs so the script not ruff owns single-line explosion; never a trailing comma after a bare `*`/`/` marker (SyntaxError) or inside a 1-element tuple `(x,)` or after `**kwargs` (project convention not syntax; `*args` takes one)

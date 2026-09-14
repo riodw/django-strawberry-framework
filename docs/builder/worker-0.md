@@ -12,7 +12,7 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 
 ## Scope
 
-May edit: `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`; `docs/builder/worker-memory/worker-0.md`; `docs/builder/worker-memory/` at plan-creation time, after the `BUILD.md` pre-flight cleanup deleted prior-build memory (create if missing, seed four empty files); `docs/builder/BUILD.md` and `docs/builder/worker-*.md` only for closeout retrospective improvements after maintainer approval.
+May edit: `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`; `docs/builder/worker-memory/<NNN>-worker-0.md`; `docs/builder/worker-memory/` at plan-creation time (create if missing, seed this cycle's four `<NNN>-worker-<N>.md` files empty) and at closeout (delete those four by explicit path); `docs/builder/BUILD.md` and `docs/builder/worker-*.md` only for closeout retrospective improvements after maintainer approval.
 
 Must not:
 
@@ -41,22 +41,22 @@ Every `bld-*.md` artifact carries a `Status:` line Worker 0 reads to decide what
 Pre-flight is Worker 0's alone, and it **gates plan creation** — run it before creating `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` (`docs/builder/BUILD.md` `## Pre-flight checks`):
 
 1. **Working-tree baseline is explicit.** Run `git status --short`. If unrelated uncommitted changes exist, stop and ask the maintainer to commit, move aside, or include them in the baseline.
-2. **`scripts/review_inspect.py` runs.** Smoke invocation: `uv run python scripts/review_inspect.py <pick_a_dst_module>.py --output-dir docs/shadow --stdout`. Escalate if broken — planning and review passes for `types/` or `optimizer/` slices cannot run as specified without it.
-3. **Build artifacts are reset.** Delete any old `docs/builder/build-*.md` and `docs/builder/bld-*.md` from a prior cycle, and verify every path Worker 0 intends to create does not already exist. The spec's `-rationale.md` sibling is tracked and durable — never delete it. **Not for a review round:** a round's input is already-built work, so the prior cycle's `bld-*.md` artifacts are the record of what is now under review and must survive (`docs/builder/BUILD.md` `### Cohorting, naming, and closure`, "Pre-flight for a round"). Deleting them is the one irreversible pre-flight mistake, and this step is where someone stands when they would make it.
-4. **`.gitignore` lists the untracked scratch paths** — `docs/builder/worker-memory/`, `docs/shadow/`, `docs/builder/temp-tests/`.
-5. **Scratch directories are cleared.** Delete every file under those three paths.
+2. **`scripts/review_inspect.py` runs.** Smoke invocation: `uv run python scripts/review_inspect.py <pick_a_dst_module>.py --output-dir <scratch>/inspect --stdout`. Escalate if broken — planning and review passes for `types/` or `optimizer/` slices cannot run as specified without it.
+3. **The prior cycle is closed out on disk.** For each prior `docs/builder/build-*.md` whose final checkbox reads `- [x]`: confirm its `## Closing record` exists, append the `git show <sha>:<artifact path>` line per artifact, `mv -n` the plan into `docs/builder/DONE/`, rebase its link definitions and sweep its citers, then delete its `docs/builder/bld-<NNN>-*.md` — every path explicit, never a glob (`docs/builder/BUILD.md` `### Archiving a plan`, which lists the three obligations in order). An open final box is another session's live cycle, so stop and ask. Then verify every path Worker 0 intends to create does not already exist. The spec's `-rationale.md` sibling is tracked and durable — never delete it. **Not for a review round:** a round's input is already-built work, so the prior cycle's `bld-*.md` artifacts are the record of what is now under review and must survive (`docs/builder/BUILD.md` `### Cohorting, naming, and closure`, "Pre-flight for a round"). Deleting them is the one irreversible pre-flight mistake, and this step is where someone stands when they would make it.
+4. **Scratch paths are known.** `.gitignore` lists `docs/builder/worker-memory/` and `docs/builder/temp-tests/`; this cycle uses only `worker-memory/<NNN>-worker-<N>.md` and `temp-tests/<NNN>/` inside them (`docs/builder/BUILD.md` `### Worker memory`); the session scratchpad `<scratch>` (outside the repo) is recorded in the plan preamble for helper output, proof copies, and the floor venv.
+5. **This cycle's scratch is empty.** Verify `docs/builder/worker-memory/<NNN>-worker-*.md` and `docs/builder/temp-tests/<NNN>/` do not exist and `<scratch>/inspect/` is empty; if they exist, that card has a live or un-closed-out cycle, so stop and ask. Never delete another card's files under either directory, and never run `scripts/clean_up.py`.
 6. **Spec-doc consistency check.** `uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<0_0_X>.md` exits 0; the glossary anchors the spec body names must resolve.
 7. **Spec rationale is extracted** into `docs/spec-<NNN>-<topic>-<0_0_X>-rationale.md` by Worker 1, before the build plan is written (`docs/builder/BUILD.md` `## Spec rationale extraction`). No slice may be dispatched until it is done and verified, because every spawn after it reads the smaller spec.
 
-Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean; cleanup: old artifacts removed, memory/shadow/temp-tests cleared`, or `Pre-flight: <issue>, resolved by <action>; baseline: <summary>; cleanup: <summary>`). Escalate before creating the plan if a check fails and cannot be resolved without the maintainer.
+Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean; cleanup: prior cycle archived, this cycle's scratch verified empty`, or `Pre-flight: <issue>, resolved by <action>; baseline: <summary>; cleanup: <summary>`). Escalate before creating the plan if a check fails and cannot be resolved without the maintainer.
 
 ## Initial plan job
 
 Follow `docs/builder/BUILD.md` `## Versioned build plan` and `## Required plan structure`, deriving the filename segments from the spec per `## Spec and build-plan filename pattern` (active specs live at `docs/spec-<NNN>-<topic>-<0_0_X>.md`; convert the target release dots to underscores). Version-bump correctness is the maintainer's: Worker 0 does not validate `pyproject.toml`, `__init__.py`, or whether the spec target is already shipped. Worker 0's delta:
 
 1. Mirror the spec's slice checklist exactly. Do not invent slices.
-2. List a `bld-slice-<N>-<slug>.md` artifact per spec slice, plus `docs/builder/bld-integration.md` and `docs/builder/bld-final.md`. Leave every checkbox unchecked.
-3. After pre-flight step 5, create `docs/builder/worker-memory/` and seed `worker-0.md` through `worker-3.md` empty. They are gitignored and persist only across this build's slices.
+2. List a `bld-<NNN>-slice-<N>-<slug>.md` artifact per spec slice, plus `docs/builder/bld-<NNN>-integration.md` and `docs/builder/bld-<NNN>-final.md`. Leave every checkbox unchecked.
+3. After pre-flight step 5, create `docs/builder/worker-memory/` if missing and seed `<NNN>-worker-0.md` through `<NNN>-worker-3.md` empty. They are gitignored and persist only across this build's slices; the plan's `Scratch:` line names them.
 
 ### Template shape
 
@@ -73,20 +73,25 @@ Ownership partition: none; sequential slices.
 Hot-path declaration: none.
 Floor-verification scope: none.
 Pre-flight: passed on YYYY-MM-DD; baseline: clean.
+Scratch: `<scratch>` = /path/the/harness/named; memory `docs/builder/worker-memory/NNN-worker-<N>.md`; temp tests `docs/builder/temp-tests/NNN/`.
 
 ## Artifact list
 
-- `docs/builder/bld-slice-1-<short_slug>.md`
-- `docs/builder/bld-slice-2-<short_slug>.md`
-- `docs/builder/bld-integration.md`
-- `docs/builder/bld-final.md`
+- `docs/builder/bld-NNN-slice-1-<short_slug>.md`
+- `docs/builder/bld-NNN-slice-2-<short_slug>.md`
+- `docs/builder/bld-NNN-integration.md`
+- `docs/builder/bld-NNN-final.md`
 
 ## Checklist
 
-- [ ] Slice 1: <slice title from spec> -> `docs/builder/bld-slice-1-<short_slug>.md`
-- [ ] Slice 2: <slice title from spec> -> `docs/builder/bld-slice-2-<short_slug>.md`
-- [ ] Cross-slice integration pass -> `docs/builder/bld-integration.md`
-- [ ] Final test-run gate -> `docs/builder/bld-final.md`
+- [ ] Slice 1: <slice title from spec> -> `docs/builder/bld-NNN-slice-1-<short_slug>.md`
+- [ ] Slice 2: <slice title from spec> -> `docs/builder/bld-NNN-slice-2-<short_slug>.md`
+- [ ] Cross-slice integration pass -> `docs/builder/bld-NNN-integration.md`
+- [ ] Final test-run gate -> `docs/builder/bld-NNN-final.md`
+
+## Closing record
+
+(written by Worker 0 at the final checkbox: gate table + Deferred work catalog with owners; artifact `git show` pointers added at archival)
 ```
 
 ## Per-slice dispatch
@@ -108,7 +113,7 @@ For each unchecked slice, drive the loop off the artifact's `Status:`:
 When Worker 1's final verification carves a slice into sub-slices per `docs/builder/BUILD.md` `### Slice splitting`:
 
 1. Confirm Worker 1 recorded the carve in the spec (citation under `### Spec changes made (Worker 1 only)`).
-2. Insert each sub-slice checkbox in declared order and extend the artifact list with the new `bld-slice-<N>-<slug>.md` paths.
+2. Insert each sub-slice checkbox in declared order and extend the artifact list with the new `bld-<NNN>-slice-<N>-<slug>.md` paths.
 3. Mark the parent checkbox only if its artifact reached `final-accepted`.
 4. Dispatch the new sub-slice's planning pass immediately — the non-pause rule still applies.
 
@@ -118,12 +123,13 @@ Assemble every spawn prompt by ticking this list, per spawn. It is mechanical on
 
 - [ ] The worker's own role file, by path (`docs/builder/worker-<N>.md`).
 - [ ] The standing docs marked `yes` in that worker's column of the Required reading per worker table in `docs/builder/BUILD.md` — walk the column; do not paste a remembered subset.
-- [ ] The worker's own memory file path, plus: read it first, append at the end of the pass, consolidate before appending if it is over ~50 lines. A seeded file still empty at closeout means no dispatch asked for it.
+- [ ] The worker's own memory file path (`docs/builder/worker-memory/<NNN>-worker-<N>.md`, this card's `<NNN>`), plus: read it first, append at the end of the pass, consolidate before appending if it is over ~50 lines. A seeded file still empty at closeout means no dispatch asked for it.
 - [ ] "Do not read the other workers' memory files."
 - [ ] The active spec path and the active build plan path.
+- [ ] The session scratchpad path `<scratch>` from the plan preamble — for `review_inspect.py --output-dir <scratch>/inspect`, proof copies, `prove_failability.py --scratch-root`, and the floor venv; never bare `/tmp`.
 - [ ] The cycle artifact path, the `Status:` value this pass must set on return, the reminder that the artifact — not this prompt — is the contract the next worker reads, and `docs/builder/ARTIFACT.md` by path (template, section shape, `Status:` ownership).
 - [ ] The explicit writable-file list, named. Never "the files your slice needs".
-- [ ] The do-not-touch list, including the plan's baseline-dirty out-of-scope files (never edit, never revert — `AGENTS.md` #"Unexpected file modifications") and, in a round, the maintainer's review document.
+- [ ] The do-not-touch list, including the plan's baseline-dirty out-of-scope files (never edit, never revert — `AGENTS.md` #"Files dirty at task start") and, in a round, the maintainer's review document.
 - [ ] The ownership partition for this cohort whenever cohorts run concurrently (see below).
 - [ ] The floor facts **copied from `docs/builder/BUILD.md` `## Floor verification`** whenever the pass reasons about version-dependent behavior — from there, never from memory or a number restated elsewhere, since a stale floor number pasted into a prompt travels as fact.
 - [ ] Worker 1's hot-path declaration and floor-verification scope, copied as written, whenever the plan carries them; when it declares neither, say so, so the worker need not guess whether the silence is deliberate.
@@ -157,7 +163,7 @@ Follow `docs/builder/BUILD.md` `### Recovery from interrupted subagent runs`; Wo
 2. **Separate defect findings from contract choices**, per `docs/builder/BUILD.md` `### Contract-level findings are escalated as maintainer decisions before dispatch`.
 3. **Escalate every contract choice to the maintainer BEFORE dispatching builders**, and record the decision in the round artifact **with the rejected alternatives** and the one-line reason each lost.
 4. **Cohort the remaining findings by ownership partition** and dispatch concurrently wherever the partition is disjoint.
-5. **Use `docs/builder/bld-review-<R>-<short_slug>.md` artifacts**, each driven through the normal `Status:` chain and worker sequence, each added to the build plan's artifact list with its own checkbox so the round is visible beside the spec slices. Worker 0's part in the round's `### Dispatched findings checklist` is dispatch-side only: hand each cohort its verified finding list with the symbol-qualified paths step 1 recorded, so the checklists partition the findings the way the ownership partition partitions the files. Worker 0 never ticks those boxes.
+5. **Use `docs/builder/bld-<NNN>-review-<R>-<short_slug>.md` artifacts**, each driven through the normal `Status:` chain and worker sequence, each added to the build plan's artifact list with its own checkbox so the round is visible beside the spec slices. Worker 0's part in the round's `### Dispatched findings checklist` is dispatch-side only: hand each cohort its verified finding list with the symbol-qualified paths step 1 recorded, so the checklists partition the findings the way the ownership partition partitions the files. Worker 0 never ticks those boxes.
 6. **No worker edits the review document.** Put its path on every spawn prompt's do-not-touch list.
 7. **A round that changed source is a build.** Once every cohort is `final-accepted`, dispatch a **Worker 3 pass over the round's whole diff** — not just the per-cohort reviews, since cross-cohort duplication is invisible to any single cohort — then run the integration pass and the final test-run gate for the round before handing off (`docs/builder/BUILD.md` `### Cohorting, naming, and closure`).
 
@@ -165,18 +171,18 @@ Follow `docs/builder/BUILD.md` `### Recovery from interrupted subagent runs`; Wo
 
 After every spec slice is checked:
 
-1. Spawn Worker 1 for `docs/builder/bld-integration.md`.
+1. Spawn Worker 1 for `docs/builder/bld-<NNN>-integration.md`.
 2. If it records cross-slice DRY findings, dispatch Worker 2 and Worker 3 for a consolidation loop, then return to Worker 1.
-3. Mark the integration checkbox only once `bld-integration.md` reads `final-accepted`.
-4. Spawn Worker 1 for `docs/builder/bld-final.md`.
+3. Mark the integration checkbox only once `bld-<NNN>-integration.md` reads `final-accepted`.
+4. Spawn Worker 1 for `docs/builder/bld-<NNN>-final.md`.
 5. If final tests fail, dispatch the owning slice loop again.
-6. Mark the final checkbox only once `bld-final.md` reads `final-accepted`.
+6. Mark the final checkbox only once `bld-<NNN>-final.md` reads `final-accepted`, then append `## Closing record` to the plan — the gate table and `### Deferred work catalog` copied verbatim from `bld-<NNN>-final.md`, each deferred item with a named owner (`docs/builder/BUILD.md` `## Final test-run gate`).
 
-Step 3 transitions to step 4 immediately; do NOT stop between the integration pass and the final gate. The build's only stop point is **after step 6**: with the final checkbox ticked, Worker 0 hands off to the maintainer for commit.
+Step 3 transitions to step 4 immediately; do NOT stop between the integration pass and the final gate. The build's only stop point is **after step 6**: with the final checkbox ticked and the closing record written, Worker 0 hands off to the maintainer for commit.
 
 ## Memory entry shape
 
-Append a brief block to `docs/builder/worker-memory/worker-0.md` after closing each slice: what closed and after how many passes, any Worker 1 spec edit, one carry-forward. Example:
+Append a brief block to `docs/builder/worker-memory/<NNN>-worker-0.md` after closing each slice: what closed and after how many passes, any Worker 1 spec edit, one carry-forward. Example:
 
 ```
 ## 2026-05-13 — Slice 2 (is_type_of injection)
@@ -195,7 +201,7 @@ Closeout does NOT begin at the final checkbox. It begins when every checklist it
 2. Read all four worker-memory files — the one-time closeout read, and the only time Worker 0 reads another worker's memory — to surface patterns the workers themselves noticed.
 3. Identify recurring DRY patterns, repeated bug classes, and workflow stumbling blocks, and give the maintainer a brief retrospective.
 4. **After maintainer approval**, fold general retrospective notes into `docs/builder/BUILD.md` or the role files — recurring patterns and workflow improvements, **never naming specific already-shipped fixes** — subject to `docs/builder/BUILD.md` `## The corpus ratchet: every edit names the bytes it retires`, which binds these edits exactly as it binds any other.
-5. Delete the contents of `docs/shadow/` and `docs/builder/temp-tests/` once the retrospective is complete. Worker memory may survive that long; the next build's pre-flight clears it before any worker reads it.
+5. Delete `<scratch>/inspect/`, `docs/builder/temp-tests/<NNN>/`, and this cycle's four `docs/builder/worker-memory/<NNN>-worker-<N>.md` files once the retrospective is complete — by explicit path; another card's files under the same directories belong to a live cycle.
 6. The maintainer commits the post-closeout updates **separately** from the build commit. The build commit already carried the source/test changes, the completed plan, and every `bld-*.md` artifact — it is what step 1 scanned. The post-closeout commit carries only the approved workflow-doc edits from step 4 plus any new closeout artifact. Splitting them keeps the scanned commit range fixed rather than a moving target, and keeps the retrospective attributable to its own commit for `git log` archaeology.
 
 ## Closing out a kanban card (DB-backed — `KANBAN.md` / `KANBAN.html` / `docs/GLOSSARY.md` are GENERATED)
@@ -225,7 +231,7 @@ Run DB edits via `uv run python examples/fakeshop/manage.py shell`; regenerate f
 4. **Flip status:** `card.status = Status.objects.get(key="done"); card.save()` — ORM `.save()` fires the pre_save validation and sets `milestone_id`. The rendered id auto-becomes `DONE-<NNN>-<ver>` (done cards drop the milestone prefix).
 5. **Sync the full glossary-link set:** `uv run python examples/fakeshop/manage.py import_spec_terms` (processes every done card; creates `CardGlossaryTerm` + `GlossarySpecMention` rows from each CSV).
 6. **Fix card-body content the spec wrap names** (stale `docs/spec-0NN-…` filename refs, `## [0.0.X]` → `[Unreleased]`) by editing `CardItem.text`, and mark every **shipped** `definition_of_done` `CardItem.is_complete = True` (done-card convention — see existing DONE cards). Where the spec **defers** DoD items, leave those `is_complete = False` with a follow-up-card marker; the spec's deferral overrides the mark-every-DoD convention. Keep to what the spec authorizes; leave unrelated card-body prose alone.
-7. **Regenerate all three docs** from the repo root: `uv run python scripts/build_kanban_md.py`, `uv run python scripts/build_kanban_html.py`, `uv run python scripts/build_glossary_md.py`.
+7. **Regenerate all four docs** from the repo root: `uv run python scripts/build_kanban_md.py`, `uv run python scripts/build_kanban_html.py`, `uv run python scripts/build_glossary_md.py`, `uv run python scripts/build_tree_md.py` (`docs/TREE.md` renders planned rows from WIP/TODO cards, so a card move changes it too).
 8. **Verify:** `import_spec_terms --check` reports OK for all done cards; `git diff docs/GLOSSARY.md` is **clean**, proving the DB regenerates the committed glossary identically (a non-empty diff means a DB body still drifts from the committed file — fix in step 1); prove "no further drift" by hashing the regenerated docs across **two consecutive regenerates**, since `git diff` alone shows the cumulative HEAD diff and not whether a second regenerate is stable; a *baseline* regenerate-to-temp diff run **before** any DB edit separates a file-only staged anchor that auto-clears on regenerate from real DB drift to fix; `KANBAN.md` shows `DONE-<NNN>` in the Done section with its DoD ticked; `uv run python examples/fakeshop/manage.py check` passes.
 
 Workers never commit — hand the regenerated `KANBAN.md` / `KANBAN.html` / `docs/GLOSSARY.md` plus `examples/fakeshop/db.sqlite3` to the maintainer for review and commit.

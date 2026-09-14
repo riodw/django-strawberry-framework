@@ -350,23 +350,60 @@ properties follow, and each is load-bearing:
   reader, so a policy built from a mapping, from an explicit instance, or as a narrowed
   copy is validated on identical terms. Two gates drift.
 - **Immutable at request time.** A resolver that holds the request's policy cannot widen
-  its own budget by mutating it.
+  its own budget by mutating it, and cannot widen it by replacing the published context
+  value either ([Decision 2](#decision-2--armed-for-the-operation-published-on-the-request-context)).
+- **Built-in values only.** Every bound a policy stores is an exact `int` (or, for the
+  deadline, an exact `float`), so nothing the policy later does with a bound can dispatch
+  consumer code.
 
-`bool` is rejected explicitly at every integer bound. `isinstance(True, int)` is `True`, so
-a bound accepting `True` would silently become `1` — a bound so tight it presents as an
-unrelated bug.
+The integer-bound domain is the EXACT built-in type, `type(value) is int`. That is what
+rejects `bool` — `isinstance(True, int)` is `True`, so a bound accepting `True` would
+silently become `1`, a bound so tight it presents as an unrelated bug — and equally what
+keeps a deployment-supplied `int` SUBCLASS out of a policy. A subclass whose comparison
+raises would replace the typed `ConfigurationError` with a raw error out of schema
+construction; worse, one whose comparison answers normally would be STORED, and every later
+use of the bound would then run consumer dunders — `narrowed()`'s comparison, and the
+`limit` / `charged` values `ResourceLimitExceeded` formats into the message and `extensions`
+of every rejection that bound drives.
 
 *Alternatives rejected: see the [rationale][rationale] (a per-bound settings read, a
 mutable dataclass with `freeze()`, Pydantic).*
 
-### Decision 2 — Threaded through the request context, mirroring the optimizer seam
+### Decision 2 — Armed for the operation, published on the request context
 
-The resolved policy — and the monotonic deadline derived from it — is stashed under
-`DST_RESOURCE_POLICY` and `DST_RESOURCE_DEADLINE` at the start of every operation by
-`resource_policy.py::stash_resource_policy`, and read back by
-`resource_policy.py::policy_from_info` and `resource_policy.py::check_deadline`. The keys and
-the dispatch mirror `optimizer/_context.py`'s `DST_OPTIMIZER_*` seam, which the card's
+The resolved policy — and the monotonic deadline derived from it — is armed for the operation
+by `resource_policy.py::begin_resource_budget` and read back by
+`resource_policy.py::policy_from_info` and `resource_policy.py::check_deadline`. The same call
+publishes both under `DST_RESOURCE_POLICY` and `DST_RESOURCE_DEADLINE`; those keys and their
+dispatch mirror `optimizer/_context.py`'s `DST_OPTIMIZER_*` seam, which the card's
 architectural posture names directly.
+
+**The published keys are a mirror, not the authority.** They live on the CONSUMER's
+`info.context`, which every resolver in the request can write. If an enforcement seam read the
+budget back from them, a resolver could replace `DST_RESOURCE_POLICY` with a wider
+`ResourcePolicy` and widen `max_list_rows` — both the returned-row bound and the accepted
+`offset` ceiling `list_field.py` derives from it — and `max_page_size`, for the rest of the
+operation and without passing `narrowed()`; or replace `DST_RESOURCE_DEADLINE` with a future
+instant and buy itself unlimited wall clock. Neither needs hostile intent: an application
+context key or a middleware reusing a generic string name collides just as effectively. The
+authority is therefore a module-private `ContextVar` (`_active_budget`), which no context write
+can reach, is scoped per task under asyncio and per thread otherwise, and propagates across
+`sync_to_async` / `async_to_sync` so it is armed wherever the package's own collection seams
+run. It is the same `ContextVar`-over-stash shape `optimizer/_context.py::_active_strictness`
+takes, for the same reason: a per-execution answer a context stash cannot be trusted to give.
+
+**The mirror may narrow, never widen.** A resolver stashing an EARLIER instant under
+`DST_RESOURCE_DEADLINE` is shortening its own request, which it is always entitled to do, and
+`resource_policy.py::_effective_deadline` honours it. A later instant, a cleared key, or a
+value no comparison can order leaves the armed deadline standing. This is the narrowing rule
+`effective_bound` and `narrowed()` already state, applied to the one piece of budget state a
+consumer can write. A numeric deadline that is **not finite** is refused rather than treated as
+a distant future: no configured policy can derive one, and no comparison against it can certify
+the request is inside its budget.
+
+**A published policy with nothing armed still answers**, which is the path a plain
+`strawberry.Schema` with no extension, and a direct `stash_resource_policy` call, take. That is
+a context none of this package's collection resolvers runs inside.
 
 **The operation SNAPSHOTS both keys and puts them back; it does not clear them.**
 `utils/context.py::restored_context_keys` brackets each operation: it records what each key
@@ -388,8 +425,8 @@ installed the extension, and a resolver invoked outside an operation all read ba
 *bounded* policy. Returning `None` would have forced every caller to write its own
 "no policy means no bound" branch, which is the fail-open shape spelled out in six places.
 
-*Alternatives rejected: see the [rationale][rationale] (a `contextvars.ContextVar`, a
-thread-local).*
+*Alternatives rejected: see the [rationale][rationale] (a context stash as the sole
+authority, a thread-local).*
 
 ### Decision 3 — The document text scan runs BEFORE the parse
 
@@ -715,8 +752,14 @@ It is the only optional bound, and the only one whose domain is not the positive
 `None`, or a **finite** positive number of seconds. `float("inf")` is refused like any other
 invalid value — an infinite deadline is a deadline that never fires, which is the disabling
 spelling [Goals](#goals) 3 says no bound has. `bool` is refused here as it is at every
-integer bound, and a numeric subclass whose own comparison raises is classified as outside
-the domain rather than allowed to escape `__post_init__` as a raw error.
+integer bound, and a numeric SUBCLASS is outside the domain by the same exact-type rule the
+integer bounds take. The deadline has two escapes of its own that make the rule load-bearing
+rather than tidy: `stash_resource_policy` derives the absolute deadline as
+`time.monotonic() + seconds`, where Python gives a subclass's reflected `__radd__` priority
+over `float`'s own and a `nan` result silently disarms the budget of a policy the deployment
+believes it configured; and an expired rejection renders the configured value through
+`math.ceil` and an f-string, where a hostile `__ceil__` or `__format__` replaces the typed
+`ResourceLimitExceeded` with a raw error out of a collection resolver.
 
 *Why its default is `None` rather than a number is in the [rationale][rationale].*
 
@@ -976,7 +1019,11 @@ Both belong to the surface rather than to a slice; neither is a root package exp
 - **A frozen or read-only context** cannot hold the stash; the request runs under
   `DEFAULT_RESOURCE_POLICY` rather than unbounded.
 - **A consumer key collision** — some other value stashed under `dst_resource_policy` — is
-  ignored, not trusted: `policy_from_info` type-checks before returning.
+  ignored while a budget is armed, and type-checked by `policy_from_info` on the fallback
+  path where nothing is.
+- **A hostile or colliding write to either published key** cannot widen the request: the
+  policy key is not consulted at all while a budget is armed, and the deadline key is
+  consulted only when it names an EARLIER instant than the one the operation started with.
 - **An upload that cannot report its size** is *rejected*, not charged as zero bytes. Six
   spellings of unmeasurable, all answered the same way: the attribute is absent, it is
   `None`, it is non-integral, it is negative, it is `True`, or **reading it raises**.

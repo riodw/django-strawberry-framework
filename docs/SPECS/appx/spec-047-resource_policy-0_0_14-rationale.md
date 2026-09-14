@@ -210,6 +210,7 @@ this card's bound promises even though this card did not do it.
 | `aadca5a2` | spec-050. **`effective_bound`'s widening test changed from `if trusted:` to `if trusted is True:`** — the release accepted any truthy value. New constructor-site `validate_trusted_flag`. | correction | [D10][spec-047-d10] |
 | `63a132be` | spec-050. (i) **`offset` / `requested_limit` came off the exported `bounded_rows` / `bounded_rows_async`** — an importer could have widened the one primitive whose contract is that nothing a caller passes can widen it — and onto the package-private `_windowed_rows` / `_windowed_rows_async`, which `list_field.py` calls directly; the export delegates with no window, `_raw_list_bound` is unchanged as the single derivation, and `list_field.py::_normalize_list_arguments` owns the ceiling check on the coordinates. The spec may no longer say the exported seam accepts client coordinates. (ii) New `_attach_cleanup_note` / `_is_cleanup_diagnostic`: a cleanup error becomes a `__notes__` entry on the primary error only when it is an `Exception`; a `BaseException` such as `asyncio.CancelledError` propagates from both async cleanup seams. spec-050 Decisions 5 and 8 own that contract's text; spec-047's test-plan phrase "a cleanup failure that must not mask the source error" stays true. | correction | [D6][spec-047-d6], DRY, Test plan |
 | `4c483b6b`, `d3b91c8d`, `9a9f970c`, `4d98ad98` | spec-050 review fixes and scaffolding; `_close_async_iterator` gained a `caller` label. | later feature | — |
+| *(uncommitted at the time of writing)* | spec-050 review fixes. (i) **The request context stopped being the authority for the budget.** `begin_resource_budget` / `end_resource_budget` arm a module-private `ContextVar`; `policy_from_info` reads it and ignores `DST_RESOURCE_POLICY` entirely while it is armed, and `check_deadline` takes the tighter of the armed deadline and `DST_RESOURCE_DEADLINE` (`_effective_deadline`), so the mirror can narrow and can no longer widen or clear. At the release a resolver could widen `max_list_rows`, the `offset` ceiling and `max_page_size`, or buy unlimited wall clock, by writing its own `info.context`. (ii) A numeric deadline that is **not finite** is refused rather than read as a distant future. (iii) **The bound domain became the EXACT built-in type** for every integer bound and for the deadline: a numeric SUBCLASS that compares normally was accepted and STORED at the release, and its `__format__` / `__ceil__` / reflected `__radd__` then reached the rejection message, `math.ceil`, and the `time.monotonic() + seconds` derivation — the last of which could return `nan` and silently disarm an accepted policy's deadline. | correction | [D1][spec-047-d1], [D2][spec-047-d2], [D9][spec-047-d9], Edge cases |
 
 #### Claims the spec may no longer make
 
@@ -222,6 +223,17 @@ the old sentence can see that it was retired deliberately rather than lost.
   request with no deadline for the rest of its work. `clear_resource_context` survives as an
   export and is called by nothing in the package — only `tests/test_resource_policy.py` calls
   it — so nothing should describe it as part of the operation lifecycle.
+- **[Decision 2][spec-047-d2] — the request context as the place the budget is "read back
+  from".** The keys are still published there, and a consumer may still read them and may
+  still stash an EARLIER deadline to shorten its own request. What they are not is the value
+  any enforcement seam trusts: `info.context` belongs to the consumer, so a design that reads
+  a bound back out of it lets every resolver in the request widen that bound. Nothing may
+  describe `policy_from_info` or `check_deadline` as reading the operation's budget from the
+  context while a budget is armed.
+- **[Decision 1][spec-047-d1] — "`bool` is rejected explicitly", as the whole domain rule.**
+  The rule is the exact built-in type, and `bool` is one thing it excludes. Describing it as a
+  `bool` carve-out reads as though `isinstance` were the test, which is what admitted a
+  numeric subclass whose dunders then ran inside the policy.
 - **[Decision 4][spec-047-d4] — "classified by TYPE, never by argument name", as a complete
   enumeration.** The type is the second signal, not the first. A mutation's bind-time
   `RELATION_MULTI` spec outranks the `ID`-scalar test, which is the only reason a raw-pk
@@ -343,17 +355,26 @@ Spec: [Decision 1][spec-047-d1].
 unrelated settings reads across resolvers"). A mutable dataclass with a `freeze()` call (the
 unfrozen window is the bug). Pydantic (a new hard dependency for one object).
 
-### Decision 2 — Threaded through the request context, mirroring the optimizer seam
+### Decision 2 — Armed for the operation, published on the request context
 
 Spec: [Decision 2][spec-047-d2].
 
 *Changed after the release* — the end-of-operation clear became a snapshot-and-restore, in
-commits `ba15c767` and `a8f31a2d`. See
+commits `ba15c767` and `a8f31a2d`; the request context stopped being the AUTHORITY for the
+budget and became a mirror beside a `ContextVar`, with the mirror allowed to narrow the
+deadline and nothing else. See
 [the post-release change register](#the-post-release-change-register).
 
-*Moved — alternatives rejected.* A `contextvars.ContextVar` (invisible to the consumer's context
-object, and the package already owns a context seam — two would be one too many). A thread-local
-(wrong under async).
+*Moved — alternatives rejected.* The context stash as the sole authority: it was the shipped
+design, and it is the one the register's `_active_budget` row corrects. The reasoning that
+chose it — the stash is visible to the consumer's context object, and the package already owned
+a context seam, so two would be one too many — weighed visibility and seam count and did not
+weigh WRITABILITY. Both of those goods survive: the keys are still published on the consumer's
+context, and the shape-agnostic dispatch is still the one shared seam. What could not survive
+is reading enforcement state back out of an object every resolver in the request can write. A
+thread-local (wrong under async) stays rejected, and for a reason the `ContextVar` does not
+share: a `ContextVar` is per-task under asyncio and propagates across the `sync_to_async`
+boundary a Django resolver actually crosses.
 
 *Moved — why the context dispatch is shared rather than copied.* The shape-agnostic read / write
 / delete dispatch was the optimizer's before this card, in `optimizer/_context.py`. Slice 1

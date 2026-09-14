@@ -61,6 +61,7 @@ from .extensions.error_policy import DjangoErrorPolicyExtension
 from .extensions.resource_policy import DjangoResourcePolicyExtension
 from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import ResourcePolicy, resolve_resource_policy
+from .utils.policies import copy_policy
 from .utils.querysets import run_in_one_sync_boundary
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
@@ -402,11 +403,13 @@ class DjangoSchema(strawberry.Schema):
         error_policy: ErrorPolicy | Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        self.resource_policy = resolve_resource_policy(resource_policy)
-        self.error_policy = resolve_error_policy(error_policy)
+        self._resource_policy = resolve_resource_policy(resource_policy)
+        self._error_policy = resolve_error_policy(error_policy)
         if kwargs.get("execution_context_class") is None:
             kwargs["execution_context_class"] = DjangoMutationExecutionContext
-        extensions = _with_resource_policy_extension(kwargs.get("extensions"))
+        extensions, self._auto_resource_policy_extension = _with_resource_policy_extension(
+            kwargs.get("extensions"),
+        )
         self._auto_error_policy_extension = not any(
             _extension_entry_matches(extension, DjangoErrorPolicyExtension)
             for extension in extensions
@@ -414,34 +417,101 @@ class DjangoSchema(strawberry.Schema):
         kwargs["extensions"] = _with_error_policy_extension(extensions)
         super().__init__(*args, **kwargs)
 
+    @property
+    def resource_policy(self) -> ResourcePolicy:
+        """The resolved execution resource policy, as a copy per read.
+
+        The resolved policy is the authority every bound in the request is read
+        from, and ``info.schema`` puts this attribute in reach of every resolver
+        in every operation. Handing out the authority itself would make the
+        attribute a write seam onto it - a frozen dataclass still admits
+        ``policy.__dict__[bound] = wider``, and the object is process-lived, so
+        one such write would widen every later request on the process and not
+        just the one that made it. Each read therefore answers with a duplicate
+        (``utils/policies.py::copy_policy``): reading a bound is unchanged,
+        writing one changes only the reader's own copy.
+        """
+        return copy_policy(self._resource_policy)
+
+    @property
+    def error_policy(self) -> ErrorPolicy:
+        """The resolved error policy, as a copy per read.
+
+        The same boundary as :attr:`resource_policy`, for the policy whose
+        ``enabled`` decides whether an unexpected exception is masked at all:
+        writing it on the stored object would turn masking off for every later
+        request on the process and put the raw exception text on the wire.
+        """
+        return copy_policy(self._error_policy)
+
     def get_extensions(self, sync: bool = False) -> list[Any]:
-        """Resolve extensions and remove only a duplicate auto policy instance.
+        """Resolve extensions and remove a duplicate automatic policy instance.
 
         Strawberry accepts classes, instances, and zero-argument factories. A
         factory cannot be identified by type without calling it, and calling it
         during schema construction would violate its fresh-per-operation
-        lifecycle. When the constructor had to add the automatic error-policy
-        class because the consumer supplied only opaque entries, runtime
-        resolution is the first safe point to see whether one of those entries
-        produced an explicit error-policy extension. If so, the first resolved
-        policy is the automatic entry; remove that one and preserve every
-        consumer entry and its order.
+        lifecycle. When the constructor had to add an automatic policy class
+        because the consumer supplied only opaque entries, runtime resolution is
+        the first safe point to see whether one of those entries produced an
+        explicit policy extension of that kind. If so, the automatic entry is
+        removed and every consumer entry keeps its place and its order.
+
+        BOTH policies are deduplicated here, on the same terms. A second
+        resource-policy extension is not a cosmetic duplicate: each one arms its
+        own budget over the whole operation, the last one armed is what
+        ``resource_policy.py::policy_from_info`` and ``check_deadline`` answer
+        with, and the automatic entry is appended AFTER the consumer's, so a
+        consumer who configured a narrow policy through a factory would get the
+        package defaults enforced at every resolve-time bound while their own
+        policy still charged the document - a split authority whose looser half
+        wins exactly where the rows are.
+
+        Which resolved instance is the automatic one follows from where the
+        constructor put it: the error-policy entry is PREPENDED, so it is the
+        first of its kind, and the resource-policy entry is APPENDED, so it is
+        the last.
         """
         resolved = super().get_extensions(sync=sync)
-        if not self._auto_error_policy_extension:
-            return resolved
-        policy_indexes = [
-            index
-            for index, extension in enumerate(resolved)
-            if isinstance(extension, DjangoErrorPolicyExtension)
-        ]
-        if len(policy_indexes) <= 1:
-            return resolved
-        automatic_index = policy_indexes[0]
-        return [extension for index, extension in enumerate(resolved) if index != automatic_index]
+        if self._auto_error_policy_extension:
+            resolved = _without_automatic_policy(
+                resolved,
+                DjangoErrorPolicyExtension,
+                automatic=0,
+            )
+        if self._auto_resource_policy_extension:
+            resolved = _without_automatic_policy(
+                resolved,
+                DjangoResourcePolicyExtension,
+                automatic=-1,
+            )
+        return resolved
 
 
-def _with_resource_policy_extension(extensions: Any) -> list[Any]:
+def _without_automatic_policy(
+    resolved: list[Any],
+    extension_type: type,
+    *,
+    automatic: int,
+) -> list[Any]:
+    """Drop the automatic ``extension_type`` entry when a consumer entry resolved beside it.
+
+    ``automatic`` is the position the constructor put its own entry at among the
+    resolved extensions of this type - ``0`` for a prepended one, ``-1`` for an
+    appended one - which is the only thing that distinguishes it from the
+    consumer's, both being ordinary instances by the time Strawberry has called
+    every factory. With one or none of a kind there is nothing to choose between
+    and the list is returned untouched.
+    """
+    indexes = [
+        index for index, extension in enumerate(resolved) if isinstance(extension, extension_type)
+    ]
+    if len(indexes) <= 1:
+        return resolved
+    dropped = indexes[automatic]
+    return [extension for index, extension in enumerate(resolved) if index != dropped]
+
+
+def _with_resource_policy_extension(extensions: Any) -> tuple[list[Any], bool]:
     """Return ``extensions`` with the resource-policy extension appended if absent.
 
     The extension is appended as a CLASS, which is what Strawberry wants: it
@@ -454,9 +524,14 @@ def _with_resource_policy_extension(extensions: Any) -> list[Any]:
     that entry rather than getting a second copy whose charges would double-count
     against the same bounds. A consumer who wants a different policy without
     touching ``extensions`` passes ``DjangoSchema(resource_policy=...)``, which is
-    the supported spelling; a bare factory callable
-    (``lambda: DjangoResourcePolicyExtension(...)``) is opaque to this check by
-    construction, so a consumer using one should not also rely on suppression.
+    the supported spelling.
+
+    A bare factory callable (``lambda: DjangoResourcePolicyExtension(...)``) is
+    opaque to this check by construction - identifying it would mean calling it
+    at schema construction, which is the one thing a per-operation factory must
+    not have done to it - so the append happens and the second flag this returns
+    says so. ``DjangoSchema.get_extensions`` is where that is settled, at the
+    first point a resolved instance can be seen.
     """
     # Do not use truthiness to normalize the consumer's iterable.  A list
     # subclass can override ``__bool__`` (or be stateful), and extension
@@ -465,9 +540,9 @@ def _with_resource_policy_extension(extensions: Any) -> list[Any]:
     installed = [] if extensions is None else list(extensions)
     for extension in installed:
         if _extension_entry_matches(extension, DjangoResourcePolicyExtension):
-            return installed
+            return installed, False
     installed.append(DjangoResourcePolicyExtension)
-    return installed
+    return installed, True
 
 
 def _with_error_policy_extension(extensions: list[Any]) -> list[Any]:

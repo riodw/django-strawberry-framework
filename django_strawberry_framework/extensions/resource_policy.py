@@ -152,6 +152,19 @@ _TYPENAME_META_FIELD = "__typename"
 def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
     """Charge a raw document's tokens and structural nesting, before it is parsed.
 
+    Charged over the WHOLE request document, including operations the request did
+    not name. Two bounds are scanned here - ``max_document_tokens`` and
+    ``max_depth`` - and they are the request-level pair: they exist to bound the
+    parse, the parse reads the whole document whatever ``operationName`` says,
+    and the operation is not identified until that parse has finished. Charging
+    only the named operation would therefore name a cost nobody pays and leave
+    the cost somebody does pay unbounded. Every bound charged AFTER the parse -
+    ``max_selections``, ``max_aliases``, ``max_collection_cost`` and every value
+    bound - is charged against the named operation alone (:func:`charge_document`),
+    which is the distinction spec-047 draws between the two halves and not a
+    disagreement between them. A client sending one persisted document carrying
+    several operations is charged for the document it sent.
+
     A malformed document is left to the real parser: a ``GraphQLSyntaxError``
     raised by the lexer here means the request is going to fail validation with a
     precise syntax error anyway, and swallowing it keeps this pass from

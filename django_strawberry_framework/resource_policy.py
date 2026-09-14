@@ -26,10 +26,15 @@ startup and no resolver re-reads or re-validates a setting per request.
 
 **Immutable and armed for the whole operation.** The resolved policy is armed as
 the operation's authoritative budget by ``begin_resource_budget`` and read back
-by ``policy_from_info`` and ``check_deadline``. The object is a frozen
-dataclass, so a resolver cannot widen the request's own budget by mutating it,
-and the authority is a ``ContextVar`` rather than a request-context key, so a
-resolver cannot widen it by REPLACING it either. The same call publishes the
+by ``policy_from_info`` and ``check_deadline``. The authority is a ``ContextVar``
+rather than a request-context key, so a resolver cannot widen the budget by
+REPLACING it; and the armed object is reachable from no consumer-visible name,
+so a resolver cannot widen it by MUTATING it either. Everything a resolver can
+reach - the schema attribute, the published mirror, whatever
+``policy_from_info`` returns - is a copy (``utils/policies.py::copy_policy``).
+Being a frozen dataclass is not what makes that true: frozen rejects ``setattr``
+and admits ``__dict__`` writes, so on a process-lived object it would have been
+one write away from widening every later request on the process. The same call publishes the
 policy and its derived deadline under ``DST_RESOURCE_POLICY`` /
 ``DST_RESOURCE_DEADLINE``, mirroring the optimizer's ``DST_OPTIMIZER_*`` context
 seam; those keys are a consumer-readable mirror, and no enforcement seam trusts
@@ -65,7 +70,7 @@ from .conf import resource_policy_setting
 from .exceptions import ConfigurationError, DjangoStrawberryFrameworkError, describe_value
 from .utils.context import clear_context_key, get_context_value, stash_on_context
 from .utils.errors import coded_error_extensions
-from .utils.policies import resolve_policy
+from .utils.policies import canonical_policy, copy_policy, resolve_policy
 from .utils.querysets import is_async_only_iterable
 
 __all__ = (
@@ -485,8 +490,14 @@ def _absolute_deadline(policy: ResourcePolicy) -> float | None:
 
 
 def _publish_budget_mirror(context: Any, policy: ResourcePolicy, deadline: float | None) -> None:
-    """Write the consumer-readable mirror of a budget onto the request context."""
-    stash_on_context(context, DST_RESOURCE_POLICY, policy)
+    """Write the consumer-readable mirror of a budget onto the request context.
+
+    The policy published here is a COPY. The mirror exists to be read by consumer
+    code, which means every resolver in the request holds whatever object is put
+    under this key; publishing the armed one would make a key documented as a
+    mirror into a write seam onto the authority it mirrors.
+    """
+    stash_on_context(context, DST_RESOURCE_POLICY, copy_policy(policy))
     stash_on_context(context, DST_RESOURCE_DEADLINE, deadline)
 
 
@@ -497,21 +508,48 @@ def stash_resource_policy(context: Any, policy: ResourcePolicy) -> None:
     is what arms the budget the enforcement seams actually read; a caller that
     publishes without arming leaves the seams on their fallback, which reads
     this mirror back.
+
+    The policy is canonicalized first (:func:`_operation_policy`), because that
+    fallback makes what is published here the value a bound is read from, so it
+    is admitted on the same terms as an armed one.
     """
+    policy = _operation_policy(policy)
     _publish_budget_mirror(context, policy, _absolute_deadline(policy))
+
+
+def _operation_policy(policy: ResourcePolicy) -> ResourcePolicy:
+    """The private, exact policy one operation is bounded by.
+
+    Taken once per operation rather than per bound read, so the per-field seams
+    pay nothing for it. Two properties are established here and nowhere else:
+    the object is an exact ``ResourcePolicy``, so every field read a bound
+    performs is the package's own rather than a subclass's
+    (``utils/policies.py::canonical_policy``); and it is a fresh object no caller
+    of :func:`begin_resource_budget` retained a reference to, so the budget
+    cannot be widened afterwards by writing the object that was passed in.
+    """
+    return copy_policy(
+        canonical_policy(policy, policy_cls=ResourcePolicy, display_name="resource policy"),
+    )
 
 
 def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:
     """Arm ``policy`` as this operation's budget and publish it; returns the reset token.
+
+    What is armed is a private snapshot (:func:`_operation_policy`), never the
+    object the caller passed: the schema's policy is process-lived and reachable
+    from ``info.schema``, so arming it directly would put the operation's ceiling
+    behind a name every resolver in every later request can write.
 
     One derived absolute deadline reaches both the armed budget and the
     published mirror, so the authority and the mirror cannot disagree about when
     the operation's budget ends. :func:`end_resource_budget` closes the scope,
     restoring whatever budget an enclosing operation had armed.
     """
-    deadline = _absolute_deadline(policy)
-    _publish_budget_mirror(context, policy, deadline)
-    return _active_budget.set(_RequestBudget(policy, deadline))
+    armed = _operation_policy(policy)
+    deadline = _absolute_deadline(armed)
+    _publish_budget_mirror(context, armed, deadline)
+    return _active_budget.set(_RequestBudget(armed, deadline))
 
 
 def end_resource_budget(token: Any) -> None:
@@ -588,6 +626,21 @@ def policy_from_info(info: Any) -> ResourcePolicy:
     that any bound reads. The mirror answers only where no budget is armed,
     which is a context none of this package's collection seams runs inside.
 
+    What comes back is always a COPY, never the armed object or the package
+    default singleton. This function is the package's own way of reading a bound
+    and it is equally the way a consumer resolver reads one, so whatever it
+    returns is in reach of consumer code for the rest of the operation; returning
+    the authority would let one ``__dict__`` write on it widen every bound for
+    the rest of the request, and returning the singleton would widen them for
+    every request the process serves afterwards.
+
+    A mirror value is admitted only when it is an EXACT ``ResourcePolicy``. A
+    subclass answers every field read with consumer code, which is the same
+    domain rule the module applies to a number crossing into the budget
+    (:func:`_is_builtin_number`); an armed budget has been through
+    :func:`_operation_policy` already, so this is the one path where a foreign
+    object could still arrive.
+
     Fail-closed by construction: the miss path returns
     ``DEFAULT_RESOURCE_POLICY``, never ``None``. A field consulting the policy is
     therefore always bounded, including under a plain ``strawberry.Schema`` that
@@ -595,9 +648,9 @@ def policy_from_info(info: Any) -> ResourcePolicy:
     """
     budget = _active_budget.get()
     if budget is not None:
-        return budget.policy
+        return copy_policy(budget.policy)
     value = get_context_value(getattr(info, "context", None), DST_RESOURCE_POLICY)
-    return value if isinstance(value, ResourcePolicy) else DEFAULT_RESOURCE_POLICY
+    return copy_policy(value if type(value) is ResourcePolicy else DEFAULT_RESOURCE_POLICY)
 
 
 def check_deadline(info: Any) -> None:

@@ -1,223 +1,187 @@
 # Adversarial implementation review: spec 050 (fresh pass)
 
-Date: 2026-09-14. Reviewed revision `ab98d240` and the current working tree against
-the [specification][spec-050], [GOAL.md][goal], [AGENTS.md][agents], [START.md][start], and the
-live-test rules in [the fakeshop test guide][live-readme]. The comparison also covered the local
-[Strawberry-Django pagination implementation][strawberry-pagination], the installed
-Graphene-Django fields, and the [cookbook schema][cookbook-schema] shape named by the project
-instructions. Those upstream projects are migration references only; this package's Meta-first API
-remains the contract under review.
+Date: 2026-09-14. Reviewed revision `9eb58a96` and the current implementation against the
+[specification][spec-050], the [completed build record][build-050], [GOAL.md][goal],
+[AGENTS.md][agents], and the live-test rules in [the fakeshop test guide][live-readme]. This
+pass deliberately targets lifecycle, configuration, and operation-selection behavior that the
+previous numeric-domain, deadline-mirror, async-cleanup, routing, and definition-threading
+reviews did not exercise.
 
-No pytest command was run. The repository instructions reserve pytest for an explicit request,
-and the current build record itself says the post-remediation default, sharded, and supported-floor
-gates are still owed. The behavioral evidence below comes from source inspection and small,
-non-pytest probes run against the current checkout.
+No pytest command was run. The repository instructions reserve pytest for an explicit request.
+The build record contains historical green figures, while the probes below are fresh checks
+against the current checkout.
 
 ## Verdict
 
-**Not accepted yet.** The latest round closes the earlier routing, async cancellation, deterministic
-async-deadline-test, effective-order-witness, exported-helper-coordinate, and definition-threading
-concerns. Two production boundary defects remain: resolver code can replace either request-side
-resource-policy seam, and hostile numeric subclasses can escape the typed resource-policy errors.
-The test plan also still bundles independent claims into single nodes, and the final gate has not
-been rerun after the latest production changes.
+**Not accepted yet.** The previously reported deadline-mirror, upload-size, exact-bound,
+async-cleanup, routing, and definition-capture defects are fixed in the current code. This pass
+found three remaining production/contract issues:
+
+1. the operation budget retains the same mutable `ResourcePolicy` object exposed on the schema,
+   so a resolver can widen later fields by editing its `__dict__`;
+2. a factory-installed policy extension can be duplicated and overridden, so the default
+   extension becomes the active budget; and
+3. a named operation can be rejected by the raw-token/depth scan of a different, unselected
+   operation, despite the resource-policy specification saying only the named operation is
+   charged.
+
+The build record also has contradictory gate-status prose, and none of the three new seams has a
+regression test.
 
 ## Findings
 
-### P1-1 — the cooperative budget is mutable consumer state and can be widened or cleared
+### P1-1 — the armed budget aliases a publicly mutable policy object
 
-The extension publishes both the frozen policy and a derived absolute deadline through the
-consumer-owned `info.context` (the shape-agnostic dispatch in
-[`utils/context.py`][context-utils]) in
-[`DjangoResourcePolicyExtension.on_operation`][resource-extension] via
-[`stash_resource_policy`][resource-policy]. Both exported keys are writable by resolver code:
-`policy_from_info` accepts any `ResourcePolicy` currently stashed under `DST_RESOURCE_POLICY`,
-while [`check_deadline`][resource-policy] trusts the scalar currently stored under
-`DST_RESOURCE_DEADLINE`. Neither seam proves that its value is the one established at operation
-start or that the two values still agree.
+[`begin_resource_budget`][resource-policy] stores the caller's `ResourcePolicy` instance directly
+inside `_RequestBudget`. The same instance is deliberately exposed as
+`DjangoSchema.resource_policy`, and `ResourcePolicy` is a non-slotted frozen dataclass. The
+ordinary assignment guard therefore does not provide an authority boundary: Python code can edit
+`schema.resource_policy.__dict__` (or use `object.__setattr__`) without replacing the object.
 
-This is directly exploitable by ordinary resolver code in two independent ways. A minimal probe
-stashed `ResourcePolicy(execution_deadline_seconds=0.001)`, replaced `DST_RESOURCE_DEADLINE` with
-`time.monotonic() + 3600`, and called `check_deadline`; the check returned normally even though the
-configured budget had already been exceeded by the time the next seam was reached. Replacing the
-key with `None` has the same effect. A second probe stashed a policy with `max_list_rows=5`, then
-had the resolver replace `DST_RESOURCE_POLICY` with `ResourcePolicy(max_list_rows=999)`; the same
-bounded list seam returned 999 rows instead of 5. The frozen object is immutable, but the actual
-request budget is not: every resolve-time bound derived through `policy_from_info` can be widened
-by replacing the context value, bypassing `narrowed()` entirely.
-
-That contradicts spec-047's “one immutable budget” and spec-050's deadline wording: a consumer
-resolver can make the request start more work after its budget rather than merely narrow it. It is
-also not limited to malicious code; a pre-existing application context key or a middleware/resolver
-that reuses a generic string key can accidentally disable or widen the guard for the rest of the
-operation. The deadline mutation is the small half of this finding; `DST_RESOURCE_POLICY` is the
-larger seam because it carries `max_list_rows`, `max_page_size`, and every document, value, and
-rejection limit consulted at resolve time.
-
-**Root-cause correction:** move the authoritative policy and deadline to request-internal state that
-resolver code cannot replace (for example, an execution-context-owned immutable budget capsule or a
-private context-local token), and have `policy_from_info` / `check_deadline` validate that capsule
-rather than trusting consumer-writable values. If the public context seams must remain for
-compatibility, make their contents opaque framework tokens, keep the policy and absolute deadline
-private, and reject a token whose identity or policy binding does not match the operation. Revisit
-spec-047 Decision 2's context-only alternative analysis; the current design has context seams
-without an authenticity boundary.
-
-**Required proofs:** add live async HTTP rows where a resolver awaits, attempts to move the deadline
-into the future, clears it, installs a non-finite deadline, and replaces the policy with a wider
-`ResourcePolicy`; each must still enforce the operation-start policy at a collection seam and return
-`RESOURCE_LIMIT_EXCEEDED` with the configured `limit`/`charged` values. Keep the existing
-context-restoration tests so the fix does not leak state into an outer execution.
-
-### P2-1 — hostile numeric subclasses escape typed resource-policy boundaries
-
-The positive-integer validator in [`resource_policy.py::_require_positive_int`][resource-policy]
-accepts `int` subclasses and immediately evaluates `value < 1`. A hostile subclass can raise from
-that comparison, replacing the promised `ConfigurationError` with a raw exception. The same helper
-is used by `validate_collection_bound`, so a hostile
-[`list_field.py::DjangoListField`][list-field] `max_rows=...` declaration has the same
-construction-site escape.
-
-The narrowing path has a second copy of the problem: [`ResourcePolicy.narrowed`][resource-policy]
-compares the preserved override value with `>` after `replace(...)`. A hostile positive subclass
-can therefore raise a raw exception while the code is deciding whether a valid narrowing widens the
-bound. More subtly, a benign-comparison subclass can pass construction and remain stored on the
-frozen policy. When any bound rejects, `_ValueBudget._reject` passes that original object to
-`ResourceLimitExceeded`; its f-strings and `extensions` payload format both `limit` and `charged`,
-so a hostile `__format__` hook can turn any resource rejection into a raw `RuntimeError`, not just a
-deadline-expiry error. Finally, a valid `float` subclass can survive `_is_valid_deadline`; its
-reflected `__radd__` can even make `time.monotonic() + deadline` become `nan` during
-[`stash_resource_policy`][resource-policy], so an accepted policy can silently disarm its own
-deadline before `check_deadline` runs.
-
-Current probes produced:
+A two-field synchronous probe demonstrates the bypass:
 
 ```text
-ResourcePolicy(max_list_rows=BombInt(5))                  -> RuntimeError: lt bomb
-ResourcePolicy(max_list_rows=2).narrowed(max_list_rows=BombInt(3))
-                                                          -> RuntimeError: lt bomb
-expired policy with CeilBomb(1.0)                        -> RuntimeError: ceil bomb
-ResourcePolicy(max_list_rows=FmtInt(2)); rejected bound -> RuntimeError: format bomb
-accepted float subclass stashed; derived deadline    -> nan; check_deadline passed
+schema policy: ResourcePolicy(max_list_rows=1)
+resolver for the first field: schema.resource_policy.__dict__["max_list_rows"] = 999
+second field: DjangoListField(..., limit=2)
+result: two rows, no LIST_ARGUMENT_INVALID / RESOURCE_LIMIT_EXCEEDED error
 ```
 
-The existing hostile-deadline test in [`tests/test_resource_policy.py`][test-resource-policy] only
-covers a subclass whose comparison raises during construction; it does not cover a valid subclass
-reaching narrowing or expired-error rendering. The direct list-argument boundary in
-[`tests/test_list_field.py`][test-list-field] is hardened with exact-int checks, but the policy and
-field configuration boundaries are not.
+The second field reads `budget.policy` through [`policy_from_info`][resource-policy], so it sees
+the edited value. This is not a theoretical post-request mutation: a normal resolver can mutate
+the object in one sibling field and widen the row bound, page bound, or any other resolve-time
+bound used by a later sibling in the same operation. The absolute deadline happens to be copied
+to a scalar, but the collection and value policy fields remain live object attributes. This
+contradicts spec-047's “immutable and armed for the whole operation” invariant and spec-050's
+claim that the ceiling is the budget the operation started with.
 
-**Root-cause correction:** canonicalize policy and field-bound numerics to exact built-in values at
-the construction boundary, or reject all numeric subclasses with a typed `ConfigurationError`
-before any comparison, arithmetic, or formatting. Store only built-in `int` / `float` values on a
-policy and on field configuration so `narrowed`, deadline arithmetic, and GraphQL error
-serialization cannot dispatch consumer dunders. This boundary canonicalization closes the
-reflected-`__radd__` deadline case and the error-rendering case at the same time; adding scattered
-`try` blocks around every later comparison is an inconsistent and incomplete containment posture.
-Add package tests for hostile integer construction, hostile integer narrowing, a valid hostile float
-that reaches expiry and deadline derivation, a hostile `max_rows` declaration, and a valid
-comparison-but-hostile-format bound that reaches each relevant rejection family. The tests must
-assert the typed error, not merely that “some exception” was raised.
+The same acceptance path also admits a hostile `ResourcePolicy` subclass. The shared
+[`resolve_policy`][utils-policies] helper and the extension's `_resolved_policy` use
+`isinstance(...)`, and [`policy_from_info`][resource-policy] does the same. A subclass overriding
+`__getattribute__` can return an `int` subclass for `max_list_rows`; a live `limit` request then
+raises the subclass's raw comparison exception instead of a typed framework error. Thus the
+exact-built-in rule protects values only while the object is read honestly; it does not protect
+the object that supplies those values.
 
-### P2-2 — non-finite deadline values in the exported context key fail open
+**Root-cause correction:** materialize a private operation snapshot at the arm point. The capsule
+must contain exact built-in scalar values (or an exact base `ResourcePolicy` copy built through
+contained reads), must be the sole source for `policy_from_info`, `check_deadline`, and all
+resolve-time bounds, and must not be the public schema object. `on_execute` should use the same
+snapshot rather than re-reading `schema.resource_policy`. Require an exact `ResourcePolicy`
+instance or safely canonicalize subclasses at schema construction; merely adding `slots=True` or
+more `try` blocks leaves the shared-object alias intact.
 
-[`check_deadline`][resource-policy] checks only `isinstance(deadline, (int, float))` and then
-compares it with `time.monotonic()`. It does not apply the same finiteness rule that
-`ResourcePolicy.__post_init__` applies to configured deadlines. A numeric value manually placed in
-the consumer context as `float("nan")` or `float("inf")` therefore returns without a rejection:
+**Required proofs:** a live sibling-field query that edits `__dict__` and attempts to widen
+`max_list_rows`/`max_page_size`; an async equivalent crossing an `await`; and package rows for a
+benign and a hostile `ResourcePolicy` subclass. Each must show the operation-start ceiling and a
+typed rejection, with no raw consumer exception.
+
+### P1-2 — an extension factory can install two resource policies, with the default overriding the custom one
+
+[`DjangoSchema.__init__`][schema] delegates resource-extension insertion to
+`_with_resource_policy_extension`. That helper recognizes only a class or an already-created
+instance through `_extension_entry_matches`; a zero-argument factory is intentionally opaque and
+therefore causes the automatic `DjangoResourcePolicyExtension` class to be appended as well.
+
+This is a valid Strawberry extension form, not an invalid input. The following probe resolves two
+resource extensions:
 
 ```text
-DST_RESOURCE_DEADLINE = nan   -> check_deadline passed
-DST_RESOURCE_DEADLINE = inf   -> check_deadline passed
-DST_RESOURCE_DEADLINE = -inf  -> ResourceLimitExceeded
+extensions=[lambda: DjangoResourcePolicyExtension(
+    policy=ResourcePolicy(max_list_rows=1),
+)]
+schema.get_extensions() -> custom resource extension, automatic resource extension
 ```
 
-The key is exported and consumer-writable, which makes this the observable half of P1-1 rather than
-an academic constructor case. The premise that a configured policy cannot create these values is
-also false: an accepted `float` subclass with a reflected `__radd__` can turn the
-`time.monotonic() + deadline` result into `nan` inside `stash_resource_policy`; the policy is
-accepted, its derived deadline is `nan`, and the expired check passes. A malformed numeric stash is
-neither “absent” nor “non-numeric”; treating it as a future deadline silently disables a guard whose
-documented stance is fail closed.
+The automatic class is entered inside the factory-produced extension. Its default policy becomes
+the active `_active_budget`, so an ordered `DjangoListField` request with `offset=2` succeeds even
+though the consumer's factory explicitly configured `max_list_rows=1`. The custom extension may
+still charge its own document walk, which makes the result dependent on extension ordering rather
+than on the policy the schema author supplied. The helper's docstring warns that factories are
+“opaque”, but the public schema constructor does not reject or otherwise make this behavior safe;
+the result is a silent policy downgrade.
 
-**Required correction:** canonicalize the deadline field to an exact built-in `float` before
-deriving the absolute deadline; this closes both the reflected-subclass and construction-boundary
-holes. Once the authoritative deadline state is protected as described above, also reject any
-numeric value in a compatibility seam that is not finite before comparing it. Add direct tests for
-`nan`, `+inf`, and `-inf`, an accepted hostile float whose derived deadline would otherwise be
-`nan`, and a live mutation control proving a resolver cannot install any of them to bypass the
-configured budget.
+**Root-cause correction:** apply the same runtime deduplication already used for the error-policy
+factory. Resolve the extension list once per operation, detect any resolved
+`DjangoResourcePolicyExtension`, and remove only the automatic instance while preserving the
+consumer factory and ordering. Alternatively, explicitly reject a factory that produces this
+extension with a typed configuration error; silently adding a second authority is not acceptable.
 
-### P2-3 — the final verification gate is explicitly still owed
+**Required proofs:** add a schema-level test for class, instance, and factory forms. For the
+factory form, assert exactly one resource extension is active and that restrictive row/deadline
+settings are enforced through a real list-field request. Add a control proving an unrelated
+factory still receives the automatic extension.
 
-The current [build record][build-050] and the specification both state that the last green figures
-were measured before the latest production changes and that the default, `FAKESHOP_SHARDED=1`, and
-supported-floor runs must be rerun. The build plan still has its final test-run item unchecked. No
-fresh coverage, sharded routing, structural, or floor result can therefore be used as evidence that
-the cancellation, routing, and deadline changes preserve the repository's 100% package gate.
+### P2-1 — the named-operation contract does not hold for the pre-parse token/depth scan
 
-This is a release-blocking evidence gap, not a request to paper over failures with a test-only
-change. After the two production corrections, rerun the required format/lint/structural checks and
-the three identified test tiers on one identified tree; record exit status and exact counts in the
-build artifact. Until that happens, “implementation complete” is not an independently verified
-claim.
+[`DjangoResourcePolicyExtension.on_operation`][resource-extension] calls
+`scan_document_text(policy, execution_context.query)` with the entire raw document. The scanner
+has no operation-name argument and therefore counts every lexical token and every structural
+delimiter in every operation before graphql-core selects the requested one. The later
+[`charge_document`][resource-extension] walk does filter by `operation_name`, so the two halves
+disagree.
 
-### P3-1 — live test nodes still bundle independent claims contrary to the repository contract
+A direct schema probe used `ResourcePolicy(max_document_tokens=10)`:
 
-The live guide requires one claim per node id and says to parametrize rather than loop. The current
-spec-050 suites still combine failures that can regress independently:
+```graphql
+query Small { a }
+query Big { b c b c b c b c b c b c b c b c }
+```
 
-- [`test_shipped_branches_coercion_failures_and_integral_floats`][sync-list-tests] loops over
-  string, boolean, and float variables, then adds a float literal and an integral-float success
-  case under one node.
-- [`test_shipped_branches_empty_order_and_permission_precedence`][sync-list-tests] asserts two
-  different empty-order forms and a permission-precedence form in one node.
-- [`test_shipped_branches_error_precedence_pairs`][sync-list-tests] carries three unrelated
-  precedence claims (numeric ordering, materialized source, and pre-sliced source) in one node.
-- [`test_holder_branches_post_orderset_malformed_result_matrix`][sync-list-tests] drives ten
-  malformed `OrderSet` results through one helper/test body; a failure in an early arm prevents the
-  remaining defect classes from running.
-- The async sibling repeats the pattern in
-  [`test_async_queryset_completion_optimizer_on_and_off`][async-list-tests],
-  [`test_async_error_transport_and_naming`][async-list-tests], and the context-preservation rows.
-- [`test_async_holder_branches_post_orderset_seals`][async-list-tests] is a numbered five-defect
-  `apply_async` matrix in one node, the exact async twin of
-  `test_holder_branches_post_orderset_malformed_result_matrix`.
+Executing with `operation_name="Small"` returns
+`ResourceLimitExceeded(bound="max_document_tokens")` before `Small` runs. Removing `Big`, or
+raising the token ceiling, allows the same named operation to execute. This is an avoidable
+denial-of-service vector for clients that legitimately send a persisted document containing
+several operations, and it contradicts spec-047's edge-case statement that only the named
+operation is charged.
 
-An AST census of the two live modules finds 14 loop-in-test-body cases without parametrization.
-Several are legitimate seeding, SQL, or census loops, so the rule is not “split every loop”;
-independent behavioral claims must still own distinct node ids. The async holder matrix above is a
-clear missed case under that rule.
+There is a real design distinction here: token/depth limits are intentionally pre-parse, so a
+scanner cannot generally know the selected operation without first parsing the document it is
+supposed to protect. If the intended contract is “the whole request document is bounded before
+parse”, the spec must say that explicitly and exempt `max_document_tokens`/`max_depth` from the
+named-operation rule. If the named-operation rule is intended to cover these bounds too, the
+current pre-parse architecture cannot satisfy it and needs a different framing/segmentation
+strategy.
 
-These are not equivalent-data censuses: each arm protects a different boundary or precedence rule.
-One-node bundling weakens failability accounting and makes a green row unable to show which claim
-would fail when its boundary is removed.
+**Required correction:** choose and document one meaning, then add a regression pair: selected
+small operation plus oversized unselected operation, and the same document with the request-level
+token/depth contract made explicit. The test must assert whether rejection is intentionally
+request-wide or operation-specific rather than leaving the mismatch implicit.
 
-**Required correction:** split distinct invariants into separately named tests, or use
-`pytest.mark.parametrize(..., ids=[...])` so every case has its own node id. Keep the exact GraphQL
-error/SQL assertions with the case that owns them; retain a must-not control beside each scoped
-positive claim.
+### P3-1 — the build record's gate status is self-contradictory
 
-## Closed checks from this pass
+The opening status sentence in the [build record][build-050] says “The gate is owed” and describes
+the implementation as through the ninth review, while `## Final gate record` says the tenth-round
+production changes were measured at `207c7328` with green default, sharded, floor, structural, and
+citation results. The current `HEAD` is the docs-only descendant `9eb58a96`, so the code is still
+the gated tree, but a maintainer cannot tell from the surviving status line whether the gate is
+complete or pending.
 
-The following earlier concerns were re-checked and are not open findings:
+**Required correction:** rewrite the opening status to state one unambiguous state (final gate
+GREEN at the recorded tree, or gate owed) and identify the docs-only descendant if that matters.
+Do not leave two mutually exclusive release-readiness claims in the only surviving build artifact.
 
-- [`utils/querysets.py::_snapshot_routing_intent`][querysets] resolves an effective alias before a
-  public `OrderSet` override and the accepted seal is pinned to that alias; in-place routing edits
-  no longer move the completed read.
-- Async cleanup now demotes only ordinary `Exception` failures; cancellation and other control
-  `BaseException` signals propagate from both cleanup seams.
-- The live async deadline row crosses an actual resolver `await`, uses a wide deterministic budget,
-  and proves zero advancement plus exactly one close for the default and zero-limit windows.
-- The async effective-order row records compiler-built SQL, so dormant random terms are not accepted
-  on a lucky row value alone.
-- `bounded_rows` and `bounded_rows_async` no longer accept client coordinates; the private window
-  seam is the only coordinate-bearing path.
-- The optimizer's nested planner, synthesized relation connections, and connection cache now carry
-  the captured registry definition rather than re-reading the target class at request time.
-- The spec's DRY paragraph intentionally says argument-bearing visibility uses `reject-combined` at
-  both source and result seals; the adjacent em-dash clause supplies the message-arm requirement.
-  This wording was re-read against the implementation and is not a finding.
+## Test and documentation gaps
+
+- No package or live test covers mutation of the exposed policy object's `__dict__` between two
+  sibling fields, so the “frozen” claim has no authority-boundary proof.
+- No schema test covers a resource-policy factory, even though the repository already tests custom
+  error-policy factories; the duplicate-extension downgrade is therefore unpinned.
+- No test states whether `max_document_tokens` and `max_depth` are request-wide or selected-
+  operation bounds when `operationName` is supplied.
+- The new tests should remain in the repository's live-first shape: use a real fakeshop HTTP field
+  for row/deadline behavior and package tests only for construction and extension-list mechanics,
+  following [the fakeshop test guide][live-readme].
+
+## Checks run
+
+- `ruff format --check`: 444 files already formatted.
+- `ruff check`: all checks passed (the existing COM812 warning only).
+- Spec glossary check: 43 terms, all resolved.
+- Trailing-comma structural check: passed.
+- Python compilation: passed.
+- Citation check: 1010 citations resolved.
+- Pytest was intentionally not run under [AGENTS.md][agents].
 
 <!-- LINK DEFINITIONS -->
 
@@ -235,25 +199,19 @@ The following earlier concerns were re-checked and are not open findings:
 [build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
-[context-utils]: ../django_strawberry_framework/utils/context.py
 [list-field]: ../django_strawberry_framework/list_field.py
-[querysets]: ../django_strawberry_framework/utils/querysets.py
 [resource-extension]: ../django_strawberry_framework/extensions/resource_policy.py
 [resource-policy]: ../django_strawberry_framework/resource_policy.py
+[schema]: ../django_strawberry_framework/schema.py
+[utils-policies]: ../django_strawberry_framework/utils/policies.py
 
 <!-- tests/ -->
-[test-list-field]: ../tests/test_list_field.py
-[test-resource-policy]: ../tests/test_resource_policy.py
 
 <!-- examples/ -->
-[async-list-tests]: ../examples/fakeshop/test_query/test_list_field_async_api.py
 [live-readme]: ../examples/fakeshop/test_query/README.md
-[sync-list-tests]: ../examples/fakeshop/test_query/test_list_field_api.py
 
 <!-- scripts/ -->
 
 <!-- .venv/ -->
 
 <!-- External -->
-[cookbook-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
-[strawberry-pagination]: ../../strawberry-django-main/strawberry_django/pagination.py

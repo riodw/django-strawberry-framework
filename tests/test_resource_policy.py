@@ -390,14 +390,14 @@ def test_the_policy_round_trips_or_fails_closed_on_every_context_shape(context_f
     policy = ResourcePolicy(max_depth=3)
     stash_resource_policy(context, policy)
     read = policy_from_info(SimpleNamespace(context=context))
-    assert read is policy or read is DEFAULT_RESOURCE_POLICY
+    assert read in (policy, DEFAULT_RESOURCE_POLICY)
 
 
 def test_clearing_the_context_restores_the_default_policy():
     context = SimpleNamespace()
     stash_resource_policy(context, ResourcePolicy(max_depth=3))
     clear_resource_context(context)
-    assert policy_from_info(SimpleNamespace(context=context)) is DEFAULT_RESOURCE_POLICY
+    assert policy_from_info(SimpleNamespace(context=context)) == DEFAULT_RESOURCE_POLICY
     assert not hasattr(context, DST_RESOURCE_POLICY)
     assert not hasattr(context, DST_RESOURCE_DEADLINE)
 
@@ -405,7 +405,7 @@ def test_clearing_the_context_restores_the_default_policy():
 def test_a_non_policy_value_under_the_key_is_ignored():
     """A consumer key collision must not become "the request has no bounds"."""
     context = {DST_RESOURCE_POLICY: "not a policy"}
-    assert policy_from_info(SimpleNamespace(context=context)) is DEFAULT_RESOURCE_POLICY
+    assert policy_from_info(SimpleNamespace(context=context)) == DEFAULT_RESOURCE_POLICY
 
 
 def test_nested_sync_schema_restores_the_outer_policy_and_deadline():
@@ -825,7 +825,7 @@ def test_ending_a_budget_restores_the_one_it_was_opened_inside():
     # than to the budget token.
     assert policy_from_info(info).max_list_rows == 2
     clear_resource_context(context)
-    assert policy_from_info(info) is DEFAULT_RESOURCE_POLICY
+    assert policy_from_info(info) == DEFAULT_RESOURCE_POLICY
 
 
 async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread():
@@ -2300,12 +2300,12 @@ def test_the_context_is_cleared_even_when_the_document_scan_rejects():
 )
 def test_a_consumer_supplied_extension_suppresses_the_automatic_one(supplied):
     """Two copies would charge every bound twice against the same budget."""
-    assert _with_resource_policy_extension([supplied]) == [supplied]
+    assert _with_resource_policy_extension([supplied]) == ([supplied], False)
 
 
 def test_the_extension_is_appended_as_a_class_when_absent():
     """A class (not an instance) is what gives each request its own charge counters."""
-    assert _with_resource_policy_extension(None) == [DjangoResourcePolicyExtension]
+    assert _with_resource_policy_extension(None) == ([DjangoResourcePolicyExtension], True)
 
 
 def test_extension_installation_does_not_call_consumer_iterable_truthiness():
@@ -2316,13 +2316,17 @@ def test_extension_installation_does_not_call_consumer_iterable_truthiness():
             raise RuntimeError("bool exploded")
 
     marker = object()
-    installed = _with_resource_policy_extension(_HostileTruthiness([marker]))
+    installed, appended = _with_resource_policy_extension(_HostileTruthiness([marker]))
     assert installed == [marker, DjangoResourcePolicyExtension]
+    assert appended is True
 
 
 def test_an_unrelated_extension_is_preserved_alongside_the_appended_one():
     marker = object()
-    assert _with_resource_policy_extension([marker]) == [marker, DjangoResourcePolicyExtension]
+    assert _with_resource_policy_extension([marker]) == (
+        [marker, DjangoResourcePolicyExtension],
+        True,
+    )
 
 
 def test_a_resource_rejection_is_catchable_as_a_graphql_error():
@@ -2594,3 +2598,141 @@ def test_memoryview_multibyte_buffer_charged_by_nbytes():
         _charge(document, {"p": mv}, policy=ResourcePolicy(max_scalar_bytes=39))
     assert caught.value.bound == "max_scalar_bytes"
     assert caught.value.charged == 40
+
+
+class _LiesAfterValidating(ResourcePolicy):
+    """A policy that validates honestly at construction and answers differently later.
+
+    ``__post_init__`` reads every field through this hook, so the class validates
+    itself on real values; flipping ``armed`` afterwards is what a subclass's
+    reads actually are - consumer code, running whenever a seam looks at a bound.
+    The returned ``int`` subclass then answers the comparison that would have
+    caught it with a raw exception.
+    """
+
+    armed = False
+
+    def __getattribute__(self, name):
+        if name == "max_list_rows" and object.__getattribute__(type(self), "armed"):
+            return _AmountNoBoundCanExceed(3)
+        return object.__getattribute__(self, name)
+
+
+class _UnreadablePolicy(ResourcePolicy):
+    """A policy whose ``max_list_rows`` read raises, as a property does at any time."""
+
+    @property
+    def max_list_rows(self):
+        raise RuntimeError("hostile read detonated")
+
+
+def test_a_policy_subclass_is_replaced_by_an_exact_instance_at_schema_construction():
+    """``isinstance`` admits a subclass, whose every field read is consumer code.
+
+    Reading it out once here and building an exact instance is what keeps a read
+    that validates honestly and answers differently afterwards from reaching a
+    bound: the subclass is discarded and no seam calls it again.
+    """
+    hostile = _LiesAfterValidating()
+    schema = DjangoSchema(query=_Probe, resource_policy=hostile)
+    _LiesAfterValidating.armed = True
+    try:
+        assert type(schema.resource_policy) is ResourcePolicy
+        assert schema.resource_policy.max_list_rows == DEFAULT_RESOURCE_POLICY.max_list_rows
+    finally:
+        _LiesAfterValidating.armed = False
+
+
+def test_a_policy_whose_bound_cannot_be_read_is_a_typed_configuration_error():
+    """A read that raises during canonicalization is a deployment fault, named as one."""
+    with pytest.raises(ConfigurationError) as caught:
+        DjangoSchema(query=_Probe, resource_policy=object.__new__(_UnreadablePolicy))
+
+    assert "max_list_rows" in str(caught.value)
+
+
+def test_the_armed_budget_is_not_the_policy_the_caller_armed_it_with():
+    """``begin_resource_budget`` snapshots, so the caller keeps no handle on the ceiling."""
+    policy = ResourcePolicy(max_list_rows=2)
+    context: dict[str, Any] = {}
+    token = begin_resource_budget(context, policy)
+    try:
+        policy.__dict__["max_list_rows"] = 999
+        info = SimpleNamespace(context=context)
+
+        assert policy_from_info(info).max_list_rows == 2
+    finally:
+        end_resource_budget(token)
+
+
+def test_the_published_mirror_is_not_the_object_any_bound_is_read_from():
+    """The mirror is documented for consumers to read, so it cannot be the authority."""
+    context: dict[str, Any] = {}
+    token = begin_resource_budget(context, ResourcePolicy(max_list_rows=2))
+    try:
+        context[DST_RESOURCE_POLICY].__dict__["max_list_rows"] = 999
+        info = SimpleNamespace(context=context)
+
+        assert policy_from_info(info).max_list_rows == 2
+    finally:
+        end_resource_budget(token)
+
+
+def test_policy_from_info_answers_twice_with_two_objects():
+    """Every read is a duplicate, so one reader's write is invisible to the next."""
+    context: dict[str, Any] = {}
+    token = begin_resource_budget(context, ResourcePolicy(max_list_rows=2))
+    try:
+        info = SimpleNamespace(context=context)
+        first = policy_from_info(info)
+        first.__dict__["max_list_rows"] = 999
+
+        assert policy_from_info(info).max_list_rows == 2
+        assert policy_from_info(info) is not first
+    finally:
+        end_resource_budget(token)
+
+
+def test_the_package_default_is_never_the_object_a_miss_hands_back():
+    """The fail-closed baseline is process-lived; handing it out would let one write widen it."""
+    info = SimpleNamespace(context={})
+
+    answered = policy_from_info(info)
+    answered.__dict__["max_list_rows"] = 999
+
+    assert answered is not DEFAULT_RESOURCE_POLICY
+    assert policy_from_info(info).max_list_rows == DEFAULT_RESOURCE_POLICY.max_list_rows
+
+
+def test_a_mirror_holding_a_policy_subclass_reads_back_as_the_package_default():
+    """The unarmed fallback admits the exact class only; a subclass's reads are not ours."""
+    info = SimpleNamespace(context={DST_RESOURCE_POLICY: _LiesAfterValidating()})
+
+    assert policy_from_info(info) == DEFAULT_RESOURCE_POLICY
+
+
+def test_the_pre_parse_scan_charges_an_operation_the_request_did_not_name():
+    """``max_document_tokens`` is a request-level bound, and says so.
+
+    It exists to bound the parse; the parse reads the whole document whatever
+    ``operationName`` says, and no operation is identified until it has finished.
+    Charging the named operation alone would name a cost nobody pays and leave the
+    one somebody does pay unbounded.
+    """
+    document = "query Small { echo } query Big { echo echo echo echo }"
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        scan_document_text(ResourcePolicy(max_document_tokens=6), document)
+
+    assert caught.value.bound == "max_document_tokens"
+
+
+def test_the_post_parse_walk_charges_only_the_operation_the_request_named():
+    """Its counterpart: the bounds charged after the parse do filter by name."""
+    document = "query Small { echo } query Big { echo echo echo echo }"
+    charge_document(
+        ResourcePolicy(max_selections=1),
+        DjangoSchema(query=_Probe)._schema,
+        parse(document),
+        {},
+        "Small",
+    )

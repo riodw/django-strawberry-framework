@@ -75,7 +75,14 @@ class ErrorPolicy:
         error's ``extensions`` map. Configurable because a deployment with an
         existing error contract may already have a name for this field.
 
-    Frozen, so a resolver cannot widen its own request's policy.
+    A resolver cannot turn masking off for its own request, or for any later
+    one, because the object reached through ``schema.error_policy`` is a copy
+    (``schema.py::DjangoSchema.error_policy``) and the resolved policy itself is
+    reachable from no consumer-visible name. Frozen is not what establishes
+    that: it rejects ``setattr`` and admits ``policy.__dict__["enabled"] =
+    False``, and this object outlives the request, so the stored one being in
+    reach would have meant one write putting raw exception text on the wire for
+    every request the process served afterwards.
     """
 
     enabled: bool = True

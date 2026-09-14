@@ -16,7 +16,7 @@ from django_strawberry_framework.error_policy import ErrorPolicy
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.error_policy import DjangoErrorPolicyExtension
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
-from django_strawberry_framework.resource_policy import ResourcePolicy
+from django_strawberry_framework.resource_policy import ResourcePolicy, bounded_rows
 from django_strawberry_framework.schema import (
     DjangoMutationExecutionContext,
     DjangoSchema,
@@ -77,14 +77,17 @@ def test_schema_init_with_none_execution_context_class_falls_back():
 
 
 def test_with_resource_policy_extension_shapes():
-    assert _with_resource_policy_extension([]) == [DjangoResourcePolicyExtension]
-    assert _with_resource_policy_extension(None) == [DjangoResourcePolicyExtension]
-    assert _with_resource_policy_extension([DjangoResourcePolicyExtension]) == [
-        DjangoResourcePolicyExtension,
-    ]
-    assert _with_resource_policy_extension([CustomResourcePolicyExtension]) == [
-        CustomResourcePolicyExtension,
-    ]
+    """The append and its flag: the flag says whether the automatic entry was added."""
+    assert _with_resource_policy_extension([]) == ([DjangoResourcePolicyExtension], True)
+    assert _with_resource_policy_extension(None) == ([DjangoResourcePolicyExtension], True)
+    assert _with_resource_policy_extension([DjangoResourcePolicyExtension]) == (
+        [DjangoResourcePolicyExtension],
+        False,
+    )
+    assert _with_resource_policy_extension([CustomResourcePolicyExtension]) == (
+        [CustomResourcePolicyExtension],
+        False,
+    )
 
 
 def test_with_error_policy_extension_shapes():
@@ -403,3 +406,106 @@ async def test_execute_mutation_field_async_exception_rolls_back():
         pytest.raises(RuntimeError, match="async field crash"),
     ):
         await ctx.execute_field(ctx.schema.mutation_type, None, [MagicMock()], None)
+
+
+def test_get_extensions_with_a_custom_resource_factory_dedups():
+    """A factory-produced resource extension is the operation's one armed budget.
+
+    A factory cannot be identified at construction without calling it, so the
+    automatic entry is appended beside it and dropped here. Left in, it would arm
+    last and answer every resolve-time bound with the package defaults while the
+    consumer's own policy went on charging the document.
+    """
+
+    def resource_factory():
+        return CustomResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+
+    schema = DjangoSchema(query=DummyQuery, extensions=[resource_factory])
+    resolved = schema.get_extensions(sync=True)
+    resource_exts = [e for e in resolved if isinstance(e, DjangoResourcePolicyExtension)]
+
+    assert len(resource_exts) == 1
+    assert isinstance(resource_exts[0], CustomResourcePolicyExtension)
+
+
+def test_a_factory_configured_bound_is_the_one_a_request_is_held_to():
+    """The behavioral half: a second armed budget answers the resolve-time bounds.
+
+    The automatic entry is appended after the consumer's, so it arms last and
+    ``policy_from_info`` answers with the package defaults - the consumer's own
+    policy goes on charging the document while the rows it meant to bound are
+    unbounded.
+    """
+
+    @strawberry.type
+    class _RowQuery:
+        @strawberry.field
+        def rows(self, info: strawberry.Info) -> list[str]:
+            return list(bounded_rows(["a", "b", "c"], info, None))
+
+    def resource_factory():
+        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+
+    schema = DjangoSchema(query=_RowQuery, extensions=[resource_factory])
+    result = schema.execute_sync("{ rows }")
+
+    assert result.errors is None, result.errors
+    assert result.data == {"rows": ["a"]}
+
+
+def test_get_extensions_leaves_an_unrelated_factory_its_automatic_resource_extension():
+    """The control: a factory producing something else still gets the package's own entry."""
+
+    def unrelated_factory():
+        return DjangoErrorPolicyExtension()
+
+    schema = DjangoSchema(query=DummyQuery, extensions=[unrelated_factory])
+    resolved = schema.get_extensions(sync=True)
+    resource_exts = [e for e in resolved if isinstance(e, DjangoResourcePolicyExtension)]
+
+    assert len(resource_exts) == 1
+
+
+def test_get_extensions_keeps_an_explicit_resource_class_alone():
+    """A class entry suppresses the append at construction, so nothing is dropped here."""
+    schema = DjangoSchema(query=DummyQuery, extensions=[CustomResourcePolicyExtension])
+    resolved = schema.get_extensions(sync=True)
+    resource_exts = [e for e in resolved if isinstance(e, DjangoResourcePolicyExtension)]
+
+    assert len(resource_exts) == 1
+    assert isinstance(resource_exts[0], CustomResourcePolicyExtension)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "policy"),
+    [
+        ("resource_policy", ResourcePolicy(max_list_rows=7)),
+        ("error_policy", ErrorPolicy(message="masked")),
+    ],
+    ids=["resource", "error"],
+)
+def test_a_schema_policy_attribute_answers_with_a_copy(attribute, policy):
+    """``info.schema`` reaches this attribute from every resolver in every request.
+
+    A frozen dataclass refuses ``setattr`` and accepts ``policy.__dict__[name] =
+    value``, and the resolved object outlives the request, so handing the stored
+    one out would make an attribute documented as configuration into a write seam
+    onto every later request's authority.
+    """
+    schema = DjangoSchema(query=DummyQuery, **{attribute: policy})
+
+    first = getattr(schema, attribute)
+    second = getattr(schema, attribute)
+
+    assert first == second
+    assert first is not second
+    assert first is not policy
+
+
+def test_widening_a_schema_policy_copy_leaves_the_schemas_own_bound():
+    """The write lands on the reader's duplicate and nowhere a bound is read from."""
+    schema = DjangoSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=7))
+
+    schema.resource_policy.__dict__["max_list_rows"] = 999
+
+    assert schema.resource_policy.max_list_rows == 7

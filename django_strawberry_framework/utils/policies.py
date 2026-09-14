@@ -3,11 +3,11 @@
 ``resource_policy.py::resolve_resource_policy`` and ``error_policy.py::
 resolve_error_policy`` are deliberately the same shape - a consumer who has
 learned how one schema-construction policy is configured has learned both -
-so that shape lives here once: an explicit policy instance passes through, an
-absent one falls back to the configured setting and then to the fail-closed
-package default, a non-mapping override is rejected, unknown keys are rejected
-naming the valid vocabulary, and a mapping is applied over the dataclass
-defaults. A mapping override is MATERIALIZED ONCE into a plain ``dict`` before
+so that shape lives here once: an explicit policy instance is canonicalized and
+used, an absent one falls back to the configured setting and then to the
+fail-closed package default, a non-mapping override is rejected, unknown keys
+are rejected naming the valid vocabulary, and a mapping is applied over the
+dataclass defaults. A mapping override is MATERIALIZED ONCE into a plain ``dict`` before
 anything reads it, so validation and construction see the same keys even when
 the mapping is stateful, one-shot, or otherwise hostile - a Mapping that
 diverges between passes, yields an unhashable key, or raises mid-iteration is
@@ -25,9 +25,66 @@ from typing import Any, TypeVar
 
 from ..exceptions import ConfigurationError, describe_value
 
-__all__ = ("resolve_policy",)
+__all__ = ("canonical_policy", "copy_policy", "resolve_policy")
 
 PolicyT = TypeVar("PolicyT")
+
+
+def copy_policy(policy: PolicyT) -> PolicyT:
+    """Return a private duplicate of ``policy`` that shares no state with it.
+
+    Every surface that hands a policy OUT gives out one of these rather than the
+    object an enforcement seam reads: the schema attribute a consumer holds, the
+    request-context mirror, and ``resource_policy.py::policy_from_info``. Being a
+    frozen dataclass rejects ``setattr``, which guards against the accident; it
+    does not stop ``instance.__dict__[name] = value`` or ``object.__setattr__``,
+    so frozen is not by itself an authority boundary and is not what keeps a
+    resolver from widening its own request. What keeps it is that the object a
+    resolver can reach is a duplicate - writing it changes the writer's own copy
+    and nothing any bound is read from - and that the authority is reachable
+    from no consumer-visible name at all.
+
+    Built by field-dict copy rather than by calling the constructor, because the
+    source validated itself when it was built and this runs on the path a
+    collection resolver takes: re-validating every bound per read would put a
+    schema-construction check on a per-field seam.
+    """
+    duplicate = object.__new__(type(policy))
+    duplicate.__dict__.update(policy.__dict__)
+    return duplicate
+
+
+def canonical_policy(policy: Any, *, policy_cls: type[PolicyT], display_name: str) -> PolicyT:
+    """Return ``policy`` as an EXACT ``policy_cls``, reading a subclass out once.
+
+    ``isinstance`` admits a subclass, and a subclass's field reads are consumer
+    code. A ``__getattribute__`` or property that answers honestly while the
+    constructor validates and differently afterwards passes every check the class
+    performs on itself and then hands an enforcement seam whatever it likes - an
+    ``int`` subclass whose ``__gt__`` raises turns a bound comparison into a raw
+    error out of a collection resolver. ``__post_init__`` is a statement about
+    one past read, never a property of the object.
+
+    So a subclass is read out ONCE, here, and those values build an exact
+    instance that validates them on the ordinary terms; the subclass is then
+    discarded and no seam downstream ever calls it again. A read that raises is a
+    typed ``ConfigurationError`` rather than a raw error, because this runs at
+    schema construction and a policy that cannot be read is a deployment fault.
+    """
+    if type(policy) is policy_cls:
+        return policy
+    values: dict[str, Any] = {}
+    reading = ""
+    try:
+        for field in fields(policy_cls):
+            reading = field.name
+            values[reading] = getattr(policy, reading)
+    except Exception as exc:
+        raise ConfigurationError(
+            f"The {display_name} could not be read: "
+            f"{policy_cls.__name__}.{reading} raised on access.",
+        ) from exc
+    return policy_cls(**values)
 
 
 def _article(name: str) -> str:
@@ -46,9 +103,12 @@ def resolve_policy(
 ) -> PolicyT:
     """Normalize one deployment policy the way every schema-construction policy resolves.
 
-    Precedence, highest first: the ``explicit`` argument (a ``policy_cls``
-    instance passes through as-is - it has already validated itself), the
-    deployment value read through ``read_setting``, and ``default``.
+    Precedence, highest first: the ``explicit`` argument, the deployment value
+    read through ``read_setting``, and ``default``. An instance from either
+    override slot is admitted without re-validating its bounds - it validated
+    them at construction - but it is put through :func:`canonical_policy` first,
+    so what the schema stores is an exact ``policy_cls`` whose every field read
+    is the package's own.
 
     ``display_name`` is the human name used in messages ("resource policy") and
     ``unit`` is what one override key is called there ("bound" / "option"); the
@@ -56,7 +116,7 @@ def resolve_policy(
     resolvers cannot drift apart in text any more than in behavior.
     """
     if isinstance(explicit, policy_cls):
-        return explicit
+        return canonical_policy(explicit, policy_cls=policy_cls, display_name=display_name)
     overrides = explicit if explicit is not None else read_setting()
     if overrides is None:
         return default
@@ -66,7 +126,7 @@ def resolve_policy(
         # are one ladder with two spellings, so an instance from either passes
         # through unchanged. (Rejecting it here made the typed message name the
         # policy class as the received type while claiming it must be one.)
-        return overrides
+        return canonical_policy(overrides, policy_cls=policy_cls, display_name=display_name)
     if not isinstance(overrides, Mapping):
         raise ConfigurationError(
             f"The {display_name} must be {_article(policy_cls.__name__)} "

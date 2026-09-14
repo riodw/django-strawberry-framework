@@ -42,9 +42,10 @@ from django_strawberry_framework.resource_policy import (
     DST_RESOURCE_POLICY,
     RESOURCE_LIMIT_ERROR_CODE,
     ResourcePolicy,
+    policy_from_info,
 )
 from django_strawberry_framework.schema import DjangoSchema
-from django_strawberry_framework.utils.context import stash_on_context
+from django_strawberry_framework.utils.context import get_context_value, stash_on_context
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 _CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
@@ -1355,3 +1356,64 @@ async def test_async_child_delegated_impure_ordering_is_rejected(monkeypatch):
     assert payload["data"] is None
     assert "BranchOrder._normalize_input is not pure" in payload["errors"][0]["message"]
     assert calls["n"] == 2
+
+
+def _async_policy_from_info_object(info):
+    """The policy the package's own bound readers get."""
+    return policy_from_info(info)
+
+
+def _async_schema_attribute_object(info):
+    """The resolved schema policy, which ``info.schema`` puts in every resolver's reach."""
+    return info.schema.resource_policy
+
+
+def _async_context_mirror_object(info):
+    """The published mirror, which the spec invites a consumer to read."""
+    return get_context_value(info.context, DST_RESOURCE_POLICY)
+
+
+_ASYNC_REACHABLE_POLICIES = (
+    _async_policy_from_info_object,
+    _async_schema_attribute_object,
+    _async_context_mirror_object,
+)
+_ASYNC_REACHABLE_POLICY_IDS = ("policy-from-info", "schema-attribute", "context-mirror")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("reach", _ASYNC_REACHABLE_POLICIES, ids=_ASYNC_REACHABLE_POLICY_IDS)
+async def test_async_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_it_can_reach(reach):
+    """The object-write twin of the context-write row, on the far side of an ``await``.
+
+    The write happens after a real suspension point, so the bounded field answers
+    it from whatever task-local budget the hand-off restored rather than from the
+    one the writing resolver last saw.
+    """
+    for i in range(5):
+        await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
+
+    holder: dict[str, Any] = {"awaited": False}
+
+    async def _widen(root, info: strawberry.Info) -> str:
+        await asyncio.sleep(0)
+        holder["awaited"] = True
+        reach(info).__dict__["max_list_rows"] = 999
+        return "written"
+
+    @strawberry.type
+    class _WideningQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+        widen: str = strawberry.field(resolver=_widen)
+
+    schema = DjangoSchema(
+        query=_WideningQuery,
+        config=strawberry_config(),
+        resource_policy={"max_list_rows": 2},
+    )
+
+    payload = await _post_async(schema, "{ widen branches { name } }")
+
+    assert holder["awaited"] is True, "the resolver never reached its await"
+    assert "errors" not in payload, payload
+    assert [row["name"] for row in payload["data"]["branches"]] == ["B0", "B1"]

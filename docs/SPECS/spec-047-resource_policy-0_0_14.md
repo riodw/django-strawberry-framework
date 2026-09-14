@@ -359,6 +359,26 @@ properties follow, and each is load-bearing:
   `size`, a `first` / `last` page bound supplied through a variable, any amount charged
   against a bound — stated once as `resource_policy.py::_is_builtin_number`.
 
+Frozen is what makes the first two of those true, and it is not what makes the third true.
+A frozen dataclass rejects `setattr`; it admits `policy.__dict__[bound] = wider` and
+`object.__setattr__`, so freezing is an accident guard and never an authority boundary. What
+holds the bound is that no consumer-visible name reaches the object a bound is read from:
+the resolved policy lives behind `schema.py::DjangoSchema.resource_policy`, which answers
+every read with a copy; the operation's own budget is a private snapshot taken at the arm
+point; the published mirror is a third object; and `policy_from_info` returns a copy of the
+snapshot rather than the snapshot. A resolver may write any of those freely, and writes its
+own duplicate every time. `error_policy.py::ErrorPolicy` is held on exactly the same terms —
+the same shape, the same process-lived object, and a write to it would put raw exception text
+on the wire rather than widen a row count.
+
+The policy object a schema stores is also held to the EXACT class. `isinstance` admits a
+subclass, and a subclass's field reads are consumer code that `__post_init__` cannot speak
+for: a read that validates honestly at construction and answers differently afterwards
+passes every check the class performs on itself and then hands a bound whatever it likes. So
+a subclass is read out once at schema construction and an exact instance is built from those
+values (`utils/policies.py::canonical_policy`), which is the object-level statement of the
+same rule the bounds themselves follow below.
+
 The integer-bound domain is the EXACT built-in type, `type(value) is int`. That is what
 rejects `bool` — `isinstance(True, int)` is `True`, so a bound accepting `True` would
 silently become `1`, a bound so tight it presents as an unrelated bug — and equally what
@@ -1044,6 +1064,21 @@ Both belong to the surface rather than to a slice; neither is a root package exp
 - **A hostile or colliding write to either published key** cannot widen the request: the
   policy key is not consulted at all while a budget is armed, and the deadline key is
   consulted only when it names an EARLIER instant than the one the operation started with.
+- **A write to a policy OBJECT a resolver holds** changes only that resolver's own copy.
+  Every policy a consumer can name is a duplicate — `schema.resource_policy`,
+  `schema.error_policy`, the `dst_resource_policy` mirror, and whatever `policy_from_info`
+  returned — so the write lands nowhere a bound is read from and nowhere a later request on
+  the process will look.
+- **A `ResourcePolicy` or `ErrorPolicy` SUBCLASS** supplied to a schema is read out once and
+  replaced by an exact instance built from those values. A read that raises during that pass
+  is a `ConfigurationError` at schema construction, not a raw error out of a resolver.
+- **A consumer-installed resource extension leaves exactly one armed.** A class or an
+  instance in `extensions=` suppresses the automatic entry at construction; a zero-argument
+  FACTORY cannot be identified without calling it, so the automatic entry is added and
+  `schema.py::DjangoSchema.get_extensions` drops it once a resolved instance can be seen.
+  Two armed budgets would not be a cosmetic duplicate: the automatic entry is appended after
+  the consumer's, arms last, and would answer every resolve-time bound with the package
+  defaults while the consumer's own policy went on charging the document.
 - **An upload that cannot report its size** is *rejected*, not charged as zero bytes. Six
   spellings of unmeasurable, all answered the same way: the attribute is absent, it is
   `None`, it is non-integral, it is negative, it is `True`, or **reading it raises**.
@@ -1077,8 +1112,16 @@ Both belong to the surface rather than to a slice; neither is a root package exp
   rather than a typed resource rejection — a bound the package does not own is not a bound
   it promises.
 - **A subscription or mutation against a schema that defines no such root** is skipped.
-- **Only the named operation is charged** when `operationName` is supplied; a document
-  carrying several operations does not pay for the ones it did not run.
+- **Only the named operation is charged** when `operationName` is supplied, for every
+  bound charged after the parse — `max_selections`, `max_aliases`, `max_collection_cost`
+  and every value bound. A document carrying several operations does not pay those for the
+  ones it did not run.
+- **`max_document_tokens` and `max_depth` are request-level bounds**, charged over the whole
+  document text including operations the request did not name. They exist to bound the parse;
+  the parse reads the whole document whatever `operationName` says, and no operation is
+  identified until it has finished. A client sending one persisted document carrying several
+  operations is charged for the document it sent, so the ceiling a deployment configures for
+  these two is a ceiling on a request, not on an operation.
 - **The example project keeps both relation shapes live**: `CategoryType.items`,
   `ItemType.entries` and `BookType.genres` / `GenreType.books` are explicit `"both"`
   opt-ins so the bounded raw-list surface stays covered, while `CategoryType.properties` is

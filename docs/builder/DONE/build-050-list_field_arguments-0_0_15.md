@@ -3,7 +3,15 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: implementation complete through the ninth review's request-budget and numeric-domain remediation (the operation's policy and deadline are armed for the operation rather than read back from the consumer-writable request context, which may now narrow the deadline and nothing else; a non-finite deadline is refused rather than read as a distant future; every policy bound and field-declared `max_rows` is an exact built-in, so no consumer dunder reaches the derived deadline or a rendered rejection; each bundled live claim was given its own node id). The final gate is GREEN on one tree - default 7849, sharded 7866, both at 100.00% package coverage, focused floor 444. Scope, figures and the standing evidence are in `## Final gate record` below.
+Status: the final gate is GREEN at HEAD `207c7328`, which carries the tenth round's
+remediation - default 7868, sharded 7885, both at 100.00% package coverage, focused floor
+463. Those are the only gate figures this plan states; `## Final gate record` below owns the
+scope, the commands and the standing evidence. Work landed on descendants of that tree is not
+covered by it: the eleventh round's policy-authority remediation (the object every bound is
+read from is no longer reachable from any consumer-visible name, a policy subclass is
+canonicalized at schema construction, the resource-policy extension deduplicates a consumer
+factory, and the two pre-parse document bounds are stated as request-level) is implemented and
+ungated at the time of writing.
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).
@@ -89,7 +97,7 @@ Status: implementation complete through the ninth review's request-budget and nu
 close on the maintainer's instruction; this plan is the only surviving artifact of the cycle.
 All seven are readable at commit `63a132be` (`git show 63a132be:docs/builder/<name>`).
 
-The nine rounds of finding-by-finding remediation, the superseded command tables and the
+The ten rounds of finding-by-finding remediation, the superseded command tables and the
 gate narratives are NOT restated here: every fix they describe is in the commit that landed
 it, in one of the spec's five homes, or in the code's own docstrings. What follows is what
 nothing else in the tree records.

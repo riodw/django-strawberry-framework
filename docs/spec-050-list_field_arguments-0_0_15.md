@@ -1854,7 +1854,13 @@ the shipped SDL.
     would read back empty and fall open to the context. The deadline row carries a second
     spelling of the same request: a `float` subclass written as an instant already past, which
     a narrowing rule admits and which then answers every later reading of the clock as time
-    remaining.
+    remaining. Nor is the budget reachable from any policy OBJECT the request can
+    name: live sync and async rows have a sibling field write `max_list_rows` on each of
+    `policy_from_info`'s answer, `info.schema.resource_policy` and the `dst_resource_policy`
+    mirror, and require the bounded field to answer with the operation's ceiling - and a second
+    sync row requires the request AFTER it to answer with the same ceiling, because these are
+    process-lived objects and a write that stuck would widen every later request rather than
+    the one that made it.
 33. A policy bound is an exact built-in or it is not a policy. Package-tier rows require a
     typed `ConfigurationError` for an `int` subclass whose comparison is BENIGN - the arm that
     a detonating-subclass test passes without covering, and the one whose value would be stored
@@ -2260,6 +2266,14 @@ structural checks, and link/kanban verification prescribed by
       numeric deadline that is not finite, or that is not an exact built-in number, is refused
       rather than read as a distant future - a subclass answers both the comparison the
       narrowing rule is decided by and the one deciding whether time is up.
+- [ ] No policy object a resolver can name is the object a bound is read from. The schema
+      attributes answer with a copy, the operation's budget is a private snapshot, the
+      published mirror is a third object, and `policy_from_info` returns a copy - so a
+      `__dict__` write on any of them, which a frozen dataclass admits, changes only the
+      writer's own duplicate and nothing a later request reads. A `ResourcePolicy` or
+      `ErrorPolicy` SUBCLASS is read out once at schema construction and replaced by an exact
+      instance, and a consumer factory installing the resource extension leaves exactly one
+      armed budget.
 - [ ] A bound stored on a `ResourcePolicy`, and a field's declared `max_rows`, is an exact
       built-in `int` (or `float` for the deadline); every numeric subclass is refused with a
       typed `ConfigurationError` before any comparison, arithmetic or formatting runs, so no

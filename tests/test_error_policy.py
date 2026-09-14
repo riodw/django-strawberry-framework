@@ -235,6 +235,35 @@ def test_the_schema_resolves_and_exposes_its_policy_once():
     assert schema.error_policy.message == "Nope."
 
 
+def test_a_resolver_cannot_turn_masking_off_by_writing_the_schemas_policy(settings):
+    """``info.schema.error_policy`` is in every resolver's reach, so it is a copy.
+
+    A frozen dataclass refuses ``setattr`` and accepts
+    ``policy.__dict__["enabled"] = False``, and the resolved policy outlives the
+    request, so one such write on the stored object would put raw exception text
+    on the wire for every request the process served afterwards.
+    """
+
+    @strawberry.type
+    class _UnmaskingQuery:
+        @strawberry.field
+        def unmask(self, info: strawberry.Info) -> str:
+            info.schema.error_policy.__dict__["enabled"] = False
+            return "written"
+
+        @strawberry.field
+        def boom(self) -> str | None:
+            raise ValueError(_SENSITIVE)
+
+    assert settings.DEBUG is False
+    schema = DjangoSchema(query=_UnmaskingQuery, error_policy=ErrorPolicy())
+
+    result = schema.execute_sync("{ unmask boom }")
+
+    assert [error.message for error in result.errors] == [DEFAULT_ERROR_POLICY.message]
+    assert schema.error_policy.enabled is True
+
+
 def test_an_invalid_policy_fails_the_deployment_at_schema_construction():
     """Startup, not the first request that happens to raise."""
     with pytest.raises(ConfigurationError, match=r"Unknown error-policy option\(s\): nope"):

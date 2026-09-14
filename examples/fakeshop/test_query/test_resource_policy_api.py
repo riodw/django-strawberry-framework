@@ -275,6 +275,46 @@ def test_document_over_the_token_bound_is_rejected():
     assert extensions["charged"] == MAX_TOKENS + 1
 
 
+def _post_named(mount, query, operation_name):
+    """POST a document with an ``operationName``, which the shared client cannot express.
+
+    The raw-envelope exemption (spec-043): the subject IS the wire field, so the
+    body is hand-built rather than replaced by the client's body-builder.
+    """
+    response = Client().post(
+        mount,
+        data=json.dumps({"query": query, "operationName": operation_name}),
+        content_type="application/json",
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+#: One persisted document carrying a small operation and an oversized one. The
+#: small operation alone is comfortably under ``MAX_TOKENS``.
+_TWO_OPERATIONS = "query Small { __typename }\nquery Big { %s }" % " ".join(
+    f"a{index}: __typename" for index in range(MAX_TOKENS)
+)
+
+
+def test_the_token_bound_is_charged_over_the_whole_request_document():
+    """``max_document_tokens`` bounds the parse, and the parse reads every operation.
+
+    Naming one operation does not make the rest of the document free: it is
+    lexed, it is parsed, and nothing has identified the selected operation until
+    that parse has finished. The bound a deployment configures here is a ceiling
+    on a request, not on an operation.
+    """
+    extensions = _rejection(_post_named("/rp-tokens/", _TWO_OPERATIONS, "Small"))
+    assert extensions["bound"] == "max_document_tokens"
+
+
+def test_the_named_operation_alone_is_under_the_same_token_bound():
+    """The control: the document, minus the operation it did not name, executes."""
+    payload = _post_named("/rp-tokens/", "query Small { __typename }", "Small")
+    assert payload["data"] == {"__typename": "Query"}
+
+
 def test_a_malformed_document_keeps_the_parsers_own_syntax_diagnostic():
     """A document the lexer cannot finish comes back as a syntax error, not a resource rejection.
 

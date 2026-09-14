@@ -459,7 +459,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
-├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
+├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
@@ -696,7 +696,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
-├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
+├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.

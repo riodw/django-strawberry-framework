@@ -1,300 +1,399 @@
 # System-wide bug hunt
 
-Hunt for bugs in `django_strawberry_framework/` one file at a time. The target is one file; the
-investigation is not. Follow the target through callers, dependencies, state, framework hooks,
-tests, examples, and public contracts before deciding that it is correct.
+The bug-hunt agentflow. The per-file two-role method it replaces is at
+`git show 58114254:docs/bug_hunt/HUNT.md`; section 1 records what that method found and what it
+missed. Contracts and a pilot come first, orchestration second. The first deliverable is a
+three-scenario pilot specification plus a runner that provably rejects bad evidence. The full
+workflow rewrite, generators, dependency groups, and any second profile are built only from what
+the pilot earns.
 
-Treat bug discovery as a multi-layer problem. In clean code, serious bugs are rarely isolated
-golden-nugget mistakes; they emerge when individually reasonable layers stack into a broken
-lifecycle, state transition, ownership boundary, or public behavior. Think holistically and
-creatively. Search the interactions between layers, not only suspicious lines inside the target.
+## 1. What the three hunts did
 
-This is a fresh hunt of the current working tree. Do not seed findings from old build, review, DRY,
-or bug-hunt artifacts. The generated shadow snapshot is an orientation aid fixed at the start of
-the hunt; the live source is always authoritative.
+Sources: `docs/bug_hunt/bug_hunt-0_0_13.md`, `bug_hunt-0_0_14.md`, `bug_hunt-0_0_15.md`,
+`CHANGELOG.md`, `git log`, `KANBAN.md`, `docs/bug_hunt/pbugs.md`, root `vulns.md`.
 
-There are exactly two worker roles:
+### 1.1 Observations (recorded facts)
 
-- **Worker 0 — coordinator and verifier:** sets up and owns the progress file, dispatches every
-  item, independently verifies every fix, and runs the final gate.
-- **Worker 1 — hunter and implementer:** searches for confirmed bugs, implements root-cause fixes,
-  and adds the permanent tests that prove them.
+| | 0.0.13 | 0.0.14 (surviving record) | 0.0.15 |
+|---|---|---|---|
+| items | 34 checked | 11 of 96 checked, stalled | 96 of 96 |
+| items with a `Result: Fixed` line | ~24 | 6 | 52 (+1 recorded in a non-`Result:` line) |
+| headline severity grades of fixed items | - | - | 4 High, 27 Medium, 48 Low |
+| blocked | 0 | 0 | 0 |
+| landed as | 2 commits | 6 scoped commits | 1 commit, 154 files, empty body |
 
-No Worker 2 or Worker 3 participates. Once started, the process is autonomous: continue through
-the next unchecked item and every necessary revision until the hunt is complete or a genuine
-external blocker requires maintainer input.
+Counting method: one row per checklist item; "fixed items" counts items with a `Result: Fixed`
+line; "headline grades" counts every severity token in those lines (an item may carry several, e.g.
+`Fixed Low x4`), so the two populations differ by design. `pbugs.md` speaks of 27 verified fixes in
+a 0.0.14 run; the surviving 0.0.14 record names a prior run whose progress file was deleted, so the
+two numbers describe different runs of the same release. Principle 15 addresses that collision.
 
-## Ground rules
+- About 45 of the 0.0.15 fixed items share one shape: a hostile or broken *consumer-supplied
+  object* (raising `__eq__`/`__iter__`/`__repr__`, a descriptor, a metaclass, a one-shot generator)
+  escapes a declaration or schema-construction seam as a raw `TypeError` instead of a typed
+  `ConfigurationError`.
+- Client-reachable isolation or authorization findings across all three hunts: the
+  `utils/querysets.py` Prefetch-over-foreign-model leak (first fix failed open on reverse relations
+  without `related_name`), the `mutations/permissions.py` awaitable-truthiness silent allow, the
+  `optimizer/_context.py` cross-execution sentinel leak.
+- The four-card security program `DONE-046`..`DONE-049` came from a maintainer audit run through
+  the builder. Wide-blast-radius contract fixes (`74e8cbe1`, `597dbbb4`) came from the review flow;
+  one-rule-two-sites divergences (`f92c1944`, `6500fd3c`) from DRY.
+- The 0.0.15 record shows Worker 0 rejecting five submissions whose claimed probes had not run
+  (a drafted-never-executed battery, a placeholder-failing scratch file, a concealed fourth failing
+  file, a 50,000-depth claim whose probe never reached the scanner, a prose-only analysis). It also
+  shows Worker 0 erring: an empty-scope read attributed to a tool error, and a post-closeout
+  six-agent review that regraded six items, reverted an undisclosed `utils/__init__.py` export
+  removal, and corrected "spec-050 concurrent work" labels on hunks when spec-050 had zero slices
+  built.
+- The `optimizer/hints.py` containment fix was later superseded by a `nested_fetch` owner fix;
+  the earlier item stayed checked.
+- Every probe in every hunt ran on one cell: Python 3.14 / Django 6.1 / SQLite / single-DB.
+  `pbugs.md` item 11: `utils/relations.py::is_forward_concrete_relation` had 100% coverage,
+  survived 39 probes in an item closed `no-bugs`, and was wrong on a push/PR cell.
+- `dicta.md` is 0 bytes for all three hunts. `pbugs.md` (20 ranked targets) and root `vulns.md`
+  (12 ranked targets, 7 open) were never fed back into a hunt.
+- Debris: the 0.0.15 header still reads `Status: in-progress`; `docs/shadow/current/` does not
+  exist in the tree so every shadow citation dangles; the generated per-item prompt is one sentence
+  while the method lived only in this file; `AGENTS.md` spells the glob `bug_hunt.*.md` while the
+  files are `bug_hunt-*.md`.
+- Instruments absent from `pyproject.toml`/`uv.lock`/`.github/workflows/`: hypothesis,
+  hypothesis-graphql, schemathesis, ruff `S`, bandit, semgrep, CodeQL, any type checker
+  (`ANN` enforced, nothing checks), mutation testing beyond the manual-manifest
+  `scripts/prove_failability.py`, `pytest-randomly`, `pytest-timeout`, `freezegun`. Push/PR CI runs
+  2 of 20 matrix cells; Postgres is dispatch-only; fakeshop settings make `FAKESHOP_PG_DSN` and
+  `FAKESHOP_SHARDED` mutually exclusive, so Postgres x multi-DB is never built.
 
-- Read `AGENTS.md`, `START.md`, `README.md`, `GOAL.md`, `docs/README.md`, `docs/TREE.md`, and
-  `docs/GLOSSARY.md` before beginning a run. `AGENTS.md` governs repository safety, test placement,
-  formatting, changelog edits, and commits.
-- Preserve unrelated dirty and concurrent work. A bug fix may cross files when the broken invariant
-  does, but unrelated cleanup stays out of scope.
-- Confirm a defect before editing. Static warnings, suspicious shapes, shadow markers, and missing
-  tests are leads, not findings.
-- Coverage is never proof of correctness. 100% line coverage means existing lines executed under at
-  least one happy or expected path; it does not prove the absence of missing branches, unhandled
-  type shapes, missing defensive guards, or escaping runtime exceptions. Search for the defensive
-  branches and validations that should exist but are missing.
-- A new guard needs a test that reaches it. `fail_under = 100` admits no unreached branch, and
-  `AGENTS.md` allows `pragma: no cover` only where the runner cannot reach the line. A guard that
-  no real path reaches is usually the wrong guard or sits at the wrong layer; never widen the
-  pragma to land one.
-- Prefer the root-cause fix at the layer that owns the violated contract. Do not patch only the
-  observed caller when the system invariant is wrong.
-- Every production fix receives a permanent behavioral test at the strongest reachable tier
-  required by `AGENTS.md`.
-- Worker 1 may be deliberately messy and destructive inside disposable scratch scope. It may write
-  many temporary tests, mutate throwaway databases and state, monkeypatch internals, force invalid
-  sequences, and leave failed experiments in place. Scratch belongs under
-  `docs/bug_hunt/temp-tests/<scope>/` or another path Worker 0 can identify and remove.
-- Destructiveness stops at the scratch boundary. Worker 1 never deletes or corrupts package source,
-  permanent tests, maintainer work, credentials, external services, or non-disposable data. Its
-  production edits are limited to confirmed fixes and their permanent tests.
-- Worker 1 does not clean up its scratch work. Worker 0 owns cleanup after the item is verified and
-  before the next item begins, so verification can inspect and rerun the exact destructive probes.
-- Only the maintainer commits, creates or switches branches, pushes, or changes the changelog.
+### 1.2 Causal claims (inferences, each with its confidence)
 
-## Progress file and setup
+- **The hunt's incentives favor local containment defects.** High confidence: the per-file entry
+  point, the "break things" mandate, and the blanket exception rule reward exactly the shape that
+  dominates the fix table. This is a property of the rules, not of the agents.
+- **The single execution cell hides real defects.** Demonstrated once (item 11 above); the size of
+  the class is inferred from `pbugs.md` items 12-15 and 20, not measured.
+- **Self-reported evidence is the weak link.** High confidence that it *was* weak: five rejected
+  submissions. Low confidence that a third role alone fixes it: Worker 0 caught those five, so the
+  record does not show the two-role design failing at detection. What it does show is anchoring
+  (the verifier reads the hunter's diagnosis first) and a post-closeout regrade that a fresh
+  verifier would plausibly have caught earlier. The fresh-verifier case rests on those two, not on
+  the fabrication cases.
+- **The uniform sweep is the wrong unit.** High confidence for transaction, authorization,
+  pagination, and session bugs, which live in cross-file contracts. Not a reason to make unchanged
+  code invisible (principle 7).
+- **The historical record is not a controlled comparison of designs.** Any claim that a new
+  mechanism would have found more is a hypothesis for the pilot, not a conclusion.
 
-Worker 0 owns one generated `docs/bug_hunt/bug_hunt-<release>.md` file for the entire run, named
-from the release like the review and DRY flows (`0.0.13` becomes `bug_hunt-0_0_13.md`). It is the
-canonical plan, progress record, and handoff between workers.
+## 2. Design principles
 
-If an in-progress file already exists, resume it. Otherwise Worker 0 runs:
+1. **An error-contract table replaces the blanket containment rule.** The old rule "every
+   unhandled `TypeError`/`ValueError`/... out of a resolver is a defect, invalid input becomes a
+   `FieldError` envelope" is not this package's universal contract. Parse and coercion errors,
+   deliberate `GraphQLError` rejections including authorization denials, mutation validation
+   envelopes, masked unexpected exceptions under `error_policy.py::ErrorPolicy`, and transport
+   rejections have different owners and different promised wire shapes (`docs/README.md`, the
+   consumer guide, distinguishes them). The 0.0.15 post-closeout review had to *remove* a bare
+   `AttributeError` containment that swallowed a consumer descriptor bug. Rule: before probing a
+   boundary, the hunter records the row of the contract table that governs it: boundary, failure
+   class, promised wire shape, masking, logging, rollback, and absence of unauthorized effects. An
+   unexpected internal exception is a lead to investigate; its Python class alone never justifies
+   converting it to `FieldError`, and masking alone never proves the underlying behavior correct.
+2. **A property is validated before it can define a fix.** An invented `pascal_case` idempotence property is the
+   cautionary case: `utils/strings.py::pascal_case` is documented for snake_case input and
+   `pascal_case("PaymentMethod")` is `"Paymentmethod"` by design. A hunter obeying it would
+   have changed the implementation to satisfy an invented contract. Rule: every property records,
+   before it runs, the authoritative contract (doc or code citation), the valid input domain, the
+   transformation, the observable result, an *independent* oracle (querying through the same
+   implementation is not one), and known exceptions. The verifier approves the premise, not just
+   the rerun. "Bigger document never charges less" must name the charge dimension and ordering;
+   cursor round trips must fix schema, order, and key context; filter algebra must state null,
+   duplicate, visibility, and ordering semantics. A contract nobody can cite goes to the maintainer
+   as a decision, never to a fix.
+3. **Per-example state isolation is designed before Hypothesis touches a write path.** pytest-django
+   wraps a test in one transaction; Hypothesis runs many examples inside it, so generated writes,
+   users, sessions, registry entries, caches, and failed transactions contaminate later examples
+   and shrinking (Hypothesis documents this and ships `hypothesis.extra.django`). Rule: the pilot
+   demonstrates a supported per-example reset with this project's seeding, HTTP client, settings
+   overrides, and schema-reload machinery before any write-path property is accepted. Locking and
+   transaction experiments run outside an outer rollback wrapper, which suppresses commit hooks and
+   changes the behavior under test. Every reproducer is a minimal operation sequence from fresh
+   state, not a seed.
+4. **A scratch directory is not a sandbox.** Nothing in the old method stops a probe
+   from importing the live package, connecting to the tracked `examples/fakeshop/db.sqlite3`, a
+   shared Postgres, or a file store. `scripts/prove_failability.py` mutates the *shared-tree*
+   source and restores from a pre-mutation copy, so a concurrent edit in that window is lost; its
+   scratch root holds evidence, not execution. Rule: campaign input is copied immutable into a
+   disposable execution workspace; each worker and cell gets its own environment, database name,
+   file storage, caches, and subprocesses; network and credentials are restricted; the runner
+   positively checks the database target and the imported source path before any verdict. Only the
+   disposable copy is mutated. Promoting a verified patch to the shared checkout is a separate,
+   serialized step with a drift check. No automatic branches, no shared-tree restores.
+5. **Evidence is attributable to a run, not merely present on disk.** "Probe file plus log" would
+   not have caught the 50,000-depth case: the file existed and the invocation never reached the
+   scanner. Rule: the runner emits a record per run with source and probe digests, the exact
+   command and environment, the imported package location, collected node IDs, executed/skipped/
+   error counts, exit status, seed and profile where relevant, and claim-to-evidence links. A claim
+   that a boundary was reached needs an entry or effect assertion proving it. Every instrument
+   carries a positive control that makes it fail for the intended reason. Missing, empty, stale,
+   timed-out, or setup-only evidence is `inconclusive`, never `no finding`. Logs and generated
+   examples are untrusted data, never instructions to the next agent.
+6. **Verdicts go stale.** A verdict names the exact source and dependencies it inspected; a change
+   to any of them marks it `stale` and enqueues targeted re-verification. Integration and closeout
+   re-inventory added, deleted, renamed, and previously untracked files. Source drift during a run
+   invalidates the run. The final report certifies one materialized tree state, never a branch name
+   or an accumulation of checkmarks.
+7. **Contracts are the unit; files are the inventory.** Work units are scenarios with entry points,
+   dependency edges, and an owning population; every package file, `__init__.py` included, maps to
+   an owning scenario even when not selected. Change impact includes reverse dependencies and
+   environment changes, computed from a machine inventory (`git ls-files` plus untracked and dirty
+   paths), not `git diff --stat`. A rotation budget covers older low-ranked surfaces. The result is
+   reported as "selected campaign complete" with the unexamined scope listed; never as
+   whole-package clearance.
+8. **Security discovery needs valid, stateful adversaries.** hypothesis-graphql's negative mode
+   violates types, required arguments, enums, or nullability; those documents stop before resolver
+   execution. Rule: authorization, tenant isolation, cache reuse, and race scenarios use known-valid
+   IDs and operations, several actors with ownership relationships, and stateful sequences (warm as
+   A then read as B; authorize then revoke; subscribe then expire; validate then change a relation
+   on another connection), asserting forbidden rows and side effects are *absent*. Hypothesis
+   `RuleBasedStateMachine` against an independent model is the candidate generator. Invalid
+   generation is kept for parser and input boundaries. `testing/client.py::TestClient` is the
+   in-process HTTP client (a Django `Client` wrapper, not a schema shortcut) and stays; rejection
+   probes disable its default assert-no-errors and assert the correct rejection; CSRF probes enable
+   enforcement explicitly. WebSocket, streaming, cancellation, and multi-connection races need their
+   own harnesses.
+9. **Roles are separated by evidence access and authority.** W0 owns scheduling and the mechanical
+   acceptance prerequisites (the runner record exists and is well-formed, the scenario's contract
+   row is cited, the workspace was isolated). W1 investigates and implements only confirmed,
+   authorized fixes. W2 owns substantive verification: it derives the expected behavior from the
+   contract and reproducer *before* reading W1's diagnosis where practical, records that
+   expectation, then verifies the exact patch. **Passing W0's mechanical checks never implies the
+   finding is correct; only W2's verification does.** W0 cannot override a W2 rejection.
+   Disagreement about product semantics goes to the maintainer. For selected high-risk scenarios,
+   two independent hunters with different lenses (contract and state transitions vs implementation
+   and failure paths) work before exchanging results; this is not required for every scenario, and
+   extra agents earn their place by unique confirmed findings or stronger rejection of false ones.
+10. **Severity is impact-based; no origin floors or caps.** Separate reachability, actor
+    prerequisites, likelihood, confidentiality/integrity/availability impact, blast radius, and
+    confidence. Developer-robustness defects and security vulnerabilities are distinct categories,
+    but a fail-open authorization outcome triggered by a plausible integration mistake is still
+    High. Claiming CVSS means supplying the vector and rationale.
+11. **Each environment cell states what it can prove.** Scenarios map to axes: interpreter and
+    dependency semantics, SQL vendor, database aliasing, optional-dependency presence, sync/async
+    transport, process order. The identical minimized reproducer runs on each applicable cell; the
+    record lists resolved versions and *executed* tests. Locking and race claims use real separate
+    connections and synchronization barriers. Postgres x multi-DB needs fixture and settings work
+    first (the modes are mutually exclusive today). An unavailable cell is `unverified`, never
+    passed. Pure helpers are not rerun on every vendor.
+12. **Mutation testing is a pilot lead, not a per-item tax.** A surviving mutant is a lead about
+    test discrimination, never a product defect; equivalent, unexecuted, timed-out, and
+    mis-imported mutants are classified separately. mutmut needs explicit test discovery for this
+    repo's four test trees and proof of mutated-import provenance and one known killed mutant
+    before any survivor list is read. `scripts/prove_failability.py` keeps its purpose: proving the
+    regression test detects the actual correction.
+13. **Permanent regression dependencies live where CI installs them.** Hypothesis in an optional
+    group alongside permanent property tests fails: ordinary CI installs `dev`, so those tests
+    would fail collection or be skipped silently. Rule: either a dependency a
+    permanent test imports is in `dev` and exercised in CI, or the generator stays in the optional
+    campaign and only minimized deterministic regressions are promoted to the suite. Heavy discovery
+    tools stay optional. Clean-dev collection and the floor cell are proved when implementation is
+    authorized. A Hypothesis profile is registered and loaded in code, not merely named in
+    `pytest.ini`.
+14. **Static warnings are calibrated before they become policy.** Enabling all of ruff `S` flags
+    `S101` on every test assertion; the first step is reporting without gating, then selecting
+    reviewed rules with justified exclusions. A rule banning resolver `except` arms without
+    `FieldError` conversion inherits principle 1's error; `getattr` outside `utils/canonical.py` is
+    not a defect. Custom static rules ship with known-positive and legitimate-negative fixtures. A
+    type checker is advertised as catching the awaitable-truthiness class only after it demonstrably
+    reports the 0.0.13 `mutations/permissions.py` case on a pre-fix copy. `freezegun` freezes
+    monotonic clocks and needs its asyncio option; controlled time is applied at the owned seam and
+    real timeout and cancellation behavior is proved with an external watchdog. Seeds, scheduling
+    mode, and timeout mechanism are recorded in evidence.
+15. **Run identity is separate from release identity.** Two runs of one release collide under both
+    `bug_hunt-<release>.md` and any other release-keyed name; the 0.0.14 record already
+    describes a deleted predecessor. Rule: unique run id, item id, iteration; an immutable source
+    and environment manifest per run; run-owned outputs. Before cleanup the run retains a durable
+    bounded bundle: minimal probe, required fixtures, runner record, relevant logs, regression-test
+    mapping. Cleanup deletes only enumerated disposable resources the run owns and repairs
+    references. Resume validates schema version, inputs, ownership, and evidence; it never trusts a
+    `Status:` line alone. `docs/shadow/current/` is regenerable by other tasks and is not immutable
+    input.
+16. **Leads keep provenance and never become oracles.** Banning historical seeding discards useful
+    failure patterns; merging maintainer questions, `pbugs.md`, and root `vulns.md` into one
+    required `dicta.md` and deleting the sources overcorrects, because it turns old hypotheses and
+    stale `pending` labels into expected results. Rule: maintainer questions stay in `dicta.md`,
+    separate from generated or history-derived leads. Each lead carries provenance, contract,
+    last-tested tree state, and disposition, and is revalidated on current source. An independent
+    discovery pass runs before prior diagnoses are exposed. Every numbered item in `pbugs.md` and
+    `vulns.md` is reconciled with an explicit counting method before either file retires;
+    `vulns.md` lives at the repository root.
+17. **Pilot before infrastructure.** No dependency, generator, artifact, custom rule, or second
+    flow is adopted before its benefit is measured. Review mode is read-only;
+    fix mode is explicitly authorized. A shipped, sensitive finding gets restricted evidence
+    handling and the `SECURITY.md` maintainer path before any reproducer lands in a tracked public
+    document; a card plus a failing test is not a parked vulnerability without a named owner and a
+    containment step.
 
-```shell
-uv run python scripts/bug_hunt.py
-```
+## 3. Design
 
-The generator:
+### 3.1 One engine, campaign profiles
 
-- resolves the current `HEAD` as the hunt baseline;
-- refreshes only `docs/shadow/current/` through
-  `scripts/review_historical_package_snapshot_at_commit.py`;
-- reads `docs/bug_hunt/dicta.md` as optional maintainer-authored probing questions;
-- inventories the live package and creates one item for every non-`__init__.py` Python file,
-  followed by a package integration item and the final test gate;
-- records autonomous mode and the full baseline commit, and names the file from the matching
-  `pyproject.toml` and package `__init__.py` version (`--target-release` overrides it); and
-- refuses to overwrite an existing progress file unless the maintainer explicitly requests a
-  restart with `--force`.
+One dispatch, evidence, state-machine, verifier, revision, and archive mechanism. Profiles change
+the scenario population, the oracles, and the disclosure handling, not the machinery:
 
-`dicta.md` may be missing or empty; either state produces an explicit `## Package questions`
-fallback saying that no maintainer questions were supplied. Non-empty content is newline-normalized
-and placed under that heading when it does not already carry one. Do not regenerate it from
-historical worker briefs or treat it as a list of expected findings. Questions in it guide
-exploration; current source and executable behavior decide the result.
+- **Correctness:** public API, lifecycle, schema construction, portability across cells, error
+  behavior per the contract table, performance budgets.
+- **Security:** actor, asset, and trust-boundary model; unauthorized effects; isolation; resource
+  exhaustion; disclosure handling. Valid-client attacks and plausible integration misconfiguration
+  are in scope. The threat model and the confidential-handling policy are a separate standing
+  document; they do not own a second dispatch engine.
+- **Change-focused:** changed contracts and their dependency closure plus a rotation slice of
+  unchanged coverage.
 
-The snapshot remains fixed for the run even as earlier items change the working tree. The helper
-stages and validates the complete artifact set before replacing its owned
-`docs/shadow/current/` directory, including when the correct snapshot is empty. Its stripped source
-and overview files help orient Worker 1 to the baseline structure when a trustworthy matching pair
-exists. A live file may have no shadow because the snapshot helper excludes its path, because it did
-not exist at the baseline, or because a baseline-eligible file's expected artifact pair is
-unexpectedly incomplete. The item records the applicable facts rather than inferring file age from
-artifact presence: paths containing `test` are excluded, so the whole `testing/` subpackage is
-absent no matter how old those files are; an excluded path may independently be old or new; and an
-eligible old file without a complete pair is reported as incomplete. Every case remains a full hunt
-item. Worker 1 must read the complete live target and connected live code before reaching a
-conclusion.
+`BUILD.md` mechanisms (`<scratch>`, floor venv, corpus ratchet, closing record) are linked only
+after checking that their source-mutation and role assumptions hold for hunts; `prove_failability.py`
+in particular is not reused in a shared tree (principle 4).
 
-Each progress item starts in this form:
+### 3.2 Scenario record
 
-```text
-- [ ] path/to/target.py
-    - Status: pending
-    - Prompt:
-        - <target and shadow inputs>
-```
+Each scenario carries: id; entry points; authoritative contract citations and the governing rows of
+the error-contract table; actors; input domain; lifecycle and state; observations and independent
+oracle; dependency edges (forward and reverse); applicable cells and what each proves; permitted
+tools; exploration budget; owning files.
 
-Worker 0 alone updates the progress file. Valid item states are `pending`, `hunting`,
-`fix-implemented`, `revision-needed`, `no-bugs`, `verified`, and `blocked`. Before dispatch, Worker
-0 records a cycle baseline so changes from the current item can be separated from earlier and
-concurrent work.
+### 3.3 Lifecycle
 
-## Worker 1: search and implement
+`planned -> investigating -> candidate -> reproduced -> fix proposed -> independently verified`
 
-Use a fresh Worker 1 context for each item. Give it the exact target and prompt, the progress-file
-path, the hunt baseline, the cycle baseline, and the required reading. Worker 1 reads the progress
-file but never edits it.
+Terminal alternatives: `no finding within scope`, `rejected candidate`, `inconclusive`,
+`blocked on authority/environment`. Changed inputs produce `stale` then re-verification. Budget
+exhaustion is `inconclusive`, never `no finding`, and never a reason to abandon a confirmed,
+authorized root-cause correction. Every unresolved confirmed defect has a named owner.
 
-### Understand the target
+### 3.4 Agent allocation
 
-Read the entire live target. Trace important behavior into and out of it until the relevant
-contracts are clear:
+Default W0 / W1 / W2 per principle 9. Read-only discovery across disjoint scenarios runs in parallel
+in isolated workspaces. Shared-tree promotion is serialized; file-disjoint entry points are not
+dependency-disjoint changes. Dual independent hunters only for selected high-risk scenarios.
 
-- who calls, imports, registers, wraps, exposes, or configures it;
-- which state, lifecycle, settings, ORM behavior, cache, or framework machinery it relies on;
-- how representative inputs become outputs, errors, queries, or persistent state;
-- which tests and public docs promise its behavior; and
-- whether a suspicious local branch is actually protected or invalidated elsewhere.
+### 3.5 Instruments: initial use and what each does not establish
 
-Follow connections as far as the bug judgment requires. Do not stop at an adapter when the real
-contract lives behind it, and do not expand into unrelated subsystems once an edge is understood.
+| Instrument | Initial use | Does not establish |
+|---|---|---|
+| Hypothesis | contract-backed pagination and input transformations; then stateful scenarios | a correct oracle, DB isolation, or realistic authorization by itself |
+| hypothesis-graphql | valid and invalid document strategies through `TestClient` | tenant semantics, other transports, race behavior |
+| `scripts/prove_failability.py` | exact regression discrimination, in an isolated source copy | general discovery; safe shared-tree mutation |
+| mutmut | bounded test-discrimination pilot on one module | that a survivor is a bug; declaration-time completeness |
+| pyright / selected ruff `S` / semgrep | advisory leads, calibrated on known positives and legitimate negatives | soundness through `Any` or dynamic ORM hooks; a severity score |
+| Schemathesis | optional comparison for HTTP transport campaigns (replay, reporting, pytest integration) | domain authorization correctness; OpenAPI-grade stateful support for GraphQL |
+| CrossHair | optional later experiment on explicitly contracted pure functions (parsing, window arithmetic) | anything on the ORM path |
 
-### Search and verify
+A third-party plugin or hosted scanner is an integration choice, not an oracle. Evaluating one later
+requires measured additional findings, reproducible exports, bounded permissions, explicit
+source-upload approval, and a retention and disclosure policy; agentflow correctness never depends
+on a vendor UI or an unreplayable report. No plugin is needed to start the pilot.
 
-Worker 1's mandate is simple: **break things, break things, break things.** Write scratch test files.
-Be messy. Be hostile. Try misuse, malformed state, unnatural ordering, interruption, repetition,
-concurrency, partial success, and failure during failure handling. Within disposable scratch scope,
-Worker 1 is free to do anything useful to make the behavior fail. Do not clean up after yourself;
-leave every useful probe and its state for Worker 0.
+## 4. First deliverable: pilot specification and runner rejection cases
 
-Think creatively across layers, not merely through familiar local bug patterns. A clean function
-can still participate in a broken system when its caller, adapter, cache, registry, ORM boundary,
-framework hook, or error translator makes a different reasonable assumption. Combine those layers
-in hostile sequences and search for failures that appear only after several individually valid
-steps stack together.
+Nothing in sections 5 or 6 is built until this deliverable is accepted and the pilot has run.
 
-For every direction tested, push hard in the opposite direction too: empty and enormous input,
-missing and overspecified configuration, first and repeated calls, allowed and denied access,
-uninitialized and stale state, commit and rollback, sync and async, one database and another,
-single-threaded and concurrent execution, early and late lifecycle phases. Do not stop when one
-extreme passes; contrast it with its inverse and then combine extremes across layers.
+### 4.1 Three scenarios
 
-Challenge assumptions around invalid input, partial failure, request and cache isolation,
-permissions, optional dependencies, schema lifecycle, type selection, error translation, and
-ordering. These are prompts for invention, not a checklist to reproduce.
+Each is specified to the section 3.2 record before any code, with its oracle approved by the
+maintainer.
 
-### Mandatory adversarial probing matrix
+1. **Pagination window semantics.** Entry points: `connection.py`, `keyset.py`,
+   `utils/connections.py`, `optimizer/single_parent_fetch.py`. Contract: the Relay window laws the
+   consumer guide states, with `UNSET` vs `None` semantics per `74e8cbe1`. Independent oracle: a
+   pure-Python model of the window over a materialized ordered list, with a nullable ordering key.
+   Cells: SQLite and Postgres (NULL collation differs); floor and latest Django.
+2. **Authorization and visibility across actors.** Entry points: `utils/querysets.py` seal,
+   `permissions.py`, `filters/sets.py` nested combinators, `relay.py` GlobalID decode. Contract:
+   rows outside actor A's `get_queryset` visibility are never returned, counted, filtered on, or
+   revealed through existence oracles, for any valid document. Independent oracle: a per-actor
+   allowed-row set computed directly from the ORM outside the framework. Stateful sequence: warm
+   caches and plans as A, then query as B. Cells: single-DB and sharded SQLite; Postgres.
+3. **Transaction or session lifecycle under interruption.** Entry points:
+   `utils/write_transaction.py`, `mutations/resolvers.py`, `auth/sessions.py`, `consumers.py`
+   revalidation. Contract: the conflict envelope, rollback-on-error, and session invalidation
+   promises as documented. Independent oracle: database state read on a second real connection after
+   a deterministic interleaving (barrier-synchronized), and session store state. Runs outside any
+   outer rollback wrapper. Cells: Postgres for `select_for_update` (a no-op on SQLite); SQLite for
+   the lockless conflict path.
 
-Five axes on which defects outlive a passing suite. They are the floor of a hunt, not its shape: a
-target yielding only matrix hits has not been searched. Discharge every axis on every target,
-either with a probe or with one line naming why the target has no such surface.
+### 4.2 Runner rejection cases
 
-1. **Shape and container mismatches:** scalars where an iterable is consumed, collections where a
-   scalar is expected, at every boundary that unpacks, iterates, or measures its input.
-2. **Absent versus explicitly null:** for each field kind the target handles, contrast an omitted
-   value (`UNSET`) with an explicit `None`, especially where the contract forbids null.
-3. **Lexical and delimiter boundaries:** wherever text is scanned, split, or classified, probe
-   nesting, redundant and unbalanced delimiters, compound forms, and non-whitespace separators.
-4. **Hostile callables and iterators:** one-shot generators, iterators that raise midway, and
-   objects with adversarial `__iter__`, `__len__`, `__eq__`, or `__str__`.
-5. **Absent versus empty configuration:** delete the settings attribute with
-   `monkeypatch.delattr(settings, ...)` rather than setting it to `None` or `[]`.
+The runner (principle 5) is accepted only when each of these produces a non-success verdict with
+the correct classification, demonstrated by a fixture:
 
-### Exception containment invariant
+| Case | Expected verdict |
+|---|---|
+| probe imports the package from the shared checkout instead of the workspace copy | `invalid: wrong import path` |
+| zero tests collected | `inconclusive: nothing executed` |
+| setup or fixture failure before the target boundary | `inconclusive: setup-only` |
+| timeout | `inconclusive: timed out`, with the watchdog record |
+| an applicable cell unavailable | that cell `unverified`; run not `passed` |
+| source digest changed between manifest and execution | `invalid: stale source` |
+| known-failing positive control passes | `invalid: instrument` |
+| probe connects to a database other than the workspace's | `invalid: database target` |
+| evidence record missing a claim's link | `inconclusive` for that claim |
 
-No client-supplied input, however hostile, may leave a public resolver, input decoder, or
-transaction guard as an unhandled `TypeError`, `ValueError`, `AttributeError`, `IndexError`, or
-`KeyError`. Invalid input becomes a field-keyed `FieldError` envelope
-(`errors { field messages codes }`); phase and transaction guards fail closed. Reaching a top-level
-GraphQL error or a transport failure that way is a defect in the target, not in the probe that
-found it.
+### 4.3 Comparison protocol
 
-Try to disprove every candidate. Read the existing test bodies and exercise uncertain framework or
-state behavior with a small scratch probe. A confirmed bug must have:
+- Matched inputs and budgets: the old per-file method and this method each run the three
+  scenarios.
+- Sensitivity: historical pre-fix trees for the three client-reachable findings in section 1.1 are
+  materialized in disposable copies; hunters are not shown the old diagnosis. Rediscovery measures
+  sensitivity, not new yield.
+- Current-source exploration on the three scenarios measures new yield.
+- Metrics: unique confirmed root causes; false positives rejected by W2; severity and reachability
+  mix; time to minimal reproducer; W1/W2 disagreement rate; agent and execution cost; evidence
+  replay success rate. Test count, log volume, mutant count, and Low-finding count are not metrics.
+- Acceptance: replayable evidence for every claim, at least one bad oracle or instrument correctly
+  rejected, no shared-state damage, and a detection benefit justified against cost. A quiet run
+  proves neither tool ineffectiveness nor package safety.
 
-- **Defect:** the violated behavior or invariant;
-- **Evidence:** a reproducible path, experiment, test, or authoritative contract;
-- **Impact:** the real consequence and affected callers;
-- **Severity:** High, Medium, or Low; and
-- **Proof:** the permanent test that will fail without the fix and pass with it.
+## 5. Built only from pilot results
 
-High means a correctness, security, data-isolation, or public-contract failure with serious impact.
-Medium means a material edge-case, lifecycle, performance, or integration failure. Low means a
-bounded real defect with limited consequence. Do not record style preferences or speculative risks
-as bugs.
+- The full workflow text replacing sections 4-6 of this file, the scenario-record template, the
+  generator and its tests, `START.md` and `AGENTS.md` references, cleanup and link rules, all in
+  one change; active records migrated explicitly, historical runs never overwritten.
+- Dependency and CI placement per principle 13, decided by whether generated tests stay permanent
+  or reduce to deterministic regressions.
+- The security profile's standing threat-model document and its confidential-handling policy.
+- Instrument adoption per the section 3.5 table, each with its calibration fixtures.
+- Debris fixes from section 1.1 (status closeout, shadow regeneration or removal, glob spelling,
+  generator role text).
 
-### Implement
+## 6. Recommended maintainer decisions
 
-Implement the best root-cause correction for every confirmed defect found in the item. Cross-file
-source, test, example, or documentation changes are allowed when the invariant requires them; name
-why every changed file is necessary. Do not limit a systemic fix to the entry-point file merely to
-keep the diff small.
+1. One engine with correctness and security profiles, threat-model content separate.
+2. Fresh W2 verifier with authority as in principle 9; independent parallel hunters reserved for
+   high-risk scenarios.
+3. Isolated runner and the three-scenario pilot approved before any workflow rewrite.
+4. Hypothesis through the existing HTTP client first; hypothesis-graphql evaluated inside the
+   pilot; every other tool advisory or optional until demonstrated useful.
+5. Permanent regression dependencies in ordinary CI; heavy discovery opt-in.
+6. Severity impact-based; disputed contracts resolved by the maintainer before any edit.
+7. Which Postgres a pilot workspace may use, and whether sharded x Postgres fixture work is in the
+   pilot's scope or deferred.
 
-Add permanent tests in the same change. Use focused validation when useful and normally pass
-`--no-cov` to focused pytest runs. Do not run the full suite; Worker 0 owns the final gate. After
-any edit, run:
+<!-- LINK DEFINITIONS -->
 
-```shell
-uv run ruff format .
-uv run ruff check --fix .
-```
+<!-- Root -->
 
-Worker 1 reports:
+<!-- docs/ -->
 
-- target and result: `No bugs`, `Fixed <severity>`, or `Blocked`;
-- system paths and behavior examined;
-- the probing matrix: each axis probed, or ruled inapplicable with its reason;
-- confirmed defects and evidence, or the strongest evidence supporting a no-bug conclusion;
-- files changed and why;
-- permanent and scratch tests, commands, and outcomes;
-- formatter and linter outcomes; and
-- every scratch path and disposable state deliberately left for Worker 0.
+<!-- docs/SPECS/ -->
 
-## Worker 0: verify and advance
+<!-- docs/builder/ -->
 
-Worker 0 reviews every Worker 1 report for completeness and scope. Every conclusion, `No bugs` or
-`Fixed`, must show the probing matrix discharged: each axis probed, or ruled inapplicable for that
-target. Judge a claimed inapplicability on its reason against the target's real surface, not on the
-missing probe; a found bug never excuses an unsearched axis. Where the trace is shallow, purely
-happy-path, or silent on an axis, Worker 0 records `Status: revision-needed` with concrete
-adversarial challenges. For a thorough `No bugs`, Worker 0 reruns or inspects the strongest scratch
-probes, removes all item-owned scratch and disposable state, records `Status: no-bugs` and a
-concise `Result:` line, then checks the item.
+<!-- django_strawberry_framework/ -->
 
-After any fix, Worker 0 independently verifies it before advancing:
+<!-- tests/ -->
 
-1. Inspect the item-scoped changes without absorbing unrelated dirty work.
-2. Re-trace the violated contract through the live target, affected callers, dependencies, tests,
-   examples, docs, and public exports.
-3. Reproduce the original failure or otherwise prove the pre-fix behavior was wrong.
-4. Try to break the fix with different inputs, ordering, repeated calls, state boundaries, and
-   failure paths relevant to the defect.
-5. Confirm the fix lives at the correct owner, connected behavior remains compatible, and every
-   necessary file moved with the invariant.
-6. Confirm permanent tests exercise real usage at the strongest reachable tier and would fail
-   without the correction.
-7. Only after verification passes, remove every scratch file and disposable state created for the
-   item and confirm that cleanup did not touch unrelated work.
+<!-- examples/ -->
 
-Worker 0 may use new scratch probes or focused tests when they improve confidence. It does not edit
-the production fix or its permanent tests during verification.
+<!-- scripts/ -->
 
-If the fix is complete, Worker 0 records `Status: verified`, the verification evidence, changed
-files, validation, and cleanup, then checks the item and advances. If anything remains, it records
-`Status: revision-needed` with concrete reproducible feedback and returns the same item to Worker 1.
-Leave the scratch environment intact during a revision so Worker 1 can reproduce and extend it. The
-Worker 1 → Worker 0 loop continues automatically until verified. Use `blocked` only when the solution
-requires maintainer authority or an external dependency that the workers cannot obtain.
+<!-- .venv/ -->
 
-Use concise stable result lines:
-
-```text
-Result: No bugs. Evidence: <paths/probes examined>.
-Result: Fixed Medium. Files changed: <paths>; validation: <commands/results>.
-Verification: Passed. Evidence: <independent checks>.
-Cleanup: Removed <item-owned scratch paths/state>; unrelated work preserved.
-Blocked: <specific condition and required decision>.
-```
-
-Do not erase earlier results or revision feedback. Append an `Iteration:` line when an item cycles.
-
-## Integration and final gate
-
-After all source-file items, Worker 1 performs the package integration item against the live final
-tree. It traces representative behavior across package boundaries and explicitly examines public
-exports and `__init__.py` files. It searches for failures that no individual entry point reveals:
-incompatible lifecycle phases, state owned in two places, circular initialization, divergent public
-flavors, and gaps between implementation, tests, examples, and documentation. Any fix follows the
-same Worker 1 implementation and Worker 0 verification loop.
-
-At the final item, Worker 0 runs:
-
-```shell
-uv run pytest
-```
-
-The gate passes only when the suite passes and configured package coverage remains 100%. Record the
-result, coverage, skips, and xfails. A product failure returns to Worker 1 for a root-cause fix and
-then through Worker 0 verification; an unrelated environment or concurrent-work failure is recorded
-precisely and treated as a genuine blocker.
-
-When every item and the final gate are checked, Worker 0 sets the progress file to `Status:
-complete` and reports confirmed fixes, no-bug items, blockers, final validation, and unrelated work
-left untouched. Confirm that Worker 0 removed all item-owned scratch before closeout. Do not remove
-`HUNT.md`, `dicta.md`, the completed progress file, or any sibling output under `docs/shadow/`, and
-do not commit.
+<!-- External -->

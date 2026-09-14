@@ -29,6 +29,20 @@ from django_strawberry_framework.orders.inputs import (
     materialize_input_class,
 )
 
+
+@pytest.fixture(autouse=True)
+def _isolate_registry(isolate_global_registry):
+    """Clear the global registry and input ledgers around every test here.
+
+    The module declares function-scope ``OrderSet`` subclasses whose
+    class-derived input type names (``BookOrderInputType``,
+    ``ShelfOrderInputType``) are the same names the shipped fakeshop
+    ordersets claim. Without the clear, a test that runs after anything
+    that built the fakeshop schema on the same worker meets a registry
+    where those names are already owned, and the collision guard fires.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Module-path constant
 # ---------------------------------------------------------------------------

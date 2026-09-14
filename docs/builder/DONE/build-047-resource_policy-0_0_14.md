@@ -106,7 +106,10 @@ them is somebody else's** and is never this cycle's output.
 - `docs/builder/bld-047-reconcile.md` — the spec + rationale reconciliation cohort. Retired
   from the tree after the round committed; its three passes and two reviews are recoverable
   at `git show c134da8c:docs/builder/bld-047-reconcile.md`.
-- `docs/builder/bld-047-final.md` — the round's closing gate.
+- `docs/builder/bld-047-final.md` — the round's closing gate. Retired from the tree once its
+  gate results were committed and its deferred-work catalog had been routed onto the board;
+  recoverable at `git show 94ddfe39:docs/builder/bld-047-final.md`. What it held that lives nowhere
+  else is folded into `## Deliberate non-edits` below.
 - (contingent) `docs/builder/bld-047-code.md` — only if a code defect is confirmed.
 
 ## Worker-0 verification pass (findings carried into dispatch)
@@ -466,10 +469,33 @@ routes the round's deferred items onto the board as `CardItem` rows through
    concurrent session has committed, and `git status --short` carries no dirty `.py`, so
    `uv run pytest --no-cov` now measures `HEAD` and nothing else. It runs.
 
+## Deliberate non-edits, recorded so no later pass re-derives them
+
+Each was read clause by clause by two different reviewers and left as it stands. A later
+reconciliation pass that reads any of them as drift and "corrects" it is undoing a decision,
+not fixing a defect.
+
+- **The spec's `## Current state` section stays as written.** It is observation-only under
+  [`BUILD.md`][build] `### ``## Current state``: observations stand, predictions do not`, so a
+  claim in it is true of the moment the spec was authored and is not a contract this round
+  reconciles. Re-tensing it would convert a dated observation into a present-tense promise
+  nothing gates.
+- **The rationale's `#### Public symbols the spec did not name` heading stays past-tense.** It
+  is a register observation about what the spec omitted at the release. Re-tensing it would
+  make the post-release change register narrate THIS round instead of the post-release change
+  it exists to describe, which is the one thing the spec/rationale division forbids the
+  rationale to do.
+- **One line survives the retired-history-vocabulary sweep legitimately**:
+  `docs/SPECS/spec-047-resource_policy-0_0_14.md` #"so opting in no longer opts out of the cap".
+  The sweep (`now shared|itself moved|would have been the first`, plus the eight retired
+  absolutes) is a blunt instrument and this is present-tense contract prose about what opting
+  in does, not chronology. It is the sweep's only hit in the spec, and `grep -cE '\b[0-9a-f]{8}\b'`
+  over the spec returns 0, so no sha reaches it either.
+
 ## Checklist
 
 - [x] Cohort `047-reconcile`: spec + rationale reconciliation -> `docs/builder/bld-047-reconcile.md`
-- [x] Round closing gate -> `docs/builder/bld-047-final.md`
+- [x] Round closing gate -> `docs/builder/bld-047-final.md` (retired; `git show 94ddfe39:docs/builder/bld-047-final.md`)
 - [x] Round 2 (HEAD `63a132be`): findings P + Q -> `docs/builder/bld-047-reconcile.md` pass 3 (`built` → `review-accepted`, 0 High / 0 Medium / 3 Low, one spec Low fixed at final verification → `final-accepted`); gate re-run -> `docs/builder/bld-047-final.md` `## Gate re-run at 63a132be`: `uv run pytest --no-cov -q` 7796 passed / 40 skipped / 0 failed, `manage.py check` clean, `makemigrations --check --dry-run` no changes, `ruff check` + `ruff format --check` clean, `git diff --check` clean; test-plan floor raised to 120 / 191 (measured, two instruments)
 - [x] Round 2: three board rows (`053` scope order 70, `056` scope orders 96 and 97) via `append_card_item`; `KANBAN.md` (+3 lines) / `KANBAN.html` (data block) regenerated; `check_kanban_anchors.py` OK; every `#"substring"` the rows cite resolves to exactly one line in its file, except the `056` ruling-item citation, which matches 3 lines in `KANBAN.md` (the ruling item, its existing spec-025 citer, and the new row) — the same spelling that card already uses, and a generated-target citation of the class `056` itself catalogs
 
@@ -481,12 +507,12 @@ routes the round's deferred items onto the board as `CardItem` rows through
 <!-- docs/ -->
 
 <!-- docs/SPECS/ -->
-[spec-047]: ../SPECS/spec-047-resource_policy-0_0_14.md
-[spec-047-rationale]: ../SPECS/appx/spec-047-resource_policy-0_0_14-rationale.md
+[spec-047]: ../../SPECS/spec-047-resource_policy-0_0_14.md
+[spec-047-rationale]: ../../SPECS/appx/spec-047-resource_policy-0_0_14-rationale.md
 
 <!-- docs/builder/ -->
-[build]: BUILD.md
-[worker-1]: worker-1.md
+[build]: ../BUILD.md
+[worker-1]: ../worker-1.md
 
 <!-- django_strawberry_framework/ -->
 

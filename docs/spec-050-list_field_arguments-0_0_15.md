@@ -1851,7 +1851,10 @@ the shipped SDL.
     positive control that keeps the refusals from passing on a seam that merely ignores the
     key, a nested arm proving the inner budget's end restores the outer one, and an arm reading
     the bound from inside a `sync_to_async` worker thread - the place a per-thread authority
-    would read back empty and fall open to the context.
+    would read back empty and fall open to the context. The deadline row carries a second
+    spelling of the same request: a `float` subclass written as an instant already past, which
+    a narrowing rule admits and which then answers every later reading of the clock as time
+    remaining.
 33. A policy bound is an exact built-in or it is not a policy. Package-tier rows require a
     typed `ConfigurationError` for an `int` subclass whose comparison is BENIGN - the arm that
     a detonating-subclass test passes without covering, and the one whose value would be stored
@@ -1859,7 +1862,11 @@ the shipped SDL.
     `narrowed()`, for the same value declared as a field's `max_rows`, and for a `float`
     subclass whose reflected `__radd__` would otherwise turn the derived absolute deadline into
     `nan`. The last row asserts the derived deadline of an ordinary policy is finite beside it,
-    so the rejection is not standing in for a seam that derives nothing.
+    so the rejection is not standing in for a seam that derives nothing. The same domain is
+    required of every number the request itself supplies to a charge - an upload's reported
+    `size`, a `first` / `last` page bound read from a variable - and of every amount charged
+    against a bound, each row pinning the typed rejection rather than the raw error or the
+    silent pass a consumer dunder would otherwise produce.
 
 Every test-local sync/async schema mount uses the established module-level current-schema
 holder under `override_settings(ROOT_URLCONF=...)`, resets that holder and Django's URL caches
@@ -2250,11 +2257,16 @@ structural checks, and link/kanban verification prescribed by
       changes neither the returned-row bound nor the `offset` ceiling derived from the same
       field, and one that pushes `DST_RESOURCE_DEADLINE` forward or clears it does not outlive
       its budget. A resolver writing an EARLIER deadline still shortens its own request; a
-      numeric deadline that is not finite is refused rather than read as a distant future.
+      numeric deadline that is not finite, or that is not an exact built-in number, is refused
+      rather than read as a distant future - a subclass answers both the comparison the
+      narrowing rule is decided by and the one deciding whether time is up.
 - [ ] A bound stored on a `ResourcePolicy`, and a field's declared `max_rows`, is an exact
       built-in `int` (or `float` for the deadline); every numeric subclass is refused with a
       typed `ConfigurationError` before any comparison, arithmetic or formatting runs, so no
-      consumer dunder can reach the derived deadline or a rejection's rendered `limit`.
+      consumer dunder can reach the derived deadline or a rejection's rendered `limit`. The
+      same domain holds for a number the request supplies to a charge - an upload's reported
+      `size`, a `first` / `last` page bound - and for any amount charged against a bound, which
+      rejects as unmeasurable rather than passing as free.
 - [ ] Negative and over-ceiling values raise `ListArgumentError` with stable extensions;
       active schema naming determines `argument`; actual GraphQL `Int` coercion failures
       perform no SQL, while integral float variables retain graphql-core's standard coercion.

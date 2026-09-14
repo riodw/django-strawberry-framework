@@ -585,15 +585,44 @@ async def test_async_a_resolver_cannot_widen_the_row_bound_through_the_context()
     assert [row["name"] for row in payload["data"]["branches"]] == ["B0", "B1"]
 
 
+class _NarrowsThenNeverExpires(float):
+    """A written deadline that orders as EARLIER than the armed one, then never as passed.
+
+    Both answers come out of the same object: the ``<`` a narrowing rule admits
+    it by, and the reflected ``__le__`` that decides whether the clock has
+    reached it.
+    """
+
+    def __lt__(self, other):
+        return True
+
+    def __le__(self, other):
+        return False
+
+
+#: The two spellings of "give me more wall clock", written to the mirror key a
+#: resolver owns: an instant plainly past the budget, and one that presents as a
+#: narrowing and then answers every reading as time remaining.
+_WIDENED_DEADLINES = [
+    lambda: time.monotonic() + 3600,
+    lambda: _NarrowsThenNeverExpires(time.monotonic() - 1),
+]
+
+
 @pytest.mark.django_db(transaction=True)
-async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context():
+@pytest.mark.parametrize(
+    "widened",
+    _WIDENED_DEADLINES,
+    ids=["far-future", "narrowing-subclass"],
+)
+async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context(widened):
     """A budget that ended while the resolver awaited cannot be pushed back out.
 
     The resolver sleeps well past its own configured deadline and then writes a
-    far-future instant under ``DST_RESOURCE_DEADLINE``. The sleep is what makes
-    the expiry the pipeline's verdict rather than the machine's: it is longer
-    than the budget by a multiple, so the only way this row goes green on a
-    widened deadline is if the seam trusted the key the resolver wrote.
+    widened instant under ``DST_RESOURCE_DEADLINE``. The sleep is what makes the
+    expiry the pipeline's verdict rather than the machine's: it is longer than
+    the budget by a multiple, so the only way a row goes green is if the seam
+    trusted the key the resolver wrote.
     """
     for i in range(3):
         await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
@@ -603,7 +632,7 @@ async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context()
     async def _resolver(root, info):
         await asyncio.sleep(_SHORT_DEADLINE_SECONDS * 3)
         holder["awaited"] = True
-        stash_on_context(info.context, DST_RESOURCE_DEADLINE, time.monotonic() + 3600)
+        stash_on_context(info.context, DST_RESOURCE_DEADLINE, widened())
         return library_models.Branch.objects.order_by("name")
 
     @strawberry.type

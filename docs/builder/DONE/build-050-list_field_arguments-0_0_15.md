@@ -89,24 +89,27 @@ Status: implementation complete through the ninth review's request-budget and nu
 close on the maintainer's instruction; this plan is the only surviving artifact of the cycle.
 All seven are readable at commit `63a132be` (`git show 63a132be:docs/builder/<name>`).
 
-The eight rounds of finding-by-finding remediation, the superseded command tables and the
+The nine rounds of finding-by-finding remediation, the superseded command tables and the
 gate narratives are NOT restated here: every fix they describe is in the commit that landed
 it, in one of the spec's five homes, or in the code's own docstrings. What follows is what
 nothing else in the tree records.
 
-**The gate, measured.** One tree: the working tree at HEAD `ab98d240`, carrying the ninth
-round's production changes (the operation budget moved off the request context onto an armed
-`ContextVar`, the bound domain narrowed to exact built-in types, the non-finite deadline
-refusal) and the live-node split that gave each bundled claim its own node id.
+**The gate, measured.** One tree: the working tree at HEAD `207c7328`, carrying the tenth
+round's production changes (the exact-built-in domain extended from the policy's stored bounds
+to the consumer-written deadline mirror, an upload's reported size, a variable-supplied page
+bound and every amount charged against a bound) on top of the ninth's (the operation budget
+moved off the request context onto an armed `ContextVar`, the bound domain narrowed to exact
+built-in types, the non-finite deadline refusal) and the live-node split that gave each bundled
+claim its own node id.
 
 | Tier | Command | Result |
 |---|---|---|
 | format / lint | `uv run ruff format .`, `uv run ruff check --fix .` | clean |
 | structural + link | `uvx pre-commit run --files <changed>` | 6 hooks Passed |
-| citations | `scripts/check_citations.py --check` | 1008 resolve (830 in 441 `.py`, 178 in `KANBAN.md`) |
-| default | `uv run pytest` | **7849 passed / 40 skipped / 100.00%** |
-| sharded | `FAKESHOP_SHARDED=1 uv run pytest` | **7866 passed / 37 skipped / 100.00%** |
-| floor | focused scope, Python 3.10.19 / Django 5.2.16 / strawberry 0.316.0 | **444 passed** |
+| citations | `scripts/check_citations.py --check` | 1010 resolve (832 in 441 `.py`, 178 in `KANBAN.md`) |
+| default | `uv run pytest` | **7868 passed / 40 skipped / 100.00%** |
+| sharded | `FAKESHOP_SHARDED=1 uv run pytest` | **7885 passed / 37 skipped / 100.00%** |
+| floor | focused scope, Python 3.10.19 / Django 5.2.16 / strawberry 0.316.0 | **463 passed** |
 
 The floor run is the focused scope for the seam this round touched - the resource-policy
 budget and the two list-field surfaces that read it - rather than the thirteen-path scope
@@ -117,9 +120,9 @@ was whether the armed budget survives the `sync_to_async` hand-off on 3.10, sinc
 authority would read back empty there and fall open to the context; the row asserting it passes
 at the floor.
 
-The superseded figures this record previously carried - default 7775, sharded 7792, floor 2397,
-measured at HEAD `96b9e047` - described a tree that no longer exists and are dropped rather
-than kept beside the ones above.
+Superseded figures are dropped rather than kept beside the ones above: default 7775 / sharded
+7792 / floor 2397 at HEAD `96b9e047`, and default 7849 / sharded 7866 / floor 444 at HEAD
+`ab98d240`. Each described a tree that no longer exists.
 
 ### Floor-verification scope
 

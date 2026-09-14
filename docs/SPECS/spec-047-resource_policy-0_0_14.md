@@ -354,7 +354,10 @@ properties follow, and each is load-bearing:
   value either ([Decision 2](#decision-2--armed-for-the-operation-published-on-the-request-context)).
 - **Built-in values only.** Every bound a policy stores is an exact `int` (or, for the
   deadline, an exact `float`), so nothing the policy later does with a bound can dispatch
-  consumer code.
+  consumer code. The same domain holds for every other number that crosses into the budget
+  machinery from outside it — a consumer-written deadline mirror, an uploaded file's reported
+  `size`, a `first` / `last` page bound supplied through a variable, any amount charged
+  against a bound — stated once as `resource_policy.py::_is_builtin_number`.
 
 The integer-bound domain is the EXACT built-in type, `type(value) is int`. That is what
 rejects `bool` — `isinstance(True, int)` is `True`, so a bound accepting `True` would
@@ -365,6 +368,15 @@ construction; worse, one whose comparison answers normally would be STORED, and 
 use of the bound would then run consumer dunders — `narrowed()`'s comparison, and the
 `limit` / `charged` values `ResourceLimitExceeded` formats into the message and `extensions`
 of every rejection that bound drives.
+
+The same reasoning is why an amount CHARGED against a bound is held to the same domain. A
+charge is compared (`charged > limit`), accumulated into a running total, and formatted into a
+rejection, so a subclass reaching one answers all three: its `__gt__` decides the rejection
+that would have caught it, and its reflected `__radd__` / `__rmul__` — which take priority over
+the built-in's own — turn the running total into `nan`, which is over no limit ever again. An
+amount outside the built-in integers is therefore unmeasurable rather than free, and rejects
+at one past its limit, the spelling this subsystem already uses for an upload whose size
+cannot be read.
 
 *Alternatives rejected: see the [rationale][rationale] (a per-bound settings read, a
 mutable dataclass with `freeze()`, Pydantic).*
@@ -395,11 +407,19 @@ takes, for the same reason: a per-execution answer a context stash cannot be tru
 **The mirror may narrow, never widen.** A resolver stashing an EARLIER instant under
 `DST_RESOURCE_DEADLINE` is shortening its own request, which it is always entitled to do, and
 `resource_policy.py::_effective_deadline` honours it. A later instant, a cleared key, or a
-value no comparison can order leaves the armed deadline standing. This is the narrowing rule
-`effective_bound` and `narrowed()` already state, applied to the one piece of budget state a
-consumer can write. A numeric deadline that is **not finite** is refused rather than treated as
-a distant future: no configured policy can derive one, and no comparison against it can certify
-the request is inside its budget.
+value outside the deadline domain leaves the armed deadline standing. This is the narrowing
+rule `effective_bound` and `narrowed()` already state, applied to the one piece of budget state
+a consumer can write. A numeric deadline that is **not finite** is refused rather than treated
+as a distant future: no configured policy can derive one, and no comparison against it can
+certify the request is inside its budget.
+
+The written value is admitted only as an exact built-in number, which is what makes the
+narrowing rule hold rather than merely read as though it does. A numeric SUBCLASS answers the
+comparison the rule is decided by AND the one that decides whether the deadline has passed, so
+it can present as EARLIER than the armed instant and then answer every later reading as time
+remaining — a narrowing on the way in and a widening on the way out. Outside the domain it
+narrows nothing, and where nothing is armed it fails closed: a value the seam cannot place on
+the clock is not a deadline it can certify the request is inside.
 
 **A published policy with nothing armed still answers**, which is the path a plain
 `strawberry.Schema` with no extension, and a direct `stash_resource_policy` call, take. That is

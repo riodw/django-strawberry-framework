@@ -526,13 +526,15 @@ def test_a_passed_deadline_with_no_policy_behind_it_still_rejects():
     assert "unknown" in caught.value.message
 
 
-def test_a_hostile_deadline_subclass_fails_closed_instead_of_crashing_the_seam():
-    """A numeric SUBCLASS whose comparisons raise cannot certify its budget.
+def test_a_numeric_subclass_deadline_fails_closed_instead_of_being_asked():
+    """A numeric SUBCLASS cannot certify a budget, so it is never asked to.
 
     The deadline stash is a process-internal derived value, but the context is
-    consumer-owned, so a hostile numeric can sit under the key. The seam must
-    fail closed on the same typed path a passed deadline takes rather than leak
-    the raw comparison error out of a collection resolver.
+    consumer-owned, so a numeric subclass can sit under the key - one whose
+    every comparison is consumer code, and which a seam that asked it would
+    either believe or crash on. It is outside the deadline domain, and a value
+    the seam cannot place on the clock fails closed on the same typed path a
+    passed deadline takes.
     """
 
     class HostileFloat(float):
@@ -543,9 +545,9 @@ def test_a_hostile_deadline_subclass_fails_closed_instead_of_crashing_the_seam()
             raise RuntimeError("hostile __lt__")
 
         def __le__(self, other):
-            # ``monotonic >= stash`` dispatches to the REFLECTED ``__le__`` first
-            # (a float subclass wins the reversed slot), so this is the dunder
-            # that actually detonates inside the seam.
+            # ``monotonic >= stash`` dispatches to the REFLECTED ``__le__``
+            # first (a float subclass wins the reversed slot), so this is the
+            # dunder a seam that compared the value would run.
             raise RuntimeError("hostile __le__ detonated")
 
         def __ge__(self, other):
@@ -557,6 +559,14 @@ def test_a_hostile_deadline_subclass_fails_closed_instead_of_crashing_the_seam()
     assert caught.value.bound == "execution_deadline_seconds"
     assert caught.value.limit == 0
     assert "unknown" in caught.value.message
+
+
+def test_an_integer_deadline_too_large_for_the_clock_fails_closed():
+    """An instant the conversion to a double overflows is one no comparison can place."""
+    context = {DST_RESOURCE_DEADLINE: 10**400}
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        check_deadline(SimpleNamespace(context=context))
+    assert caught.value.bound == "execution_deadline_seconds"
 
 
 def test_a_benign_comparison_int_subclass_is_still_refused_a_policy_field():
@@ -736,18 +746,70 @@ def test_a_narrowing_deadline_arrives_where_the_operation_configured_none():
     assert "unknown" in caught.value.message
 
 
-def test_an_unorderable_written_deadline_leaves_the_armed_ceiling_standing():
-    """A value that cannot be ordered against the budget cannot be shown to narrow it."""
+class _UnorderableDeadline(float):
+    """A written deadline no comparison can order against the armed one."""
 
-    class HostileFloat(float):
-        def __lt__(self, other):
-            raise RuntimeError("hostile __lt__ detonated")
+    def __lt__(self, other):
+        raise RuntimeError("hostile __lt__ detonated")
 
+
+class _NarrowsThenNeverExpires(float):
+    """Orders as EARLIER than the armed instant, then as one that has not passed.
+
+    Both answers come out of the same object, which is the whole escape: it is
+    admitted as a narrowing and then refuses to read as expired.
+    """
+
+    def __lt__(self, other):
+        return True
+
+    def __le__(self, other):
+        # ``time.monotonic() >= deadline`` dispatches to the REFLECTED operand
+        # first, so this is the comparison that decides whether time is up.
+        return False
+
+
+_HOSTILE_DEADLINE_SUBCLASSES = [_UnorderableDeadline, _NarrowsThenNeverExpires]
+_HOSTILE_DEADLINE_IDS = ["unorderable", "narrows-then-never-expires"]
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    _HOSTILE_DEADLINE_SUBCLASSES,
+    ids=_HOSTILE_DEADLINE_IDS,
+)
+def test_a_numeric_subclass_written_deadline_leaves_the_armed_ceiling_standing(hostile):
+    """A value outside the deadline domain cannot be shown to narrow the budget."""
     context: dict[str, Any] = {}
     info = SimpleNamespace(context=context)
     with _armed(context, ResourcePolicy(execution_deadline_seconds=30)):
-        context[DST_RESOURCE_DEADLINE] = HostileFloat(time.monotonic() - 1)
+        context[DST_RESOURCE_DEADLINE] = hostile(time.monotonic() - 1)
         check_deadline(info)
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    _HOSTILE_DEADLINE_SUBCLASSES,
+    ids=_HOSTILE_DEADLINE_IDS,
+)
+def test_a_numeric_subclass_written_deadline_cannot_outlive_an_expired_budget(hostile):
+    """The escape a narrowing rule alone leaves open once the domain is not exact.
+
+    A subclass answers BOTH comparisons this seam makes - the one deciding
+    whether the written instant narrows the armed one, and the one deciding
+    whether that instant has passed - so a value that presents as a narrowing on
+    the way in can answer every later reading as time remaining. Admitted as the
+    effective deadline it buys the rest of the operation unbounded wall clock
+    off a budget that has already run out.
+    """
+    context: dict[str, Any] = {}
+    info = SimpleNamespace(context=context)
+    with _armed(context, ResourcePolicy(execution_deadline_seconds=0.001)):
+        time.sleep(0.01)
+        context[DST_RESOURCE_DEADLINE] = hostile(time.monotonic() - 1)
+        with pytest.raises(ResourceLimitExceeded) as caught:
+            check_deadline(info)
+    assert caught.value.bound == "execution_deadline_seconds"
 
 
 def test_ending_a_budget_restores_the_one_it_was_opened_inside():
@@ -1837,11 +1899,28 @@ class _ScalarEdges:
 
 
 @strawberry.type
+class _ProbeEdge:
+    node: str
+    cursor: str
+
+
+@strawberry.type
+class _ProbeConnection:
+    """The whole edge shape ``_is_connection_type`` matches on."""
+
+    edges: list[_ProbeEdge]
+
+
+@strawberry.type
 class _Probe:
     """A minimal schema whose only job is to give the walker real types."""
 
     fauxes: list[_NotAConnection]
     scalar_edges: _ScalarEdges
+
+    @strawberry.field
+    def page(self, first: int | None = None) -> _ProbeConnection:
+        return _ProbeConnection(edges=[])
 
     @strawberry.field
     def echo(self, text: str = "x", tags: list[str] | None = None) -> str:
@@ -2103,6 +2182,45 @@ def test_an_introspection_meta_field_argument_is_charged():
     assert caught.value.bound == "max_scalar_bytes"
 
 
+class _AmountNoBoundCanExceed(int):
+    """An amount no bound can ever be over, by whichever route it is charged.
+
+    Its ``__gt__`` answers the comparison a rejection is decided by; its
+    reflected ``__radd__`` and ``__rmul__`` - which take priority over
+    ``int``'s own - decide what a running total and a multiplied bound become
+    the moment one of these reaches them, and ``nan`` is over no limit ever
+    again.
+    """
+
+    def __gt__(self, other):
+        return False
+
+    def __radd__(self, other):
+        return math.nan
+
+    def __rmul__(self, other):
+        return math.nan
+
+
+def test_a_page_size_variable_outside_the_integers_narrows_nothing():
+    """A page bound is a charge, so the value that sets it must be one the package owns.
+
+    ``first`` narrows the rows a connection selection is charged. Supplied as an
+    ``int`` SUBCLASS it answers the clamp that would cap it at the page ceiling
+    AND, once charged, the reflected addition the running collection cost is
+    accumulated through - a page bound that is over every ceiling and a total
+    that is under every one. Out of the domain, it narrows nothing and the
+    selection is charged the policy's own ceiling.
+    """
+    document = "query P($n: Int) { page(first: $n) { edges { node } } }"
+    policy = ResourcePolicy(max_page_size=50, max_collection_cost=49)
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(document, {"n": _AmountNoBoundCanExceed(10**9)}, policy=policy)
+    assert caught.value.bound == "max_collection_cost"
+    assert caught.value.charged == 50
+    _charge(document, {"n": 10}, policy=policy)
+
+
 def test_a_type_that_merely_has_an_edges_field_is_not_a_connection():
     """The connection exemption makes a list FREE, so it must match the edge shape.
 
@@ -2223,25 +2341,62 @@ def test_a_selection_under_a_leaf_field_has_no_field_definition_to_charge():
     _charge("{ echo { nope } }")
 
 
-def test_an_upload_that_cannot_report_its_size_is_rejected():
-    """Guard the ANSWER, not one spelling of the missing input.
-
-    An unmeasurable file charged as zero bytes would be an unbounded upload that
-    every byte bound reports as free - the fail-open shape this bound exists to
-    avoid. ``None``, a non-integer, a negative, and ``True`` are all "not a size".
-    """
-    for size in (
+@pytest.mark.parametrize(
+    "size",
+    [
         None,
         "12",
         -1,
         True,
-    ):
-        with pytest.raises(ResourceLimitExceeded) as caught:
-            _charge(
-                "query U($f: Upload!) { stash(document: $f) }",
-                {"f": SimpleNamespace(size=size)},
-            )
-        assert caught.value.bound == "max_upload_file_bytes"
+        _AmountNoBoundCanExceed(10**9),
+    ],
+    ids=[
+        "absent",
+        "string",
+        "negative",
+        "boolean",
+        "int-subclass",
+    ],
+)
+def test_an_upload_that_cannot_report_its_size_is_rejected(size):
+    """Guard the ANSWER, not one spelling of the missing input.
+
+    An unmeasurable file charged as zero bytes would be an unbounded upload that
+    every byte bound reports as free - the fail-open shape this bound exists to
+    avoid. ``None``, a non-integer, a negative, ``True``, and an ``int``
+    SUBCLASS are all "not a size": the subclass most of all, because its own
+    ``__gt__`` answers the per-file bound and its reflected ``__radd__`` decides
+    what the aggregate counter becomes for every file that follows it.
+    """
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query U($f: Upload!) { stash(document: $f) }",
+            {"f": SimpleNamespace(size=size)},
+        )
+    assert caught.value.bound == "max_upload_file_bytes"
+
+
+def test_a_scalar_that_reports_an_unmeasurable_byte_count_is_rejected():
+    """Every charge is an amount the package can compare, not one the value decides.
+
+    A buffer's ``nbytes`` is read off the value the request carried in, so a
+    subclass can answer the very comparison that would reject it. An amount
+    outside the built-in integers charges the bound at one past its limit rather
+    than passing as free.
+    """
+
+    class _Bytes(bytes):
+        nbytes = _AmountNoBoundCanExceed(10**9)
+
+    document = "query B($p: JSON!) { blob(payload: $p) }"
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            document,
+            {"p": _Bytes(b"0123456789")},
+            policy=ResourcePolicy(max_scalar_bytes=4),
+        )
+    assert caught.value.bound == "max_scalar_bytes"
+    assert caught.value.charged == 5
 
 
 def test_an_upload_size_descriptor_that_raises_is_rejected():

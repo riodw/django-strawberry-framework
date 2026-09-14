@@ -158,24 +158,35 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
         )
 
 
+def _is_builtin_number(value: Any) -> bool:
+    """Whether ``value`` is an exact built-in ``int`` or ``float``.
+
+    The test is EXACT, not ``isinstance``, everywhere a number crosses into the
+    budget machinery - a deployment's configured bound, a consumer-written
+    deadline mirror, an uploaded file's reported size. A numeric SUBCLASS is
+    consumer code wearing a number's type, and every dunder the package then
+    reaches for is that code: a raising ``__le__`` / ``__gt__`` replaces a typed
+    ``ConfigurationError`` with a raw error out of schema construction, a
+    raising ``__ceil__`` / ``__format__`` replaces a typed
+    ``ResourceLimitExceeded`` with one out of a collection resolver, a lying
+    ``__float__`` answers a domain check for a value it does not hold, a lying
+    ``__lt__`` / ``__le__`` makes an expired instant compare as a future one,
+    and a reflected ``__radd__`` - which takes priority over the built-in's own
+    - turns ``x + value`` into ``nan``, which no later comparison against a
+    bound can ever exceed. Admitting only the built-in types is what keeps every
+    comparison, conversion, arithmetic and format the package performs on a
+    value the package owns.
+    """
+    return type(value) is int or type(value) is float
+
+
 def _is_valid_deadline(value: Any) -> bool:
     """Whether ``value`` sits in the deadline domain (``None`` is decided by the caller).
 
-    The type test is EXACT, not ``isinstance``. The value is
-    deployment-supplied, and a numeric SUBCLASS is a hostile configuration
-    object whose dunders are consumer code the policy would then carry
-    everywhere it uses the deadline: a raising ``__le__`` / ``__gt__`` replaces
-    the typed ``ConfigurationError`` with a raw error out of schema
-    construction, a raising ``__ceil__`` / ``__format__`` replaces the typed
-    ``ResourceLimitExceeded`` with one out of a collection resolver, a lying
-    ``__float__`` answers this very check for a value it does not hold, and a
-    reflected ``__radd__`` - which takes priority over ``float``'s own - turns
-    ``stash_resource_policy``'s ``time.monotonic() + deadline`` into ``nan``,
-    silently disarming the deadline of a policy that was accepted. Admitting
-    only the built-in types is what keeps every later comparison, conversion,
-    arithmetic and format on a value the package owns.
+    Exact built-in numbers only (:func:`_is_builtin_number`), finite and
+    positive.
     """
-    if type(value) is not int and type(value) is not float:
+    if not _is_builtin_number(value):
         return False
     try:
         return math.isfinite(value) and value > 0
@@ -516,22 +527,50 @@ def _effective_deadline(armed: float | None, mirror: Any) -> Any:
     of budget state a consumer can write: a resolver that stashes an EARLIER
     instant under ``DST_RESOURCE_DEADLINE`` is shortening its own request, which
     it is always entitled to do; one that stashes a later instant, clears the
-    key, or writes a value no comparison can order is asking to run past the
+    key, or writes a value outside the deadline domain is asking to run past the
     budget the operation started with, which no caller is entitled to. The armed
     value is the ceiling either way, so the seam cannot be widened by anything
     reachable from ``info.context``.
+
+    The written value is admitted only if it is an exact built-in number
+    (:func:`_is_builtin_number`). A numeric SUBCLASS answers the comparison the
+    narrowing rule is decided by, so it can present itself as EARLIER than the
+    armed instant while answering every later comparison as a future one - a
+    narrowing on the way in and a widening on the way out, which is the one
+    thing this seam exists to refuse.
     """
-    if not isinstance(mirror, (int, float)) or isinstance(mirror, bool):
+    if not _is_builtin_number(mirror):
         return armed
     if armed is None:
         return mirror
-    try:
-        return mirror if mirror < armed else armed
-    except Exception:
-        # A hostile numeric SUBCLASS cannot be ordered against the armed
-        # deadline, so it cannot be shown to narrow it: the operation keeps the
-        # deadline it started with rather than adopting an unorderable one.
-        return armed
+    return mirror if mirror < armed else armed
+
+
+def _deadline_expired(deadline: Any) -> bool | None:
+    """Whether ``deadline`` has passed, or ``None`` when it is not a deadline at all.
+
+    Only an exact built-in number is placed against the clock
+    (:func:`_is_builtin_number`); a non-finite one is expired, since no
+    configured policy derives it and no comparison can certify the request is
+    inside it.
+
+    A value that is numeric-SHAPED but outside that domain - an ``int`` or
+    ``float`` SUBCLASS, whose comparison, conversion and format are all consumer
+    code - is likewise a deadline the seam cannot certify the request is inside,
+    and reads as passed rather than being asked. Absent, cleared, ``bool``, or
+    anything non-numeric is not a deadline at all and leaves the request
+    running.
+    """
+    if _is_builtin_number(deadline):
+        try:
+            return not math.isfinite(deadline) or time.monotonic() >= deadline
+        except OverflowError:
+            # ``isfinite`` overflows converting an integer too large for a
+            # double, which is therefore an instant no comparison can place.
+            return True
+    if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
+        return None
+    return True
 
 
 def clear_resource_context(context: Any) -> None:
@@ -571,12 +610,12 @@ def check_deadline(info: Any) -> None:
     clear it (:func:`_effective_deadline`). Where no budget is armed, the
     published mirror is all there is and answers alone.
 
-    Guarding the *answer* rather than a spelling of the input: only a deadline
-    that is a real number leaves the request running, so an absent, cleared, or
-    non-numeric one leaves it running rather than rejecting it, while a deadline
-    that has passed - and equally one that is numeric but NOT FINITE, which no
-    configured policy can derive and which no comparison can certify the request
-    is inside - always rejects.
+    Guarding the *answer* rather than a spelling of the input
+    (:func:`_deadline_expired`): an absent, cleared, or non-numeric deadline
+    leaves the request running rather than rejecting it, while one that has
+    passed - and equally one that is numeric but not placeable on the clock,
+    which no configured policy can derive and which no comparison can certify
+    the request is inside - always rejects.
 
     The rejection reports the CONFIGURED budget, never the clock: ``limit`` is
     the policy's own ``execution_deadline_seconds`` and ``charged`` is one second
@@ -590,18 +629,7 @@ def check_deadline(info: Any) -> None:
     budget = _active_budget.get()
     mirror = get_context_value(getattr(info, "context", None), DST_RESOURCE_DEADLINE)
     deadline = mirror if budget is None else _effective_deadline(budget.deadline, mirror)
-    if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
-        return
-    try:
-        expired = not math.isfinite(deadline) or time.monotonic() >= deadline
-    except Exception:
-        # A numeric SUBCLASS whose conversion or comparison raises is a hostile
-        # mirror shape: the seam cannot certify the request inside its budget,
-        # so it fails closed on the same typed path a passed deadline takes
-        # rather than leaking the raw arithmetic error out of a collection
-        # resolver.
-        expired = True
-    if not expired:
+    if not _deadline_expired(deadline):
         return
     source = budget.policy if budget is not None else policy_from_info(info)
     configured = source.execution_deadline_seconds

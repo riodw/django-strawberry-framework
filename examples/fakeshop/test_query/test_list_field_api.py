@@ -132,9 +132,10 @@ def _post_sync(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
-def test_shipped_branches_introspection_arguments():
-    query = """
+#: The introspection document every published-surface row reads. One request per
+#: row rather than one request read three times: a field that never reached the
+#: schema must fail its own node, not the first assertion of a shared body.
+_INTROSPECTION_QUERY = """
     query {
       __type(name: "Query") {
         fields {
@@ -174,31 +175,49 @@ def test_shipped_branches_introspection_arguments():
       }
     }
     """
-    payload = graphql_payload(query)
-    fields = {f["name"]: f for f in payload["data"]["__type"]["fields"]}
 
-    for field_name in (
+
+def _introspected_query_fields() -> dict[str, Any]:
+    """The ``Query`` type's fields, keyed by published name."""
+    payload = graphql_payload(_INTROSPECTION_QUERY)
+    return {f["name"]: f for f in payload["data"]["__type"]["fields"]}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "field_name",
+    [
         "allLibraryBranchesViaListField",
         "allLibraryBranchesViaListFieldNullable",
         "allLibraryBranchesViaListFieldManagerResolver",
-    ):
-        assert field_name in fields
-        field_data = fields[field_name]
-        args_map = {a["name"]: a for a in field_data["args"]}
+    ],
+    ids=["default", "nullable", "manager-resolver"],
+)
+def test_shipped_branches_introspection_arguments(field_name):
+    """Every published list surface carries the same three arguments in the same types."""
+    fields = _introspected_query_fields()
+    assert field_name in fields
+    args_map = {a["name"]: a for a in fields[field_name]["args"]}
 
-        assert "offset" in args_map
-        assert args_map["offset"]["type"]["kind"] == "SCALAR"
-        assert args_map["offset"]["type"]["name"] == "Int"
+    assert "offset" in args_map
+    assert args_map["offset"]["type"]["kind"] == "SCALAR"
+    assert args_map["offset"]["type"]["name"] == "Int"
 
-        assert "limit" in args_map
-        assert args_map["limit"]["type"]["kind"] == "SCALAR"
-        assert args_map["limit"]["type"]["name"] == "Int"
+    assert "limit" in args_map
+    assert args_map["limit"]["type"]["kind"] == "SCALAR"
+    assert args_map["limit"]["type"]["name"] == "Int"
 
-        assert "orderBy" in args_map
-        order_type = args_map["orderBy"]["type"]
-        assert order_type["kind"] == "LIST"
-        assert order_type["ofType"]["kind"] == "NON_NULL"
-        assert order_type["ofType"]["ofType"]["name"] == "BranchOrderInputType"
+    assert "orderBy" in args_map
+    order_type = args_map["orderBy"]["type"]
+    assert order_type["kind"] == "LIST"
+    assert order_type["ofType"]["kind"] == "NON_NULL"
+    assert order_type["ofType"]["ofType"]["name"] == "BranchOrderInputType"
+
+
+@pytest.mark.django_db
+def test_shipped_branches_introspection_return_types():
+    """The annotation, not ``DjangoListField``, decides the published nullability."""
+    fields = _introspected_query_fields()
 
     # Non-null list return type: the consumer's bare ``list[BranchType]``
     # annotation renders all four levels NON_NULL -> LIST -> NON_NULL -> OBJECT,
@@ -1483,19 +1502,29 @@ def _parity_run(
     return response, branch_sql, counters["visibility"]
 
 
-@pytest.mark.django_db
-def test_branches_omitted_and_null_arguments_match_the_legacy_reference(monkeypatch):
-    """Omitted and all-null arguments reproduce the PRE-CARD pipeline, not merely each other.
+#: The reference envelope's own spelling, and the one the card promises is the
+#: same request. Each is compared against the SAME legacy reference, so each
+#: owns a node rather than sharing one that stops at the first divergence.
+_PARITY_OMITTED = "{ branches { id name } }"
+_PARITY_ALL_NULL = "{ branches(offset: null, limit: null, orderBy: null) { id name } }"
+_SHIPPED_OMITTED = "{ allLibraryBranchesViaListField { id name } }"
+_SHIPPED_ALL_NULL = (
+    "{ allLibraryBranchesViaListField(offset: null, limit: null, orderBy: null) { id name } }"
+)
+
+
+def _legacy_branch_oracle(monkeypatch):
+    """Seed the rows, run the pre-card reference, and hand back its every claim.
 
     The oracle is a test-local legacy schema publishing the same ``branches``
     field name, composed from the shipped primitives the old pipeline used, so
     the same request envelope reaches both and the raw response BYTES can be
-    compared. The all-null form is compared against the legacy OMITTED response
-    because that is precisely the claim: the two spellings are the same request.
-    Behind the bytes, ``library_branch`` SQL, the final queryset's
-    ``str(query)`` / ``low_mark`` / ``high_mark``, and the visibility-hook count
-    must match too. The shipped field publishes its own name, so its rows are
-    compared semantically against the same oracle.
+    compared. Built inside each node: a reference shared across nodes would make
+    one row's failure another row's fixture error.
+
+    Returns ``(counters, current_schema, oracle)``, the oracle carrying the
+    reference response, its ``library_branch`` SQL, its visibility-hook count,
+    its final query marks, and its rows.
     """
     for name in ("Alpha", "Bravo", "Charlie"):
         library_models.Branch.objects.create(name=name, city="Boston")
@@ -1505,68 +1534,98 @@ def test_branches_omitted_and_null_arguments_match_the_legacy_reference(monkeypa
     legacy_schema = _build_legacy_parity_schema(source_factory)
     current_schema = _build_current_parity_schema(source_factory)
 
-    omitted = "{ branches { id name } }"
-    all_null = "{ branches(offset: null, limit: null, orderBy: null) { id name } }"
-
-    legacy_response, legacy_sql, legacy_visibility = _parity_run(
-        omitted,
-        counters,
-        schema=legacy_schema,
-    )
-    legacy = legacy_response.json()
-    assert "errors" not in legacy, legacy
-    legacy_rows = legacy["data"]["branches"]
-    assert [row["name"] for row in legacy_rows] == ["Alpha", "Bravo", "Charlie"]
-    assert len(legacy_sql) == 1
-    assert legacy_visibility == 1
-    legacy_marks = _PARITY_CAPTURE["legacy_marks"]
-    assert legacy_marks[1] == 0
-    assert legacy_marks[2] is not None
-
-    # The two envelopes the card promises are unchanged, byte for byte.
-    for label, query in (("omitted", omitted), ("all-null", all_null)):
-        _PARITY_CAPTURE.pop("current_marks", None)
-        response, sql, visibility = _parity_run(query, counters, schema=current_schema)
-        assert response.content == legacy_response.content, label
-        assert sql == legacy_sql, label
-        assert visibility == legacy_visibility, label
-        assert _PARITY_CAPTURE["current_marks"] == legacy_marks, label
-
-    # The shipped field publishes its own name, so its rows are compared to the
-    # same oracle semantically; the pipeline claims are identical.
-    shipped_queries = {
-        "shipped omitted": "{ allLibraryBranchesViaListField { id name } }",
-        "shipped all-null": (
-            "{ allLibraryBranchesViaListField(offset: null, limit: null, orderBy: null) "
-            "{ id name } }"
-        ),
+    response, sql, visibility = _parity_run(_PARITY_OMITTED, counters, schema=legacy_schema)
+    payload = response.json()
+    assert "errors" not in payload, payload
+    rows = payload["data"]["branches"]
+    assert [row["name"] for row in rows] == ["Alpha", "Bravo", "Charlie"]
+    assert len(sql) == 1
+    assert visibility == 1
+    marks = _PARITY_CAPTURE["legacy_marks"]
+    assert marks[1] == 0
+    assert marks[2] is not None
+    oracle = {
+        "response": response,
+        "sql": sql,
+        "visibility": visibility,
+        "marks": marks,
+        "rows": rows,
     }
-    for label, query in shipped_queries.items():
-        _PARITY_CAPTURE.pop("current_marks", None)
-        response, sql, visibility = _parity_run(query, counters)
-        payload = response.json()
-        assert "errors" not in payload, (label, payload)
-        assert payload["data"]["allLibraryBranchesViaListField"] == legacy_rows, label
-        assert sql == legacy_sql, label
-        assert visibility == legacy_visibility, label
-        assert _PARITY_CAPTURE["current_marks"] == legacy_marks, label
+    return counters, current_schema, oracle
 
 
 @pytest.mark.django_db
-def test_holder_branches_combined_legacy_branch_matches_the_legacy_reference(monkeypatch):
-    """The combined-source legacy branch is held to the pre-card oracle, not to "no new error".
+@pytest.mark.parametrize(
+    "query",
+    [_PARITY_OMITTED, _PARITY_ALL_NULL],
+    ids=["omitted", "all-null"],
+)
+def test_branches_a_null_spelling_reproduces_the_legacy_reference_bytes(query, monkeypatch):
+    """Omitted and all-null arguments reproduce the PRE-CARD pipeline, not merely each other.
 
-    A union source under omitted / all-null arguments takes the legacy policy path,
-    which is exactly where argument mode diverges (any non-null argument rejects at
-    the source seal). Both schemas publish the same ``branches`` field name over the
-    same source factory, so the oracle is the legacy response's RAW BYTES - whatever
-    the pre-card composition produces, rows or a pre-existing error, with its
+    The all-null form is compared against the legacy OMITTED response because
+    that is precisely the claim: the two spellings are the same request. Behind
+    the bytes, ``library_branch`` SQL, the final queryset's ``str(query)`` /
+    ``low_mark`` / ``high_mark``, and the visibility-hook count must match too.
+    """
+    counters, current_schema, oracle = _legacy_branch_oracle(monkeypatch)
+
+    _PARITY_CAPTURE.pop("current_marks", None)
+    response, sql, visibility = _parity_run(query, counters, schema=current_schema)
+
+    assert response.content == oracle["response"].content
+    assert sql == oracle["sql"]
+    assert visibility == oracle["visibility"]
+    assert _PARITY_CAPTURE["current_marks"] == oracle["marks"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "query",
+    [_SHIPPED_OMITTED, _SHIPPED_ALL_NULL],
+    ids=["omitted", "all-null"],
+)
+def test_branches_the_shipped_field_matches_the_legacy_reference(query, monkeypatch):
+    """The shipped field publishes its own name, so its ROWS carry the byte claim.
+
+    A different field name makes the envelopes differ for a reason that has
+    nothing to do with the pipeline; every claim behind the rows - SQL, final
+    marks, visibility-hook count - is still held to the same oracle.
+    """
+    counters, _current_schema, oracle = _legacy_branch_oracle(monkeypatch)
+
+    _PARITY_CAPTURE.pop("current_marks", None)
+    response, sql, visibility = _parity_run(query, counters)
+
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryBranchesViaListField"] == oracle["rows"]
+    assert sql == oracle["sql"]
+    assert visibility == oracle["visibility"]
+    assert _PARITY_CAPTURE["current_marks"] == oracle["marks"]
+
+
+#: The two spellings that take the combined source's legacy policy path. Any
+#: other argument spelling rejects at the seal, which is a different claim and a
+#: different node.
+_COMBINED_LEGACY_QUERIES = [
+    "{ branches { name } }",
+    "{ branches(offset: null, limit: null) { name } }",
+]
+
+
+def _combined_branch_oracle(monkeypatch, client):
+    """Run the pre-card reference over a union source and hand back its every claim.
+
+    Both schemas publish the same ``branches`` field name over the same source
+    factory, so the oracle is the legacy response's RAW BYTES - whatever the
+    pre-card composition produces, rows or a pre-existing error, with its
     envelope ordering, locations, path and extensions intact - plus its
     ``library_branch`` SQL, final marks, and visibility-hook count. A semantic
-    projection would pass while the envelope drifted. The staff client bypasses ``BranchType.get_queryset``'s
-    ``exclude`` so the combined queryset is not refused by Django before the seal.
+    projection would pass while the envelope drifted. The staff client bypasses
+    ``BranchType.get_queryset``'s ``exclude`` so the combined queryset is not
+    refused by Django before the seal.
     """
-    client = _staff_client()
     library_models.Branch.objects.create(name="A", city="Boston")
     library_models.Branch.objects.create(name="B", city="Boston")
     counters = _install_parity_probes(monkeypatch)
@@ -1579,46 +1638,76 @@ def test_holder_branches_combined_legacy_branch_matches_the_legacy_reference(mon
     legacy_schema = _build_legacy_parity_schema(_combined_source)
     current_schema = _build_current_parity_schema(_combined_source)
 
-    legacy_response, legacy_sql, legacy_visibility = _parity_run(
-        "{ branches { name } }",
+    response, sql, visibility = _parity_run(
+        _COMBINED_LEGACY_QUERIES[0],
         counters,
         schema=legacy_schema,
         client=client,
         extra_settings=_ERROR_POLICY_PASS_THROUGH,
     )
-    legacy_payload = legacy_response.json()
-    assert legacy_visibility == 1
-    legacy_marks = _PARITY_CAPTURE["legacy_marks"]
-    assert "UNION" in legacy_marks[0].upper()
-    if "errors" not in legacy_payload:
-        assert sorted(row["name"] for row in legacy_payload["data"]["branches"]) == ["A", "B"]
-        assert len(legacy_sql) == 1
+    payload = response.json()
+    assert visibility == 1
+    marks = _PARITY_CAPTURE["legacy_marks"]
+    assert "UNION" in marks[0].upper()
+    if "errors" not in payload:
+        assert sorted(row["name"] for row in payload["data"]["branches"]) == ["A", "B"]
+        assert len(sql) == 1
+    oracle = {
+        "response": response,
+        "sql": sql,
+        "visibility": visibility,
+        "marks": marks,
+    }
+    return counters, current_schema, oracle
 
-    for query in ("{ branches { name } }", "{ branches(offset: null, limit: null) { name } }"):
-        _PARITY_CAPTURE.pop("current_marks", None)
-        response, sql, visibility = _parity_run(
-            query,
-            counters,
-            schema=current_schema,
-            client=client,
-            extra_settings=_ERROR_POLICY_PASS_THROUGH,
-        )
-        assert response.content == legacy_response.content, query
-        assert sql == legacy_sql
-        assert visibility == legacy_visibility
-        assert _PARITY_CAPTURE["current_marks"] == legacy_marks
 
-    # Argument mode is where the two branches part: any non-null argument rejects the
-    # combined source at the seal before visibility runs.
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "query",
+    _COMBINED_LEGACY_QUERIES,
+    ids=["omitted", "all-null"],
+)
+def test_holder_branches_a_combined_legacy_spelling_matches_the_reference(query, monkeypatch):
+    """The combined-source legacy branch is held to the pre-card oracle, not to "no new error"."""
+    client = _staff_client()
+    counters, current_schema, oracle = _combined_branch_oracle(monkeypatch, client)
+
+    _PARITY_CAPTURE.pop("current_marks", None)
+    response, sql, visibility = _parity_run(
+        query,
+        counters,
+        schema=current_schema,
+        client=client,
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+
+    assert response.content == oracle["response"].content
+    assert sql == oracle["sql"]
+    assert visibility == oracle["visibility"]
+    assert _PARITY_CAPTURE["current_marks"] == oracle["marks"]
+
+
+@pytest.mark.django_db
+def test_holder_branches_an_argument_rejects_the_combined_source_before_visibility(monkeypatch):
+    """Argument mode is where the two branches part.
+
+    A union source under omitted / all-null arguments takes the legacy policy
+    path; any non-null argument rejects at the source seal, and rejects there
+    before the visibility hook is reached at all.
+    """
+    client = _staff_client()
+    counters, current_schema, _oracle = _combined_branch_oracle(monkeypatch, client)
+
     counters["visibility"] = 0
-    p_active = _post_sync(
+    payload = _post_sync(
         current_schema,
         "{ branches(limit: 1) { name } }",
         client=client,
         extra_settings=_ERROR_POLICY_PASS_THROUGH,
     )
-    assert p_active["data"] is None
-    assert "combined" in p_active["errors"][0]["message"].lower()
+
+    assert payload["data"] is None
+    assert "combined" in payload["errors"][0]["message"].lower()
     assert counters["visibility"] == 0
 
 

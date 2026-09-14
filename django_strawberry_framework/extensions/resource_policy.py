@@ -316,7 +316,27 @@ class _ValueBudget:
         charged: int,
         detail: str,
     ) -> None:
+        """Reject unless ``charged`` is a measurable amount within ``bound``.
+
+        The amount must BE a built-in integer. Most charges are this walk's own
+        counters and lengths, but some are read off a value the request carried
+        in - an uploaded file's ``size``, a buffer's ``nbytes`` - and a numeric
+        SUBCLASS there is consumer code answering for a number: the ``>`` that
+        decides this rejection, and the ``__format__`` the rejection's own
+        message would then run, are both its own. An amount that is not a
+        built-in integer is therefore unmeasurable rather than free, and is
+        rejected on the same typed path an over-budget one takes, charged at one
+        past the limit - the spelling this module uses wherever a budget is
+        exceeded by an amount it cannot put a number to.
+        """
         limit = getattr(self.policy, bound)
+        if type(charged) is not int:
+            raise ResourceLimitExceeded(
+                bound,
+                limit,
+                limit + 1,
+                "a value charges this bound by an amount the framework cannot measure",
+            )
         if charged > limit:
             raise ResourceLimitExceeded(bound, limit, charged, detail)
 
@@ -647,6 +667,14 @@ class _ValueBudget:
         and an unmeasurable file is rejected rather than charged as zero bytes.
         Charging the answer instead of one spelling of the missing input is what
         keeps a stream the framework cannot measure out of the permit path.
+
+        "Integral" is the built-in type, not ``isinstance``
+        (``resource_policy.py::_is_builtin_number``): an ``int`` SUBCLASS reports
+        a size whose comparisons and arithmetic are the file object's own code,
+        and its reflected ``__radd__`` takes priority over ``int``'s in the
+        aggregate below - which is how a per-file size that passes every
+        per-file bound turns ``upload_bytes`` into a value no aggregate bound
+        can ever exceed.
         """
         self.upload_count += 1
         self._reject(
@@ -663,7 +691,7 @@ class _ValueBudget:
                 self.policy.max_upload_file_bytes + 1,
                 "an uploaded file does not report a usable size, so its bytes cannot be bounded",
             ) from exc
-        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        if type(size) is not int or size < 0:
             raise ResourceLimitExceeded(
                 "max_upload_file_bytes",
                 self.policy.max_upload_file_bytes,
@@ -769,12 +797,18 @@ def _page_bound(policy: ResourcePolicy, node: FieldNode, variables: Mapping[str,
     non-integral, out of range, or supplied through a variable that is not an
     integer - falls back to the policy's own page ceiling, which is the
     conservative answer rather than the permissive one.
+
+    "Integral" is the built-in type (``resource_policy.py::_is_builtin_number``),
+    so a variable holding an ``int`` SUBCLASS narrows nothing. The bound this
+    returns becomes a charge against ``max_collection_cost``, and a subclass
+    reaching that counter answers both the ``min`` that would clamp it and the
+    reflected ``__radd__`` the running total is accumulated through.
     """
     for argument in node.arguments:
         if argument.name.value not in ("first", "last"):
             continue
         value = value_from_ast_untyped(argument.value, variables)
-        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        if type(value) is int and value >= 0:
             return min(value, policy.max_page_size)
     return policy.max_page_size
 

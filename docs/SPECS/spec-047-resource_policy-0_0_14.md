@@ -6,7 +6,7 @@ four-card security-remediation program** derived from the hardening audit in
 budget for query and response work) and **S4** (unbounded variable-driven input
 cardinality). It depends on [`spec-046`][spec-046], which corrected the transports every
 bound here is consumed by; cards [`DONE-048-0.0.14`][kanban] (secure output and
-error defaults) and [`WIP-ALPHA-049-0.0.14`][kanban] (dependency / CI hygiene) follow.
+error defaults) and [`DONE-049-0.0.14`][kanban] (dependency / CI hygiene) follow.
 
 Deliberation, rejected alternatives, and this spec's change record live in its companion
 [`spec-047-resource_policy-0_0_14-rationale.md`][rationale].
@@ -30,9 +30,10 @@ records the same state.
 **Version boundary** (see
 [Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)):
 this card targets `0.0.14`, the patch its three program siblings and cards 041-045 also
-target. The version quintet already reads `0.0.14`, so there is no bump for this card to
-take; the [joint version cut][glossary-joint-version-cut] rule assigns the release wording
-to the last card of that shared line to land. Slice 5 folds documentation in only.
+target. The version quintet reached `0.0.14` ahead of this card's first slice, so there is
+no bump for this card to take; the [joint version cut][glossary-joint-version-cut] rule
+assigns the release wording to the last card of that shared line to land. Slice 5 folds
+documentation in only.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits without explicit
 permission. This card's Slice 5 does **not** claim that permission — the release entry is
@@ -267,7 +268,7 @@ package defaults. Both override sources are *trusted declarations* and may widen
 | `max_aliases` | `100` | Aliased selections after fragment expansion. |
 | `max_collection_cost` | `1_000_000_000` | Multiplicative row cost of the document. |
 | `max_page_size` | `100` | Ceiling over a connection's effective `relay_max_results`. |
-| `max_list_rows` | `100` | Rows a raw (non-Relay) list field may evaluate. |
+| `max_list_rows` | `100` | Ceiling on the rows a raw (non-Relay) list field returns and on the skip coordinate it accepts. |
 | `max_input_nodes` | `5_000` | Every scalar / list / object node in the argument values. |
 | `max_container_width` | `1_000` | The widest single list or input object. |
 | `max_value_depth` | `20` | The deepest chain of nested lists / input objects in one value. |
@@ -279,7 +280,7 @@ package defaults. Both override sources are *trusted declarations* and may widen
 | `max_upload_count` | `10` | Files in the request. |
 | `max_upload_file_bytes` | `10 MiB` | Bytes in the largest single file. |
 | `max_upload_total_bytes` | `25 MiB` | Bytes in all files together. |
-| `max_scalar_bytes` | `65_536` | UTF-8 bytes in one scalar value. |
+| `max_scalar_bytes` | `65_536` | Bytes in one scalar value: the UTF-8 encoding of a text value, `nbytes` of a bytes-like one. |
 | `execution_deadline_seconds` | `None` | Optional cooperative wall-clock budget. |
 
 ### The rejection
@@ -304,6 +305,14 @@ package defaults. Both override sources are *trusted declarations* and may widen
 `RESOURCE_LIMIT_ERROR_CODE` is exported so a consumer can compare against a constant.
 `ResourceLimitExceeded` multiple-inherits `graphql.GraphQLError` and the package base, so
 it is catchable both ways.
+
+The exception carries a fourth attribute, `detail` — the clause that names *which* shape of
+the bound was exceeded, and the half of the message that is not mechanically derivable from
+`bound` / `limit` / `charged`. It stays off the wire on purpose: `extensions` carries the
+three fields a client can act on, and prose a client would have to parse is not one of them.
+`ResourceLimitExceeded.__reduce__` restores all four, so a rejection survives a pickle round
+trip intact — which is what lets one cross a process boundary (a task queue, a subprocess
+test harness) without degrading into a bare `GraphQLError`.
 
 ### The field bound
 
@@ -352,15 +361,26 @@ mutable dataclass with `freeze()`, Pydantic).*
 
 ### Decision 2 — Threaded through the request context, mirroring the optimizer seam
 
-The resolved policy is stashed under `DST_RESOURCE_POLICY` at the start of every operation
-and read back by `resource_policy.py::policy_from_info`. The keys, the dispatch, and the
-end-of-operation clear all mirror `optimizer/_context.py`'s `DST_OPTIMIZER_*` seam, which
-the card's architectural posture names directly.
+The resolved policy — and the monotonic deadline derived from it — is stashed under
+`DST_RESOURCE_POLICY` and `DST_RESOURCE_DEADLINE` at the start of every operation by
+`resource_policy.py::stash_resource_policy`, and read back by
+`resource_policy.py::policy_from_info` and `resource_policy.py::check_deadline`. The keys and
+the dispatch mirror `optimizer/_context.py`'s `DST_OPTIMIZER_*` seam, which the card's
+architectural posture names directly.
 
-The shape-agnostic read / write / delete dispatch itself moved to `utils/context.py` and is
-now shared by both subsystems. It handled four context shapes (`None`, object, `dict`,
-frozen) and was already the single place a new shape would land; a second copy in
-`resource_policy.py` would have been the first duplicate of it.
+**The operation SNAPSHOTS both keys and puts them back; it does not clear them.**
+`utils/context.py::restored_context_keys` brackets each operation: it records what each key
+held before the stash — distinguishing a key that was ABSENT from one explicitly stashed as
+`None`, through the public `utils/context.py` `MISSING` sentinel — and restores that on the
+way out, on the exception path as well as the normal one. A nested schema execution inside an
+outer operation therefore hands the outer operation back its own row cap and its own
+deadline. Clearing instead would leave the outer request running with no deadline for the
+rest of its work, which is a fail-open on the one bound that is allowed to be absent.
+
+The shape-agnostic read / write / delete dispatch lives in `utils/context.py` and is shared by
+both subsystems: it handles the four context shapes (`None`, object, `dict`, frozen) and is
+the single place a new shape lands. *Why it is shared rather than copied is in the
+[rationale][rationale].*
 
 **The miss path is fail-closed.** `policy_from_info` returns `DEFAULT_RESOURCE_POLICY`, never
 `None`. A frozen context that refused the stash, a plain `strawberry.Schema` that never
@@ -396,7 +416,17 @@ Two consequences are contractual and are documented rather than hidden:
   The scan is not a promise to measure every malformed document, it is a promise that a
   document too large to parse safely never reaches the parser.
 - **`depth` is a running bracket balance**, so it is a true nesting depth for a balanced
-  document. An unbalanced one is a syntax error by construction and is answered as one.
+  document. An unbalanced one is a syntax error by construction and is answered as one. The
+  three structural families the balance counts are single-sourced by
+  `extensions/resource_policy.py #"_STRUCTURAL_DELIMITER_PAIRS: tuple"`, and the open and
+  close token sets are derived from that one declaration — so an open bracket family cannot
+  be counted without its close.
+- **A value that is not text at all is declined, not scanned.** Anything that is not a `str`
+  carries no tokens to charge, and handing it to the lexer raises a raw `TypeError` /
+  `AttributeError` / `KeyError` out of graphql-core at exactly the input the package's
+  exception-containment invariant says must never escape an input decoder. Both HTTP views
+  type-check the query before the extension runs; the WebSocket path performs no such check,
+  so the decline is this scan's own contract rather than a transport's favor.
 
 *Alternatives rejected: see the [rationale][rationale] (`parse_options["max_tokens"]`, a
 depth `ValidationRule`, a regex or `str.count` over the document).*
@@ -421,9 +451,15 @@ single iterative walk over the validated AST in `on_execute`, before execution.
 - **Aliases are charged per alias.** The same expensive field under twenty aliases is
   twenty selections and twenty aliases.
 - **Values are charged in the same pass** because family classification needs the argument's
-  own GraphQL input type, which only the field context supplies. Literal arguments,
-  variables, and literal objects with variables spliced into them all normalize through
-  `value_from_ast_untyped`, so there is one walker rather than one per value source.
+  own GraphQL input type, which only the field context supplies. Four value sources normalize
+  through `value_from_ast_untyped` into one walker rather than one walker per source: literal
+  arguments; variables; literal objects with variables spliced into them; and **an operation
+  variable definition's own default**, folded into the per-operation variable map before any
+  argument value is charged (a supplied variable wins; a default is charged only where the
+  map has no entry for its name). The default is a source in its own right because a
+  document can carry its whole payload there — `query($p: [Int!] = [ … 5000 items … ])
+  { … }` supplies no variables map at all — and a walk that charges only what the map holds
+  charges nothing for it.
 
 **Why after validation.** The walk resolves field and argument definitions against the
 schema; running it on an unvalidated document would mean reimplementing validation's
@@ -432,11 +468,31 @@ either way. The degenerate inputs an invalid document would present (unknown fra
 unknown argument, a selection under a leaf, an operation kind the schema lacks) are each
 handled and tested regardless, because a schema may disable validation.
 
-**Value families are classified by TYPE, never by argument name.** A list of input objects
-is a nested row set; a list of `ID` in a mutation is a relation-id set; a list of `ID` under
-an argument named `ids` in a query is a node-refetch set; every other list is a membership
-list. The single name-based rule — `ids` — exists because node refetch is a Relay
-convention with no distinguishing type, and it is stated once rather than inferred.
+**Value families are classified by the write's own BIND SPEC first, by TYPE second, and
+never by argument name.** The ladder is stated once here rather than inferred, in the order
+`extensions/resource_policy.py::_ValueBudget._charge_list_family` applies it:
+
+1. a list of input objects is a **nested row set**;
+2. a list the owning mutation's bind-time spec records as `utils/inputs.py::RELATION_MULTI`
+   is a **relation-id set**, whether the related type renders its ids as `GlobalID` (`ID`) or
+   as raw pks (`Int`);
+3. otherwise a list of `ID` inside a **mutation** is a **relation-id set**;
+4. a list of `ID` under an argument named `ids` in a **query** is a **node-refetch set**;
+5. every other list is a **membership list**.
+
+**Rule 2 outranks rule 3 because the type cannot answer the question.** A raw-pk relation
+list is typed `[Int!]`, and nothing about `[Int!]` says relation — charged by type alone it
+is a membership list, which means a mutation's relation payload is measured against
+`max_membership_items` and never against either relation bound. The bind spec is the write
+input's own record of what each field IS, read through
+`extensions/resource_policy.py::_mutation_input_specs` for the top-level input and
+`::_nested_specs_map` for a nested serializer's own fields, and it is the same record the
+request-time relation decode walks — so the budget and the decode cannot disagree about what
+a list is. A field the package did not generate has no spec, which is exactly when rule 3
+takes over.
+
+The single name-based rule — `ids` — exists because node refetch is a Relay convention with
+no distinguishing type.
 
 **An ancestor-path cycle guard makes the value walk cycle-safe, and every reference is
 charged.** Each entry on the walker's stack carries the ANCESTOR PATH of the value it
@@ -489,38 +545,98 @@ settings flag restoring the old default, relying on the row bound alone), are in
 
 ### Decision 6 — Every raw list is bounded at one seam
 
-`resource_policy.py::bounded_rows` is the single place a non-Relay list of rows is bounded,
-shared by the root [`DjangoListField`][glossary-djangolistfield] and by the generated
-many-side relation resolver. Both spellings of "a list of rows with no cursor" therefore
-carry the same ceiling, and a future third spelling has an obvious home.
+One seam bounds every non-Relay list of rows, in two execution colors:
+`resource_policy.py::bounded_rows` on the sync paths and
+`resource_policy.py::bounded_rows_async` on the async ones. The generated many-side relation
+resolver calls that exported pair; the root [`DjangoListField`][glossary-djangolistfield]
+enters the same seam one level down, at the package-private windowed body the exported pair
+itself runs (below). So every spelling of "a list of rows with no cursor" carries the same
+ceiling and a future spelling has an obvious home.
 
-- **The bound is applied by SLICING**, so a `QuerySet` carries it into SQL as a `LIMIT` and
-  is never evaluated unbounded. A value that is already materialized (a consumer resolver's
-  return, Django's prefetch cache) is truncated in Python — which cannot un-fetch those rows
-  but does stop the response from serializing them.
+**The two colors are one seam, not two bounds.** `resource_policy.py::_raw_list_bound` is the
+single body that performs the deadline check and then resolves the tighter of `max_list_rows`
+and the field's own declaration; every function on the seam reaches it and none computes a
+limit of its own, so they cannot drift onto different bounds. The async color exists because
+an async-only iterable cannot be sliced or consumed synchronously — it bounds the iteration itself and
+closes the iterator afterwards — not because it enforces something different. A synchronous
+iterable handed to the async color falls back to the sync one.
+
+**`max_list_rows` is a coordinate-and-result ceiling, not a promise about rows evaluated.**
+The exported pair carries no client window — `bounded_rows(result, info, declared=None, *,
+trusted=False)` and its async twin take nothing a caller could widen the bound with, so a
+direct importer gets the advertised ceiling unconditionally. The coordinate-bearing seam is
+package-private: `resource_policy.py::_windowed_rows` and
+`resource_policy.py::_windowed_rows_async` accept the `offset` / `requested_limit` pair a
+`DjangoListField` request carries, and `list_field.py` calls them directly. The exported pair
+delegates to them with no window, and `resource_policy.py::_raw_list_bound` is still the one
+place any of the four derives a limit — so the private seam is the body the two exported names
+run, not a second bound beside them. The ceiling bounds both the skip that seam will honor and
+the window it will return. What it does not claim is a cap on the physical rows the database
+scans to satisfy that window: an offset is pushed into SQL as `OFFSET`, and what the planner
+does to reach it is the database's business. The row promise this bound makes is the one it
+can keep. The `offset` / `limit` arguments themselves, and the typed, argument-named rejection
+a malformed or over-ceiling coordinate receives, are spec-050's surface on `DjangoListField`:
+`list_field.py::_normalize_list_arguments` is the sole owner of that check, and no coordinate
+reaches the private seam without passing it. What spec-047 owns is the ceiling those
+coordinates are checked against.
+
+- **The bound is applied by SLICING**, so a `QuerySet` carries it into SQL as a `LIMIT` (and
+  as an `OFFSET` when a skip coordinate is supplied) and is never evaluated unbounded. A
+  value that is already materialized (a consumer resolver's return, Django's prefetch cache)
+  is truncated in Python — which cannot un-fetch those rows but does stop the response from
+  serializing them.
 - **A non-subscriptable iterable is bounded through `islice`, not waved through.** The
   alternative to slicing an unsliceable value is not "return it whole"; that would be a
-  bound that silently stops applying to exactly the shapes nobody anticipated.
+  bound that silently stops applying to exactly the shapes nobody anticipated. The fallback
+  is entered on `KeyError` as well as `TypeError`, because a mapping-shaped result answers a
+  slice subscript with `KeyError` — and a bound seam must never let that escape a resolver as
+  itself.
 - **Ordering against the visibility hook is a correctness constraint, not a preference.**
   The bound is applied AFTER
   [`get_queryset`][glossary-get_queryset-visibility-hook] and after the consumer-resolver
   post-processing, because a sliced queryset cannot be refiltered or reordered and both the
   hook and the surface compose onto the source. Slicing first turns the bound into a crash
   on every type that declares a hook — which is how the implementation discovered the
-  constraint.
+  constraint. The generated many-side relation resolver applies it at each of its own
+  branches — the prefetched path and the manager path, in both colors — and each of them
+  after that relation's visibility step, never before.
 
 `DjangoListField(max_rows=…)` narrows; `trusted_max_rows=True` is the only way a field can
 be wider than the request policy. A non-positive `max_rows` raises at the line that
-constructed the field, matching the four target guards already there.
+constructed the field, joining the guards `list_field.py::_validate_djangotype_target`
+already runs there — the target is a class, it subclasses `DjangoType`, its definition is
+the one the registry holds for it, and a supplied resolver is callable.
+`resource_policy.py::validate_trusted_flag` rejects a `trusted_max_rows` that is not exactly
+`True` or `False` at the same line.
 
 ### Decision 7 — The policy is a CEILING over `relay_max_results`, never a replacement
 
 `utils/connections.py::resolve_relay_max_results` — the one seam both the plan-time walker
-and the resolve-time window read — now returns
-`min(<explicit or configured cap>, policy.max_page_size)`. Both `DjangoConnection`
-`resolve_connection` entry points resolve it once at the top, so every downstream window,
-slicer, and fallback receives an already-clamped integer and the two windows agree by
-construction.
+and the resolve-time window read — returns
+`min(<explicit or configured cap>, policy.max_page_size)`.
+`connection.py::DjangoConnection.resolve_connection` resolves it once at the top, before the
+`first` + `last` guard and before any window, slicer, or fallback runs, so every downstream
+consumer receives an already-clamped integer. There is ONE `resolve_connection` — the plain
+and `totalCount` shapes are one body that reads a class flag — so the clamp cannot be
+resolved twice or differently for the two shapes.
+
+**The offset window narrows through the same seam.**
+`utils/connections.py::derive_connection_window_bounds` resolves the cap through
+`resolve_relay_max_results` before it builds the slice metadata, so the clamp reaches the
+window arithmetic rather than only the field entry point. Its keyset twin
+`::derive_keyset_window_bounds` does the same.
+
+**The over-cap rejection reaches the two forks from different places, and is held to one
+vocabulary.** The offset fork takes it from Strawberry's `SliceMetadata.from_arguments`,
+which `derive_connection_window_bounds` calls immediately after resolving the cap. A keyset
+cursor is not an offset, so that engine cannot be run over one; the keyset fork instead
+routes every over-cap check through `utils/connections.py::assert_relay_pagination_bound`,
+the single spelling its two sites share — `::derive_keyset_window_bounds` and
+`connection.py::_resolve_keyset_connection` — and that helper reproduces
+`SliceMetadata`'s own negative and over-cap messages exactly. Parity therefore rests on the
+keyset helper mirroring the offset engine's text, not on one owner serving both forks: the
+two cannot answer the same over-cap request with different errors, and a change to either
+message is a change that must be made in both places.
 
 This keeps the existing precedence intact (an explicit field `max_results` still beats the
 schema config, which still beats Strawberry's default) and adds the policy strictly on top.
@@ -558,21 +674,30 @@ calls `resource_policy.py::check_deadline` first. The seams are enumerated rathe
 to "the collection resolvers", because a seam that charges rows without checking the
 deadline is a seam the deadline does not cover:
 
-- `resource_policy.py::bounded_rows` — both raw-list spellings, root field and generated
-  many-side relation resolver alike;
-- `connection.py::_resolve_connection_fast_path` — the head both `resolve_connection` entry
-  points share, so the plain and `totalCount` connections cannot diverge, placed after the
-  `first` + `last` guard so a malformed pagination request still answers with its own error;
+- `resource_policy.py::_raw_list_bound` — the shared body of both raw-list colors, so the
+  root field and the generated many-side relation resolver are covered in one place on the
+  sync and the async path alike;
+- `connection.py::DjangoConnection.resolve_connection` — the single head every connection
+  shape passes through, so the plain and `totalCount` connections cannot diverge, placed
+  after the `first` + `last` guard so a malformed pagination request still answers with its
+  own error;
 - `relay.py::DjangoNodeField` / `DjangoNodesField` — before the decode, which is the step
   that makes a visibility-scoped query inevitable (after the empty-`ids` short circuit, so
   a request that asks for nothing is never refused for it);
-- `mutations/resolvers.py::run_write_pipeline_sync` and the delete branch of
-  `_run_pipeline_sync` — BEFORE `transaction.atomic()` opens, so the refusal never has a
-  partial transaction to unwind. The create / update check sits in the shared skeleton, so
-  the model, form and serializer flavors all inherit it.
+- `mutations/resolvers.py::run_write_pipeline_sync` — BEFORE `transaction.atomic()` opens,
+  so the refusal never has a partial transaction to unwind. It is the ONE write seam: the
+  model, form and serializer create / update flavors, the plain form flavor, and delete all
+  enter this skeleton, so all five inherit the single check rather than each carrying one.
 
 `utils/connections.py` was audited and needs none: every helper there is pure window
 arithmetic with no database access.
+
+**The stashed deadline is a fail-closed read.** `resource_policy.py::check_deadline` arms
+only on a stash that is a real number, so an absent, cleared, or non-numeric stash leaves the
+request running rather than rejecting it — the guard is on the answer, not on one spelling of
+a missing input. But a stashed value whose own comparison raises is a hostile shape the seam
+cannot certify as inside budget, so it takes the rejection path rather than leaking a raw
+arithmetic error out of a collection resolver.
 
 **The rejection reports the CONFIGURED budget, never the clock.** `limit` is the policy's
 own `execution_deadline_seconds` and `charged` is one second past it. The monotonic deadline
@@ -586,21 +711,41 @@ database's job and a request timeout is the deployment's. A cooperative deadline
 the request from starting *more* work is honest and useful; a `signal.alarm` or a watchdog
 thread pretending to cancel SQL is neither.
 
-It is the only optional bound. *Why its default is `None` rather than a number is in the
-[rationale][rationale].*
+It is the only optional bound, and the only one whose domain is not the positive integers:
+`None`, or a **finite** positive number of seconds. `float("inf")` is refused like any other
+invalid value — an infinite deadline is a deadline that never fires, which is the disabling
+spelling [Goals](#goals) 3 says no bound has. `bool` is refused here as it is at every
+integer bound, and a numeric subclass whose own comparison raises is classified as outside
+the domain rather than allowed to escape `__post_init__` as a raw error.
+
+*Why its default is `None` rather than a number is in the [rationale][rationale].*
 
 ### Decision 10 — Per-field overrides narrow; the schema policy is the trusted declaration
 
 `resource_policy.py::effective_bound` is the whole rule: `None` means "the field declares
 nothing, the policy governs"; a declared value narrows to the tighter of the two;
-`trusted=True` is the explicit widening opt-in at the call site.
+`trusted` widens.
+
+**The widening test is `trusted is True`, not `if trusted:`.** This is the one primitive in
+the package whose answer may be WIDER than the request policy, so the condition that reaches
+it admits exactly the one value that means it. A truthy string, a non-empty container, or any
+object whose `__bool__` answers `True` narrows like every other non-opt-in caller. The field
+factories check the same thing at their own construction line —
+`resource_policy.py::validate_trusted_flag` rejects anything that is not exactly `True` or
+`False`, so a misspelled `trusted_max_rows="false"` fails where it was written rather than
+silently widening every request the field serves — and the primitive repeats the rule because
+it must stay safe for an internal caller with no factory in front of it.
 
 The schema-construction policy IS the trusted declaration S3 asks for — it is the only place
 that may widen a package default, and it is the deployment's own deliberate statement.
 `ResourcePolicy.narrowed()` enforces the same rule between policies and refuses any override
-that loosens a bound, naming both values so the message is actionable.
-`execution_deadline_seconds` narrows from `None` to any positive value and downward from
-there; restoring `None` is the widest move available and is refused like any other widening.
+that loosens a bound, naming both values so the message is actionable. It builds the
+candidate copy FIRST and compares the value that copy holds, so every override passes
+`__post_init__`'s domain check before the narrowing comparison sees it — an invalid override
+is answered as invalid rather than as a widening, and the comparison never runs on an
+unvalidated value. `execution_deadline_seconds` narrows from `None` to any positive value
+and downward from there; restoring `None` is the widest move available and is refused like
+any other widening.
 
 ### Decision 11 — One typed rejection, and no per-transport translation
 
@@ -623,13 +768,21 @@ subscription error envelope to paper over it is not in this card's scope; the cl
 narrowed to what is true instead.
 
 `extensions.code` is the single constant `RESOURCE_LIMIT_EXCEEDED`; `bound`, `limit`, and
-`charged` ride alongside so a client can act on the rejection without parsing prose.
+`charged` ride alongside so a client can act on the rejection without parsing prose. The
+payload is built by `utils/errors.py::coded_error_extensions`, which is the one shape every
+coded framework error's `extensions` mapping takes — so this rejection cannot drift into a
+different envelope from the package's other typed failures.
 
 **`DjangoSchema` installs the extension automatically**, as a class rather than an instance,
 because Strawberry constructs one instance per request and a shared instance would share
 one set of charge counters across every concurrent request. A consumer-supplied entry —
 class or instance — suppresses the automatic append, so a consumer who installed the
 extension with their own policy does not get a second copy double-charging the same bounds.
+The already-installed test is `schema.py::_extension_entry_matches`, one spelling for both
+the class and the instance form, and the consumer's `extensions` container is **never
+consulted through truthiness**: a container whose `__bool__` answers `False` still has its
+entries read, because Strawberry will read them, and a check that skipped them would install
+a second copy on exactly the container that lied about being empty.
 *Why installation is automatic rather than documented is in the [rationale][rationale].*
 
 ### Decision 12 — The version bump belongs to the `0.0.14` joint cut
@@ -639,7 +792,9 @@ with the three other cards of this security program (046, 048, 049) and with car
 before them. The quintet — `pyproject.toml [project].version`,
 `django_strawberry_framework/__init__.py::__version__`, the `tests/base/test_init.py`
 assertion that pins them together, the glossary's package-version line, and the package's
-own `uv.lock` entry — already reads `0.0.14`, so there is no bump for this card to take.
+own `uv.lock` entry — reached `0.0.14` ahead of this card's first slice, so there is no bump
+for this card to take. Later cards move the quintet past `0.0.14` on their own lines; that
+is their release wording to own, and it is not a fact about this one.
 
 Under the [joint version cut][glossary-joint-version-cut] rule the release wording belongs
 to the **last** card of a shared line to land, never to an individual card's slices. Slice 5
@@ -650,9 +805,9 @@ authoring-time board scan could not have known better, is in the [rationale][rat
 
 ### Decision 13 — What this policy does not bound, and why each boundary is deliberate
 
-**Decision.** The six boundaries below are not oversights and must not be re-derived. Three are
+**Decision.** The five boundaries below are not oversights and must not be re-derived. Three are
 transport-adjacent bounds this walker is the wrong layer to carry, and they are carried as scope
-on card `TODO-ALPHA-051-0.0.15`; three are audited exclusions that a later pass must not "fix".
+on card `TODO-ALPHA-051-0.0.15`; two are audited exclusions that a later pass must not "fix".
 Each is a boundary of the shipped contract rather than a gap in it.
 
 **Not this layer — a package-owned subscription rejection envelope.** Enforcement is not the gap;
@@ -698,11 +853,6 @@ the assert helpers are all pure window arithmetic with no database access.
 fire outside a resolve and against a plan-time `info`, so it is explicitly the wrong seam rather
 than a missing one.
 
-**Audited exclusion — `forms/resolvers.py::_run_plain_form_pipeline_sync` gets no deadline
-check.** The model-less plain-form flavour has no locate, no relation decode and no model write,
-so there is no database seam to guard. The three model-backed flavours all enter
-`run_write_pipeline_sync`, which has one.
-
 **Audited exclusion — `_charge_container` is deliberately not memoized.** A diamond-shaped value
 (one container referenced from many places) is charged **once per reference**, which is the
 contract [Decision 4](#decision-4--the-document-and-value-budgets-are-one-iterative-walk) states.
@@ -740,7 +890,7 @@ check runs rather than about how long anything takes.
 
 | Slice | Files | Delta |
 |---|---|---|
-| 1 | `resource_policy.py` (new) | `ResourcePolicy`, `DEFAULT_RESOURCE_POLICY`, `ResourceLimitExceeded`, `RESOURCE_LIMIT_ERROR_CODE`, `resolve_resource_policy`, `stash_resource_policy` / `policy_from_info` / `clear_resource_context`, `effective_bound`, `validate_collection_bound`, `bounded_rows`, `check_deadline`. |
+| 1 | `resource_policy.py` (new) | `ResourcePolicy`, `DEFAULT_RESOURCE_POLICY`, `ResourceLimitExceeded`, `RESOURCE_LIMIT_ERROR_CODE`, `DST_RESOURCE_POLICY` / `DST_RESOURCE_DEADLINE`, `resolve_resource_policy`, `stash_resource_policy` / `policy_from_info` / `clear_resource_context`, `effective_bound`, `validate_collection_bound`, `bounded_rows`, `check_deadline`. |
 | 1 | `utils/context.py` (new), `optimizer/_context.py` | The shape-agnostic dispatch lifted out and shared; the optimizer module keeps its keys and its reset and re-exports the helpers. |
 | 1 | `conf.py` | `RESOURCE_POLICY_KEY` and `resource_policy_setting()`, a thin reader that validates nothing. |
 | 2 | `extensions/resource_policy.py` (new) | `scan_document_text`, `charge_document`, `_DocumentBudget`, `_ValueBudget` (per-reference charging, `_closes_a_cycle` ancestor-path guard), `_field_definition` (introspection meta-fields), `_is_connection_type` (full edge shape), [`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension]. |
@@ -755,18 +905,64 @@ check runs rather than about how long anything takes.
 | 4 | `tests/test_relay_connection.py`, `tests/test_connection.py`, `tests/optimizer/test_extension.py` | Re-pinned to the new default, with the `"both"` shape pinned separately. |
 | 5 | `docs/GLOSSARY.md` (DB), `docs/TREE.md`, `KANBAN.md` (DB) | Fold-in. |
 
+**Shared modules this surface consumes rather than owns.** Three package modules carry
+contracts this policy depends on and no slice above created; a reader tracing the shipped
+behavior needs them named:
+
+- `utils/policies.py::resolve_policy` — the precedence ladder
+  ([Decision 1](#decision-1--one-immutable-frozen-dataclass-validated-at-construction)),
+  stated once for every schema-construction policy in the package.
+  `resource_policy.py::resolve_resource_policy` keeps its own name, signature and contract
+  and delegates, so a caller reads no difference.
+- `utils/errors.py::coded_error_extensions` — the one shape a coded framework error's
+  `extensions` mapping takes
+  ([Decision 11](#decision-11--one-typed-rejection-and-no-per-transport-translation)).
+- `utils/inputs.py::RELATION_MULTI` — the bind-spec kind that classifies a relation list
+  ahead of the `ID`-scalar test
+  ([Decision 4](#decision-4--the-document-and-value-budgets-are-one-iterative-walk)).
+
+**Two names on this module's surface that no slice row above carries.** Each `Delta` cell
+names what its slice landed, and `resource_policy.py`'s `__all__` is wider than the Slice 1
+row: it also exports `bounded_rows_async`, the async color of the raw-list seam
+([Decision 6](#decision-6--every-raw-list-is-bounded-at-one-seam)), and
+`validate_trusted_flag`, the constructor-site half of the widening rule
+([Decision 10](#decision-10--per-field-overrides-narrow-the-schema-policy-is-the-trusted-declaration)).
+Both belong to the surface rather than to a slice; neither is a root package export, so
+`__init__.py`'s `__all__` is unaffected.
+
 ## Helper-reuse obligations (DRY)
 
 - **`utils/context.py` is the only context dispatch.** No subsystem may grow a second
   `getattr`-then-`__getitem__` ladder; a new context shape lands there.
-- **`bounded_rows` is the only raw-list bound.** No resolver may slice a collection with a
-  locally-derived limit.
-- **`effective_bound` is the only narrowing rule.** No call site may open-code `min(...)`
-  against a policy value.
+- **`bounded_rows` / `bounded_rows_async` are the only raw-list bound**, read through their
+  delegation: the package-private `resource_policy.py::_windowed_rows` /
+  `resource_policy.py::_windowed_rows_async` are the body those two names run — the same
+  ceiling, plus the client window a validated `DjangoListField` request carries — not a second
+  bound beside them, and `resource_policy.py::_raw_list_bound` is the only place any of the
+  four derives a limit. Each rule governs one thing: the exported pair governs what a direct
+  caller can get, the private pair governs what a validated window can get, and
+  `_raw_list_bound` governs the limit both are held to. No resolver may slice a collection with
+  a locally-derived limit, no color may compute its own, and no caller may hand the private
+  pair a coordinate `list_field.py::_normalize_list_arguments` has not already checked — two
+  colors and two depths of one seam are still one bound only while one body decides it.
+- **`effective_bound` is the only narrowing rule between a request policy and a field's own
+  declaration**, so no field-side call site may open-code `min(...)` against a policy value.
+  The pre-execution document walk narrows under a different rule and keeps its own site:
+  `extensions/resource_policy.py::_page_bound` clamps a document's literal `first:` / `last:`
+  to `max_page_size` while charging collection cost, where there is no field, no declared
+  field maximum, and no trusted opt-in for `effective_bound` to weigh. Two rules, one site
+  each — not one rule with an exception.
 - **`resolve_relay_max_results` is the only connection-cap resolution**, and remains shared
   by the plan-time and resolve-time halves so their windows cannot diverge.
-- **`_ValueBudget._reject` is the only rejection constructor** inside the walker, so every
-  bound's message, code, and extension payload have one shape.
+- **`_ValueBudget._reject` is the only THRESHOLD rejection in the value walker**, so every
+  bound that rejects because a charge passed its limit has one message, code, and extension
+  shape. The rejections that sit beside it are a different rule rather than a second copy of
+  this one: `extensions/resource_policy.py::_ValueBudget._charge_upload`'s two
+  unmeasurable-size branches have no charge to compare — they synthesize `limit + 1` to say
+  "exceeded a budget integers cannot express" — and `::_DocumentBudget` keeps its own
+  comparisons because a document charge is a running total held on the budget object, not a
+  value the walker is carrying. A new bound charged against a limit goes through `_reject`;
+  nothing else may.
 - **`_is_connection_type` is the only connection detection**, and it matches the whole edge
   SHAPE — an `edges` field that is a list whose item type carries both `node` and `cursor` —
   rather than a `...Connection` name or the presence of a field called `edges`. Matching the
@@ -781,9 +977,12 @@ check runs rather than about how long anything takes.
   `DEFAULT_RESOURCE_POLICY` rather than unbounded.
 - **A consumer key collision** — some other value stashed under `dst_resource_policy` — is
   ignored, not trusted: `policy_from_info` type-checks before returning.
-- **An upload that cannot report its size** (absent, `None`, non-integral, negative, or
-  `True`) is *rejected*, not charged as zero bytes. Charging the answer rather than one
-  spelling of the missing input is what keeps an unmeasurable stream out of the permit path.
+- **An upload that cannot report its size** is *rejected*, not charged as zero bytes. Six
+  spellings of unmeasurable, all answered the same way: the attribute is absent, it is
+  `None`, it is non-integral, it is negative, it is `True`, or **reading it raises**.
+  Charging the answer rather than one spelling of the missing input is what keeps an
+  unmeasurable stream out of the permit path — and a `size` descriptor that raises is the
+  spelling a permissive read would have let through as "absent".
 - **Duplicate node ids are charged positionally**, because
   [`DjangoNodesField`][glossary-djangonodesfield] preserves duplicates positionally; the
   database may collapse the `IN`, but the framework still does the work.
@@ -792,7 +991,13 @@ check runs rather than about how long anything takes.
 - **A JSON-shaped custom scalar's contents are still charged** as untyped nodes and widths;
   otherwise a `JSON` argument would be a free payload of unlimited size.
 - **A scalar supplied where a list is declared** is charged as a one-item list, matching
-  GraphQL's own input coercion.
+  GraphQL's own input coercion: the synthetic container costs an input node and one level of
+  value depth, and its list family is classified and charged exactly as a written-out
+  one-item list would be. `max_container_width` is the one bound it does not pay, because
+  that bound is validated at or above 1 and a one-item container can never exceed it.
+- **A bytes-like scalar is charged by its byte count**, `nbytes` where the object reports one
+  and `len` otherwise — so a `bytes` / `bytearray` / `memoryview` value does not ride past
+  `max_scalar_bytes` merely by not being `str`.
 - **`__typename` and the introspection roots** resolve to their graphql-core meta-field
   definitions and are charged like any other field: `__type(name: …)`'s argument value is
   charged as a scalar, and `__schema`'s nested `types { fields { … } }` lists charge
@@ -814,25 +1019,44 @@ check runs rather than about how long anything takes.
 
 ## Test plan
 
-The live tier (`examples/fakeshop/test_query/test_resource_policy_api.py`, 35 rows) drives
-mounts of the package view over probe schemas that each narrow ONE family of bounds and
-leave every other bound at its default — so a row that rejects can only have rejected on the
-bound it is about.
+**A "row" here is one test function**, and each count names its node-id expansion beside it.
+The two are not the same number — a parametrized function is one row and several node ids —
+and a count published without saying which it is gets replaced by a third figure the next
+time somebody measures. Both counts are floors rather than fixed totals: later cards add
+rows to these files, so a larger number means the file grew, not that this plan is wrong.
+
+The live tier (`examples/fakeshop/test_query/test_resource_policy_api.py`, 56 rows / 56 node
+ids) drives mounts of the package view over probe schemas that each narrow ONE family of
+bounds and leave every other bound at its default — so a row that rejects can only have
+rejected on the bound it is about.
 
 - **Document text**: under / over the token bound with the exact charge; over the depth
-  bound; argument and input-object nesting counted toward depth.
+  bound; argument and input-object nesting counted toward depth; and the malformed pair —
+  a malformed document answered with the parser's own syntax diagnostic rather than a
+  resource rejection, and a malformed document already over the token bound before its
+  garbage rejected on size. Both are live rows because a malformed document IS expressible
+  over the wire, which is what decides the tier.
 - **Expanded document**: a fragment charged at every spread site; `@skip(if: true)` not
   evading accounting; the same field under many aliases charged per alias; nested
   collections charged multiplicatively; an explicit small `first:` narrowing the charge.
-- **Values, tiny document / large variable payload**: node ids under, at, and over the
-  bound, with `CaptureQueriesContext` proving **zero** queries after a rejection; duplicate
-  ids charged positionally; an empty list accepted; membership items at and over; a wide
+- **Values, tiny document / large variable payload**: node ids at and over the bound, with
+  `CaptureQueriesContext` proving **zero** queries after a rejection; duplicate ids charged
+  positionally; an empty list accepted; membership items at and over; a wide
   filter tree charged by container width; relation ids over the per-mutation bound; two
   individually-legal mutation fields exceeding the aggregate bound; **one variable spliced
   into two mutation fields charged twice** (the shared-container bypass, and the shape a
   request can actually build over the wire); a deeply nested variable value over and under
   the value-depth bound (the bound the pre-parse text scan structurally cannot supply); a
-  scalar over the byte bound; several arguments together exhausting the input-node budget.
+  scalar over the byte bound; several arguments together exhausting the input-node budget;
+  and an operation variable DEFAULT charged when the variables map omits it, with its twin
+  proving a supplied variable overrides the default rather than adding to it.
+- **The relation-list classification, from the bind spec's side**: a raw-pk (`[Int!]`)
+  relation list over the bound on each of the model, form and serializer flavors; a nested
+  serializer row's own relation list charged against the enclosing field; a `GlobalID`
+  relation list and a raw-pk one sharing one aggregate; raw-pk lists at the bound executing;
+  and a membership list inside a generated mutation input staying a membership list. These
+  are live rows because only the example schema's generated writes carry real bind specs;
+  the `ID`-scalar fallback half is the package tier's.
 - **Introspection**: a nested `__schema { types { fields … } }` document rejected on
   collection cost, proving the meta-fields resolve and their subtree is charged.
 - **The cooperative deadline**, one row per seam — connection, raw list, Relay refetch and a
@@ -846,26 +1070,43 @@ bound it is about.
   connection-only default leaving no raw sibling in the SDL to select.
 - **Parity**: the sync and async mounts returning byte-identical rejection extensions.
 
-The package tier (`tests/test_resource_policy.py`, 79 rows) covers what a request cannot
-express: per-bound validation including the `bool` trap; the precedence ladder and the
-settings-shape rejections; the narrowing rule including the deadline's asymmetry; context
-threading across object / dict / frozen shapes and the fail-closed miss; the cooperative
-deadline armed, unarmed, and passed — the passed row asserting the CONFIGURED seconds in
-`limit` and in the message, with a hand-written-key row for the no-policy-behind-it case;
-`bounded_rows` on a non-subscriptable iterable and under a trusted widening; the pre-parse
-scan on an absent, malformed, and oversized-and-malformed document; and the walker's
-degenerate inputs (unnamed operation, missing root type, unknown fragment, fragment cycle,
-inline fragment with and without a type condition, unknown argument, leaf parent, untyped
-container, unmeasurable upload). The identity rows are the pointed ones: a container
+The package tier (`tests/test_resource_policy.py`, 120 rows / 191 node ids) covers what a
+request cannot express: per-bound validation including the `bool` trap and the deadline's
+separate finite-positive domain; the precedence ladder and the settings-shape rejections;
+the narrowing rule including the deadline's asymmetry; context threading across object /
+dict / frozen shapes, the fail-closed miss, and the snapshot round trip that hands an outer
+operation its keys back — pinned on the normal path in a sync row and an async twin, with the
+restore's `finally` pinned separately by a row that rejects in the document scan and asserts
+the key is absent afterwards, which is the restore-to-cleared half of the same round trip; the
+cooperative deadline armed, unarmed, and passed — the passed row asserting the CONFIGURED
+seconds in `limit` and in the message, with a hand-written-key row for the
+no-policy-behind-it case and a hostile-comparison row proving the check fails closed;
+`bounded_rows` on a non-subscriptable iterable and under a trusted widening; the exported pair
+refusing `offset` and `requested_limit` in both colors
+(`tests/test_resource_policy.py::test_the_exported_raw_list_bound_takes_no_client_window`);
+`bounded_rows_async` pinned separately on its own shapes — the iterator closed after the
+effective prefix, and a cleanup failure that must not mask the source error; the
+package-private `_windowed_rows` / `_windowed_rows_async` on the window only they receive — a
+zero window that never advances the source, and offset arithmetic; the trusted flag admitted
+only as an exact `bool` and widening only on the literal `True`; the pre-parse scan on an
+absent document, on
+a non-`str` query it declines rather than lexes, and across the three structural delimiter
+families with their derivation from the single pair table; the pickle round trip proving
+`bound` / `limit` / `charged` / `detail` all survive; and the walker's degenerate inputs
+(unnamed operation, missing root type, unknown fragment, fragment cycle, inline fragment
+with and without a type condition, unknown argument, leaf parent, untyped container,
+unmeasurable upload). The identity rows are the pointed ones: a container
 referenced twice charged **twice** at a node budget that separates the two contracts, two
 distinct-but-equal containers both charged, a self-referential mapping AND a
 self-referential list terminating, a cycle that closes onto a grandparent rather than a
 parent, an over-and-under value-depth pair, the introspection meta-fields charged
 (selections, and `__type(name:)`'s own argument value), and the connection shape test from
-both sides — a type whose `edges` is a list of non-edges, and one whose `edges` is not a
-list at all — each asserting the exact charge, since the connection exemption's whole effect
-is a charge that does not happen. `tests/test_list_field.py` adds the constructor-site
-`max_rows` rejection and the narrowing row.
+both sides — a type whose `edges` is a list of non-edges, asserting the exact charge the
+exemption would have removed, and one whose `edges` is not a list at all, asserting that a
+budget a real connection would exceed goes unrejected. The exemption's whole effect is a
+charge that does not happen, so one side pins the charge and the other pins its absence.
+`tests/test_list_field.py` adds the constructor-site `max_rows` rejection, the
+`trusted_max_rows` flag rejection, and the narrowing row.
 
 ## Doc updates
 
@@ -903,7 +1144,7 @@ is in the [rationale][rationale].*
 ## Out of scope (explicitly tracked elsewhere)
 
 - Secure output and error defaults — [`DONE-048-0.0.14`][kanban] (S5-S8).
-- Dependency and CI hardening — [`WIP-ALPHA-049-0.0.14`][kanban].
+- Dependency and CI hardening — [`DONE-049-0.0.14`][kanban].
 - Persisted queries / document allow-listing — not carded.
 - Rate limiting per client or per IP — a deployment concern, not a schema one.
 

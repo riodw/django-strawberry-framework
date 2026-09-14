@@ -103,7 +103,9 @@ them is somebody else's** and is never this cycle's output.
 
 ## Artifact list
 
-- `docs/builder/bld-047-reconcile.md` — the spec + rationale reconciliation cohort.
+- `docs/builder/bld-047-reconcile.md` — the spec + rationale reconciliation cohort. Retired
+  from the tree after the round committed; its three passes and two reviews are recoverable
+  at `git show c134da8c:docs/builder/bld-047-reconcile.md`.
 - `docs/builder/bld-047-final.md` — the round's closing gate.
 - (contingent) `docs/builder/bld-047-code.md` — only if a code defect is confirmed.
 

@@ -3,7 +3,8 @@
 Spec reference: [`docs/SPECS/spec-047-resource_policy-0_0_14.md`][spec-047] (whole file)
 Rationale companion: [`docs/SPECS/appx/spec-047-resource_policy-0_0_14-rationale.md`][spec-047-rationale]
 Build plan: [`docs/builder/build-047-resource_policy-0_0_14.md`][build-047]
-Cohort artifact: [`docs/builder/bld-047-reconcile.md`][bld-047-reconcile]
+Cohort artifact: `docs/builder/bld-047-reconcile.md`, retired from the tree after the round
+committed; recover it with `git show c134da8c:docs/builder/bld-047-reconcile.md`
 Status: final-accepted
 
 ## Plan (Worker 1)
@@ -146,7 +147,7 @@ is one unit.
 |---|---|---|
 | `docs/SPECS/spec-047-resource_policy-0_0_14.md` | modified, 63,529 → 80,550 bytes | cohort `047-reconcile` |
 | `docs/SPECS/appx/spec-047-resource_policy-0_0_14-rationale.md` | modified, 19,262 → 41,243 bytes | cohort `047-reconcile` |
-| `docs/builder/bld-047-reconcile.md` | new, untracked | cohort `047-reconcile` |
+| `docs/builder/bld-047-reconcile.md` | new, untracked (committed `c134da8c`, since retired) | cohort `047-reconcile` |
 | `docs/builder/bld-047-final.md` | new, untracked | this gate |
 
 `docs/builder/build-047-resource_policy-0_0_14.md` also shows untracked. It is Worker 0's plan
@@ -260,7 +261,8 @@ dies"). Four further items are recorded as closed so no later pass re-derives th
 - **The register's `19` criterion** — escalated to final verification by Worker 3 and
   **discharged there**, in the rationale. The criterion now reads "read against this contract"
   and states the **15 / 4** split with the rows each occupies. See
-  [`bld-047-reconcile.md`][bld-047-reconcile] `### Spec changes made (Worker 1 only)`.
+  `bld-047-reconcile.md` `### Spec changes made (Worker 1 only)`
+  (`git show c134da8c:docs/builder/bld-047-reconcile.md`).
 - **The pass-2 report's self-reported artifact link figure, "4 / 4"** — the figure is **5 / 5**,
   re-measured independently at final verification. Recorded, never edited:
   [`ARTIFACT.md`][artifact] `## Re-pass sections` forbids editing a prior entry. Nothing is
@@ -298,7 +300,7 @@ absence, not a pass. Five items are routed forward, each on a named owner.
 ## Gate re-run at 63a132be
 
 Recorded 2026-09-14 by Worker 1 after the pass-3 cycle on
-[`bld-047-reconcile.md`][bld-047-reconcile] closed `final-accepted`. `HEAD` = `63a132be` at the
+`bld-047-reconcile.md` closed `final-accepted`. `HEAD` = `63a132be` at the
 start and at the end of this re-run. No prior section of this file is edited; this section
 supersedes `### The suite, manage.py check, and makemigrations --check --dry-run were NOT run`
 above for the reason that section itself gave — **the advance exception's second leg is gone.**
@@ -370,7 +372,6 @@ run rather than recorded as absent.
 
 <!-- docs/builder/ -->
 [artifact]: ARTIFACT.md
-[bld-047-reconcile]: bld-047-reconcile.md
 [build]: BUILD.md
 [build-047]: build-047-resource_policy-0_0_14.md
 [worker-1]: worker-1.md

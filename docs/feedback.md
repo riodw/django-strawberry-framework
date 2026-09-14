@@ -4,338 +4,306 @@ Date: 2026-09-13
 
 ## Verdict
 
-**Not accepted.** The latest remediation fixes the previously reported list/connection factory
-re-reads, child-delegated order attestation, exact-boolean trusted bound, and combined raw-response
-oracle. Three architectural defects remain:
+**Not accepted yet. Two reproducible production defects remain:** the offset guard checks the
+wrong ordering state, and a deadline rejection can leave an async iterator unclosed. The previous
+canonical-definition, connection-cache provenance, and terminal-ledger defects are fixed. They
+are not repeated as open findings.
 
-1. the nested-connection optimizer still asks the target class for its definition during every
-   request, including on the visibility decision that can determine whether `get_queryset` runs;
-2. the shared field validator accepts a fabricated, non-registry definition, and the connection
-   cache can consequently return a class built from different metadata than the field that uses
-   it; and
-3. closing the order-normalization ledger merely empties it, so a child task holding a copied
-   context can repopulate and claim invocation state after the owning resolution has ended.
+This review reads the full [specification][spec-050], traces the implementation and its regression
+tests, and applies [AGENTS.md][agents], [START.md][start], [GOAL.md][goal], and the
+[live-test manual][live-readme]. It also checks the local Graphene-Django and Strawberry-Django
+references and the [cookbook schema][cookbook-schema].
 
-The first two are foundational metadata-integrity failures. They invalidate the specification's
-one-definition dependency and registered-target claims, and they must be corrected before any
-secondary cleanup or gate rerun. The third is a real lifecycle failure against the ledger contract,
-although it does not by itself expose one request's ledger to a different request.
+The starting HEAD was `974d25b4`, containing the metadata/ledger remediation in `9a9f970c`.
+HEAD advanced concurrently to `4746a0fe`. The intervening changes did not alter the reviewed
+package source, package tests, live-query tests, or spec 050. Concurrent documentation, kanban
+test, and database work was preserved.
 
-This pass reviewed the full [specification][spec-050], the relevant production implementation and
-tests, [AGENTS.md][agents], [GOAL.md][goal], the [live-test guide][live-readme], Graphene-Django,
-Strawberry-Django, and the django-graphene-filters [cookbook schema][cookbook-schema]. The reviewed
-snapshot had `96b9e047` at `HEAD`; the card-050 remediation is in its `aadca5a2` ancestor. Unrelated
-files changed concurrently during the review and were not reverted or included as card-050 work.
+Evidence below comes from source inspection and isolated, non-pytest Python probes, including
+actual `DjangoSchema` execution. Probe databases were configured in memory; the probes performed
+no row writes or row-fetch SQL. SQL shown below was compiled from the resulting querysets.
+No pytest, Django system-check, build, or full-suite command was run. The recorded full/default,
+sharded, and floor passes are implementation evidence in the [build record][bld-final], not
+fresh results from this review.
 
-No pytest command was run: [AGENTS.md][agents] permits pytest only when explicitly requested. The
-behavioral evidence below comes from focused, non-pytest construction and real-schema execution
-probes, plus direct production-dataflow inspection.
+Two Luna Extra High reviewers were dispatched as requested earlier, but both terminated before
+returning findings because the workspace reported no remaining subagent credits. No conclusion
+below is attributed to an independent reviewer.
 
-## Blocking findings
+## P2-1 — the positive-offset guard does not inspect the effective ordering
 
-### P1-1 — the nested optimizer violates the one-definition invariant and can skip visibility
+Location:
+[`django_strawberry_framework/list_field.py::_has_no_random_terms`][list-field] and
+[`django_strawberry_framework/list_field.py::_check_nonzero_offset_guard`][list-field].
 
-Decision 1 says the accepted target definition is the field's sole construction and execution
-dependency. It expressly says a synthesized relation connection receives its definition from
-[`types/finalizer.py::finalize_django_types`][finalizer] and never asks the target class for it.
-That is true for the resolver built by finalization, but false for the optimizer that plans the same
-field at request time.
+The guard accepts active order input when `queryset.ordered` is true and
+`_has_no_random_terms(queryset)` succeeds. The latter checks both `query.order_by` and
+`query.extra_order_by`, but never model-default terms.
 
-[`optimizer/walker.py::_resolve_relation_target`][walker] already receives the parent definition.
-Its `related_target_for(...)` answer contains the child `DjangoTypeDefinition`, but the helper
-discards that object and returns only `target_definition.origin`. The nested planner then performs
-fresh class-mediated reads:
+Those are not Django's effective-ordering rules.
+[`django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`][django-compiler] selects
+`extra_order_by` first, then explicit ordering, then enabled model defaults. It does not
+combine the two explicit collections or omit defaults when they are the selected order.
+The mismatch produces both wrong verdicts.
 
-- [`optimizer/nested_planner.py::plan_connection_relation`][nested-planner] calls the injected
-  [`optimizer/walker.py::_target_has_custom_get_queryset`][walker];
-- that helper calls [`types/base.py::DjangoType.has_custom_get_queryset`][type-base], which reads
-  `__django_strawberry_definition__` again;
-- the planner calls [`keyset.py::resolve_declared_cursor_state`][keyset], which independently reads
-  the same attribute; and
-- when the first read says a custom hook exists,
-  [`optimizer/walker.py::_build_child_queryset`][walker] calls the visibility runner without its
-  captured-model seam, causing a further definition read inside
-  [`utils/querysets.py::_captured_model`][querysets].
+### Random default accepted
 
-A real `DjangoSchema` probe enabled `DjangoOptimizerExtension`, selected a nested
-`itemsConnection(first: 1)`, armed a metaclass definition-read counter only for execution, and used
-a no-SQL root source. The request succeeded and recorded:
+A registered type has an OrderSet with an `id` input. A mistaken public
+`OrderSet.apply_sync` override returns the supplied queryset unchanged. The model declares
+`Meta.ordering = ("?",)`. Calling the actual list-field resolver with active `id: ASC`,
+`offset=1`, and `limit=1` succeeds:
 
 ```text
-errors None
-request_definition_reads 2 ['__django_strawberry_definition__',
-                            '__django_strawberry_definition__']
+accepted_type QuerySet
+explicit_order ()
+default_order ('?',)
+sql ... ORDER BY RAND() ASC LIMIT 1 OFFSET 1
 ```
 
-That is the minimum default-hook case. A custom visibility hook adds the visibility runner's model
-read. This is not a harmless accounting mismatch. A stateful or replaced target definition can
-answer `has_custom_get_queryset=False`; `_build_child_queryset` then skips
-`apply_type_visibility_sync` entirely and constructs the optimized prefetch from the unscoped
-default manager. The resolver consumes that planned window rather than re-running the per-parent
-visibility pipeline. The very threat Decision 1 cites—metadata changing after acceptance—therefore
-reaches a row-visibility decision.
+The same probe with `Meta.ordering = (Random(),)` also succeeds. Its no-order control raises
+`ListArgumentError(reason="order_required")`; its stable `("id",)` control succeeds.
+Thus the random default specifically defeats the guard through the active-input branch:
+`queryset.ordered` sees the default, while the random check sees two empty collections.
 
-The current root-connection read-once tests do not cover this. They build a plain Strawberry schema
-without `DjangoOptimizerExtension`, so the nested planner is never entered. A root connection also
-cannot prove the synthesized relation path.
+This does not require proving arbitrary override lineage. Decision 5 trusts overrides to
+preserve predicates; Decision 6 separately promises a mechanical check that effective ordering
+contains no recognized random term. A mistaken override is exactly where that check matters.
+Both `"?"` and bare `Random()` are expressly recognized forms, not unspecified SQL volatility.
 
-Root-cause correction:
+### Effective deterministic order rejected
 
-- Preserve the child definition returned by `definition.related_target_for(...)`; do not collapse
-  it to its `origin` and later reconstruct metadata through the class.
-- Thread `(target_type, target_definition)` into the nested planner. Read
-  `target_definition.has_custom_get_queryset` directly and call
-  [`keyset.py::declared_cursor_state_for_definition`][keyset].
-- Thread `target_definition.model` into the visibility runner's existing `model=` seam.
-- Keep the registry-only fallback for the unresolved relation case, but have it return the registry
-  definition and origin as one answer. A missing definition must degrade or reject according to the
-  existing relation-planning contract; it must never trigger a class-attribute lookup.
-- Grep the complete planned-connection path and leave no request-time
-  `__django_strawberry_definition__` read keyed by the target class.
+A public override returns:
 
-Required proofs:
+```python
+queryset.order_by("?").extra(order_by=["id"])
+```
 
-- Package-level read counter and decoy-definition proof through a real `DjangoSchema` with
-  `DjangoOptimizerExtension`, covering cold and warm optimizer plans.
-- A live `/graphql/` row over a shipped synthesized relation whose child `get_queryset` hides a
-  distinguishable row; prove the optimized path returns the same visible rows as the unplanned
-  fallback. This is consumer-observable and therefore belongs in the live tier under the
-  [test guide][live-readme].
-- Offset and keyset targets, so both cursor vocabularies are proven to use the captured definition.
-
-### P1-2 — “registered DjangoType” validation is forgeable, and the cache has no provenance check
-
-[`list_field.py::_validate_djangotype_target`][list-field] currently proves only that the target is
-a `DjangoType` subclass and that whatever object the class attribute returned has
-`origin is target_type`. It does not prove that the object is a `DjangoTypeDefinition`, that the
-target is present in [`registry.py::DjangoTypeRegistry`][registry], or that the returned object is
-the exact definition registered for that class.
-
-A focused construction probe created an unregistered child of a real `DjangoType`, assigned a
-`SimpleNamespace(origin=child, model=Item, orderset_class=None)` as its definition attribute, and
-called `DjangoListField(child)`. The result was:
+For active `id: ASC` input this is effectively ordered by `id`, because the extra ordering
+takes precedence. The compiled SQL confirms it:
 
 ```text
-registry_definition_before None
-factory_accepted_fabricated_definition True
-registry_definition_after None
+effective_sql ... ORDER BY "contenttypes_probemodel"."id" ASC
+guard ListArgumentError order_required
 ```
 
-The field advertised by the error text as requiring a registered target therefore accepts a target
-the registry has never seen. Schema completion can then fail later with a Strawberry runtime-type
-error because the inherited GraphQL type and the fabricated Django model are unrelated. That is a
-late engine failure in place of the promised typed construction-site rejection.
+The guard rejects the dormant `"?"` in `query.order_by`, which Django never executes.
+This half also affects an override that honors the supplied order; it cannot be dismissed as
+the no-op override's responsibility.
 
-The same missing identity check breaks the connection cache's own guarantee.
-[`connection.py::_connection_type_for`][connection] keys only on `target_type` and returns a warm
-entry without checking which definition produced it. A second probe warmed the cache from a real
-definition without `total_count`, then supplied a same-origin replacement definition with
-`connection={"total_count": True}`. Validation accepted the replacement, while the cache returned
-the first class:
+**Root-cause correction:** classify the terms Django actually selects, once, using its
+precedence on the already-sealed queryset. Preserve the separate public-order eligibility
+rule: resolver-only ordering must still not authorize positive offset without active input or
+an eligible model default. Preserve the grouping and empty-queryset rules. Do not call the
+compiler or evaluate rows on the successful request path merely to discover this small state
+selection, and do not borrow `effective_connection_order`: that helper intentionally changes
+ordering to the connection's total-order contract.
+
+**Required proofs:** sync and async live holder rows for random-default rejection after a
+no-op apply, and acceptance when deterministic extra ordering supersedes dormant random
+ordering. Include stable-default and effective-random-extra controls. Retain package checks
+only for exact precedence mechanics. The current
+`tests/test_list_field.py::test_offset_guard_random_term_question_mark` and
+`test_offset_guard_random_term_random_function` exercise explicit random terms alone; the
+separate model-default predicate checks never exercise this interaction with active input.
+
+## P2-2 — deadline rejection bypasses async-source cleanup
+
+Location:
+[`django_strawberry_framework/resource_policy.py::bounded_rows_async`][resource-policy],
+reached through [`django_strawberry_framework/list_field.py::DjangoListField`][list-field]'s
+`_resolve_async_iterable` closure.
+
+`bounded_rows_async` calls `_raw_list_bound` before acquiring the iterator and before entering
+its cleanup-protected region. If the deadline expires while the consumer resolver awaits,
+`_raw_list_bound` raises `ResourceLimitExceeded`. The already-returned async source is
+abandoned without attempting `aclose`.
+
+A real `DjangoSchema` probe used a custom async iterator with external advance/close counters.
+The resolver awaited 80 ms and then returned that retained iterator. The operation was
+`{ rows(limit: 0) { id } }`; the deadline case used the schema's normal 50 ms resource policy.
+No internal deadline key was modified for this schema-level reproduction.
 
 ```text
-second_definition_total_count {'total_count': True}
-cached_connection_fields ['page_info', 'edges']
-cache_matches_second_definition False
+deadline=None: source_called=True, errors=[], advances=0, closes=1
+deadline=0.05: source_called=True, RESOURCE_LIMIT_EXCEEDED, advances=0, closes=0
 ```
 
-The second field's signature and pipeline are built from its captured replacement, but its return
-class is built from the earlier definition. This directly contradicts
-`_connection_type_for`'s statement that connection shape and published arguments cannot come from
-different answers. It also makes [`connection.py::clear_connection_type_cache`][connection]'s
-claim that a stale entry can never be wrong untrue.
+The deadline error's extensions remained correct:
+`bound="execution_deadline_seconds", limit=1, charged=2`.
+The defect is the missing close, not the deadline rejection or its rounded payload.
 
-The current warm-cache test counts reads but never changes the definition between fields and never
-inspects the second field's connection shape. It therefore proves cache reuse, not cache
-provenance.
+This remains an uncovered composition of the existing deadline and cleanup mechanisms;
+it was not introduced by the latest metadata remediation. It nevertheless violates this
+card's async early-exit guarantee, including its explicit `limit: 0` cleanup promise.
+The list wrapper handles capability rejection and even error-construction failure, but
+ownership does not end merely because the next failure occurs inside the bounding helper.
+An iterator may own an open external resource even before its first item is requested.
 
-Root-cause correction:
+**Root-cause correction:** make the shared async bounding seam own cleanup on this pre-iteration
+rejection too. Keep the single deadline check in `_raw_list_bound`, before row advancement and
+window arithmetic. If it rejects, acquire the source's iterator solely for cleanup, invoke
+the existing close mechanism, and preserve the deadline error as primary if acquisition or
+closure fails. Move/reuse the existing rejected-source cleanup utility below both callers
+instead of duplicating its acquisition, diagnostic-note, and close policy in a second module.
+Do not add a second clock check or a list-field-only catch that leaves other callers exposed.
 
-- Make the shared validator compare its one contained class read by identity with
-  `registry.get_definition(target_type)`. Accept only the canonical registered
-  `DjangoTypeDefinition`; reject a missing, fabricated, inherited, or alternate same-origin object
-  with `ConfigurationError` at field construction.
-- Keep the hostile-read containment: a raising metaclass must still become the typed unregistered
-  target error rather than leak its exception.
-- Make cache provenance explicit. Store the canonical definition identity beside the generated
-  class and verify it on every warm hit, or key the cache by an identity pair while separately
-  enforcing the one-canonical-definition rule. Silently returning the first shape is not safe.
-- Use the same canonical validator for list, connection, and Relay node field entry points so the
-  definition of “registered target” cannot drift by factory.
+**Required proofs:** a live async request whose resolver crosses the configured deadline after
+obtaining its source; zero advances and exactly one close, including `limit: 0`.
+Use a deterministic clock-controlled boundary for the retained regression test rather than a
+timing-sensitive sleep. Cover a failing close with the complete resource-error extensions
+still primary. Exact diagnostic notes belong in `tests/test_resource_policy.py`; retain the
+natural-exhaustion control, where the iterator is deliberately not closed. A never-started
+async generator's body `finally` is not a valid close witness—use the externally counted
+iterator the spec already prescribes.
 
-Required proofs:
+## P2-3 — the metadata regression proof misses the custom-hook model dependency
 
-- An unregistered subclass with an inherited definition remains rejected.
-- A fabricated same-origin object and a real `DjangoTypeDefinition` copy with the same origin are
-  both rejected.
-- A warm cache presented with alternate same-origin metadata fails at construction rather than
-  returning the old shape.
-- Ordinary list, root connection, synthesized relation connection, and node fields still consume
-  the registry's exact object with the existing one-read counters armed.
+Location:
+[`tests/test_connection.py::test_the_optimizer_plans_a_relation_without_reading_the_target_class`][test-connection]
+and `tests/test_connection.py::_counting_node_type`.
 
-This correction matches the project references. Graphene-Django binds a model and connection once
-on canonical `_meta` during type construction and registers that type; its fields consume `_meta`
-rather than accept a caller-swapped lookalike. Strawberry-Django similarly resolves an attached
-Django definition for the field/type it is processing. The cookbook uses only declarative
-`class Meta` declarations and `AdvancedDjangoFilterConnectionField(Type)`. None of these surfaces
-ask consumers to manage or replace framework metadata objects. [GOAL.md][goal] likewise promises
-Meta-driven declarations and loud failure for unregistered targets.
+The new counter/decoy test builds its target with only `Meta`; that target has no custom
+`get_queryset`. Therefore the test cannot exercise the captured-model dependency in
+[`django_strawberry_framework/optimizer/walker.py::_build_child_queryset`][walker].
+The live visibility rows exercise custom hooks but use ordinary target metadata, so removing
+the forwarded model merely adds class reads there while preserving their rows and SQL.
 
-### P2-1 — a closed normalization ledger can be reopened by a copied context
+I checked this with a process-local diagnostic change that drops `target_model` at the
+child-builder call. No repository file was changed. A real `DjangoSchema` planned both the
+list relation and its connection sibling:
 
-[`orders/sets.py::_NormalizationLedger.close`][orders-sets] clears `_records` and `_claimed`, but
-the object has no closed state. A task created while the scope is live receives that same ledger
-object through its copied `ContextVar`. After the parent exits and calls `close()`, the child can
-resume, call the public `OrderSet.apply_*`, append a new record, and claim it from its retained
-context.
-
-A focused delayed-child probe produced:
-
-```text
-after_scope_before_child 0
-child_after_closed_scope (1, True, 1)
-parent_binding None
-```
-
-The parent binding is correctly reset, so this does not make the next request inherit the old
-ledger. The object nevertheless regains invocation records after its advertised terminal state,
-can retain the input object for the lifetime of the child context, and can reduce a later active
-term check inside that orphan context from the standalone double-normalization path to an
-attested one. That contradicts both the implementation docstring and the spec's promise that
-emptying the ledger prevents a child that outlives the resolution from carrying invocation state.
-
-Existing tests prove a new scope starts empty and that child/worker publication works while the
-owning scope remains live. Neither test delays the descendant until after scope exit, which is the
-boundary the prose claims.
-
-Root-cause correction:
-
-- Add a lock-protected `_closed` tombstone.
-- Make `close()` atomically set `_closed=True` and clear both collections.
-- Make `publish()` after close a no-op, matching publication outside an active scope, and make
-  `claim()` after close return no attestation. A closed ledger must be terminal.
-- In `capture_applied_order_normalization`, guarantee both operations with nested `try/finally`.
-  Close before resetting the parent binding so descendants observe the tombstone immediately and
-  a reset failure cannot skip closure.
-
-Required proofs:
-
-- A task captures the scope, waits until after exit, then calls public `apply_async`; the ledger
-  remains empty and its active-term check takes the standalone double-normalization path.
-- The same delayed-after-close proof through `contextvars.copy_context()` and a worker thread.
-- Retain the live child-delegating success and A/B/B rejection rows while the scope is open; the
-  tombstone must not regress the valid transport the remediation added.
-
-## Documentation, test, and maintenance findings
-
-### P2-2 — the recorded verification state is internally contradictory and is not current
-
-The [specification][spec-050] header says full and sharded verification are pending. The final
-Definition-of-Done checkbox remains open. The [build plan][build-050] status instead says both
-default and sharded tiers were rerun green at 100% on the fifth review, while its final gate item
-still instructs a rerun after remediation.
-
-The [final build record][bld-final] repeats the “rerun green” characterization, but the fifth-review
-figures explicitly record one failing governance test in each invocation:
-
-- default: `7719 passed, 40 skipped`, plus one failure;
-- sharded: `7736 passed, 37 skipped`, plus the same one failure; and
-- floor verification: not run.
-
-A run with a failing test is not green, even when the failure is attributed to concurrent work.
-Furthermore, the repository has advanced beyond those runs and currently has unrelated dirty
-files, so neither historical invocation certifies the present tree. The build documents should
-record one coherent state: coverage reached 100% in those attempted runs, both processes still
-failed, floor verification is absent, later production fixes will supersede the attempts, and the
-final gate is not green.
-
-After the foundational corrections, run the current tree through formatting, lint, structural and
-link checks, default pytest with `fail_under=100`, sharded pytest, and the supported-version floor.
-Record command, exit status, counts, coverage, and exact tree/commit state. Passing coverage while
-a test fails is evidence about coverage only, not a passing suite.
-
-### P3-1 — `_dst_node_type` is dead state with a false ownership comment
-
-[`connection.py::_generate_connection_class`][connection] writes `_dst_node_type` and says the
-optimizer's window handoff reads it. A repository-wide search finds no reader in production or
-tests; the only package occurrence is the write, plus a later comment comparing another private
-attribute to it. The keyset reader was correctly changed to consume `_dst_keyset_state` fixed at
-class generation, and the nested planner receives `target_type` independently.
-
-Remove `_dst_node_type` and the false comments unless a real, reviewed consumer is intended. Dead
-per-class state is small, but retaining it obscures the actual definition dataflow and makes future
-reviewers believe the optimizer and generated connection share an identity channel that does not
-exist.
-
-### P3-2 — the glossary describes two incompatible no-`totalCount` return types
-
-The [`DjangoConnection` glossary entry][glossary] correctly says every target receives a generated
-concrete `<TypeName>Connection` and that `DjangoConnectionField` never hands Strawberry the generic
-base. The [`Meta.connection` entry][glossary] later says a false opt-in uses `DjangoConnection[T]`
-without the field. Production always uses the concrete generated subclass, so the latter sentence
-is stale.
-
-Correct the glossary through its database-first documentation workflow and regenerate the rendered
-file; do not hand-edit over the current concurrent glossary/database work. Add or retain one
-construction-tier test for concrete-class identity and leave wire shape to the existing live
-connection tests, exactly as the [live-test guide][live-readme] prescribes.
-
-## Corrections verified in this pass
-
-The following changes are sound and should be preserved:
-
-- `DjangoListField` captures the validated definition's model and `orderset_class`; its default
-  seed, both visibility seals, post-`OrderSet` seal, signature, and resolver dispatch use those
-  captured values rather than rereading the class.
-- Root `DjangoConnectionField` and synthesized relation resolvers thread the captured/registry
-  definition through their signature, pipeline, total-order, keyset, and generated-class paths.
-  P1-1 is specifically the optimizer's parallel request-time path; P1-2 is the missing canonicality
-  check before either factory trusts the captured object.
-- `trusted_max_rows` is now validated as an exact `bool`, and the policy primitive widens only for
-  literal `True`.
-- The append-only normalization ledger correctly transports child-task and worker-thread
-  applications while the owning scope is live, matches by class and input identity, and rejects
-  disagreeing applicable attestations. P2-1 adds terminal closure; it does not call for returning to
-  a mutable last-writer-wins slot.
-- The no-`OrderSet` scope predicate now receives the captured sidecar and stays inert.
-- Both legacy omission/null oracles, including the combined source, compare raw
-  `HttpResponse.content` rather than parsed projections.
-- Exact integer validation, routing-intent freeze/pin, post-order sealing, async iterator cleanup,
-  wire-name lookup, and visibility-before-order composition remain aligned with the specification.
-- The public API remains DRF/Graphene-shaped: consumer types configure sidecars through nested
-  `Meta`; no stacked Strawberry-Django decorators or list-specific consumer input type were added.
-- No card-050 code uses a test-only workaround, new `pragma: no cover`, raw standing-document line
-  references, or a source comment naming this review file.
-
-## AGENTS.md and GOAL.md assessment
-
-| Rule | Verdict | Evidence |
+| Target hook | Captured model forwarded | Target-definition reads |
 | --- | --- | --- |
-| DRF first, Strawberry second; consumer configuration through `Meta` | Pass | The public type/list/connection surface retains the cookbook and GOAL shape. |
-| Unregistered targets fail loudly | **Fail** | P1-2 accepts a fabricated same-origin definition with no registry entry. |
-| Root-cause repair, never a test-only workaround | **Blocked** | P1-1, P1-2, and P2-1 require production dataflow/lifecycle changes. |
-| Live-first for query-reachable behavior | Partial | Most list behavior is live; the optimizer visibility boundary in P1-1 lacks a live synthesized-relation proof. |
-| Test placement follows ownership | Pass with one required addition | Construction/cache and ledger mechanics belong in `tests/`; optimized row visibility belongs in `examples/fakeshop/test_query/`. |
-| Fakeshop data discipline | Pass | Reviewed catalog/auth live tests use the prescribed seed helpers; no new hand-rolled rows were introduced by card 050. |
-| Coverage remains package-only at `fail_under=100` | Configuration passes; gate does not | Historical runs reached 100%, but both recorded fifth-review invocations still had a failure and do not cover later fixes. |
-| No pytest unless explicitly requested | Pass for this review | No pytest command was run. |
-| Run formatting and lint after edits | Pass | `uv run ruff format .` changed no files; `uv run ruff check --fix .` passed. |
-| Preserve concurrent work | Pass for this review | Unrelated dirty files and commits were inspected only as needed and not reverted or folded into this review. |
+| Default | Yes | 0 |
+| Default | No | 0 |
+| Custom | Yes | 0 |
+| Custom | No | 4 |
 
-## Required correction order and acceptance gate
+All four requests completed without errors. This demonstrates why the default-hook test
+cannot detect loss of the model-forwarding part of the fix. The recorded failability mutation
+instead drops the entire child definition; it breaks earlier metadata decisions too and does
+not isolate this dependency.
 
-1. Establish one canonical metadata source: make the shared validator accept only the registry's
-   exact definition and make connection-cache entries prove their definition provenance.
-2. Carry that canonical definition through the nested optimizer, including visibility and keyset
-   decisions, with zero request-time target-class definition reads.
-3. Make ledger closure terminal under copied tasks and threads without regressing live child
-   delegation while the scope is active.
-4. Remove the dead generated-class slot and reconcile the glossary/build records through their
-   proper ownership workflows.
-5. Add the missing package and live proofs, demonstrate that each fails when its production
-   boundary is removed, and delete any weaker stand-in that duplicates a promoted live claim.
-6. Only then rerun every required gate on one identified tree: format, lint, structural/link checks,
-   default and sharded full suites at 100% package coverage, and supported-floor verification.
+**The current production forwarding is correct.** The needed correction here is the proof,
+not another metadata abstraction: add an instrumented custom-hook target through the real
+optimizer pipeline, with its decoy armed after construction. Exercise list and connection
+paths separately so one cannot hide the other's regression. Require the hook to run and
+require zero definition reads. Remove only the forwarded-model dependency during the
+subsequent authorized failability run.
+
+Keep the default-hook cache case and assert its cache transition explicitly. My unmodified
+probe measured `(hits=0, misses=1, size=1)` then `(1,1,1)`; custom hooks correctly measured
+`(0,1,0)` then `(0,2,0)`, because their plans must not enter the cross-request cache.
+Calling a second execution “warm” without checking reuse would still pass if caching stopped.
+The committed test uses plain `strawberry.Schema`; the spec specifically calls for
+`DjangoSchema`, which the diagnostic probes show can exercise this contract.
+
+These identity/read-count assertions legitimately stay package-side. Preserve the new live
+anonymous/staff visibility and keyset-window rows; they prove the consumer consequence and are
+not redundant copies of the metadata test.
+
+## P3-1 — four new catalog tests do not follow the explicit first-statement seed rule
+
+Location: [`examples/fakeshop/test_query/test_products_visibility_api.py`][live-visibility]:
+
+- `test_anonymous_planned_list_relation_omits_the_targets_private_rows`;
+- `test_staff_planned_list_relation_keeps_every_row`;
+- `test_anonymous_planned_relation_connection_window_omits_the_targets_private_rows`;
+- `test_staff_planned_relation_connection_window_keeps_every_row`.
+
+Each starts with `_hide_one_parents_items()`. That helper calls `services.seed_data(2)`
+internally. The data does use the approved service, but [AGENTS.md][agents] and the
+[live-test manual][live-readme] explicitly require the seed call as the test's first executable
+statement.
+
+Move `services.seed_data(2)` to the start of each test and leave the shared helper responsible
+only for arranging privacy and deriving expected identities. Do not seed twice or replace the
+service with hand-built catalog rows. The current exact-membership comparisons, hidden-row
+witnesses, table-filtered query count, and staff controls are useful and should remain.
+
+## P3-2 — several current instructions still contradict the implemented contract
+
+These are small corrections, not grounds to reopen the resolved architectural findings:
+
+- `django_strawberry_framework/list_field.py::_check_nonzero_offset_guard` says an empty
+  queryset with “no active orderset or model ordering is accepted.” Its implementation and
+  Decision 6 reject that shape. Only the eligible active-order case can rely on the
+  empty-queryset behavior. Correct the docstring when repairing P2-1.
+- The spec's “Caps and error table” introduces `ListArgumentError` as “one internal type,”
+  then explicitly declares it public, catchable, and root-exported. Remove “internal” from
+  the introduction; the implementation correctly exports it.
+- The [build plan][build-050]'s status says the sixth gate passed, but its final gate item
+  still instructs a rerun after remediation; the [build record][bld-final]'s sixth-review
+  heading still says “gate pending” above its completed gate results. Reconcile those
+  current instructions with the status. Keep superseded historical results identified as
+  historical. This does **not** mean the recorded sixth-review runs failed.
+
+## Prior findings verified as resolved
+
+- **Canonical target acceptance:** focused probes supplied both a fabricated same-origin
+  object and a copied real definition to `DjangoListField`, `DjangoConnectionField`,
+  `DjangoNodeField`, and `DjangoNodesField`. All eight constructions raised
+  `ConfigurationError`. The shared validator compares against the registry's exact object;
+  the new dropped-registration test also reaches that same guard.
+- **Connection-cache provenance:** a warm entry rejected a copied definition and still
+  returned the original generated class for its canonical definition afterwards.
+- **Optimizer definition threading:** unmodified real-schema probes recorded zero
+  request-time target-class definition reads for both default and custom hooks, selecting
+  both relation vocabularies. Cacheable default-hook plans actually hit the cache on the
+  second execution; custom-hook plans were rebuilt. The source now carries the child
+  definition through hints, traversal, visibility, and keyset planning. P2-3 concerns the
+  committed regression proof, not a remaining production reread.
+- **Terminal ledger closure:** delayed task and copied-context worker probes each observed
+  `closed=True, records=0, claim=None` after attempting publication. The tombstone and
+  close-before-reset ordering are present. The committed task test also checks standalone
+  normalization after scope exit.
+- **Dead state and glossary:** the removed `_dst_node_type` and
+  `resolve_declared_cursor_state` have no remaining references in the searched package,
+  package-test, and live-query corpus (287 files). Both relevant glossary entries now describe
+  generated concrete connection classes consistently.
+- **Verification reporting:** the sixth-review record now reports zero failures and an
+  isolated floor run, while explicitly distinguishing the earlier failed invocations from
+  passing coverage. This resolves the previous substantive reporting issue; P3-2 is the
+  remaining stale current wording.
+
+## Architectural and repository assessment
+
+The implementation remains aligned with GOAL's declarative collection and optimizer direction.
+Consumer domain types and OrderSets use nested `Meta`; the cookbook still maps naturally to
+connection fields for Relay responses, with list fields as the separate flat response shape.
+Graphene-Django's cursor-converting offset and Strawberry-Django's pagination envelope are
+deliberately different surfaces, not missing requirements to import here.
+
+Keep the current single owners: signature publication in the field factory, ordering and
+normalization in OrderSet, visibility/routing reconstruction in the shared queryset boundary,
+and row windows/deadlines in resource policy. The two production repairs above belong at those
+existing owners and require no new consumer setting or input system.
+
+The new planned-visibility tests correctly assert distinguishable private rows, staff controls,
+and one child-table query across multiple parents. New externally observable order and cleanup
+verdicts must likewise be covered through live HTTP. Do not replace them with private-helper
+tests or add live twins without retiring redundant stand-ins. Package tests remain appropriate
+for construction, cache identity, normalization transport, and exact diagnostic notes.
+
+No production code, tests, settings, release literals, changelog, database rows, or generated
+documents were edited by this review. No branch or commit was created. Only this requested
+review document was overwritten; concurrent work was preserved.
+
+## Correction order and verification
+
+1. Correct effective-order selection at the existing offset guard and close the deadline
+   cleanup gap at the shared async bounding seam, with live regressions in the same change.
+2. Strengthen the custom-hook metadata proof and cache assertions; repair the four seed-call
+   sites and current contradictory prose.
+3. When the maintainer requests test execution, prove each new regression can fail by removing
+   its specific boundary, then run the required default, sharded, and floor checks. Preserve
+   the passing metadata/ledger fixes. Record the measured tree and exit status.
+
+Review-document validation: `uv run ruff format .` left all 444 files unchanged;
+`uv run ruff check --fix .` passed; `git diff --check -- docs/feedback.md` was clean.
+All 14 reference links have definitions, with no unused definitions. The source-layout checker
+explicitly excludes this review file, so its exit status is not claimed as a layout audit.
+No fresh test-suite or coverage acceptance is claimed here.
 
 <!-- LINK DEFINITIONS -->
 
@@ -345,7 +313,6 @@ The following changes are sound and should be preserved:
 [start]: ../START.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
 [spec-050]: spec-050-list_field_arguments-0_0_15.md
 
 <!-- docs/SPECS/ -->
@@ -355,34 +322,21 @@ The following changes are sound and should be preserved:
 [build-050]: builder/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
-[connection]: ../django_strawberry_framework/connection.py
-[finalizer]: ../django_strawberry_framework/types/finalizer.py
-[keyset]: ../django_strawberry_framework/keyset.py
 [list-field]: ../django_strawberry_framework/list_field.py
-[nested-planner]: ../django_strawberry_framework/optimizer/nested_planner.py
-[orders-sets]: ../django_strawberry_framework/orders/sets.py
-[querysets]: ../django_strawberry_framework/utils/querysets.py
-[registry]: ../django_strawberry_framework/registry.py
-[type-base]: ../django_strawberry_framework/types/base.py
+[resource-policy]: ../django_strawberry_framework/resource_policy.py
 [walker]: ../django_strawberry_framework/optimizer/walker.py
 
 <!-- tests/ -->
 [test-connection]: ../tests/test_connection.py
-[test-list-field]: ../tests/test_list_field.py
-[test-orders-sets]: ../tests/orders/test_sets.py
 
 <!-- examples/ -->
-[live-async]: ../examples/fakeshop/test_query/test_list_field_async_api.py
 [live-readme]: ../examples/fakeshop/test_query/README.md
-[live-sync]: ../examples/fakeshop/test_query/test_list_field_api.py
+[live-visibility]: ../examples/fakeshop/test_query/test_products_visibility_api.py
 
 <!-- scripts/ -->
-[check-commas]: ../scripts/check_trailing_commas.py
 
 <!-- .venv/ -->
-[upstream-graphene-fields]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py
-[upstream-graphene-types]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py
+[django-compiler]: ../.venv/lib/python3.14/site-packages/django/db/models/sql/compiler.py
 
 <!-- External -->
 [cookbook-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
-[upstream-strawberry-field]: ../../strawberry-django-main/strawberry_django/fields/field.py

@@ -31,7 +31,7 @@ from .exceptions import (
 )
 from .registry import registry
 from .resource_policy import (
-    _close_async_iterator,
+    _cleanup_rejected_async_iterable,
     bounded_rows,
     bounded_rows_async,
     effective_bound,
@@ -549,6 +549,13 @@ def _synthesized_list_signature(
     return inspect.Signature(params, return_annotation=inspect.Signature.empty), annotations
 
 
+#: Which collection Django's compiler selects as the ordering it will emit.
+_ORDER_FROM_EXTRA = "extra"
+_ORDER_FROM_EXPLICIT = "explicit"
+_ORDER_FROM_MODEL_DEFAULT = "model_default"
+_ORDER_FROM_NOTHING = "nothing"
+
+
 def _is_random_order_term(term: Any) -> bool:
     """Classify random order terms: exact '?' or Random() / OrderBy(Random())."""
     if term == "?" or isinstance(term, Random):
@@ -556,47 +563,65 @@ def _is_random_order_term(term: Any) -> bool:
     return isinstance(getattr(term, "expression", None), Random)
 
 
-def _has_no_random_terms(queryset: models.QuerySet) -> bool:
-    """Return True if queryset has no random terms in query.order_by or extra_order_by."""
+def _selected_ordering(queryset: models.QuerySet) -> tuple[str, tuple[Any, ...]]:
+    """Return the ordering Django will compile for ``queryset``, as ``(source, terms)``.
+
+    ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` picks ONE
+    collection and ignores the rest: an ``extra`` ordering wins outright, an
+    explicit ``order_by`` comes next, and the model's ``Meta.ordering`` is
+    reached only when nothing explicit was set and ``default_ordering`` still
+    stands. They are alternatives, never a union, so a term left in a collection
+    Django did not pick is dormant and reaches no SQL.
+
+    Both questions the offset guard asks - does the order this request will run
+    under contain a random term, and is the model's own ordering that order -
+    are this one selection read two ways, so they come from one classification
+    of the already-sealed queryset rather than from separate collection scans
+    that can disagree with each other and with the compiler.
+    """
     query = queryset.query
-    return all(not _is_random_order_term(term) for term in query.order_by) and all(
-        not _is_random_order_term(term) for term in query.extra_order_by
-    )
+    if query.extra_order_by:
+        return _ORDER_FROM_EXTRA, tuple(query.extra_order_by)
+    if query.order_by:
+        return _ORDER_FROM_EXPLICIT, tuple(query.order_by)
+    if query.default_ordering:
+        ordering = query.get_meta().ordering
+        if ordering:
+            return _ORDER_FROM_MODEL_DEFAULT, tuple(ordering)
+    return _ORDER_FROM_NOTHING, ()
+
+
+def _has_no_random_terms(queryset: models.QuerySet) -> bool:
+    """Return True when the order Django will compile carries no recognized random term.
+
+    Classifies the SELECTED ordering, not every collection holding terms: a
+    ``"?"`` sitting in ``query.order_by`` under an ``extra`` ordering that
+    supersedes it never reaches SQL, while a ``"?"`` the model brought in
+    through ``Meta.ordering`` does. Either way the verdict has to be about the
+    collection Django is going to run.
+    """
+    _source, terms = _selected_ordering(queryset)
+    return not any(_is_random_order_term(term) for term in terms)
 
 
 def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
-    """Return True if the model declares active default ordering on queryset.
+    """Return True when the model's own ``Meta.ordering`` is the order Django will compile.
 
-    Requires query.default_ordering is True, non-empty and non-random Meta.ordering,
-    empty query.order_by and query.extra_order_by, and falsy query.group_by.
+    The guard's public-order eligibility rule: ordering the resolver alone put on
+    the queryset never authorizes a positive offset, so the only two orders that
+    do are an active ``orderBy`` input and this one. ``default_ordering`` must be
+    exactly ``True`` - a merely truthy stand-in is a shape the queryset pipeline
+    does not produce, and an offset window is not granted on one. Grouping
+    suppresses the default for the same reason ``QuerySet.ordered`` does: an
+    aggregate query does not carry the model's row order.
     """
     query = queryset.query
-    if query.default_ordering is not True:
+    source, terms = _selected_ordering(queryset)
+    if source != _ORDER_FROM_MODEL_DEFAULT:
         return False
-    if query.order_by or query.extra_order_by or query.group_by:
+    if query.default_ordering is not True or query.group_by:
         return False
-    ordering = query.get_meta().ordering
-    if not ordering:
-        return False
-    return not any(_is_random_order_term(term) for term in ordering)
-
-
-async def _cleanup_rejected_async_iterable(iterable: Any, primary_error: BaseException) -> None:
-    try:
-        iterator = aiter(iterable)
-    except BaseException as aiter_err:
-        try:
-            notes = [*getattr(primary_error, "__notes__", ())]
-            notes.append(f"Iterator acquisition failed: {aiter_err!r}")
-            primary_error.__notes__ = notes
-        except Exception:
-            pass
-        return
-    await _close_async_iterator(
-        iterator,
-        primary_error=primary_error,
-        caller="DjangoListField",
-    )
+    return not any(_is_random_order_term(term) for term in terms)
 
 
 def _model_from_definition(definition: Any) -> type[models.Model]:
@@ -752,11 +777,11 @@ async def _handle_non_queryset_rejections_async(
         )
     except BaseException as primary:
         if is_async_only_iterable(source):
-            await _cleanup_rejected_async_iterable(source, primary)
+            await _cleanup_rejected_async_iterable(source, primary, caller="DjangoListField")
         raise
     if err is not None:
         if is_async_only_iterable(source):
-            await _cleanup_rejected_async_iterable(source, err)
+            await _cleanup_rejected_async_iterable(source, err, caller="DjangoListField")
         raise err
 
 
@@ -846,11 +871,17 @@ def _check_nonzero_offset_guard(
 ) -> None:
     """Validate that non-zero offset pagination is backed by a deterministic ordering.
 
-    Rejects non-zero offset requests if neither active OrderSet terms nor model default
-    ordering is in effect. Note on EmptyQuerySet: Django's EmptyQuerySet vacuously reports
-    ordered=True (Category.objects.none().ordered is True). An empty queryset with offset > 0
-    and no active orderset or model ordering is accepted by the queryset.ordered check only
-    because it represents an empty result window where row ordering is vacuously preserved.
+    A positive ``offset`` needs an order the request can name: active ``OrderSet``
+    terms the consumer supplied, or the model's own eligible ``Meta.ordering``.
+    With neither in effect the offset is rejected, because the rows it skips are
+    otherwise whichever rows the database happened to return first.
+
+    The empty-queryset allowance lives inside the active-input branch alone.
+    Django reports ``ordered`` True for an ``EmptyQuerySet`` whatever it carries
+    (``Category.objects.none().ordered is True``), so that half of the branch is
+    vacuous there and an empty window supplied with active terms rides through on
+    an order that orders nothing. A request with no active input and no eligible
+    model ordering is rejected whether its queryset is empty or not.
     """
     if args_record.offset is None or args_record.offset <= 0:
         return

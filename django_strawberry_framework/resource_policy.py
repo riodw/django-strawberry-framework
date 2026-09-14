@@ -594,6 +594,43 @@ async def _close_async_iterator(
             pass
 
 
+async def _cleanup_rejected_async_iterable(
+    iterable: Any,
+    primary_error: BaseException,
+    *,
+    caller: str,
+) -> None:
+    """Close an async-only source that is being rejected before it is ever advanced.
+
+    Sits below every caller that can reject such a source: the list field's
+    non-queryset and argument rejections, and this module's own pre-iteration
+    bound check. An iterator that has not yet produced an item can still own an
+    open external resource, so the rejection owes it a close even though no row
+    was ever requested.
+
+    The rejection stays primary throughout. Acquiring the iterator is itself a
+    consumer call that can fail, and when it does the failure becomes a note on
+    the rejection rather than the error the caller sees - the same posture
+    ``_close_async_iterator`` takes for a failing ``aclose``, and for the same
+    reason: the caller is already propagating the useful failure.
+    """
+    try:
+        iterator = aiter(iterable)
+    except BaseException as aiter_err:
+        try:
+            notes = [*getattr(primary_error, "__notes__", ())]
+            notes.append(f"Iterator acquisition failed: {aiter_err!r}")
+            primary_error.__notes__ = notes
+        except Exception:
+            pass
+        return
+    await _close_async_iterator(
+        iterator,
+        primary_error=primary_error,
+        caller=caller,
+    )
+
+
 async def bounded_rows_async(
     result: Any,
     info: Any,
@@ -626,6 +663,11 @@ async def bounded_rows_async(
     raised when iteration itself succeeded; when iteration already failed, the
     source error remains primary and the cleanup failure is attached as a note
     rather than masking the useful failure.
+
+    The deadline and row bound are read here, after the resolver has already
+    produced its source, so a rejection at that read abandons an async-only
+    source the same way an early prefix end does and owes it the same close.
+    The rejection keeps precedence over anything acquisition or closure raises.
     """
     if not is_async_only_iterable(result):
         return bounded_rows(
@@ -636,7 +678,19 @@ async def bounded_rows_async(
             requested_limit=requested_limit,
             trusted=trusted,
         )
-    limit = _raw_list_bound(info, declared, trusted=trusted)
+    try:
+        limit = _raw_list_bound(info, declared, trusted=trusted)
+    except BaseException as rejection:
+        # The source was handed over before this seam looked at the clock, so a
+        # rejection here abandons an iterator the resolver has already built.
+        # Nothing has been advanced, but an unadvanced iterator can still hold
+        # an open external resource, and no later seam will ever see it again.
+        await _cleanup_rejected_async_iterable(
+            result,
+            rejection,
+            caller="bounded_rows_async",
+        )
+        raise
     start = offset if offset is not None else 0
     window = requested_limit if requested_limit is not None else limit
 

@@ -2,10 +2,12 @@
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
 Status: in flight (`0.0.15`)
-Revision: 2026-09-13 - metadata-integrity remediation complete (one canonical definition
-across every field factory, the optimizer, and the connection cache; terminal ledger
-closure); full, sharded, and floor verification run clean on one tree (`0.0.15`) (revision
-history moved to
+Revision: 2026-09-13 - offset-guard and async-cleanup remediation complete (the non-zero-offset
+guard classifies the ONE ordering Django's compiler selects; the shared async bounding seam
+owns cleanup for a source its own deadline rejects) on top of the metadata-integrity round
+(one canonical definition across every field factory, the optimizer, and the connection cache;
+terminal ledger closure). The gate is owed again: full, sharded, and floor verification ran
+clean on one tree before this round's production changes (`0.0.15`) (revision history moved to
 [`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
 
 Deliberation, rejected alternatives, and this spec's change record live in its companion
@@ -87,6 +89,10 @@ the release wording.
   - [ ] A target carrying `Meta.orderset_class` gains nullable, optional
         `orderBy: [<OrderSet>InputType!]`; a target without that sidecar does not publish a
         meaningless order input.
+  - [ ] The offset/order guard reads ONE classification of the sealed queryset, mirroring
+        `SQLCompiler._order_by_pairs`'s precedence, so a random model default disqualifies an
+        active-input request and a random term the compiler does not select disqualifies
+        nothing.
   - [ ] Sync and async paths run visibility, then `OrderSet`, then the offset/order guard,
         then the one raw-list slice.
   - [ ] The result of a public `OrderSet.apply_*` override is validated as an unevaluated,
@@ -115,8 +121,11 @@ the release wording.
   - [ ] Ledger closure is terminal: a descendant holding the copied context can neither
         publish into nor claim from a closed ledger.
   - [ ] Package proofs arm a definition-read counter and a decoy definition through a real
-        `DjangoSchema` with the optimizer installed, over cold and warm plans; live proofs
-        cover a planned relation under both the offset and the keyset cursor vocabulary.
+        `DjangoSchema` with the optimizer installed, parametrized over hook flavour and
+        relation vocabulary and over cold and warm plans, requiring a custom hook to have RUN
+        and asserting the plan cache's hits/misses/size transition rather than calling a
+        second execution warm; live proofs cover a planned relation under both the offset and
+        the keyset cursor vocabulary.
 - [ ] **Slice 4 - live acceptance**
   - [ ] A dedicated `examples/fakeshop/test_query/test_list_field_api.py` drives the sync
         surface over `/graphql/`: ordered offset pages, `orderBy` lists,
@@ -128,7 +137,12 @@ the release wording.
   - [ ] A test-local [`AsyncDjangoGraphQLView`][glossary-djangographqlview] mount proves safe
         async queryset completion,
         configured argument names, async iterable cleanup, and async pipeline parity over
-        HTTP without `DJANGO_ALLOW_ASYNC_UNSAFE`.
+        HTTP without `DJANGO_ALLOW_ASYNC_UNSAFE`. Cleanup is proven for a deadline rejection
+        too, on the default window and on `limit: 0`, with zero advances and exactly one
+        close.
+  - [ ] Both wrong verdicts of a collection-scanning offset guard are pinned live in both
+        colorings - a random model default under a no-op public override, and a dormant random
+        term superseded by a deterministic `extra` ordering - each beside its control.
   - [ ] Add the new async live-test path to the card's predicted files, then regenerate the
         tracked-path constants after the path is in the index so governance sees the file.
   - [ ] Add the new suite and its shared-helper exemption to
@@ -462,7 +476,7 @@ CONSTRUCTS the field, so a typo fails where it was written rather than as a sile
 ceiling on every request the field serves; the primitive keeps its own check because it must
 stay safe for an internal caller with no factory in front of it.
 
-Runtime package rejections use one internal type:
+Runtime package rejections use one type, exported from the package root so a consumer can catch it:
 
 ```python
 class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
@@ -1036,15 +1050,30 @@ after the visibility boundary has rebuilt a framework-owned plain queryset, so t
 field does not inspect hostile consumer queryset internals or create another source
 classifier.
 
+Both branches read ONE classification of the sealed queryset, and it is the classification
+Django's own compiler makes. `SQLCompiler._order_by_pairs` selects a single collection by
+precedence - `query.extra_order_by`, else `query.order_by`, else the model's `Meta.ordering`
+while `query.default_ordering` still stands - and ignores the others entirely. They are
+alternatives, never a union. A term sitting in a collection the compiler did not select is
+DORMANT: it never reaches SQL and cannot make a page unrepeatable, so it cannot reject an
+offset. A term in the selected collection does reach SQL whichever collection that is, so a
+random model default is exactly as disqualifying as a random `orderBy`-derived one. Scanning
+the explicit collections and leaving model defaults out gets both verdicts wrong in opposite
+directions, and the guard must not answer from a population the database does not run. The
+selection is read from the already-sealed queryset's own state; the guard never invokes the
+compiler, evaluates rows, or borrows `effective_connection_order`, which deliberately rewrites
+ordering to the connection's total-order contract and therefore answers a different question.
+
 Two named predicates keep these branches separate. The post-apply explicit-order check
 accepts an active normalized input only when its mechanically validated queryset is ordered
 and its effective terms contain no recognized random order; an explicitly ordered,
 known-empty `.none()` queryset may satisfy this branch vacuously because the client-visible
 order contract still exists. The model-default predicate is Django's own default-ordering rule
-plus a stability requirement, not a parallel reimplementation of it. It requires all of:
-non-empty stable ordering on the query's own meta, `query.default_ordering is True`, empty
-`query.order_by`, and empty `query.extra_order_by` - and then Django's grouping rule spelled
-exactly as
+plus a stability requirement, not a parallel reimplementation of it. It requires that the model's own
+`Meta.ordering` be the collection the precedence above SELECTS - which is empty
+`query.extra_order_by`, empty `query.order_by` and non-empty ordering on the query's own meta -
+plus `query.default_ordering is True` as an exact identity rather than a truthiness test, and
+then Django's grouping rule spelled exactly as
 [`django/db/models/query.py::QuerySet.ordered`][django-queryset] spells it, `not
 query.group_by`. That last condition is written as a falsiness test, never as
 `query.group_by is None`: `group_by` is `None` on a plain query but a tuple of expressions
@@ -1190,6 +1219,20 @@ This uses the same package-private cleanup utility and primary-error precedence 
 The close is owed on every rejecting exit, including when constructing the
 `ListArgumentError` itself fails (malformed schema metadata behind the wire-name lookup): that
 failure becomes the primary exception and the same cleanup runs before it propagates.
+
+The same close is owed one seam later, for the same reason. `bounded_rows_async` reads the
+request's deadline and row bound AFTER the consumer resolver has already produced its source,
+so a deadline that expired while that resolver awaited rejects while holding an async-only
+iterable nothing else will ever see. No row has been requested, but an async source may own an
+open external resource from the moment it is constructed, so the rejection acquires its
+iterator solely to close it. The `ResourceLimitExceeded` stays primary and complete - its
+`bound`, `limit` and `charged` extensions are what the client acts on - and an acquisition or
+closure failure rides as a diagnostic note. This is the SAME cleanup utility, which therefore
+lives below both callers rather than being restated in a second module, and it is reached
+through the one existing deadline check: no second clock read is added, and no caller-specific
+catch is placed in the list field, where the other callers of the shared bounding seam would
+stay exposed. `limit: 0` is included, because the empty-window short-circuit sits downstream of
+the clock and so never gets to perform the close it promises on a healthy request.
 
 The symmetric SYNC contract is deliberately DECLINED in this card, and declining it is stated
 rather than left as an implied promise. A retained sync generator consumed through
@@ -1338,8 +1381,23 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   [`django_strawberry_framework/resource_policy.py::bounded_rows_async`][resource-policy]
   remain the only raw-list window implementation. Relation-list callers pass no client
   window and retain current behavior. Their iterator-close/error-note logic is extracted to
-  one package-private utility reused when the list pipeline rejects an async-only source
-  before bounding; no second cleanup implementation is allowed.
+  one package-private utility that LIVES BESIDE THEM, below every caller: the list pipeline
+  rejecting an async-only source before bounding, and the bounding seam's own deadline/row
+  rejection, which abandons a source the resolver has already produced. Neither may restate the
+  acquisition, diagnostic-note or close policy, and no second cleanup implementation is
+  allowed. The seam's single deadline read stays single; a rejection is routed through the
+  utility rather than met by a second clock check or a caller-local catch, which would leave
+  every other caller of the shared seam uncovered.
+- `django_strawberry_framework/list_field.py::_selected_ordering` is the only place the
+  effective-ordering precedence is spelled. Both offset-guard predicates - the random-term
+  check and the model-default eligibility rule - read its answer; neither scans
+  `query.order_by`, `query.extra_order_by` or `Meta.ordering` on its own. A second scan is
+  what let the two predicates disagree with each other and with
+  `SQLCompiler._order_by_pairs`. The guard does not reuse
+  `effective_connection_order`: that helper intentionally REWRITES ordering to the
+  connection's total-order contract, so it answers a different question and sharing it would
+  make the list field's verdict depend on a transformation it never applies.
+
 - [`django_strawberry_framework/orders/__init__.py::order_input_type`][orders-init] remains
   the only lazy order-input annotation builder and orphan-ledger writer.
 - [`django_strawberry_framework/orders/sets.py::OrderSet.apply_sync`][orders-sets] /
@@ -1438,7 +1496,12 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
 ## Edge cases and constraints
 
 - `offset: null`, `limit: null`, and `orderBy: null` are omission, not zero or empty input.
-- `offset: 0` is accepted without ordering; `limit: 0` yields an empty list.
+- `offset: 0` is accepted without ordering; `limit: 0` yields an empty list. A `limit: 0`
+  request over an async-only source still closes it, and still closes it when the deadline
+  rejects the request before the empty-window short-circuit is reached.
+- A deadline that expires while the consumer resolver awaits rejects at the shared async
+  bounding seam holding a source that was never advanced; that source is closed, zero
+  `__anext__` calls are made, and the resource error keeps its complete extensions.
 - GraphQL `Int` is signed 32-bit. A larger literal/variable fails coercion before the policy
   ceiling is consulted.
 - `True` is rejected in direct calls even though Python treats it as integer `1`.
@@ -1452,7 +1515,13 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
 - A model `Meta.ordering = []` is not active; a non-empty non-random tuple is active only
   while the post-visibility queryset still uses Django's default-ordering path.
 - A model ordering containing `"?"` or a recognized `Random()` expression is not an active
-  stability order, even when another term follows it.
+  stability order, even when another term follows it. This holds under an ACTIVE `orderBy` too:
+  an override that returns the queryset unchanged leaves the random default as the order the
+  page will actually run under, and the request is rejected.
+- Ordering the compiler does not select is dormant and cannot reject an offset. A queryset
+  carrying `.order_by("?")` under an `extra(order_by=[...])` that supersedes it is accepted;
+  the mirror shape - a stable explicit order under a superseding random `extra` ordering - is
+  rejected.
 - Reversing a stable model default remains stable; `standard_ordering=False` changes direction
   and does not by itself disable the fallback.
 - A to-many model default may duplicate parent instances; offset counts SQL result rows.
@@ -1673,6 +1742,38 @@ the shipped SDL.
     router's answer - the completed read must still return the row seeded on the source's
     alias, with no `library_branch` SQL on the alias the mutation named. The async coloring
     carries the same pin on its own executable seam.
+
+27. Both wrong verdicts of a collection-scanning offset guard are pinned live, in BOTH
+    colorings, against the shipped `allLibraryBranchesViaListField` field with a public
+    `apply_sync` / `apply_async` override in place. The rejection half: a model declaring
+    `Meta.ordering = ("?",)` under an override that returns its input unchanged is refused for
+    a positive offset even though `orderBy` input is active and the queryset reports ordered,
+    and no row SQL runs. The acceptance half: an override returning
+    `queryset.order_by("?").extra(order_by=["id"])` is served, because the extra ordering
+    supersedes the dormant random term, and the captured SQL carries the id order and the
+    raised low mark. Each is paired with its control - a stable model default under the same
+    no-op override, and a stable explicit order under a superseding random `extra` ordering -
+    so neither verdict can be produced by a guard that simply always answers one way. The
+    exact precedence mechanics stay in the package tier, which is where a term can be planted
+    in a collection the compiler will not select.
+28. A live async request whose deadline expires after its resolver has obtained an async-only
+    source closes that source exactly once and advances it zero times, for the default window
+    and for `limit: 0` alike, with the complete `execution_deadline_seconds` extensions on the
+    rejection. The witness is the externally counted iterator of the rows above, never an
+    async generator's body `finally`. The package tier carries the same claim at the bounding
+    seam itself, plus the failing-close arm where the resource error must stay primary and
+    complete with the cleanup failure attached as a note; the natural-exhaustion control, in
+    which the iterator is deliberately NOT closed, is retained beside them.
+29. The captured-definition proof is parametrized over hook flavour and relation vocabulary,
+    on a `DjangoSchema`, with the decoy armed after construction. A target declaring a custom
+    `get_queryset` is what reaches the visibility runner, so only its rows can witness the
+    captured MODEL threaded there; the list and connection vocabularies are driven from
+    SEPARATE documents because they forward that model from separate call sites and one would
+    otherwise hide the other's regression. The custom-hook rows require the hook to have RUN
+    and require zero definition reads. The default-hook rows keep the cross-request plan-cache
+    case and assert the transition explicitly - hits, misses and size - because a plan
+    carrying a hook is deliberately not cacheable, and calling a second execution "warm"
+    without reading those counters would pass equally well if caching had stopped.
 
 Every test-local sync/async schema mount uses the established module-level current-schema
 holder under `override_settings(ROOT_URLCONF=...)`, resets that holder and Django's URL caches
@@ -2062,7 +2163,10 @@ structural checks, and link/kanban verification prescribed by
       active schema naming determines `argument`; actual GraphQL `Int` coercion failures
       perform no SQL, while integral float variables retain graphql-core's standard coercion.
 - [ ] Nonzero offset requires a materially active `orderBy` or still-effective model
-      `Meta.ordering` on the post-visibility queryset; empty/null order input, cleared or
+      `Meta.ordering` on the post-visibility queryset, judged against the ONE collection
+      Django's compiler selects by precedence rather than against a union of the explicit
+      ones: a random model default disqualifies an active-input request, and a random term the
+      compiler does not select cannot disqualify anything. Empty/null order input, cleared or
       replaced model ordering, random ordering, grouping that suppresses the default, and
       opaque Python iterables cannot fake the condition. The shipped contract is stated as
       ORDERED OFFSET; no spec, docstring, glossary, or error text promises a stable or
@@ -2082,7 +2186,9 @@ structural checks, and link/kanban verification prescribed by
       aggregate behavior.
 - [ ] Querysets retain SQL `LIMIT/OFFSET`; sequences, iterables, and async-only iterables are
       bounded without over-consuming beyond the accepted window. Leak-free early-exit cleanup
-      is promised for ASYNC-ONLY sources; a retained sync generator is documented and tested as
+      is promised for ASYNC-ONLY sources on every exit that abandons the source, argument
+      rejection and deadline rejection alike, through one shared cleanup utility that sits
+      below both callers; a retained sync generator is documented and tested as
       still suspended after truncation, and the symmetric sync contract is deliberately
       deferred.
 - [ ] Async queryset results complete over `AsyncDjangoGraphQLView` through an async-only

@@ -60,6 +60,7 @@ from django_strawberry_framework.filters import FilterSet, _helper_referenced_fi
 from django_strawberry_framework.orders import OrderSet, _helper_referenced_ordersets
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.schema import DjangoSchema
 from django_strawberry_framework.types.relay import SyncMisuseError
 
 
@@ -2428,6 +2429,7 @@ def _counting_node_type(
     reads,
     orderset=None,
     filterset=None,
+    get_queryset=None,
 ):
     """Build a Relay-Node ``DjangoType`` whose definition reads are counted and swappable.
 
@@ -2435,6 +2437,12 @@ def _counting_node_type(
     is returned, and once a decoy is placed in it every later read answers with
     that instead - so a residual read is both counted and consequential rather
     than merely tallied.
+
+    ``get_queryset`` installs a visibility hook on the target. It changes which
+    metadata the planner needs: a target with a hook sends its child queryset
+    through the visibility runner, which is the seam the captured MODEL is
+    threaded into, so only an instrumented hook-bearing target can witness that
+    half of the capture.
     """
 
     class CountingMeta(type(DjangoType)):
@@ -2456,7 +2464,10 @@ def _counting_node_type(
         meta_attrs["filterset_class"] = filterset
     if orderset is not None:
         meta_attrs["orderset_class"] = orderset
-    return CountingMeta(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
+    namespace = {"Meta": type("Meta", (), meta_attrs)}
+    if get_queryset is not None:
+        namespace["get_queryset"] = classmethod(get_queryset)
+    return CountingMeta(name, (DjangoType,), namespace)
 
 
 def _item_node_type(name: str) -> type:
@@ -2665,47 +2676,52 @@ def test_a_relay_target_with_no_registered_definition_fails_the_synthesized_conn
         finalize_django_types()
 
 
-@pytest.mark.django_db
-def test_the_optimizer_plans_a_relation_without_reading_the_target_class():
-    """Planning a nested relation spends the walker's resolution, not a fresh read.
+#: One relation, two vocabularies. Planning them from separate documents keeps a
+#: regression in one from hiding behind the other's rows in the same response.
+_PLANNED_LIST_DOCUMENT = "{ parents { edges { node { name items { name } } } } }"
+_PLANNED_CONNECTION_DOCUMENT = (
+    "{ parents { edges { node { name itemsConnection(first: 2) { edges { node { name } } } } } } }"
+)
 
-    The optimizer plans the same field the finalizer already resolved, and every
-    decision it makes about the TARGET - whether the visibility hook runs over
-    the child queryset, which model that queryset's seal validates against, and
-    which cursor vocabulary the window derives through - comes from the child
-    definition ``related_target_for`` handed back. The target answers with a
-    decoy over a DIFFERENT MODEL from the moment finalization ends, so a
-    residual read would move the planned prefetch to another table rather than
-    merely raise a counter.
 
-    Both plan states are covered: the first execution builds the plan cold, the
-    second serves it from the plan cache. A warm plan must not spend a read
-    discovering that it is warm.
+def _planned_relation_schema(
+    suffix,
+    *,
+    reads,
+    decoy_slot,
+    hook_calls,
+):
+    """Compose the parent/child/decoy trio and return ``(schema, optimizer)``.
 
-    Package-side because the claim is a read COUNT on a class, which no response
-    shows: the decoy makes a residual read consequential, but only an
-    instrumented metaclass can say whether one happened. The consequence has live
-    siblings - ``examples/fakeshop/test_query/test_products_visibility_api.py``'s
-    planned-relation rows and
-    ``examples/fakeshop/test_query/test_keyset_api.py::test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out``
-    pin the rows a mis-answered plan would serve.
+    The child carries a visibility hook exactly when ``hook_calls`` is given. That
+    is the dimension the capture's two halves split on: a hook-less target never
+    reaches the visibility runner, so it cannot witness the captured model the
+    walker threads there, and a request against one says nothing about a target
+    that does.
     """
-    services.seed_data(3)
-    reads = {"armed": False, "names": []}
-    decoy_slot = {"decoy": None}
 
     class OptimizedParentNode(DjangoType):
         class Meta:
             model = Category
             fields = ("id", "name", "items")
             interfaces = (relay.Node,)
-            name = "OptimizedParentNode"
+            name = f"OptimizedParent{suffix}"
             relation_shapes = {"items": "both"}
             primary = True
 
-    _counting_node_type("OptimizedChildNode", model=Item, decoy_slot=decoy_slot, reads=reads)
+    def _hook(cls, queryset, info):
+        hook_calls.append(queryset.model)
+        return queryset
+
+    _counting_node_type(
+        f"OptimizedChild{suffix}",
+        model=Item,
+        decoy_slot=decoy_slot,
+        reads=reads,
+        get_queryset=None if hook_calls is None else _hook,
+    )
     decoy = type(
-        "OptimizedChildDecoyNode",
+        f"OptimizedChildDecoy{suffix}",
         (DjangoType,),
         {
             "Meta": type(
@@ -2715,7 +2731,7 @@ def test_the_optimizer_plans_a_relation_without_reading_the_target_class():
                     "model": Category,
                     "fields": ("id", "name"),
                     "interfaces": (relay.Node,),
-                    "name": "OptimizedChildDecoyNode",
+                    "name": f"OptimizedChildDecoy{suffix}",
                     "primary": False,
                 },
             ),
@@ -2732,7 +2748,7 @@ def test_the_optimizer_plans_a_relation_without_reading_the_target_class():
     )
     query_cls = strawberry.type(
         type(
-            "OptimizedQuery",
+            f"OptimizedQuery{suffix}",
             (),
             {
                 "__annotations__": {"parents": parent_conn},
@@ -2741,36 +2757,98 @@ def test_the_optimizer_plans_a_relation_without_reading_the_target_class():
         ),
     )
     optimizer = DjangoOptimizerExtension()
-    schema = strawberry.Schema(
+    schema = DjangoSchema(
         query=query_cls,
         config=strawberry_config(),
         extensions=[lambda: optimizer],
     )
-
-    document = (
-        "{ parents { edges { node { name "
-        "items { name } "
-        "itemsConnection(first: 2) { edges { node { name } } } } } } }"
-    )
-    reads["armed"] = True
     decoy_slot["decoy"] = decoy.__django_strawberry_definition__
+    reads["armed"] = True
+    return schema, optimizer
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("vocabulary", "document"),
+    [("List", _PLANNED_LIST_DOCUMENT), ("Connection", _PLANNED_CONNECTION_DOCUMENT)],
+    ids=["list", "connection"],
+)
+@pytest.mark.parametrize("custom_hook", [False, True], ids=["default-hook", "custom-hook"])
+def test_the_optimizer_plans_a_relation_without_reading_the_target_class(
+    vocabulary,
+    document,
+    custom_hook,
+):
+    """Planning a nested relation spends the walker's resolution, not a fresh read.
+
+    The optimizer plans the same field the finalizer already resolved, and every
+    decision it makes about the TARGET - whether the visibility hook runs over the
+    child queryset, which model that queryset's seal validates against, and which
+    cursor vocabulary the window derives through - comes from the child definition
+    ``related_target_for`` handed back. The target answers with a decoy over a
+    DIFFERENT MODEL from the moment finalization ends, so a residual read would
+    move the planned prefetch to another table rather than merely raise a counter.
+
+    Both hook flavours run because they need different halves of the capture: a
+    hook-less target never enters the visibility runner, while a hook-bearing one
+    does and must find the captured model already there. Both plan states are
+    covered too, and the cache counters say which one each execution was: a
+    hook-less plan is cacheable and the second request reuses the entry, while a
+    plan carrying a hook is deliberately not cached and is rebuilt. Calling a
+    second execution "warm" without reading those counters would pass just as
+    well if caching had stopped altogether.
+
+    Package-side because the claim is a read COUNT on a class, which no response
+    shows: the decoy makes a residual read consequential, but only an instrumented
+    metaclass can say whether one happened. The consequence has live siblings -
+    ``examples/fakeshop/test_query/test_products_visibility_api.py``'s
+    planned-relation rows and
+    ``examples/fakeshop/test_query/test_keyset_api.py::test_nested_keyset_window_hides_embargoed_rows_and_counts_them_out``
+    pin the rows a mis-answered plan would serve.
+    """
+    services.seed_data(3)
+    reads = {"armed": False, "names": []}
+    decoy_slot = {"decoy": None}
+    hook_calls = [] if custom_hook else None
+    suffix = f"{vocabulary}{'Hooked' if custom_hook else 'Bare'}"
+
+    schema, optimizer = _planned_relation_schema(
+        suffix,
+        reads=reads,
+        decoy_slot=decoy_slot,
+        hook_calls=hook_calls,
+    )
+    assert optimizer.cache_info().size == 0, optimizer.cache_info()
 
     item_names = set(Item.objects.values_list("name", flat=True))
-    for plan_state in ("cold", "warm"):
+    for execution, expected_cache in enumerate(
+        [(0, 1, 0), (0, 2, 0)] if custom_hook else [(0, 1, 1), (1, 1, 1)],
+    ):
         result = schema.execute_sync(document, context_value={"request": HttpRequest()})
-        assert result.errors is None, (plan_state, result.errors)
-        assert reads["names"] == [], plan_state
+        assert result.errors is None, (execution, result.errors)
+        assert reads["names"] == [], execution
+        info = optimizer.cache_info()
+        assert (info.hits, info.misses, info.size) == expected_cache, (execution, info)
         rows = {
-            row["name"]
+            name
             for parent in result.data["parents"]["edges"]
-            for row in parent["node"]["items"]
-        } | {
-            edge["node"]["name"]
-            for parent in result.data["parents"]["edges"]
-            for edge in parent["node"]["itemsConnection"]["edges"]
+            for name in _relation_page(parent["node"], vocabulary)
         }
-        assert rows, plan_state
-        assert rows <= item_names, plan_state
+        assert rows, execution
+        assert rows <= item_names, execution
+
+    if custom_hook:
+        # The hook has to have RUN for its request to say anything about the
+        # model the runner was handed: a hook that never fired would report zero
+        # reads because nothing consulted the target at all.
+        assert hook_calls == [Item, Item], hook_calls
+
+
+def _relation_page(node, vocabulary):
+    """Read the child names out of whichever relation vocabulary the document selected."""
+    if vocabulary == "List":
+        return [row["name"] for row in node["items"]]
+    return [edge["node"]["name"] for edge in node["itemsConnection"]["edges"]]
 
 
 @pytest.mark.django_db

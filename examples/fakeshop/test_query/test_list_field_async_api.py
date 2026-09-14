@@ -34,6 +34,7 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.orders import Ordering, OrderSet
+from django_strawberry_framework.resource_policy import RESOURCE_LIMIT_ERROR_CODE
 from django_strawberry_framework.schema import DjangoSchema
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
@@ -445,6 +446,68 @@ async def test_async_generator_natural_exhaustion_does_not_call_aclose():
     assert holder["it"].aclose_called == 0
 
 
+#: Small enough that it has always passed by the time a resolver runs, which is
+#: what makes a deadline rejection assertable without a sleep.
+_PASSED_DEADLINE_SECONDS = 0.000_001
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "arguments",
+    ["", "(limit: 0)"],
+    ids=["default-window", "limit-zero"],
+)
+async def test_async_deadline_rejection_closes_the_source_it_never_advanced(arguments):
+    """A budget spent before the bounding seam still closes the iterator the resolver returned.
+
+    The resolver hands its source over first and the clock is read second, so a
+    deadline rejection lands holding an iterator nobody will ever see again. It
+    has produced no item, but an async source can own an open external resource
+    from the moment it is constructed, so the rejection owes it exactly one
+    ``aclose`` and no advance.
+
+    ``limit: 0`` takes the same path: the empty-window short-circuit sits
+    downstream of the clock, so the close it promises on a healthy request has to
+    survive a rejected one too.
+    """
+    branches = [
+        await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
+        for i in range(3)
+    ]
+
+    holder: dict[str, _ClosableAsyncIterator | None] = {"it": None}
+
+    def _resolver(root, info):
+        it = _ClosableAsyncIterator(branches)
+        holder["it"] = it
+        return it
+
+    @strawberry.type
+    class _DeadlineQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolver,
+        )
+
+    schema = DjangoSchema(
+        query=_DeadlineQuery,
+        config=strawberry_config(),
+        resource_policy={"execution_deadline_seconds": _PASSED_DEADLINE_SECONDS},
+    )
+
+    payload = await _post_async(schema, "{ branches%s { name } }" % arguments)
+
+    assert payload["data"] is None, payload
+    extensions = payload["errors"][0]["extensions"]
+    assert extensions["code"] == RESOURCE_LIMIT_ERROR_CODE, extensions
+    assert extensions["bound"] == "execution_deadline_seconds", extensions
+    assert extensions["limit"] == 1, extensions
+    assert extensions["charged"] == 2, extensions
+    assert holder["it"] is not None
+    assert holder["it"].next_count == 0
+    assert holder["it"].aclose_called == 1
+
+
 # ---------------------------------------------------------------------------
 # 10. Async error transport and naming
 # ---------------------------------------------------------------------------
@@ -492,6 +555,69 @@ async def test_async_error_transport_and_naming():
     err = p_fail["errors"][0]
     assert err["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
     assert err["extensions"]["reason"] == "order_required"
+
+
+_ASYNC_OFFSET_WITH_ACTIVE_ORDER = (
+    "{ branches(orderBy: [{ city: ASC }], offset: 1, limit: 1) { name } }"
+)
+
+
+async def _seed_three_branches_async():
+    for name in ("Alpha", "Bravo", "Charlie"):
+        await sync_to_async(library_models.Branch.objects.create)(name=name, city="Boston")
+
+
+def _offset_guard_schema():
+    @strawberry.type
+    class _OffsetGuardQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+
+    return DjangoSchema(query=_OffsetGuardQuery, config=strawberry_config())
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_rejects_a_random_model_default(monkeypatch):
+    """The async coloring reads the same effective order the sync one does.
+
+    Both pipelines hand the sealed queryset to one guard, so the order the
+    request will run under - here the model's own ``"?"``, left standing by an
+    override that returns what it was given - has to reject the offset on either
+    side. A guard that answered from ``query.order_by`` alone would see two empty
+    collections and serve a re-shuffled page.
+    """
+    await _seed_three_branches_async()
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", ("?",))
+
+    async def _apply_unchanged(cls, order_input, queryset, info, **kwargs):
+        return queryset
+
+    monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_apply_unchanged))
+
+    payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_accepts_extra_ordering_over_a_dormant_random_order(monkeypatch):
+    """The async twin of the acceptance half: a superseded ``"?"`` cannot reject the offset.
+
+    ``extra`` ordering wins over ``query.order_by`` in the compiler, so the page
+    comes back in id order and the dormant random term never reaches SQL.
+    """
+    await _seed_three_branches_async()
+
+    async def _extra_supersedes_random(cls, order_input, queryset, info, **kwargs):
+        return queryset.order_by("?").extra(order_by=["id"])
+
+    monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_extra_supersedes_random))
+
+    payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["branches"] == [{"name": "Bravo"}]
 
 
 # ---------------------------------------------------------------------------

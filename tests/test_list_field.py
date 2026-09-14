@@ -69,7 +69,6 @@ from django_strawberry_framework.exceptions import (
     DjangoStrawberryFrameworkError,
 )
 from django_strawberry_framework.list_field import (
-    _cleanup_rejected_async_iterable,
     _field_label,
     _ListArguments,
     _model_from_definition,
@@ -4218,47 +4217,6 @@ def test_list_field_wire_name_resolution_surfaces_broken_schema_metadata():
         match="Failed to read the schema field for argument 'order_by'",
     ):
         _resolve_argument_wire_name(info, "order_by")
-
-
-@pytest.mark.asyncio
-async def test_cleanup_rejected_async_iterable_notes_an_iterator_acquisition_failure() -> None:
-    """When ``aiter()`` itself fails, the rejection carries the reason as a note.
-
-    The primary error is the argument rejection the caller is about to raise; a
-    cleanup that cannot even acquire the iterator must not replace it, so the
-    acquisition failure is attached to it instead.
-    """
-
-    class UnacquirableAsyncIterable:
-        def __aiter__(self):
-            raise RuntimeError("aiter exploded")
-
-    primary = ListArgumentError("books", "orderBy", reason="queryset_required")
-    await _cleanup_rejected_async_iterable(UnacquirableAsyncIterable(), primary)
-    assert any("Iterator acquisition failed" in note for note in primary.__notes__)
-    assert any("aiter exploded" in note for note in primary.__notes__)
-
-
-@pytest.mark.asyncio
-async def test_cleanup_rejected_async_iterable_survives_an_unannotatable_error() -> None:
-    """An error that refuses note attachment still leaves the primary error intact.
-
-    Note attachment is best-effort bookkeeping. An exception whose attribute
-    writes raise would otherwise turn a clean argument rejection into an
-    unrelated ``RuntimeError`` from the cleanup path.
-    """
-
-    class UnacquirableAsyncIterable:
-        def __aiter__(self):
-            raise RuntimeError("aiter exploded")
-
-    class NoteHostileError(Exception):
-        def __setattr__(self, name, value):
-            raise RuntimeError("notes refused")
-
-    primary = NoteHostileError("primary")
-    await _cleanup_rejected_async_iterable(UnacquirableAsyncIterable(), primary)
-    assert not hasattr(primary, "__notes__")
 
 
 def test_require_orderset_class_rejects_a_target_without_one():

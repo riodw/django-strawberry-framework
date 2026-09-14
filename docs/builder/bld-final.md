@@ -8,7 +8,7 @@ Cycle artifacts: [`bld-slice-1-argument_normalization.md`][bld-s1],
 [`bld-slice-4-live_acceptance.md`][bld-s4],
 [`bld-slice-5-documentation_fold_in.md`][bld-s5],
 [`bld-integration.md`][bld-int].
-Status: gate-green 2026-09-13 — the sixth review's metadata-integrity fixes landed and the full gate ran clean on one tree (HEAD `96b9e047` plus this round's working-tree changes): default **7775 passed / 40 skipped / 100.00%**, sharded **7792 passed / 37 skipped / 100.00%**, floor **2397 passed / 2 skipped** at Python 3.10.19 + Django 5.2.16 + strawberry-graphql 0.316.0, zero failures anywhere; figures and scope under `## Sixth implementation review`. Every EARLIER gate figure in this file is SUPERSEDED by the sixth round's code changes and kept only as the historical record of the tier it measured — in particular, neither fifth-review invocation was green (each reached 100% coverage while carrying a failing test, which is evidence about coverage and not a passing suite) and neither had a floor run
+Status: gate OWED — the seventh review's offset-guard and async-cleanup fixes landed on 2026-09-13 and changed production code, so every figure below is superseded and no gate has been run against the current tree; the maintainer has not yet requested test execution for this round. The last green gate was the sixth round's, on HEAD `96b9e047` plus that round's working-tree changes: default **7775 passed / 40 skipped / 100.00%**, sharded **7792 passed / 37 skipped / 100.00%**, floor **2397 passed / 2 skipped** at Python 3.10.19 + Django 5.2.16 + strawberry-graphql 0.316.0, zero failures anywhere; figures and scope under `## Sixth implementation review`. Every EARLIER gate figure in this file is superseded too and kept only as the historical record of the tier it measured — in particular, neither fifth-review invocation was green (each reached 100% coverage while carrying a failing test, which is evidence about coverage and not a passing suite) and neither had a floor run
 
 ## Artifact shape: one Worker 1 pass
 
@@ -516,7 +516,7 @@ relation path), Decision 4's bound table gains the exact-boolean opt-in rule, th
 bullet is rewritten around the attestation ledger and why a slot cannot satisfy both halves, and
 Test-plan item 22 states the raw-byte oracle for EVERY legacy row including the combined one.
 
-## Sixth implementation review — fixes applied 2026-09-13, gate pending
+## Sixth implementation review — fixes applied 2026-09-13, gate ran green 2026-09-13
 
 The review at `96b9e047` accepted the fifth round's list/connection factory read-once fix, the
 child-delegated order attestation, the exact-boolean trusted bound and the combined raw-response
@@ -658,6 +658,115 @@ carried ZERO failures; a run with a failing test is not recorded here as green.
   `test_products_visibility_api.py`, `test_keyset_api.py`). **2397 passed, 2 skipped**,
   `--no-cov`. The shared `.venv` was read afterwards and is unmutated (Django 6.1,
   strawberry-graphql 0.324.0); `uv.lock` and `pyproject.toml` carry no diff.
+
+## Seventh implementation review — fixes applied 2026-09-13, gate owed
+
+The review at HEAD `974d25b4` (advanced concurrently to `4746a0fe`) accepted the sixth round's
+canonical-definition, connection-cache-provenance and terminal-ledger fixes and did not reopen
+them. It found two reproducible production defects, one proof gap, and three stale instructions.
+All six have landed. No gate has been run for this round.
+
+### P2-1 — the offset guard now classifies the order Django will actually compile
+
+`_has_no_random_terms` scanned `query.order_by` AND `query.extra_order_by` and never looked at
+model defaults. Django's compiler
+(`django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`) selects ONE of the three by
+precedence — extra, then explicit, then the model default — so the guard was answering about a
+population the database does not run. Both verdicts were wrong:
+
+- A model declaring `Meta.ordering = ("?",)` behind a no-op public `apply_sync` override was
+  ACCEPTED for `offset: 1`: `queryset.ordered` saw the default while the random check saw two
+  empty collections. The compiled SQL was `ORDER BY RAND() ASC LIMIT 1 OFFSET 1`.
+- An override returning `queryset.order_by("?").extra(order_by=["id"])` was REJECTED, even
+  though the extra ordering supersedes the dormant `"?"` and the SQL reads
+  `ORDER BY "…"."id" ASC`.
+
+`list_field.py::_selected_ordering` is now the one classifier: it mirrors the compiler's
+precedence on the already-sealed queryset and returns `(source, terms)`. `_has_no_random_terms`
+asks it for the terms; `_is_model_default_ordering_active` asks it for the source and keeps its
+own `default_ordering is True` identity check and grouping suppression, so the public-order
+eligibility rule is unchanged. No compiler call and no row evaluation on the success path, and
+`effective_connection_order` is untouched — it deliberately rewrites ordering to the connection's
+total-order contract and cannot answer this question.
+
+### P2-2 — the async bounding seam owns cleanup on a pre-iteration rejection
+
+`bounded_rows_async` called `_raw_list_bound` — the single deadline check plus row bound — before
+acquiring the iterator and before entering its cleanup-protected region. A deadline that expired
+while the consumer resolver awaited therefore abandoned an async source the resolver had already
+returned, with no `aclose` attempt. Measured on a real `DjangoSchema`: `advances=0, closes=0`
+against `advances=0, closes=1` for the healthy path.
+
+`list_field.py::_cleanup_rejected_async_iterable` moved down to `resource_policy.py`, below both
+callers, and gained an explicit `caller` keyword; the acquisition, diagnostic-note and close
+policy are not duplicated. `bounded_rows_async` wraps its single bound call and routes a
+rejection through that one utility. No second clock check, and no list-field-only catch: every
+caller of the shared seam is covered, `limit: 0` included, since the empty-window short-circuit
+sits downstream of the clock.
+
+### P2-3 — the metadata proof now exercises the custom-hook model dependency
+
+The counter/decoy row built its target with `Meta` alone, so the target had no `get_queryset`,
+never reached the visibility runner, and could not witness the captured model threaded there.
+Dropping the forwarded model at either child-builder call left it green.
+
+`tests/test_connection.py::test_the_optimizer_plans_a_relation_without_reading_the_target_class`
+is now parametrized over hook flavour × relation vocabulary, on a `DjangoSchema` rather than a
+plain `strawberry.Schema`, with the decoy armed after construction. The custom-hook rows require
+the hook to have RUN (`hook_calls == [Item, Item]`) and require zero definition reads; the
+default-hook rows keep the cache case and assert the transition explicitly — `(0, 1, 1)` then
+`(1, 1, 1)` for a cacheable plan, `(0, 1, 0)` then `(0, 2, 0)` for a hook-bearing one, which is
+what separates a genuinely warm second execution from caching having stopped.
+
+### P3-1 — the four planned-visibility rows seed in their own first statement
+
+`services.seed_data(2)` moved out of `_hide_one_parents_items` and into the first executable
+statement of each of the four rows. The helper now only arranges privacy and derives the hidden
+identities; nothing seeds twice and no catalog row is hand-built.
+
+### P3-2 — three stale instructions corrected
+
+`_check_nonzero_offset_guard`'s docstring claimed an empty queryset with no active orderset and
+no model ordering is accepted; the implementation and Decision 6 reject that shape. Rewritten so
+the empty-queryset allowance is stated where it lives — inside the active-input branch alone.
+The spec's caps-and-error table no longer introduces `ListArgumentError` as "one internal type"
+two paragraphs before declaring it public, catchable and root-exported. This file's sixth-review
+heading no longer says "gate pending" above a completed gate, and both `Status:` lines now say
+the gate is owed again because this round changed production code.
+
+### Proofs added
+
+| Claim | Row | Fails when |
+| --- | --- | --- |
+| Random model default rejects a positive offset (sync) | `examples/fakeshop/test_query/test_list_field_api.py::test_shipped_branches_offset_rejects_a_random_model_default` | `_has_no_random_terms` reads the two explicit collections instead of the selected one |
+| Stable model default still serves it (sync) | `…::test_shipped_branches_offset_accepts_a_stable_model_default` | — (control) |
+| Superseded dormant `"?"` cannot reject (sync) | `…::test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_order` | the classifier unions the collections instead of selecting one |
+| Superseding extra `"?"` still rejects (sync) | `…::test_shipped_branches_offset_rejects_extra_random_ordering_over_a_stable_order` | — (control) |
+| Random model default rejects a positive offset (async) | `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_offset_rejects_a_random_model_default` | same as the sync row |
+| Superseded dormant `"?"` cannot reject (async) | `…::test_async_offset_accepts_extra_ordering_over_a_dormant_random_order` | same |
+| Deadline rejection closes the source it never advanced | `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_deadline_rejection_closes_the_source_it_never_advanced` (both ids) | the `_raw_list_bound` rejection is not routed through the cleanup utility |
+| …and at the seam itself | `tests/test_resource_policy.py::test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_any_row` | same |
+| A failing close leaves the resource error primary | `tests/test_resource_policy.py::test_bounded_rows_async_keeps_the_deadline_primary_when_the_close_fails` (both ids) | the cleanup failure is allowed to replace the rejection |
+| Planning a HOOK-BEARING list relation reads no target class | `tests/test_connection.py::test_the_optimizer_plans_a_relation_without_reading_the_target_class[custom-hook-list]` | `walker.py::_plan_prefetch_relation` stops forwarding `target_model` |
+| Planning a HOOK-BEARING connection relation reads no target class | `…[custom-hook-connection]` | `nested_planner.py::plan_connection_relation` stops forwarding `target_model` |
+| Cacheable plans actually reuse their entry | `…[default-hook-list]` and `…[default-hook-connection]` | the cache-transition tuple is dropped back to a bare second execution |
+
+The two forwarding mutations were each applied, probed, reverted and byte-compared. They are
+disjoint: dropping the list site left the connection rows green and vice versa, which is why the
+vocabularies are parametrized apart rather than selected in one document. With the decoy armed
+the mutation is consequential rather than merely counted — the runner reads the decoy's
+`Category` model and the request fails with the seal's own table rejection, hook never run.
+
+Every P2-1 and P2-2 claim above was reproduced against the current tree through non-pytest
+probes (an isolated `_selected_ordering` matrix and a real `bounded_rows_async` advance/close
+counter). The rows themselves have not been executed: no `pytest` invocation has been made this
+round.
+
+### Gate
+
+Owed. This round changed `list_field.py`, `resource_policy.py`, four test modules and two live
+modules, so the sixth round's figures above do not describe it. `uv run ruff format .` and
+`uv run ruff check --fix .` are clean on the current tree; nothing else has been run.
 
 <!-- LINK DEFINITIONS -->
 

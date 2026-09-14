@@ -404,11 +404,11 @@ _PLANNED_CONNECTION_QUERY = (
 def _hide_one_parents_items():
     """Pin three public parents, hide every item under ONE of them by name.
 
-    Returns ``(hidden_parent, hidden_names)``. Seeded privacy is arbitrary, so all
-    three parents and their items are pinned public first and the hidden rows are
-    the only ones this helper hides.
+    Arranges privacy over rows the test has already seeded; returns
+    ``(hidden_parent, hidden_names)``. Seeded privacy is arbitrary, so all three
+    parents and their items are pinned public first and the hidden rows are the
+    only ones this helper hides.
     """
-    services.seed_data(2)
     parent_pks = list(Category.objects.order_by("pk").values_list("pk", flat=True)[:3])
     assert len(parent_pks) == 3
     Category.objects.filter(pk__in=parent_pks).update(is_private=False)
@@ -477,6 +477,7 @@ def test_anonymous_planned_list_relation_omits_the_targets_private_rows():
     answered that question from a second read and got ``False`` would build the
     child from the unscoped default manager and serve these rows.
     """
+    services.seed_data(2)
     hidden_parent, hidden_names = _hide_one_parents_items()
 
     pages = _planned_item_names(_PLANNED_LIST_QUERY, reader=_list_page)
@@ -493,6 +494,7 @@ def test_staff_planned_list_relation_keeps_every_row():
     The scoping above is the hook's anonymous branch, not the plan refusing to
     fetch: the page is still one planned query and it carries every row.
     """
+    services.seed_data(2)
     hidden_parent, hidden_names = _hide_one_parents_items()
     services.create_users(1)
     client = Client()
@@ -513,6 +515,7 @@ def test_anonymous_planned_relation_connection_window_omits_the_targets_private_
     rows it partitions and the rows the hook scoped are one population, derived
     through one captured child definition.
     """
+    services.seed_data(2)
     hidden_parent, hidden_names = _hide_one_parents_items()
 
     pages = _planned_item_names(_PLANNED_CONNECTION_QUERY, reader=_connection_page)
@@ -525,6 +528,7 @@ def test_anonymous_planned_relation_connection_window_omits_the_targets_private_
 @pytest.mark.django_db
 def test_staff_planned_relation_connection_window_keeps_every_row():
     """The window partitions over every row once the viewer is staff, still in one query."""
+    services.seed_data(2)
     hidden_parent, hidden_names = _hide_one_parents_items()
     services.create_users(1)
     client = Client()

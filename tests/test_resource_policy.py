@@ -63,6 +63,7 @@ from django_strawberry_framework.resource_policy import (
     DST_RESOURCE_POLICY,
     ResourceLimitExceeded,
     ResourcePolicy,
+    _cleanup_rejected_async_iterable,
     bounded_rows,
     bounded_rows_async,
     check_deadline,
@@ -799,6 +800,133 @@ def test_bounded_rows_checks_deadline_before_preserving_none():
 
     with pytest.raises(ResourceLimitExceeded, match="execution_deadline_seconds"):
         bounded_rows(None, info)
+
+
+async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_any_row():
+    """A passed deadline abandons the source, so the seam closes it on the way out.
+
+    The clock is read after the resolver has already produced its source, so this
+    rejection owns an iterator that has never been advanced and that no later
+    seam will see. Zero advances and exactly one close is the whole claim; the
+    consumer-visible half rides live in
+    ``examples/fakeshop/test_query/test_list_field_async_api.py::test_async_deadline_rejection_closes_the_source_it_never_advanced``.
+    """
+
+    class Rows:
+        def __init__(self):
+            self.advances = 0
+            self.closes = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            self.advances += 1
+            raise StopAsyncIteration
+
+        async def aclose(self):
+            self.closes += 1
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(execution_deadline_seconds=1))
+    info.context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
+    rows = Rows()
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        await bounded_rows_async(rows, info)
+
+    assert caught.value.extensions["bound"] == "execution_deadline_seconds"
+    assert rows.advances == 0
+    assert rows.closes == 1
+
+
+@pytest.mark.parametrize("requested_limit", [None, 0], ids=["default-window", "limit-zero"])
+async def test_bounded_rows_async_keeps_the_deadline_primary_when_the_close_fails(
+    requested_limit,
+):
+    """A failing ``aclose`` on the rejected source annotates the rejection, never replaces it.
+
+    The complete resource error is what the client acts on; a cleanup that blows
+    up is a diagnostic about the source. ``limit: 0`` is covered beside the
+    default window because its empty-window short-circuit sits downstream of the
+    clock and therefore never gets to perform its own close.
+    """
+
+    class BrokenCleanupRows:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise AssertionError("a rejected source must never be advanced")
+
+        async def aclose(self):
+            raise RuntimeError("cleanup failed")
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(execution_deadline_seconds=1))
+    info.context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        await bounded_rows_async(
+            BrokenCleanupRows(),
+            info,
+            requested_limit=requested_limit,
+        )
+
+    assert caught.value.extensions["bound"] == "execution_deadline_seconds"
+    assert caught.value.extensions["limit"] == 1
+    assert caught.value.extensions["charged"] == 2
+    assert any(
+        "bounded_rows_async iterator cleanup failed" in note
+        for note in getattr(caught.value, "__notes__", [])
+    )
+
+
+async def test_cleanup_rejected_async_iterable_notes_an_iterator_acquisition_failure() -> None:
+    """When ``aiter()`` itself fails, the rejection carries the reason as a note.
+
+    The primary error is the rejection the caller is about to raise; a cleanup
+    that cannot even acquire the iterator must not replace it, so the acquisition
+    failure is attached to it instead.
+    """
+
+    class UnacquirableAsyncIterable:
+        def __aiter__(self):
+            raise RuntimeError("aiter exploded")
+
+    primary = GraphQLError("rejected")
+    await _cleanup_rejected_async_iterable(
+        UnacquirableAsyncIterable(),
+        primary,
+        caller="bounded_rows_async",
+    )
+    assert any("Iterator acquisition failed" in note for note in primary.__notes__)
+    assert any("aiter exploded" in note for note in primary.__notes__)
+
+
+async def test_cleanup_rejected_async_iterable_survives_an_unannotatable_error() -> None:
+    """An error that refuses note attachment still leaves the primary error intact.
+
+    Note attachment is best-effort bookkeeping. An exception whose attribute
+    writes raise would otherwise turn a clean rejection into an unrelated
+    ``RuntimeError`` from the cleanup path.
+    """
+
+    class UnacquirableAsyncIterable:
+        def __aiter__(self):
+            raise RuntimeError("aiter exploded")
+
+    class NoteHostileError(Exception):
+        def __setattr__(self, name, value):
+            raise RuntimeError("notes refused")
+
+    primary = NoteHostileError("primary")
+    await _cleanup_rejected_async_iterable(
+        UnacquirableAsyncIterable(),
+        primary,
+        caller="bounded_rows_async",
+    )
+    assert not hasattr(primary, "__notes__")
 
 
 async def test_bounded_rows_async_preserves_none():

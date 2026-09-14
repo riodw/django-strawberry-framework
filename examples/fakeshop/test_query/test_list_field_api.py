@@ -343,6 +343,142 @@ def test_shipped_branches_nonzero_offset_without_order_rejected():
     assert "requires an active ordering via 'orderBy' or model 'Meta.ordering'." in err["message"]
 
 
+def _apply_order_unchanged(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    """A mistaken public override: it honours the supplied order by returning nothing new."""
+    return queryset
+
+
+def _seed_three_branches():
+    for name in ("Alpha", "Bravo", "Charlie"):
+        library_models.Branch.objects.create(name=name, city="Boston")
+
+
+def _branch_offset_page(query, *, client=None):
+    """Post ``query`` and return ``(payload, branch SQL)`` for the offset-guard rows."""
+    with CaptureQueriesContext(connection) as captured:
+        payload = graphql_payload(query, client=client)
+    branch_sql = [
+        entry["sql"] for entry in captured.captured_queries if "library_branch" in entry["sql"]
+    ]
+    return payload, branch_sql
+
+
+_OFFSET_WITH_ACTIVE_ORDER = """
+query {
+  allLibraryBranchesViaListField(orderBy: [{ city: ASC }], offset: 1, limit: 1) {
+    name
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_a_random_model_default(monkeypatch):
+    """A random ``Meta.ordering`` defeats a positive offset even with active order input.
+
+    The override honours nothing, so the order the request actually runs under is
+    the model's own - and it is ``"?"``. The guard has to classify the collection
+    Django will compile rather than the one the consumer asked about: skipping a
+    row out of a re-shuffled result set is exactly the silent data loss a positive
+    offset without a deterministic order produces.
+    """
+    _seed_three_branches()
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", ("?",))
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_apply_order_unchanged))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_accepts_a_stable_model_default(monkeypatch):
+    """The control for the row above: the same no-op override over a stable default is served.
+
+    Only the randomness of the selected order is what the rejection is about. A
+    model default the database orders deterministically pages exactly as a
+    consumer-supplied one does.
+    """
+    _seed_three_branches()
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", ("name",))
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_apply_order_unchanged))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
+    assert len(branch_sql) == 1
+    assert "OFFSET 1" in branch_sql[0].upper()
+    assert "RANDOM" not in branch_sql[0].upper()
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_order(monkeypatch):
+    """Ordering Django supersedes is dormant, and a dormant ``"?"`` cannot reject the offset.
+
+    An ``extra`` ordering wins outright over ``query.order_by``, so the ``"?"``
+    left behind in the superseded collection never reaches SQL. Rejecting on it
+    would refuse a request the database answers in a stable order - the mirror
+    image of the acceptance defect, and reachable by an override that honours the
+    supplied order as readily as by one that does not.
+    """
+    _seed_three_branches()
+
+    def _extra_supersedes_random(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by("?").extra(order_by=["id"])
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_extra_supersedes_random))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
+    assert len(branch_sql) == 1
+    assert "OFFSET 1" in branch_sql[0].upper()
+    assert "RANDOM" not in branch_sql[0].upper()
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_extra_random_ordering_over_a_stable_order(monkeypatch):
+    """The control for the row above: the superseding collection is the one that decides.
+
+    Here the dormant terms are the stable ones and the ``extra`` ordering that
+    wins is ``"?"``, so the same precedence that accepted the previous request
+    rejects this one.
+    """
+    _seed_three_branches()
+
+    def _extra_random_supersedes_stable(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by("name").extra(order_by=["?"])
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_extra_random_supersedes_stable))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
 @pytest.mark.django_db
 def test_shipped_branches_offset_bounds_rejected():
     # Negative offset

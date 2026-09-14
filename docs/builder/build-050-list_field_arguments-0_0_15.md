@@ -3,7 +3,7 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: implementation complete through the sixth review's metadata-integrity remediation (registry-canonical definitions, optimizer definition threading, terminal ledger closure), and the final gate is green on ONE tree: default 7775 passed / 100.00%, sharded 7792 passed / 100.00%, floor 2397 passed at Python 3.10.19 + Django 5.2.16 + strawberry-graphql 0.316.0, zero failures in any invocation. Figures, scope and commands in [`bld-final.md`][bld-final] `## Sixth implementation review`. The fifth review's invocations are superseded and were never green in the first place - each reached 100% coverage while carrying a failing test, and neither had a floor run
+Status: implementation complete through the seventh review's offset-guard and async-cleanup remediation (effective-order selection at the non-zero-offset guard, pre-iteration source cleanup at the shared async bounding seam, custom-hook metadata proof, live seed-call placement, stale prose). The final gate is OWED: this round changed production code, so the sixth round's green figures (default 7775 / sharded 7792 / floor 2397, zero failures) describe the tree before it and are kept as history. Figures, scope and commands in [`bld-final.md`][bld-final] `## Sixth implementation review`; what this round changed is under `## Seventh implementation review`
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).
@@ -80,8 +80,10 @@ Status: implementation complete through the sixth review's metadata-integrity re
         wording, and `CHANGELOG.md` to card 053's joint cut; `pyproject.toml` and `uv.lock`
         have no duplicate root-package version to bump.
 - [x] **Cross-slice integration pass (Worker 1)**
-- [ ] **Final test-run gate (Worker 1)** — the prior gate is superseded; rerun full coverage and
-      sharded verification after remediation -> [`docs/builder/bld-final.md`][bld-final]
+- [ ] **Final test-run gate (Worker 1)** — the sixth round's gate is superseded by the seventh
+      round's production changes; rerun format, lint, structural and link checks, the default and
+      sharded suites at 100% package coverage, and supported-floor verification on ONE identified
+      tree -> [`docs/builder/bld-final.md`][bld-final]
 
 <!-- LINK DEFINITIONS -->
 

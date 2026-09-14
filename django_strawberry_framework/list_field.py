@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import strawberry
 from django.db import models
+from django.db.models.constants import LOOKUP_SEP
 from django.db.models.functions import Random
 from graphql import GraphQLError
 from strawberry.schema.schema_converter import GraphQLCoreConverter
@@ -556,11 +557,58 @@ _ORDER_FROM_MODEL_DEFAULT = "model_default"
 _ORDER_FROM_NOTHING = "nothing"
 
 
-def _is_random_order_term(term: Any) -> bool:
-    """Classify random order terms: exact '?' or Random() / OrderBy(Random())."""
-    if term == "?" or isinstance(term, Random):
+def _is_nondeterministic_order_name(query: Any, name: str) -> bool:
+    """Resolve a string ordering term the way the compiler resolves it, then classify it.
+
+    ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` tests
+    ``field == "?"`` exactly, so a descending spelling such as ``"-?"`` is not a
+    random order at all - Django resolves it as a column named ``?`` and raises
+    ``FieldError``. Every other name is looked up as an annotation (the whole
+    name first, then the head of a transform chain), then as an ``extra`` key,
+    and only then as a field path, so the name that survives to the field path
+    is the only one that orders by a column.
+
+    Raw SQL reached through ``extra`` is opaque, which is not the same as
+    deterministic. Those strings are passed through verbatim and this package
+    parses no SQL, so it cannot say what such a term orders by - and a term it
+    cannot read is one it must not certify as repeatable across the two queries
+    an offset window spans.
+    """
+    if name == "?":
         return True
-    return isinstance(getattr(term, "expression", None), Random)
+    col = name[1:] if name.startswith("-") else name
+    annotation = query.annotations.get(col)
+    if annotation is None:
+        annotation = query.annotations.get(col.split(LOOKUP_SEP)[0])
+    if annotation is not None:
+        return _is_nondeterministic_order_term(query, annotation)
+    if col in query.extra:
+        return True
+    return "." in name and name in query.extra_order_by
+
+
+def _is_nondeterministic_order_term(query: Any, term: Any) -> bool:
+    """Classify one selected ordering term by the form Django will compile it into.
+
+    A term's own top level is not what the database orders by. A string is
+    resolved through ``query.annotations`` and ``query.extra`` before it is read
+    as a field path, and an expression is compiled from its whole source tree,
+    so the random form sits one indirection away from the value the ordering
+    collection holds whenever it arrives as an annotation alias, an ``extra``
+    select alias, an ``F`` naming either, or a ``Random()`` nested inside a
+    composition. A classifier that reads only the term certifies every one of
+    those as a deterministic column order.
+    """
+    if isinstance(term, str):
+        return _is_nondeterministic_order_name(query, term)
+    if isinstance(term, models.F):
+        return _is_nondeterministic_order_name(query, term.name)
+    if isinstance(term, Random):
+        return True
+    sources = getattr(term, "get_source_expressions", None)
+    if sources is None:
+        return False
+    return any(_is_nondeterministic_order_term(query, source) for source in sources())
 
 
 def _selected_ordering(queryset: models.QuerySet) -> tuple[str, tuple[Any, ...]]:
@@ -573,8 +621,8 @@ def _selected_ordering(queryset: models.QuerySet) -> tuple[str, tuple[Any, ...]]
     stands. They are alternatives, never a union, so a term left in a collection
     Django did not pick is dormant and reaches no SQL.
 
-    Both questions the offset guard asks - does the order this request will run
-    under contain a random term, and is the model's own ordering that order -
+    Both questions the offset guard asks - is the order this request will run
+    under deterministic, and is the model's own ordering that order -
     are this one selection read two ways, so they come from one classification
     of the already-sealed queryset rather than from separate collection scans
     that can disagree with each other and with the compiler.
@@ -591,8 +639,8 @@ def _selected_ordering(queryset: models.QuerySet) -> tuple[str, tuple[Any, ...]]
     return _ORDER_FROM_NOTHING, ()
 
 
-def _has_no_random_terms(queryset: models.QuerySet) -> bool:
-    """Return True when the order Django will compile carries no recognized random term.
+def _has_deterministic_ordering(queryset: models.QuerySet) -> bool:
+    """Return True when every term of the order Django will compile is deterministic.
 
     Classifies the SELECTED ordering, not every collection holding terms: a
     ``"?"`` sitting in ``query.order_by`` under an ``extra`` ordering that
@@ -601,7 +649,8 @@ def _has_no_random_terms(queryset: models.QuerySet) -> bool:
     collection Django is going to run.
     """
     _source, terms = _selected_ordering(queryset)
-    return not any(_is_random_order_term(term) for term in terms)
+    query = queryset.query
+    return not any(_is_nondeterministic_order_term(query, term) for term in terms)
 
 
 def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
@@ -621,7 +670,7 @@ def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
         return False
     if query.default_ordering is not True or query.group_by:
         return False
-    return not any(_is_random_order_term(term) for term in terms)
+    return not any(_is_nondeterministic_order_term(query, term) for term in terms)
 
 
 def _model_from_definition(definition: Any) -> type[models.Model]:
@@ -891,7 +940,7 @@ def _check_nonzero_offset_guard(
         and orderset_class is not None
         and orderset_class._input_has_active_terms(args_record.order_by)
         and queryset.ordered
-        and _has_no_random_terms(queryset)
+        and _has_deterministic_ordering(queryset)
     ):
         has_active_order = True
     if not has_active_order and not _is_model_default_ordering_active(queryset):
@@ -1136,6 +1185,19 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     # ``inspect.iscoroutinefunction``) because Strawberry inspects the resolver
     # signature once at schema
     # construction and freezes the sync-vs-async handling.
+    #
+    # That commitment is per-RESOLVER, not per-request, so the sync wrapper is
+    # the one that runs when a sync consumer resolver is executed inside an
+    # event loop - and on that path it returns a value graphql-core completes
+    # asynchronously rather than a finished list: the queryset branch returns
+    # ``wrap_async_queryset_adapter``'s async-only rows object, and the
+    # async-only-iterable branch returns ``_resolve_async_iterable``'s
+    # coroutine, which the field executor awaits. Neither is a slip. The
+    # alternative is driving ORM iteration or an async generator from a sync
+    # frame on the event-loop thread, which is what the async pipeline exists to
+    # avoid. Code reaching past the executor to ``field.base_resolver`` under a
+    # running loop owes the return value the same completion the executor gives
+    # it.
     if resolver is None:
 
         def _default(

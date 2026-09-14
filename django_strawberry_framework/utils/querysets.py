@@ -2726,8 +2726,18 @@ class _SealPolicy:
       for a ``Prefetch`` child, so one GraphQL resolution never spans two
       database connections.
     - ``require_unevaluated`` -- the candidate's ``_result_cache`` must be ``None``.
-      Enabled only for post-OrderSet results; an evaluated queryset cannot safely compose
-      further filtering or windowing.
+      The axis separates a RESULT the surface itself demanded from a SOURCE the
+      consumer supplies. It is on for post-OrderSet results: the list field
+      invoked that ordering method one step earlier and takes its window on what
+      comes back, so rows already fetched mean the override ordered and paged
+      something other than the query about to run. It is off for every
+      ``get_queryset`` seal, this surface's included, because that hook's
+      contract is shared with the Relay node, connection and relation surfaces -
+      all of which rebuild their own query from the returned one - and holding
+      one hook to a stricter rule here would make its verdict depend on which
+      field called it and on whether a client happened to send window arguments.
+      A consumer that evaluates inside the hook pays for the discarded
+      ``_result_cache`` in one extra query, which is a cost, not a broken seal.
     """
 
     require_model_rows: bool = True
@@ -2754,8 +2764,11 @@ _UNRECOMPOSED_CHILD_POLICY = _SealPolicy(reject_sliced=False)
 # A ``Prefetch`` child: the same no-recomposition licence, plus the shared-alias
 # requirement that keeps one GraphQL resolution on one database connection.
 _PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=True)
-# List-field visibility policy for active argument execution: default policy with
-# ``reject_combined=True`` so combinators (union, intersect, difference) fail closed.
+# List-field visibility policy for active argument execution: the default read-surface
+# policy with ``reject_combined=True`` so combinators (union, intersect, difference) fail
+# closed before a window is taken. It differs from ``_DEFAULT_SEAL_POLICY`` on that one axis
+# and on no other, which is what keeps ``get_queryset`` answering to one contract whether or
+# not the request carried arguments.
 _LIST_ARGUMENT_VISIBILITY_POLICY = _SealPolicy(reject_combined=True)
 # Post-OrderSet result policy: model rows, unevaluated, unsliced, uncombined.
 _ORDERSET_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=True)
@@ -2942,6 +2955,18 @@ def _validate_post_orderset_result(
         # problem, so it keeps its own arm. Spelled as an explicit per-code map
         # rather than a ``_defect_message`` default so a code added to the seal
         # without an arm here still self-names as a framework defect.
+        #
+        # ``alias`` is the one canonical code with no arm, because ``routing``
+        # subsumes it at THIS site and nowhere else: the seal reaches the alias
+        # check only after the routing check admitted ``candidate_db ==
+        # intent.db``, and ``_snapshot_routing_intent`` sets ``effective_alias``
+        # to ``intent.db`` whenever that is not ``None``. So a routed intent
+        # leaves the candidate pinned to the required alias, and an unrouted one
+        # leaves it unrouted, which is never an alias defect for a top-level
+        # result. A surface that seals WITHOUT an expected routing record has no
+        # such subsumption and owes the code its own wording. Each site renders
+        # the subset it can reach; an arm for a code that cannot arrive would be
+        # wording no rejection can ever quote.
         shape_message = (
             f"{method_name} must return an unevaluated, unsliced, uncombined "
             f"QuerySet of {model_name} rows; got {defect[0]} defect ({defect[1]})."

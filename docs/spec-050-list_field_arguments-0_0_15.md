@@ -1113,15 +1113,29 @@ string is `"?"` and only `"?"`. The comparison lives in
 [`django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`][django-compiler], the
 generator that `SQLCompiler.get_order_by` consumes, and it tests `field == "?"` exactly, so a
 descending spelling such as `"-?"` is not a random order at all - Django resolves it as a
-column named `?` and raises `FieldError`. The implementation must not carry a `"-?"` arm; a
-term that is not exactly `"?"` and not a recognized `Random()` expression is either an ordinary
-field order or already a hard Django error. The shared
-post-apply seal rejects consumer-defined expression classes as untrusted query state. For
-other genuine Django expression compositions that pass the seal, volatility beyond the
-recognized `Random()` form remains the schema author's responsibility under Decision 7's
-deliberately weaker-than-total-order contract; the list field does not attempt to
-reverse-engineer arbitrary SQL. The shipped `OrderSet` input itself emits only declared field
-orders.
+column named `?` and raises `FieldError`. The implementation must not carry a `"-?"` arm.
+
+A term is classified by the form the compiler resolves it into, never by its own top level.
+`_order_by_pairs` reads a string through `query.annotations` (the whole name, then the head
+of a transform chain) and then through `query.extra` before it reads any name as a field
+path, and it compiles an expression from that expression's whole source tree. The random
+form therefore sits one indirection away from what the ordering collection holds whenever it
+arrives as an annotation alias, an `F` naming one, or a `Random()` nested inside a
+composition, and a classifier reading the term as written certifies all three as ordinary
+column orders. Only a name that survives every resolution step orders by a column.
+
+Raw SQL reached through `extra` - a name that is a key in `query.extra`, or the dotted form
+the compiler hands through as `RawSQL` - is opaque, which is not the same as deterministic.
+Those strings are passed through verbatim and this package parses no SQL, so it cannot say
+what ordering by one does; a term it cannot read is one it must not certify as repeatable
+across the two queries an offset window spans. An `extra` ordering naming a real field is
+still an ordinary column order and still satisfies the guard. The shared post-apply seal
+rejects consumer-defined expression classes as untrusted query state. For other genuine
+Django expression compositions that pass the seal, volatility beyond the recognized
+`Random()` form remains the schema author's responsibility under Decision 7's deliberately
+weaker-than-total-order contract; the list field recognizes Django's own random expression
+wherever it is composed, and reverse-engineers no SQL. The shipped `OrderSet` input itself
+emits only declared field orders.
 
 Django model default ordering may traverse a to-many relation and duplicate parent model
 instances. This card preserves that documented ORM result-row behavior: offset counts SQL
@@ -1417,8 +1431,9 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   utility rather than met by a second clock check or a caller-local catch, which would leave
   every other caller of the shared seam uncovered.
 - `django_strawberry_framework/list_field.py::_selected_ordering` is the only place the
-  effective-ordering precedence is spelled. Both offset-guard predicates - the random-term
-  check and the model-default eligibility rule - read its answer; neither scans
+  effective-ordering precedence is spelled. Both offset-guard predicates - the
+  term-determinism check and the model-default eligibility rule - read its answer; neither
+  scans
   `query.order_by`, `query.extra_order_by` or `Meta.ordering` on its own. A second scan is
   what let the two predicates disagree with each other and with
   `SQLCompiler._order_by_pairs`. The guard does not reuse
@@ -1443,9 +1458,14 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   cannot satisfy the offset guard on an otherwise unordered source merely by receiving a
   non-null input. `_normalize_input` overrides are therefore required to be pure and
   deterministic, and that is an explicit COMPATIBILITY CONSTRAINT on the method rather than
-  merely a test counter: an argument-bearing request may invoke normalization once inside
-  public apply and once inside the active-term helper, so a stateful override can otherwise
-  produce different application and activity verdicts from one request. The requirement is
+  merely a test counter: a request that reaches the active-term helper invokes normalization
+  once inside public apply and once inside the helper, so a stateful override can otherwise
+  produce different application and activity verdicts from one request. That second
+  normalization is what the constraint is about, and it exists on exactly one path - an
+  `orderBy` arriving with a positive `offset` through a field carrying an `OrderSet`. The
+  check is therefore scoped to that path by construction rather than by omission: everywhere
+  else normalization runs once, and a single verdict has nothing to disagree with. The
+  requirement is
   documented on the method itself, its input is capped through the existing value policy, and
   an override whose second normalization disagrees with its first must surface an actionable
   `ConfigurationError` naming the method rather than silently deciding the offset guard on an
@@ -1553,6 +1573,13 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
   carrying `.order_by("?")` under an `extra(order_by=[...])` that supersedes it is accepted;
   the mirror shape - a stable explicit order under a superseding random `extra` ordering - is
   rejected.
+- A selected term is judged by what the compiler resolves it into. An annotation alias, an
+  `F` naming one, and a `Random()` nested inside a composition all carry the random verdict;
+  an alias naming a deterministic expression is an ordinary column order and satisfies the
+  guard.
+- A term resolving into `query.extra` - a select alias, or the dotted form handed through as
+  `RawSQL` - is opaque rather than deterministic and cannot back an offset window. An
+  `extra` ordering naming a real field is unaffected.
 - Reversing a stable model default remains stable; `standard_ordering=False` changes direction
   and does not by itself disable the fallback.
 - A to-many model default may duplicate parent instances; offset counts SQL result rows.
@@ -1798,7 +1825,15 @@ the shipped SDL.
     because Django spells it `RAND()` on SQLite and MySQL and `RANDOM()` on PostgreSQL: an
     assertion written against the PostgreSQL spelling alone is blind on the tier the default
     suite runs. The exact precedence mechanics stay in the package tier, which is where a term
-    can be planted in a collection the compiler will not select.
+    can be planted in a collection the compiler will not select. The same field and the same
+    override surface carry the resolution cases: an annotation alias over `Random()`, an `F`
+    naming that alias, an `extra` select alias, and a `Random()` nested in a composition are
+    each refused with no row SQL, and their control - an alias naming a deterministic
+    expression - is served with the captured statement carrying that expression, the raised
+    low mark, and no random function. Without the control a guard refusing every ordering it
+    had to resolve would keep all four rejections green. The async coloring carries the two
+    alias shapes, which is where resolution is reached through a different pipeline rather
+    than a different rule.
 28. A live async request whose deadline expires after its resolver has obtained an async-only
     source closes that source exactly once and advances it zero times, for the default window
     and for `limit: 0` alike, with the complete `execution_deadline_seconds` extensions on the
@@ -2013,6 +2048,10 @@ sync or async HTTP request cannot isolate:
   rows. The predicate's two plain verdicts - a stable `Meta.ordering` satisfying the guard
   without a pk append, and a resolver `.order_by()` clearing or replacing it - are live-tier
   rows 19 and 14 and are not duplicated here;
+- the term-determinism classifier read term by term, which a live mount reaches only in
+  whole orderings: an alias spelled plainly, with a leading `-`, through a transform chain,
+  and as an `F`; an `extra` select alias and the dotted `RawSQL` form; a composition holding
+  a nested `Random()`; and a term carrying no source expressions to walk;
 - policy, field, trusted-field, and client-limit cap matrix;
 - exact no-argument/null-argument `str(qs.query)`, `low_mark`, and `high_mark` parity;
 - supplied limit changing only `high_mark`, and supplied offset changing `low_mark` plus the
@@ -2288,7 +2327,10 @@ structural checks, and link/kanban verification prescribed by
       `Meta.ordering` on the post-visibility queryset, judged against the ONE collection
       Django's compiler selects by precedence rather than against a union of the explicit
       ones: a random model default disqualifies an active-input request, and a random term the
-      compiler does not select cannot disqualify anything. Empty/null order input, cleared or
+      compiler does not select cannot disqualify anything. A selected term is judged by the
+      form the compiler resolves it into, so an annotation alias, an `F` naming one, and a
+      nested `Random()` disqualify as a literal `"?"` does, while raw SQL reached through
+      `extra` is opaque and cannot back the window. Empty/null order input, cleared or
       replaced model ordering, random ordering, grouping that suppresses the default, and
       opaque Python iterables cannot fake the condition. The shipped contract is stated as
       ORDERED OFFSET; no spec, docstring, glossary, or error text promises a stable or

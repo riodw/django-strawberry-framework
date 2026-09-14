@@ -25,6 +25,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import EmptyResultSet
 from django.db import models
+from django.db.models.functions import Random
 from django.db.models.sql.compiler import SQLCompiler
 from django.test import AsyncClient, override_settings
 from django.urls import clear_url_caches, path
@@ -843,6 +844,56 @@ async def test_async_offset_rejects_extra_random_ordering_over_a_stable_order(mo
         return queryset.order_by("name").extra(order_by=["?"])
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_random_extra_supersedes_stable))
+    branch_sql = _record_branch_sql(monkeypatch)
+
+    payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == [], branch_sql
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_rejects_an_annotated_random_order(monkeypatch):
+    """The async coloring resolves an ordering alias the same way the sync one does.
+
+    ``order_by("rnd")`` names an annotation, and the name alone looks like any
+    other column. Both pipelines hand the sealed queryset to one guard, so an
+    alias that resolves to a random expression has to reject the offset on either
+    side rather than serving a page out of a re-shuffled result set.
+    """
+    await _seed_three_branches_async()
+
+    async def _random_annotation(cls, order_input, queryset, info, **kwargs):
+        return queryset.annotate(rnd=Random()).order_by("rnd")
+
+    monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_random_annotation))
+    branch_sql = _record_branch_sql(monkeypatch)
+
+    payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == [], branch_sql
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_rejects_an_extra_select_ordering(monkeypatch):
+    """Raw SQL reached through ``extra`` is opaque on this coloring too.
+
+    The ``extra`` collection already decides the verdict for a term written as
+    ``"?"`` here; a term naming an ``extra`` select is the same collection
+    reached one indirection later, and the package parses no SQL on either
+    coloring.
+    """
+    await _seed_three_branches_async()
+
+    async def _extra_select_ordering(cls, order_input, queryset, info, **kwargs):
+        return queryset.extra(select={"rnd": "RANDOM()"}, order_by=["rnd"])
+
+    monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_extra_select_ordering))
     branch_sql = _record_branch_sql(monkeypatch)
 
     payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)

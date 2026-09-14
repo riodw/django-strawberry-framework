@@ -19,6 +19,7 @@ from apps.library.orders import BranchOrder
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection, models
+from django.db.models.functions import Coalesce, Lower, Random
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
@@ -509,6 +510,153 @@ def test_shipped_branches_offset_rejects_extra_random_ordering_over_a_stable_ord
     assert err["extensions"]["reason"] == "order_required"
     assert err["extensions"]["argument"] == "offset"
     assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_an_annotated_random_order(monkeypatch):
+    """An annotation alias carries its expression's verdict into the offset guard.
+
+    ``order_by("rnd")`` is an ordinary-looking column name, and Django resolves it
+    through ``query.annotations`` before it reads any name as a field path. A
+    guard classifying the term as written certifies a re-shuffled result set as a
+    deterministic page, and the rows it skips are whichever ones the shuffle put
+    first.
+    """
+    _seed_three_branches()
+
+    def _random_annotation(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.annotate(rnd=Random()).order_by("rnd")
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_random_annotation))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_an_f_reference_to_a_random_annotation(monkeypatch):
+    """The alias is resolved however the ordering names it, as a string or through ``F``.
+
+    An ``F`` is a name too. Reading only the terms that arrive as strings leaves
+    the same annotation reachable by the spelling Django itself produces when an
+    expression references a select alias.
+    """
+    _seed_three_branches()
+
+    def _random_annotation_via_f(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.annotate(rnd=Random()).order_by(models.F("rnd").desc())
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_random_annotation_via_f))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_an_extra_select_ordering(monkeypatch):
+    """Raw SQL reached through ``extra`` is opaque, and opaque is not deterministic.
+
+    The package passes an ``extra`` select through verbatim and parses no SQL, so
+    it cannot say what ordering by that alias does. A term it cannot read is one
+    it must not certify as repeatable across the two queries an offset window
+    spans - which is the same reason the field does not try to recognize raw SQL
+    dialect by dialect.
+    """
+    _seed_three_branches()
+
+    def _extra_select_ordering(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.extra(select={"rnd": "RANDOM()"}, order_by=["rnd"])
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_extra_select_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_a_composed_random_order(monkeypatch):
+    """A composition is read through, so nesting does not launder a random term.
+
+    ``Coalesce(Random(), Random())`` is not a ``Random()`` at its top level and
+    every row it produces is still a fresh shuffle. The classification has to
+    walk the expression the compiler will walk.
+    """
+    _seed_three_branches()
+
+    def _composed_random(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by(Coalesce(Random(), Random()))
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_composed_random))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_accepts_a_stable_annotated_order(monkeypatch):
+    """The control for the annotation rows: an alias naming a stable expression pages.
+
+    Resolving the alias is what the rejections above are about, not the presence
+    of an annotation. A guard that refused every ordering it had to resolve would
+    keep them green while breaking ordinary computed sorts.
+    """
+    _seed_three_branches()
+
+    def _stable_annotation(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.annotate(sort_key=Lower("name")).order_by("sort_key")
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_stable_annotation))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
+    assert len(branch_sql) == 1
+    statement = branch_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "LOWER(" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
 
 
 @pytest.mark.django_db

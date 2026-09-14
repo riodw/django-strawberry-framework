@@ -2436,15 +2436,16 @@ def test_offset_guard_random_term_question_mark():
     """Offset guard rejects queries ordered by exact '?'."""
     from django_strawberry_framework.list_field import (
         _check_nonzero_offset_guard,
-        _has_no_random_terms,
-        _is_random_order_term,
+        _has_deterministic_ordering,
+        _is_nondeterministic_order_term,
     )
 
-    assert _is_random_order_term("?") is True
-    assert _is_random_order_term("name") is False
+    query = Category.objects.all().query
+    assert _is_nondeterministic_order_term(query, "?") is True
+    assert _is_nondeterministic_order_term(query, "name") is False
 
     qs_random = Category.objects.order_by("?")
-    assert _has_no_random_terms(qs_random) is False
+    assert _has_deterministic_ordering(qs_random) is False
 
     info = SimpleNamespace(context={}, schema=None)
     args_record = _ListArguments(
@@ -2471,16 +2472,17 @@ def test_offset_guard_random_term_random_function():
 
     from django_strawberry_framework.list_field import (
         _check_nonzero_offset_guard,
-        _has_no_random_terms,
-        _is_random_order_term,
+        _has_deterministic_ordering,
+        _is_nondeterministic_order_term,
     )
 
-    assert _is_random_order_term(Random()) is True
-    assert _is_random_order_term(OrderBy(Random())) is True
-    assert _is_random_order_term("-name") is False
+    query = Category.objects.all().query
+    assert _is_nondeterministic_order_term(query, Random()) is True
+    assert _is_nondeterministic_order_term(query, OrderBy(Random())) is True
+    assert _is_nondeterministic_order_term(query, "-name") is False
 
     qs_random = Category.objects.order_by(Random())
-    assert _has_no_random_terms(qs_random) is False
+    assert _has_deterministic_ordering(qs_random) is False
 
     info = SimpleNamespace(context={}, schema=None)
     args_record = _ListArguments(
@@ -3993,6 +3995,50 @@ async def test_list_field_async_source_exact_versus_fewer_rows():
     assert fewer_src.aclose_calls == 0
 
 
+def test_order_term_classifier_resolves_indirection_and_opaque_sql():
+    """An ordering term classifies by what the compiler resolves it to, not by its own form.
+
+    Django reads a string term through ``query.annotations`` and ``query.extra``
+    before it treats the name as a field path, and compiles an expression term
+    from its whole source tree. Each of those is a place a random order can sit
+    while the term itself looks like an ordinary column name.
+    """
+    from django.db.models import F
+    from django.db.models.functions import Coalesce, Lower, Random
+
+    from django_strawberry_framework.list_field import (
+        _has_deterministic_ordering,
+        _is_nondeterministic_order_term,
+    )
+
+    # An alias carries the verdict of the expression it names, however it is spelled.
+    random_alias = Category.objects.annotate(rnd=Random())
+    assert _is_nondeterministic_order_term(random_alias.query, "rnd") is True
+    assert _is_nondeterministic_order_term(random_alias.query, "-rnd") is True
+    assert _is_nondeterministic_order_term(random_alias.query, "rnd__abs") is True
+    assert _is_nondeterministic_order_term(random_alias.query, F("rnd")) is True
+    assert _has_deterministic_ordering(random_alias.order_by("rnd")) is False
+
+    # The control: an alias naming a deterministic expression pages like a column.
+    stable_alias = Category.objects.annotate(sort_key=Lower("name"))
+    assert _is_nondeterministic_order_term(stable_alias.query, "sort_key") is False
+    assert _has_deterministic_ordering(stable_alias.order_by("sort_key")) is True
+
+    # Raw SQL reached through extra is opaque whatever it spells, as a select
+    # alias and in the dotted form the compiler passes through verbatim.
+    opaque_alias = Category.objects.extra(select={"raw": "1"}, order_by=["raw"])
+    assert _has_deterministic_ordering(opaque_alias) is False
+    verbatim = Category.objects.extra(order_by=["products_category.name"])
+    assert _has_deterministic_ordering(verbatim) is False
+
+    # A composition is read through, so nesting does not launder a random term.
+    composed = Category.objects.order_by(Coalesce(Random(), Random()))
+    assert _has_deterministic_ordering(composed) is False
+
+    # A term with no source expressions to walk has nowhere to hide one.
+    assert _is_nondeterministic_order_term(random_alias.query, 42) is False
+
+
 def test_is_model_default_ordering_active_edge_states(monkeypatch):
     """_is_model_default_ordering_active rejects group_by, extra_order_by, random, and unreadable."""
     from django.db.models.expressions import OrderBy
@@ -4158,6 +4204,8 @@ def test_is_model_default_ordering_active_exact_bool_identity():
         order_by=(),
         extra_order_by=(),
         group_by=(),
+        annotations={},
+        extra={},
         get_meta=lambda: SimpleNamespace(ordering=("name",)),
     )
     qs_mock = SimpleNamespace(query=query_mock)

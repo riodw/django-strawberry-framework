@@ -117,14 +117,19 @@ claim its own node id.
 | citations | `scripts/check_citations.py --check` | 1010 resolve (832 in 441 `.py`, 178 in `KANBAN.md`) |
 | default | `uv run pytest` | **7868 passed / 40 skipped / 100.00%** |
 | sharded | `FAKESHOP_SHARDED=1 uv run pytest` | **7885 passed / 37 skipped / 100.00%** |
-| floor | focused scope, Python 3.10.19 / Django 5.2.16 / strawberry 0.316.0 | **463 passed** |
+| floor | focused seam scope, Python 3.10.19 / Django 5.2.16 / strawberry 0.316.0 | **463 passed** - not the declared floor scope |
 
-The floor run is the focused scope for the seam this round touched - the resource-policy
-budget and the two list-field surfaces that read it - rather than the thirteen-path scope
-recorded below, which belongs to the slices that declared it: `tests/test_resource_policy.py`,
+That floor row is a focused re-check of the seam this round touched - the resource-policy
+budget and the two list-field surfaces that read it: `tests/test_resource_policy.py`,
 `tests/test_list_field.py`, `examples/fakeshop/test_query/test_list_field_api.py`,
-`examples/fakeshop/test_query/test_list_field_async_api.py`. The load-bearing floor question
-was whether the armed budget survives the `sync_to_async` hand-off on 3.10, since a per-thread
+`examples/fakeshop/test_query/test_list_field_async_api.py`. Four of the seventeen paths
+declared under `### Floor-verification scope`, so by that section's own rule it is not this
+card's floor verification, and the row above does not stand in for one. The declared scope
+last ran green at HEAD `96b9e047`, before the rounds that followed it; a gate graded at one
+HEAD answers nothing about a later one, so the card's floor verification is OWED at the
+delivery HEAD alongside the full and sharded gates, exactly as the spec's `Status:` line
+records. What the focused row does answer is the load-bearing floor question for this seam:
+whether the armed budget survives the `sync_to_async` hand-off on 3.10, since a per-thread
 authority would read back empty there and fall open to the context; the row asserting it passes
 at the floor.
 
@@ -148,7 +153,8 @@ card actually moved - every Strawberry-internals and queryset-compilation bounda
 `examples/fakeshop/test_query/test_products_visibility_api.py`,
 `examples/fakeshop/test_query/test_keyset_api.py`.
 
-A floor run that narrows this set is not this card's floor verification. The shared `.venv` is
+That is seventeen paths: thirteen package modules or directories and the four live modules. A
+floor run that narrows this set is not this card's floor verification. The shared `.venv` is
 read back afterwards and must be unmutated.
 
 ### What each proof fails on

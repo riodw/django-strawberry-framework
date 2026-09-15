@@ -1,58 +1,33 @@
-# Worker 1: system-wide DRY reviewer and implementer
+# Worker 1: reviewer and implementer
 
-Worker 1 reviews one file, folder, project integration, or final gate. The target is narrow; the
-reasoning follows the responsibility throughout the system. When the review confirms a
-consolidation, Worker 1 implements it before handing the item to Worker 2. `docs/dry/DRY.md` is
-canonical.
+Worker 1 owns one plan item: a file, a responsibility family, a folder or project integration pass,
+or the final gate. `docs/dry/DRY.md` is canonical; this file is the role's delta.
 
 ## Required reading
 
-Read `AGENTS.md`, `START.md`, `docs/dry/DRY.md`, this file, the active plan item, the complete target,
-and every connected source, test, example, doc, history entry, or upstream implementation needed
-for a sound judgment. Inspect the item-scoped diff from the baseline. Do not use old build, review,
-or DRY artifacts as inputs and do not read another worker's private memory.
+`AGENTS.md`, `START.md`, `docs/dry/DRY.md`, this file, the plan item, the complete target, and every
+connected source, test, example, doc, or upstream implementation a sound judgment needs. Inspect the
+item-scoped diff from the baseline. Prior cycle records are inputs only as rejected-candidate
+triggers to check. Never read another worker's `worker-memory/`.
 
-## Review and implementation job
+## Job
 
-1. **Trace:** explain the target's responsibility, callers, dependencies, state, lifecycle, public
-   contracts, and parallel representations elsewhere in the repository.
-2. **Search:** look package-wide for the same rule or knowledge, including differently named or
-   differently shaped implementations. Follow concepts, not only identifiers.
-3. **Verify:** try to disprove each candidate by comparing contracts and reasons to change. Use
-   focused commands or scratch tests under `docs/dry/temp-tests/<scope>/` when execution gives
-   stronger evidence than inspection.
-4. **Design:** for each real opportunity, identify the true owner, the complete set of sites to
-   migrate, the behavior that remains distinct, and proof that consolidation preserves behavior.
-5. Write the concise artifact from `DRY.md`. A finding is incomplete unless it records Repeated
-   responsibility, Sites, Evidence, Owner, Consolidation, Proof, and Risks / non-goals.
-6. **Implement:** put each confirmed shared responsibility at its true owner. Prefer extending an
-   existing owner, deleting an obsolete path, or establishing one canonical representation over
-   adding a forwarding helper. Migrate every confirmed site without hiding distinct behavior behind
-   mode flags.
-7. Add permanent behavioral tests at the strongest reachable tier required by `AGENTS.md`. Review
-   comments, docstrings, exports, and public docs affected by the new ownership.
-8. Run focused verification when useful, then `uv run ruff format .` and
-   `uv run ruff check --fix .` after edits.
+- **File item:** discharge the probing matrix, then assign every rule the file defines or enforces
+  to a family in the plan's `## Responsibility index` (adding `## Families` items for new ones), or
+  record it as file-local with the challenge that proved it. Do not consolidate here.
+- **Family item:** sweep the whole package for the rule's mechanism, inventory every site with
+  its role, run the change challenges on the rule's variation axes, make the ownership decision,
+  and implement the confirmed consolidation at its owner with permanent tests at the tier
+  `AGENTS.md` mandates, in the same change. Record each intentional separation at the owner and
+  each sub-rule as an index row. Bugs that are not duplication go under `## Defects`, unfixed.
+- **Folder and project items:** audit the unassigned remainder and the families that cross
+  ownership boundaries. Do not summarize prior artifacts.
+- **Final gate:** run `uv run pytest` only under the maintainer's explicit authorization; record
+  result, coverage, skips, and xfails.
 
-The optional `audit` and `check` modes in `docs/dry/export_dry_review.py` may orient or completeness-
-check a difficult review. Their static output is never sufficient evidence by itself.
-
-For folder and project passes, read the integrated source and search for duplication visible only
-across ownership boundaries. Do not summarize prior artifacts.
-
-## Finish
-
-When tracked changes are needed, append `## Implementation (Worker 1)` and record the owner chosen,
-every migrated source, caller, test, export, or doc, behavior kept separate, validation results,
-evidence for rejected findings, and whether the change merits a changelog entry. Do not edit
-`CHANGELOG.md` without explicit maintainer authorization.
-
-When no changes are needed, record the strongest rejected candidates and confirm the item-scoped
-diff is empty. In either case, set `Status: fix-implemented` only when the complete item is ready for
-independent verification. On a later pass, append to `## Iterations`; preserve the audit trail.
-
-Do not run the full suite except when assigned the final gate. Keep unrelated cleanup out of the
-diff, preserve concurrent work, and do not commit.
-
-For the final gate, run `uv run pytest`, record the result, coverage, skips, and xfails, and set
-`verified` only when tests pass with 100% package coverage.
+Write the artifact in `DRY.md`'s shape. After an edit run `uv run ruff format .` and
+`uv run ruff check --fix .`. Append `## Implementation (Worker 1)` when tracked changes are made;
+on a later pass append to `## Iterations`. Set `Status: fix-implemented` only when the complete
+item, edited or zero-edit, is ready for independent verification; without edit rights, set
+`Status: designed` instead. Keep unrelated cleanup out of the
+diff, preserve concurrent work, never edit `CHANGELOG.md` without authorization, and do not commit.

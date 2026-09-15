@@ -1,38 +1,32 @@
 # Worker 2: independent verifier
 
-Worker 2 decides whether one DRY item is complete. It independently challenges the claimed shared
-responsibility and the resulting ownership; it never writes the production fix.
-`docs/dry/DRY.md` is canonical.
+Worker 2 decides whether one item is complete. It challenges the claimed contract, the ownership
+decision, and the proof; it never writes the production fix. `docs/dry/DRY.md` is canonical; this
+file is the role's delta.
 
 ## Required reading
 
-Read `AGENTS.md`, `docs/dry/DRY.md`, this file, the artifact, item-scoped diff, complete target,
-consolidated sites, important consumers, and relevant tests. Do not use historical cycle artifacts
-or Worker 1's private reasoning beyond the shared artifact.
+`AGENTS.md`, `docs/dry/DRY.md`, this file, the artifact, the item-scoped diff, the complete target,
+every consolidated site, its important consumers, and the relevant tests. Never Worker 1's
+`worker-memory/`.
 
-## Verification job
+## Job
 
-1. Re-trace the responsibility through the system rather than reviewing only edited lines.
-2. Independently verify that every consolidated site shares the promised contract and reason to
-   change. Confirm that rejected or intentionally separate sites truly differ.
-3. Search for missed implementations, stale representations, bypasses, duplicate policy, imports,
-   tests, docs, and exports.
-4. Try to break the result with different inputs, state sequences, lifecycle phases, framework
-   paths, and extension points relevant to the target.
-5. Use focused tests or fresh scratch tests under `docs/dry/temp-tests/<scope>/` when useful.
+1. Re-trace the family or target through the system rather than the edited lines.
+2. Confirm the matrix was discharged against the target's real surface: judge a claimed
+   inapplicability on its reason, and never let a found consolidation excuse an unsearched axis.
+3. Re-run the change challenges and confirm the definition counts. Confirm each site's role
+   (definition, consumer, oracle, projection) and that no oracle was rewritten to read from the
+   owner it checks.
+4. Confirm observable equivalence on the axes of `DRY.md` principle 8, using fresh scratch tests
+   under `docs/dry/temp-tests/<scope>/` when execution gives stronger evidence than inspection.
    Permanent behavior gaps return to Worker 1 for production tests and fixes.
-6. Confirm the new owner is clearer than the old repetition, all call sites migrated, compatibility
-   is preserved, validation is credible, and unrelated work was not absorbed.
+5. For a zero-edit item, confirm the scoped diff is empty and search independently for a real
+   consolidation before accepting.
+6. Confirm every rejected candidate carries its contract difference and trigger, that the
+   freshness field names the inputs inspected, that each gate named can actually fail, and that
+   coupled findings are marked so neither can be accepted alone.
 
-## Outcome
-
-Append `## Independent verification (Worker 2)` and dispose of every finding and material rejected
-candidate.
-
-- If complete, set `Status: verified` and mark the matching plan item.
-- If anything remains, set `Status: revision-needed` with concrete, reproducible feedback and leave
-  the plan item open.
-
-Every review or implementation problem returns to Worker 1. For a zero-edit item, first confirm the
-scoped diff is empty and independently search for a real consolidation opportunity. Preserve
-unrelated work and do not commit.
+Append `## Independent verification (Worker 2)`. Set `Status: verified` and tick the plan item, or
+`Status: revision-needed` with concrete named candidates and reproducible feedback. Preserve
+unrelated work; do not commit.

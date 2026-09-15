@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 import strawberry
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.functions import Random
+from django.db.models.expressions import Col, Star
 from graphql import GraphQLError
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.types import Info
@@ -556,8 +556,21 @@ _ORDER_FROM_EXPLICIT = "explicit"
 _ORDER_FROM_MODEL_DEFAULT = "model_default"
 _ORDER_FROM_NOTHING = "nothing"
 
+#: The expression leaves this package can read: a column, the ``*`` of a row count,
+#: and a literal value.
+_READABLE_ORDER_LEAVES = (models.Value, Col, Star)
 
-def _is_nondeterministic_order_name(query: Any, name: str) -> bool:
+#: The container shapes a predicate's right-hand side arrives in: ``__in`` takes a
+#: sequence and ``__range`` a pair, and each member is compiled into the statement.
+_ORDER_VALUE_CONTAINERS = (
+    list,
+    tuple,
+    set,
+    frozenset,
+)
+
+
+def _is_deterministic_order_name(query: Any, name: str) -> bool:
     """Resolve a string ordering term the way the compiler resolves it, then classify it.
 
     ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` tests
@@ -575,40 +588,90 @@ def _is_nondeterministic_order_name(query: Any, name: str) -> bool:
     an offset window spans.
     """
     if name == "?":
-        return True
+        return False
     col = name[1:] if name.startswith("-") else name
     annotation = query.annotations.get(col)
     if annotation is None:
         annotation = query.annotations.get(col.split(LOOKUP_SEP)[0])
     if annotation is not None:
-        return _is_nondeterministic_order_term(query, annotation)
+        return _is_deterministic_order_term(query, annotation)
     if col in query.extra:
-        return True
-    return "." in name and name in query.extra_order_by
+        return False
+    return not ("." in name and name in query.extra_order_by)
 
 
-def _is_nondeterministic_order_term(query: Any, term: Any) -> bool:
+def _is_deterministic_order_term(query: Any, term: Any) -> bool:
     """Classify one selected ordering term by the form Django will compile it into.
 
     A term's own top level is not what the database orders by. A string is
     resolved through ``query.annotations`` and ``query.extra`` before it is read
     as a field path, and an expression is compiled from its whole source tree,
-    so the random form sits one indirection away from the value the ordering
-    collection holds whenever it arrives as an annotation alias, an ``extra``
-    select alias, an ``F`` naming either, or a ``Random()`` nested inside a
-    composition. A classifier that reads only the term certifies every one of
-    those as a deterministic column order.
+    so what the rows are ordered by sits one indirection away from the value the
+    ordering collection holds whenever it arrives as an annotation alias, an
+    ``extra`` select alias, an ``F`` naming either, or an expression nested
+    inside a composition.
+
+    Only a term that can be read down to model columns and literals is
+    certified. A composition is transparent - it orders by whatever its source
+    expressions order by - while a leaf carries all of its own SQL, so the
+    readable leaves are the ones this package can name: a column reference, the
+    ``*`` of a row count, and a literal value. Every other leaf stands for SQL
+    this package does not parse - ``Random()``, a ``Func`` naming a database
+    function, a ``RawSQL`` fragment, the inner ``Query`` a ``Subquery`` wraps -
+    and a term it cannot read is one it must not certify as repeatable across
+    the two queries an offset window spans. A composition's unfilled slots are
+    not leaves - an aggregate carries its filter and its ordering whether or not
+    either was given - so an empty one contributes no SQL and nothing to read.
+    Reading a term for what it resolves to rather than matching it against known
+    volatile classes is what keeps a spelling nobody enumerated from arriving as
+    an ordinary column order.
     """
     if isinstance(term, str):
-        return _is_nondeterministic_order_name(query, term)
+        return _is_deterministic_order_name(query, term)
     if isinstance(term, models.F):
-        return _is_nondeterministic_order_name(query, term.name)
-    if isinstance(term, Random):
-        return True
+        return _is_deterministic_order_name(query, term.name)
+    if isinstance(term, models.Q):
+        return _is_deterministic_order_condition(query, term)
     sources = getattr(term, "get_source_expressions", None)
     if sources is None:
         return False
-    return any(_is_nondeterministic_order_term(query, source) for source in sources())
+    composed = [source for source in sources() if source is not None]
+    if composed:
+        return all(_is_deterministic_order_term(query, source) for source in composed)
+    return isinstance(term, _READABLE_ORDER_LEAVES)
+
+
+def _is_deterministic_order_value(query: Any, value: Any) -> bool:
+    """Classify one value a predicate's lookup compares its column against.
+
+    A value carries SQL of its own either as an expression or inside a container
+    of them, because a lookup taking a sequence compiles every member into the
+    statement the same way it compiles a value given alone. Reading only the top
+    level would certify a fragment written one bracket deeper - ``name__in`` is
+    a list, ``created__range`` a pair - as an ordinary comparison against
+    literals. A value that is neither an expression nor such a container is a
+    plain literal, which is already as readable as a term gets.
+    """
+    if hasattr(value, "resolve_expression"):
+        return _is_deterministic_order_term(query, value)
+    if isinstance(value, _ORDER_VALUE_CONTAINERS):
+        return all(_is_deterministic_order_value(query, member) for member in value)
+    return True
+
+
+def _is_deterministic_order_condition(query: Any, condition: models.Q) -> bool:
+    """Classify the predicate a conditional ordering term picks its value with.
+
+    ``Case`` / ``When`` order by a value a ``Q`` selects, so the predicate is
+    part of the ordering and is read the same way. A predicate's children are
+    either nested predicates or ``(lookup, value)`` pairs, and each value is
+    read for the SQL it carries at any depth a lookup can hold one.
+    """
+    for child in condition.children:
+        value = child[1] if isinstance(child, tuple) else child
+        if not _is_deterministic_order_value(query, value):
+            return False
+    return True
 
 
 def _selected_ordering(queryset: models.QuerySet) -> tuple[str, tuple[Any, ...]]:
@@ -650,7 +713,7 @@ def _has_deterministic_ordering(queryset: models.QuerySet) -> bool:
     """
     _source, terms = _selected_ordering(queryset)
     query = queryset.query
-    return not any(_is_nondeterministic_order_term(query, term) for term in terms)
+    return all(_is_deterministic_order_term(query, term) for term in terms)
 
 
 def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
@@ -670,7 +733,7 @@ def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
         return False
     if query.default_ordering is not True or query.group_by:
         return False
-    return not any(_is_nondeterministic_order_term(query, term) for term in terms)
+    return all(_is_deterministic_order_term(query, term) for term in terms)
 
 
 def _model_from_definition(definition: Any) -> type[models.Model]:

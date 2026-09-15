@@ -25,6 +25,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import EmptyResultSet
 from django.db import models
+from django.db.models.expressions import RawSQL
 from django.db.models.functions import Random
 from django.db.models.sql.compiler import SQLCompiler
 from django.test import AsyncClient, override_settings
@@ -904,6 +905,30 @@ async def test_async_offset_rejects_an_extra_select_ordering(monkeypatch):
     assert branch_sql == [], branch_sql
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_rejects_a_raw_sql_order(monkeypatch):
+    """A raw SQL leaf is unreadable on this coloring for the same reason.
+
+    Both pipelines classify the sealed queryset with one term reader, so the
+    fragment that cannot be read into a column order refuses the window here as
+    well, with no row query issued.
+    """
+    await _seed_three_branches_async()
+
+    async def _raw_sql_ordering(cls, order_input, queryset, info, **kwargs):
+        return queryset.order_by(RawSQL("RANDOM()", []))
+
+    monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_raw_sql_ordering))
+    branch_sql = _record_branch_sql(monkeypatch)
+
+    payload = await _post_async(_offset_guard_schema(), _ASYNC_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == [], branch_sql
+
+
 # ---------------------------------------------------------------------------
 # 11. Async post-OrderSet seals
 # ---------------------------------------------------------------------------
@@ -1468,3 +1493,4 @@ async def test_async_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_i
     assert holder["awaited"] is True, "the resolver never reached its await"
     assert "errors" not in payload, payload
     assert [row["name"] for row in payload["data"]["branches"]] == ["B0", "B1"]
+

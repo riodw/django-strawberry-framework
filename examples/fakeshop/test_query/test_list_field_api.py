@@ -19,6 +19,7 @@ from apps.library.orders import BranchOrder
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection, models
+from django.db.models.expressions import Func, RawSQL
 from django.db.models.functions import Coalesce, Lower, Random
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -626,6 +627,175 @@ def test_shipped_branches_offset_rejects_a_composed_random_order(monkeypatch):
     assert err["extensions"]["reason"] == "order_required"
     assert err["extensions"]["argument"] == "offset"
     assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_a_raw_sql_order(monkeypatch):
+    """A raw SQL fragment is a leaf carrying its own statement, and none of it is read.
+
+    The package parses no SQL, so the fragment is opaque wherever it is written -
+    through ``extra`` as the row above, or as a ``RawSQL`` expression handed
+    straight to ``order_by``. Certifying the second because it is not one of the
+    random expression classes would make the same unreadable order pageable under
+    a different spelling.
+    """
+    _seed_three_branches()
+
+    def _raw_sql_ordering(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by(RawSQL("RANDOM()", []))
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_raw_sql_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_a_bare_database_function_order(monkeypatch):
+    """A ``Func`` naming a database function is the same leaf ``Random()`` is.
+
+    ``Random()`` is Django's own name for ``Func(function="RANDOM")``, so a guard
+    recognizing the class rather than reading the term hands a window to the
+    shuffle written the other way round.
+    """
+    _seed_three_branches()
+
+    def _bare_function_ordering(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by(
+            Func(function="RANDOM", arity=0, output_field=models.FloatField()),
+        )
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_bare_function_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_a_subquery_order(monkeypatch):
+    """An inner query is where the walk over source expressions ends.
+
+    A ``Subquery`` hands the compiler a whole query of its own, and what that
+    query orders the value by is not reachable from the term. The window is
+    refused for the reason every unreadable term is refused rather than granted
+    because the walk ran out of expressions to look at.
+    """
+    _seed_three_branches()
+
+    def _subquery_ordering(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        inner = (
+            library_models.Branch.objects.filter(pk=models.OuterRef("pk"))
+            .annotate(rnd=Random())
+            .values("rnd")
+        )
+        return queryset.order_by(models.Subquery(inner[:1]))
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_subquery_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_rejects_raw_sql_inside_a_predicate_container(monkeypatch):
+    """A lookup taking a sequence compiles every member, so reading the top level is not enough.
+
+    ``name__in`` holds its operands one bracket deeper than ``name=`` does, and
+    the list itself resolves as no expression at all. A predicate read only at
+    its top level therefore reports the same fragment as an ordinary comparison
+    against literals, and the shuffle pages under a window certified repeatable.
+    """
+    _seed_three_branches()
+
+    def _container_ordering(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by(
+            models.Case(
+                models.When(
+                    models.Q(name__in=[RawSQL("RANDOM()", [])]),
+                    then=models.Value(0),
+                ),
+                default=models.Value(1),
+            ),
+        )
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_container_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_accepts_a_conditional_order(monkeypatch):
+    """The control for the leaf rule: columns and literals are read end to end.
+
+    A ``Case`` orders by the value its predicate picks, and both halves of that -
+    the lookups in the ``When`` and the results it chooses between - are things
+    the guard can name. Refusing every ordering whose leaves it had to walk would
+    keep the rejections above green while breaking conditional sorts.
+    """
+    _seed_three_branches()
+
+    def _conditional_ordering(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by(
+            models.Case(
+                models.When(city="Boston", then=models.Value(0)),
+                default=models.Value(1),
+            ),
+            "name",
+        )
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_conditional_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
+    assert len(branch_sql) == 1
+    statement = branch_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "CASE WHEN" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
 
 
 @pytest.mark.django_db

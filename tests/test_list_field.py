@@ -2437,12 +2437,12 @@ def test_offset_guard_random_term_question_mark():
     from django_strawberry_framework.list_field import (
         _check_nonzero_offset_guard,
         _has_deterministic_ordering,
-        _is_nondeterministic_order_term,
+        _is_deterministic_order_term,
     )
 
     query = Category.objects.all().query
-    assert _is_nondeterministic_order_term(query, "?") is True
-    assert _is_nondeterministic_order_term(query, "name") is False
+    assert _is_deterministic_order_term(query, "?") is False
+    assert _is_deterministic_order_term(query, "name") is True
 
     qs_random = Category.objects.order_by("?")
     assert _has_deterministic_ordering(qs_random) is False
@@ -2473,13 +2473,13 @@ def test_offset_guard_random_term_random_function():
     from django_strawberry_framework.list_field import (
         _check_nonzero_offset_guard,
         _has_deterministic_ordering,
-        _is_nondeterministic_order_term,
+        _is_deterministic_order_term,
     )
 
     query = Category.objects.all().query
-    assert _is_nondeterministic_order_term(query, Random()) is True
-    assert _is_nondeterministic_order_term(query, OrderBy(Random())) is True
-    assert _is_nondeterministic_order_term(query, "-name") is False
+    assert _is_deterministic_order_term(query, Random()) is False
+    assert _is_deterministic_order_term(query, OrderBy(Random())) is False
+    assert _is_deterministic_order_term(query, "-name") is True
 
     qs_random = Category.objects.order_by(Random())
     assert _has_deterministic_ordering(qs_random) is False
@@ -4008,20 +4008,20 @@ def test_order_term_classifier_resolves_indirection_and_opaque_sql():
 
     from django_strawberry_framework.list_field import (
         _has_deterministic_ordering,
-        _is_nondeterministic_order_term,
+        _is_deterministic_order_term,
     )
 
     # An alias carries the verdict of the expression it names, however it is spelled.
     random_alias = Category.objects.annotate(rnd=Random())
-    assert _is_nondeterministic_order_term(random_alias.query, "rnd") is True
-    assert _is_nondeterministic_order_term(random_alias.query, "-rnd") is True
-    assert _is_nondeterministic_order_term(random_alias.query, "rnd__abs") is True
-    assert _is_nondeterministic_order_term(random_alias.query, F("rnd")) is True
+    assert _is_deterministic_order_term(random_alias.query, "rnd") is False
+    assert _is_deterministic_order_term(random_alias.query, "-rnd") is False
+    assert _is_deterministic_order_term(random_alias.query, "rnd__abs") is False
+    assert _is_deterministic_order_term(random_alias.query, F("rnd")) is False
     assert _has_deterministic_ordering(random_alias.order_by("rnd")) is False
 
     # The control: an alias naming a deterministic expression pages like a column.
     stable_alias = Category.objects.annotate(sort_key=Lower("name"))
-    assert _is_nondeterministic_order_term(stable_alias.query, "sort_key") is False
+    assert _is_deterministic_order_term(stable_alias.query, "sort_key") is True
     assert _has_deterministic_ordering(stable_alias.order_by("sort_key")) is True
 
     # Raw SQL reached through extra is opaque whatever it spells, as a select
@@ -4031,12 +4031,77 @@ def test_order_term_classifier_resolves_indirection_and_opaque_sql():
     verbatim = Category.objects.extra(order_by=["products_category.name"])
     assert _has_deterministic_ordering(verbatim) is False
 
+    # An extra ordering naming a real field is an ordinary column order.
+    assert _has_deterministic_ordering(Category.objects.extra(order_by=["name"])) is True
+
     # A composition is read through, so nesting does not launder a random term.
     composed = Category.objects.order_by(Coalesce(Random(), Random()))
     assert _has_deterministic_ordering(composed) is False
 
-    # A term with no source expressions to walk has nowhere to hide one.
-    assert _is_nondeterministic_order_term(random_alias.query, 42) is False
+
+def test_order_term_classifier_certifies_only_leaves_it_can_read():
+    """A term is certified by what it resolves to, not by failing to match a volatile class.
+
+    Every leaf that is not a column, a row count's ``*`` or a literal stands for
+    SQL this package does not parse, so a classifier built as a list of known
+    random forms certifies each spelling nobody put on the list: a ``RawSQL``
+    fragment, a bare ``Func`` naming the same database function ``Random()``
+    wraps, and the inner query a ``Subquery`` hands the compiler.
+    """
+    from django.db.models import Case, Count, F, Min, OuterRef, Q, Subquery, Value, When
+    from django.db.models.expressions import Func, OrderBy, RawSQL
+    from django.db.models.functions import Coalesce, Random
+
+    from django_strawberry_framework.list_field import (
+        _has_deterministic_ordering,
+        _is_deterministic_order_term,
+    )
+
+    # Raw SQL is a leaf carrying its whole statement, however it is reached.
+    raw = RawSQL("RANDOM()", [])
+    assert _is_deterministic_order_term(Category.objects.all().query, raw) is False
+    assert _has_deterministic_ordering(Category.objects.order_by(raw)) is False
+    assert _has_deterministic_ordering(Category.objects.order_by(OrderBy(raw))) is False
+    raw_alias = Category.objects.annotate(rnd=RawSQL("RANDOM()", []))
+    assert _is_deterministic_order_term(raw_alias.query, "rnd") is False
+    assert _is_deterministic_order_term(raw_alias.query, F("rnd")) is False
+    assert _has_deterministic_ordering(Category.objects.order_by(Coalesce(raw, Value(0)))) is False
+
+    # A Func naming a database function is the same leaf Random() is, unnamed.
+    bare = Func(function="RANDOM", arity=0, output_field=models.FloatField())
+    assert _has_deterministic_ordering(Category.objects.order_by(bare)) is False
+
+    # The walk reaches a subquery's inner query and can go no further into it.
+    inner = Category.objects.filter(pk=OuterRef("pk")).annotate(rnd=Random()).values("rnd")
+    assert _has_deterministic_ordering(Category.objects.order_by(Subquery(inner[:1]))) is False
+
+    # A term that is no expression at all resolves to nothing readable either.
+    assert _is_deterministic_order_term(Category.objects.all().query, 42) is False
+
+    # The controls: compositions of columns and literals are read end to end,
+    # including the predicate a conditional order picks its value with and the
+    # slots an aggregate carries whether or not either was given.
+    conditional = Case(
+        When(Q(name="a") | Q(name="b"), then=Value(0)),
+        default=Value(1),
+    )
+    assert _has_deterministic_ordering(Category.objects.order_by(conditional)) is True
+    aggregated = Category.objects.annotate(low=Min("items__name"), rows=Count("*"))
+    assert _has_deterministic_ordering(aggregated.order_by("low", "rows")) is True
+
+    # A predicate is read the same way, so raw SQL inside one is not laundered.
+    opaque_condition = Case(When(Q(name=RawSQL("1", [])), then=Value(0)), default=Value(1))
+    assert _has_deterministic_ordering(Category.objects.order_by(opaque_condition)) is False
+
+    # A lookup taking a sequence holds its operands one bracket deeper, and the
+    # container resolves as no expression at all, so each member is read too.
+    for container in ([RawSQL("RANDOM()", [])], (RawSQL("RANDOM()", []),)):
+        boxed = Case(When(Q(name__in=container), then=Value(0)), default=Value(1))
+        assert _has_deterministic_ordering(Category.objects.order_by(boxed)) is False
+
+    # The control: a sequence of ordinary literals is as readable as one literal.
+    literals = Case(When(Q(name__in=["a", "b"]), then=Value(0)), default=Value(1))
+    assert _has_deterministic_ordering(Category.objects.order_by(literals)) is True
 
 
 def test_is_model_default_ordering_active_edge_states(monkeypatch):

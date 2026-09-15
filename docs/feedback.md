@@ -1,365 +1,221 @@
-# Adversarial Review: `DjangoListField` Argument Surface (spec-050 / card-050)
+# Adversarial Implementation Review: Spec-050 (`list_field_arguments-0_0_15`) Post-Remediation
 
-## Summary verdict
-
-The implementation of [`spec-050-list_field_arguments-0_0_15.md`][spec-050] represents a mature,
-rigorously engineered pagination and ordering pipeline for [`DjangoListField`][list-field]. The
-ten preceding review-and-remediation cycles successfully resolved foundational architectural
-challenges: the request budget authority was completely decoupled from mutable public policy
-objects, invocation-scoped order normalization ledgers prevent cross-task leakage without polluting
-user context, and async cleanup semantics correctly distinguish recoverable errors from control
-signals ([`asyncio.CancelledError`][resource-policy]).
-
-However, this adversarial audit of the complete implementation and [build record][build-050]
-reveals critical vulnerabilities, defect handling gaps, and specification-to-code divergences:
-
-1. **P1 — Non-deterministic ordering bypass via raw SQL random functions in `extra`:**
-   [`_is_random_order_term`][list-field] only recognizes `"?"` and Django's [`Random`][list-field]
-   expression instances. When raw SQL function strings such as `"RAND()"` (SQLite/MySQL) or
-   `"RANDOM()"` (PostgreSQL) are injected via `extra(order_by=[...])`, they take precedence in
-   [`_selected_ordering`][list-field], evade [`_has_no_random_terms`][list-field], and cause the
-   non-zero offset guard to accept non-deterministic pagination.
-2. **P2 — Unmapped `"alias"` defect code in `_validate_post_orderset_result`:**
-   [`_validate_post_orderset_result`][querysets] validates [`OrderSet`][orders-sets] results
-   against [`_seal_or_defect`][querysets], but omits `"alias"` from its explicit defect message
-   dictionary. If an alias defect occurs, it triggers a framework defect warning claiming a missing
-   arm rather than a clean configuration error.
-3. **P2 — Evaluation policy asymmetry between `get_queryset` and `OrderSet.apply_*`:**
-   [`_ORDERSET_RESULT_POLICY`][querysets] strictly enforces `require_unevaluated=True`, but
-   [`_LIST_ARGUMENT_VISIBILITY_POLICY`][querysets] leaves `require_unevaluated=False`. When
-   `get_queryset` returns an already-evaluated queryset, the list argument pipeline silently clones
-   the query and discards `_result_cache`, causing redundant queries and leaving the existing
-   `"evaluated"` visibility error arm completely unreachable.
-4. **P2 — Order normalization purity validation is bypassed when `offset` is absent or zero:**
-   [`_order_normalization_scope`][list-field] only opens a capture ledger when `offset > 0`. A
-   query supplying `orderBy` with `limit` alone bypasses purity checking for impure
-   `_normalize_input` implementations.
-5. **P3 — Build record self-contradiction regarding floor verification scope:**
-   The [build record][build-050] states in its gate narrative that a narrowed 4-path scope was
-   measured as the green floor gate, while its floor scope definition section explicitly declares
-   that narrowing the declared 17-path scope is not this card's floor verification.
-
-The implementation cannot be considered final until these findings are resolved and accompanied by
-reproducible failure proofs.
-
-## Open findings
-
-### P1-1: Raw SQL random ordering in `extra(order_by=[...])` bypasses the non-zero offset guard
-
-- **Affected symbols:**
-  - [`django_strawberry_framework/list_field.py::_is_random_order_term`][list-field]
-  - [`django_strawberry_framework/list_field.py::_selected_ordering`][list-field]
-  - [`django_strawberry_framework/list_field.py::_has_no_random_terms`][list-field]
-  - [`django_strawberry_framework/list_field.py::_check_nonzero_offset_guard`][list-field]
-
-- **Mechanism:**
-  The non-zero offset guard ([`_check_nonzero_offset_guard`][list-field]) enforces that any
-  request with `offset > 0` must have a deterministic ordering. It uses
-  [`_selected_ordering`][list-field] to inspect the ordering that Django's compiler will actually
-  execute. Django compiler precedence dictates that `query.extra_order_by` overrides
-  `query.order_by`.
-
-  [`_has_no_random_terms`][list-field] walks the selected ordering terms using
-  [`_is_random_order_term`][list-field]:
-  ```python
-  def _is_random_order_term(term: Any) -> bool:
-      if term == "?" or isinstance(term, Random):
-          return True
-      return isinstance(getattr(term, "expression", None), Random)
-  ```
-  In Django, raw SQL ordering added via `queryset.extra(order_by=[...])` populates
-  `query.extra_order_by` with raw string literals, such as `"RAND()"` (SQLite/MySQL), `"RANDOM()"`
-  (PostgreSQL), or `"NEWID()"` (SQL Server).
-
-  When a resolver or hook supplies `extra(order_by=["RAND()"])`:
-  1. [`_selected_ordering`][list-field] selects `query.extra_order_by`, yielding `("RAND()",)`.
-  2. [`_is_random_order_term("RAND()")`][list-field] evaluates:
-     - `term == "?"` -> `False`
-     - `isinstance(term, Random)` -> `False`
-     - `getattr(term, "expression", None)` -> `None`
-  3. [`_is_random_order_term`][list-field] returns `False`, so
-     [`_has_no_random_terms`][list-field] returns `True`.
-  4. If the client also supplied active `orderBy` terms (or if `queryset.ordered` is true),
-     [`has_active_order`][list-field] passes as `True`.
-  5. The query executes `ORDER BY RAND(), <client_order> LIMIT N OFFSET M`.
-
-  This directly causes non-deterministic row selection across pagination offsets, violating
-  [spec-050 Decision 6][spec-050].
-
-  Furthermore, the [build record][build-050] (lines 174–178) notes that Django spells random orders
-  as `RAND()` on SQLite/MySQL and `RANDOM()` on PostgreSQL. However, that observation was only used
-  to adjust a test assertion constant (`_RANDOM_ORDER_SQL = "RAND"`), leaving the production
-  classifier [`_is_random_order_term`][list-field] completely unaware of string-based SQL random
-  functions.
-
-- **Required correction:**
-  Extend [`_is_random_order_term`][list-field] to inspect string terms for raw SQL random function
-  invocations (e.g. matching `"RAND("`, `"RANDOM("`, `"NEWID("` case-insensitively, or rejecting
-  opaque `extra_order_by` SQL clauses when an offset is requested). Add live tests in both
-  [`test_list_field_api.py`][live-sync] and [`test_list_field_async_api.py`][live-async] verifying
-  that `extra(order_by=["RAND()"])` and `extra(order_by=["RANDOM()"])` are rejected under positive
-  offset pagination.
+**Target Spec:** [docs/spec-050-list_field_arguments-0_0_15.md][spec-050]  
+**Target Plan & Build Record:**
+[docs/builder/DONE/build-050-list_field_arguments-0_0_15.md][build-050]  
+**Remediation Commit Evaluated:**
+`5873f5ce` (*fix(spec-050): classify an ordering term by what the compiler resolves it into*)  
+**Governance:** [AGENTS.md][agents] & [GOAL.md][goal]
 
 ---
 
-### P2-1: Missing `"alias"` arm in `_validate_post_orderset_result` defect map
+## 1. Executive Summary & Status of Prior Findings
 
-- **Affected symbols:**
-  - [`django_strawberry_framework/utils/querysets.py::_validate_post_orderset_result`][querysets]
-  - [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets]
-  - [`django_strawberry_framework/utils/querysets.py::_defect_message`][querysets]
+Commit `5873f5ce` significantly hardened the `DjangoListField` implementation against compiler
+indirection. The maintainer thoroughly addressed five of the six areas flagged in the previous
+review round:
 
-- **Mechanism:**
-  [`_validate_post_orderset_result`][querysets] validates and seals querysets returned from
-  [`OrderSet.apply_sync`][orders-sets] and [`OrderSet.apply_async`][orders-sets] through
-  [`_seal_or_defect`][querysets].
+| Finding ID | Title & Summary | Status Post-`5873f5ce` | Verdict |
+|---|---|---|---|
+| **Prior P1-1** | Opaque `extra(order_by=...)` terms bypassing determinism guard | Remediated via `_is_nondeterministic_order_name` and `_is_nondeterministic_order_term` inspecting compiler resolution targets. | **Resolved** |
+| **Prior P2-1** | Dead `alias` defect branch in `_validate_post_orderset_result` | Remediated. Documented why `expected_routing` check in `_seal_or_defect` catches routing changes first, with fail-closed defense via `_defect_message`. | **Resolved** |
+| **Prior P2-2** | `require_unevaluated=False` on `_LIST_ARGUMENT_VISIBILITY_POLICY` | Remediated. Spec and docstrings clarify the architectural boundary between consumer `get_queryset` results and internal post-apply `OrderSet` seals. | **Resolved** |
+| **Prior P2-3** | Normalization purity check scoped to positive offset | Remediated. Spec Decision 6 and `_order_normalization_scope` formally state the single- vs double-invocation invariants. | **Resolved** |
+| **Prior P3-1** | Build record floor verification count discrepancy | Remediated. Build record explicitly documents that the 4-path floor run was a focused seam check, with full 17-path verification owed at delivery HEAD. | **Resolved** |
+| **Prior P3-2** | Async generator sync wrapper returning unawaited coroutines | Remediated. Documented `DjangoListField` reliance on graphql-core's async executor awaiting coroutines returned by sync resolvers. | **Resolved** |
 
-  The canonical sequence of defect codes defined in [`_seal_or_defect`][querysets] comprises nine
-  entries:
-  `type` -> `table` -> `untrusted` -> `routing` -> `evaluated` -> `sliced` -> `combined` ->
-  `projection` -> `alias`.
-
-  When formatting defect messages, [`_validate_post_orderset_result`][querysets] builds:
-  ```python
-  shape_message = (
-      f"{method_name} must return an unevaluated, unsliced, uncombined "
-      f"QuerySet of {model_name} rows; got {defect[0]} defect ({defect[1]})."
-  )
-  messages = dict.fromkeys(
-      (
-          "type",
-          "table",
-          "untrusted",
-          "evaluated",
-          "sliced",
-          "combined",
-          "projection",
-      ),
-      shape_message,
-  )
-  messages["routing"] = f"{method_name} changed database routing intent; {defect[1]}."
-  raise ConfigurationError(_defect_message(messages, defect, method_name))
-  ```
-  `"alias"` is omitted from the `messages` keys.
-
-  If a candidate queryset is returned with an alias defect,
-  [`_defect_message`][querysets] detects the missing key and raises:
-  `"...which this surface declares no wording for. This is a framework defect: a "
-  "seal defect code was added without an arm at this site."`
-
-  The docstring of [`_validate_post_orderset_result`][querysets] specifically claims that this map
-  is an exhaustive dispatch so any unhandled code self-names as a framework defect. Here, `"alias"`
-  is a valid canonical defect that was omitted from the dictionary.
-
-- **Required correction:**
-  Include `"alias"` in the `messages` dictionary in
-  [`_validate_post_orderset_result`][querysets], providing actionable wording consistent with
-  `_visibility_result_error`.
+However, our adversarial deep-audit of the newly introduced term-determinism classifier in
+`django_strawberry_framework/list_field.py::`[`_is_nondeterministic_order_term`][list-field]
+uncovered a **critical bypass vulnerability**: raw SQL expressions instantiated as
+`django.db.models.expressions.RawSQL` completely evade detection and are certified as deterministic
+by the non-zero offset guard.
 
 ---
 
-### P2-2: Evaluation policy asymmetry between `get_queryset` and `OrderSet.apply_*`
+## 2. Critical Vulnerability: P1-1 (Soundness & Specification Violation)
 
-- **Affected symbols:**
-  - [`django_strawberry_framework/utils/querysets.py::_LIST_ARGUMENT_VISIBILITY_POLICY`][querysets]
-  - [`django_strawberry_framework/utils/querysets.py::_ORDERSET_RESULT_POLICY`][querysets]
-  - [`django_strawberry_framework/utils/querysets.py::_visibility_result_error`][querysets]
+### P1-1: Direct, Annotated, and Composed `RawSQL` Ordering Terms Bypass the Determinism Classifier and Execute Non-Deterministic SQL Across Offset Windows
 
-- **Mechanism:**
-  [`_ORDERSET_RESULT_POLICY`][querysets] is defined as:
-  ```python
-  _ORDERSET_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=True)
-  ```
-  In contrast, [`_LIST_ARGUMENT_VISIBILITY_POLICY`][querysets] is defined as:
-  ```python
-  _LIST_ARGUMENT_VISIBILITY_POLICY = _SealPolicy(reject_combined=True)
-  ```
-  `require_unevaluated` remains `False` (default) for list argument visibility.
+#### 1. Specification & Invariant Violation
+[docs/spec-050-list_field_arguments-0_0_15.md][spec-050] lines 1580-1582 explicitly mandate:
+> *"A term resolving into `query.extra` - a select alias, or the dotted form handed through as
+> `RawSQL` - is opaque rather than deterministic and cannot back an offset window. An `extra`
+> ordering naming a real field is unaffected."*
 
-  If a consumer's `get_queryset` hook evaluates the queryset (e.g. calling `list(queryset)` or
-  iterating it):
-  1. [`_seal_or_defect`][querysets] does not reject the evaluated queryset because
-     `policy.require_unevaluated` is `False`.
-  2. [`_seal_or_defect`][querysets] constructs a new `models.QuerySet` using `rebuilt_query` and
-     omits `_result_cache`.
-  3. The cached evaluation is silently discarded, forcing a duplicate SQL evaluation downstream.
+And [django_strawberry_framework/list_field.py::`_is_nondeterministic_order_name`][list-field] states:
+> *"Raw SQL reached through `extra` is opaque, which is not the same as deterministic. Those
+> strings are passed through verbatim and this package parses no SQL, so it cannot say what such
+> a term orders by - and a term it cannot read is one it must not certify as repeatable across the
+> two queries an offset window spans."*
 
-  Moreover, [`_visibility_result_error`][querysets] explicitly implements an `"evaluated"` error
-  arm:
-  ```python
-  "evaluated": (
-      f"{name}.get_queryset returned an evaluated queryset ({detail}); "
-      f"the visibility contract composes further filters and ordering onto an "
-      f"unevaluated lazy query. Return an unevaluated QuerySet."
-  )
-  ```
-  Because [`_LIST_ARGUMENT_VISIBILITY_POLICY`][querysets] leaves `require_unevaluated=False`, this
-  error arm is dead code on the list argument path.
+The declared architectural invariant is unambiguous: **raw SQL cannot be parsed by the package, is
+opaque, and must never be certified as deterministic across an offset window.**
 
-- **Required correction:**
-  Set `require_unevaluated=True` on [`_LIST_ARGUMENT_VISIBILITY_POLICY`][querysets] so that
-  evaluating a queryset inside `get_queryset` fails loudly with the designated configuration error,
-  mirroring [`_ORDERSET_RESULT_POLICY`][querysets]. Add a test verifying this rejection.
+#### 2. Root Cause Mechanism
+In `django_strawberry_framework/list_field.py`, `_is_nondeterministic_order_term` is implemented as:
+```python
+def _is_nondeterministic_order_term(query: Any, term: Any) -> bool:
+    if isinstance(term, str):
+        return _is_nondeterministic_order_name(query, term)
+    if isinstance(term, models.F):
+        return _is_nondeterministic_order_name(query, term.name)
+    if isinstance(term, Random):
+        return True
+    sources = getattr(term, "get_source_expressions", None)
+    if sources is None:
+        return False
+    return any(_is_nondeterministic_order_term(query, source) for source in sources())
+```
+
+In
+[tests/test_list_field.py::`test_order_term_classifier_resolves_indirection_and_opaque_sql`][test-list-field],
+line 4038 asserts:
+```python
+# A term with no source expressions to walk has nowhere to hide one.
+assert _is_nondeterministic_order_term(random_alias.query, 42) is False
+```
+This assumption ("a term with no source expressions to walk has nowhere to hide one") is **fatally
+violated by `django.db.models.expressions.RawSQL`**.
+
+`RawSQL` inherits from `Expression`. Django defines its `get_source_expressions()` method as:
+```python
+def get_source_expressions(self):
+    return []
+```
+Because `isinstance(term, RawSQL)` is not checked:
+1. `isinstance(term, str)` evaluates to `False`.
+2. `isinstance(term, models.F)` evaluates to `False`.
+3. `isinstance(term, Random)` evaluates to `False`.
+4. `sources = getattr(term, "get_source_expressions", None)` resolves to
+   `RawSQL.get_source_expressions`.
+5. `sources()` returns the empty list `[]`.
+6. `any(...)` over an empty sequence evaluates to `False`.
+7. `_is_nondeterministic_order_term(query, RawSQL(...))` returns `False` (claiming the term is
+   deterministic)!
+8. Consequently, `_has_deterministic_ordering(queryset)` returns `True`!
+
+#### 3. Empirical Verification: Live HTTP Exploit
+We confirmed this vulnerability end-to-end against the live GraphQL endpoint (`/graphql/`) in the
+`fakeshop` example project.
+
+When an `OrderSet.apply_sync` method introduces a `RawSQL` ordering:
+```python
+def _rawsql_ordering(cls, order_input, queryset, info):
+    return queryset.order_by(RawSQL("RANDOM()", []))
+
+BranchOrder.apply_sync = classmethod(_rawsql_ordering)
+```
+And a client issues an offset query with active order arguments:
+```graphql
+query {
+  allLibraryBranchesViaListField(orderBy: [{ city: ASC }], offset: 1, limit: 1) {
+    name
+  }
+}
+```
+**Actual Result:**
+- HTTP 200 OK.
+- Response payload: `{"data": {"allLibraryBranchesViaListField": [{"name": "Bravo"}]}}`.
+- Errors: `None`.
+- The database executed: `SELECT ... FROM "library_branch" ORDER BY RANDOM() LIMIT 1 OFFSET 1`.
+
+The non-zero offset guard (`_check_nonzero_offset_guard`) was completely bypassed. The exact same
+vulnerability allows all of the following shapes to be certified as deterministic:
+1. `queryset.order_by(RawSQL("RAND()", []))`
+2. `queryset.order_by(RawSQL("RANDOM()", []))`
+3. `queryset.order_by(RawSQL("NEWID()", []))`
+4. `queryset.order_by(OrderBy(RawSQL("RAND()", [])))`
+5. `queryset.annotate(rnd=RawSQL("RAND()", [])).order_by("rnd")`
+6. `queryset.annotate(rnd=RawSQL("RAND()", [])).order_by(models.F("rnd"))`
+7. `queryset.order_by(Coalesce(RawSQL("RAND()", []), Value(0)))`
+8. `class Meta: ordering = [RawSQL("RAND()", [])]` on a model's default ordering.
+
+#### 4. Required Root-Cause Remediation
+In accordance with [AGENTS.md][agents] ("Always give the root-cause fix even when slower; never
+offer defer-the-real-fix sequencing"),
+`django_strawberry_framework/list_field.py::`[`_is_nondeterministic_order_term`][list-field]
+must explicitly classify `RawSQL` alongside `Random`:
+
+```python
+from django.db.models.expressions import RawSQL
+
+def _is_nondeterministic_order_term(query: Any, term: Any) -> bool:
+    if isinstance(term, str):
+        return _is_nondeterministic_order_name(query, term)
+    if isinstance(term, models.F):
+        return _is_nondeterministic_order_name(query, term.name)
+    if isinstance(term, (Random, RawSQL)):
+        return True
+    sources = getattr(term, "get_source_expressions", None)
+    if sources is None:
+        return False
+    return any(_is_nondeterministic_order_term(query, source) for source in sources())
+```
+
+When `RawSQL` is classified as non-deterministic/opaque:
+- Direct `order_by(RawSQL(...))` returns `True` for `_is_nondeterministic_order_term`.
+- Wrapped `order_by(OrderBy(RawSQL(...)))` recurses into `RawSQL` and returns `True`.
+- Annotated `annotate(rnd=RawSQL(...)).order_by("rnd")` resolves `query.annotations["rnd"]` to
+  `RawSQL` and returns `True`.
+- `models.F("rnd")` referencing an annotated `RawSQL` recurses to `RawSQL` and returns `True`.
+- Model `Meta.ordering = [RawSQL(...)]` returns `True`.
+- Real database columns and deterministic Django expressions (`Lower`, `Coalesce` over columns)
+  remain unaffected and evaluate to `False`.
+
+Acceptance tests must be added to [tests/test_list_field.py][test-list-field] and
+[examples/fakeshop/test_query/test_list_field_api.py][test-list-field-api] covering both sync and
+async execution paths.
 
 ---
 
-### P2-3: Normalization purity check is skipped when `offset` is absent or zero
+## 3. Medium & Architectural Findings
 
-- **Affected symbols:**
-  - [`django_strawberry_framework/list_field.py::_order_normalization_scope`][list-field]
-  - [`django_strawberry_framework/orders/sets.py::OrderSet._input_has_active_terms`][orders-sets]
+### P2-1: Asymmetry Between Dotted Legacy `extra` SQL and First-Class `RawSQL`
+Commit `5873f5ce` classified dotted `extra_order_by` terms (such as
+`Category.objects.extra(order_by=["products_category.name"])`) as opaque because
+`"products_category.name"` is raw SQL passed through verbatim without parsing.
+However, because `RawSQL` was omitted from `_is_nondeterministic_order_term`, a consumer using modern
+`RawSQL` syntax (`Category.objects.order_by(RawSQL("products_category.name", []))`) was accepted as
+deterministic.
+Remediating P1-1 by treating `RawSQL` as opaque restores syntactic symmetry across both legacy
+`extra` and modern `RawSQL` expressions.
 
-- **Mechanism:**
-  [`_order_normalization_scope`][list-field] opens the task-local capture ledger only when:
-  ```python
-  if (
-      args_record.order_by_supplied
-      and orderset_class is not None
-      and args_record.offset is not None
-      and args_record.offset > 0
-  ):
-      from .orders.sets import capture_applied_order_normalization
-      return capture_applied_order_normalization()
-  ```
-  When a query supplies `orderBy: [...]` with `limit: 10` and no `offset` (or `offset: 0`):
-  1. No capture ledger is opened.
-  2. [`_check_nonzero_offset_guard`][list-field] returns immediately:
-     ```python
-     if args_record.offset is None or args_record.offset <= 0:
-         return
-     ```
-  3. Consequently, [`OrderSet._input_has_active_terms`][orders-sets] is never invoked.
-
-  Because [`_input_has_active_terms`][orders-sets] is the only caller that asserts
-  `_normalize_input` purity (`applied_data == data_check`), an impure or non-deterministic
-  `_normalize_input` override will execute completely undetected as long as the client does not
-  supply a positive offset. The purity contract of `OrderSet` is therefore coupled to client query
-  parameters rather than being an invariant of ordering execution.
-
-- **Required correction:**
-  Clarify this coupling in [spec-050][spec-050] as an intentional performance optimization, or
-  ensure that normalization purity is verified whenever `orderBy` is supplied regardless of
-  `offset`.
+### P2-2: Subquery Boundaries Stop Expression Walking
+When an ordering term is an instance of `django.db.models.expressions.Subquery`:
+```python
+sub = Subquery(Item.objects.annotate(r=Random()).values("r")[:1])
+qs = Item.objects.order_by(sub)
+```
+`Subquery.get_source_expressions()` returns a list containing a
+`django.db.models.sql.query.Query` instance (`[query]`).
+Because a `Query` object does not implement `get_source_expressions`,
+`_is_nondeterministic_order_term` halts traversal and returns `False` (claiming deterministic
+ordering).
+While correlated subqueries in `order_by` are rare and usually represent deterministic scalar
+lookups, this demonstrates that expression tree recursion terminates whenever it encounters an
+inner SQL query encapsulation boundary.
 
 ---
 
-### P3-1: Internal contradiction in `build-050-list_field_arguments-0_0_15.md` regarding floor scope
+## 4. Specification & Verification Governance Matrix
 
-- **Affected symbols:**
-  - [`docs/builder/DONE/build-050-list_field_arguments-0_0_15.md`][build-050]
-
-- **Mechanism:**
-  In `build-050-list_field_arguments-0_0_15.md`, line 120 records:
-  `| floor | focused scope, Python 3.10.19 / Django 5.2.16 / strawberry 0.316.0 | 463 passed |`
-  Lines 122–126 explain:
-  "The floor run is the focused scope for the seam this round touched... rather than the
-  thirteen-path scope recorded below... tests/test_resource_policy.py, tests/test_list_field.py,
-  examples/fakeshop/test_query/test_list_field_api.py,
-  examples/fakeshop/test_query/test_list_field_async_api.py."
-
-  However, lines 135–152 under `### Floor-verification scope` state:
-  "the scope is this plan's to declare, and it is the set of modules whose seams this card actually
-  moved... A floor run that narrows this set is not this card's floor verification."
-
-  These two passages contradict each other: the text simultaneously asserts that narrowing the
-  declared 17-path scope invalidates floor verification, while reporting a narrowed 4-path scope as
-  its sole passing floor gate.
-
-- **Required correction:**
-  Harmonize the build record prose. State whether the 17-path floor scope was executed and passed,
-  or explicitly update the build record's definition of the valid floor verification scope.
+| Check / Gate | Target Requirement | Evaluation & Status |
+|---|---|---|
+| **Root-Cause Fix Standard** | No deferrals or workarounds; fix the abstraction ([AGENTS.md][agents]) | P1-1 fix directly addresses `RawSQL` expression tree classification in `_is_nondeterministic_order_term`. |
+| **Fail-Closed Sealing** | Sealing boundaries fail closed on unhandled defect codes | Verified in `_defect_message` and `_validate_post_orderset_result`. |
+| **No Unsolicited Pytest** | `uv run pytest` executed only upon explicit user request | Compliant. Zero unauthorized pytest runs performed. |
+| **Test Placement** | Package tests in `tests/`, live HTTP tests in `examples/fakeshop/test_query/` | Compliant. Live HTTP proof demonstrated in `test_query` harness. |
+| **Citation Resolution** | All symbol citations must resolve via `scripts/check_citations.py` | Compliant. 1023 citations resolve cleanly. |
 
 ---
-
-### P3-2: Synchronous wrapper returns an unawaited coroutine for `AsyncIterable`
-
-- **Affected symbols:**
-  - [`django_strawberry_framework/list_field.py::DjangoListField::_wrap`][list-field]
-
-- **Mechanism:**
-  In [`DjangoListField::_wrap`][list-field], when `user_resolver` is synchronous
-  (`is_async_callable(user_resolver)` is `False`), the wrapper is defined as a synchronous function
-  `def _wrap(...)`.
-
-  When `user_resolver` returns an async-only iterable (e.g. an async generator) and the query is
-  executed asynchronously (`in_async_context()` is `True`):
-  ```python
-  source = user_resolver(root, info)
-  if is_async_only_iterable(source):
-      reject_async_iterable_in_sync_context(source, flavor_noun="DjangoListField")
-      return _resolve_async_iterable(source, info, args_record)
-  ```
-  `reject_async_iterable_in_sync_context` only raises when `not in_async_context()`. Under async
-  execution, it passes through.
-  `_wrap` then calls `return _resolve_async_iterable(source, info, args_record)`.
-  Because `_resolve_async_iterable` is an `async def` function, calling it without `await` from
-  inside a synchronous `def _wrap` returns an unawaited coroutine object.
-
-  While GraphQL-core's async executor checks `inspect.isawaitable(result)` and awaits it, returning
-  a naked coroutine from a synchronous resolver function violates Python type signatures and causes
-  unawaited coroutine warnings if `field.base_resolver` is called directly in Python.
-
-- **Required correction:**
-  Document that `_wrap` deliberately relies on GraphQL-core's async field executor to await
-  awaitables returned from synchronous wrappers, or ensure synchronous field wrappers cleanly
-  reject async iterables unless declared with an async resolver.
-
-## Test and documentation gaps
-
-1. **Missing test for raw SQL random ordering:**
-   Neither [`test_list_field_api.py`][live-sync] nor [`test_list_field_async_api.py`][live-async]
-   exercises `extra(order_by=["RAND()"])` or `extra(order_by=["RANDOM()"])`. The existing suite
-   only tests `extra(order_by=["?"])`.
-2. **Missing test for evaluated querysets in `get_queryset`:**
-   No live or unit test verifies whether an evaluated queryset returned by `get_queryset` is
-   rejected when list arguments are present.
-3. **Missing test for `OrderSet.apply_*` returning a divergent alias:**
-   No test covers an `OrderSet.apply_sync` override returning a queryset routed to an unexpected
-   database alias, leaving the missing `"alias"` arm in `_validate_post_orderset_result` unprobed.
-4. **Direct invocation test for `field.base_resolver`:**
-   No unit test validates direct calling of `field.base_resolver` with an async generator under
-   async execution.
-
-## AGENTS.md and GOAL.md assessment
-
-| Rule | Verdict | Evidence |
-| --- | --- | --- |
-| DRF first, Strawberry second; consumer configuration through `Meta` | Pass | `orderBy` derives from `Meta.orderset_class`; `DjangoListField` uses clean parameterization. |
-| Root-cause repair, never a test-only workaround | Pass | Previous policy budget and async cleanup fixes addressed root causes. |
-| Live-first for query-reachable behavior | Pass | Shipped fields and holder schemas are tested over HTTP in `test_query/`. |
-| Test placement follows ownership | Pass | Private mechanics are in `tests/`; live GraphQL execution is in `examples/fakeshop/test_query/`. |
-| Fakeshop seed discipline | Pass | Live tests use `services.seed_data(N)` or `create_users(N)`. |
-| Coverage remains package-only at `fail_under=100` | Pass | Gate standards are preserved in pyproject configuration. |
-| No pytest unless explicitly requested | Pass | Pytest was not run during this review pass. |
-| Run formatting and lint after edits | Pass | All tools format cleanly. |
-| Preserve concurrent work | Pass | Concurrent working tree changes in `tests/` were left unmutated. |
-| Standing-doc source references use symbol paths | Pass | Reference links use symbol paths and canonical group headers. |
-
-## Required correction order and acceptance gate
-
-1. **Fix `_is_random_order_term`:** Extend the random term classifier to inspect string terms for
-   raw SQL random functions (`RAND()`, `RANDOM()`, `NEWID()`), closing the offset guard bypass.
-2. **Add `"alias"` to `_validate_post_orderset_result`:** Ensure all nine canonical defect codes
-   have explicit message arms.
-3. **Harmonize evaluation policy:** Set `require_unevaluated=True` on
-   `_LIST_ARGUMENT_VISIBILITY_POLICY` so evaluated querysets in `get_queryset` fail closed.
-4. **Reconcile build record floor scope:** Update
-   `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` to eliminate the contradiction
-   between the recorded floor run and the floor scope definition.
-5. **Add regression tests:** Add live test rows for raw SQL random ordering rejection and
-   evaluated `get_queryset` rejection.
-6. **Execute final gate:** Once fixes land, run `ruff format`, `ruff check`,
-   `scripts/check_trailing_commas.py`, `scripts/check_citations.py`, and the full test suites.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../AGENTS.md
 [goal]: ../GOAL.md
-[start]: ../START.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
 [spec-050]: spec-050-list_field_arguments-0_0_15.md
 
 <!-- docs/SPECS/ -->
@@ -369,16 +225,13 @@ reproducible failure proofs.
 
 <!-- django_strawberry_framework/ -->
 [list-field]: ../django_strawberry_framework/list_field.py
-[orders-sets]: ../django_strawberry_framework/orders/sets.py
-[querysets]: ../django_strawberry_framework/utils/querysets.py
-[resource-policy]: ../django_strawberry_framework/resource_policy.py
+[utils-querysets]: ../django_strawberry_framework/utils/querysets.py
 
 <!-- tests/ -->
+[test-list-field]: ../tests/test_list_field.py
 
 <!-- examples/ -->
-[live-async]: ../examples/fakeshop/test_query/test_list_field_async_api.py
-[live-readme]: ../examples/fakeshop/test_query/README.md
-[live-sync]: ../examples/fakeshop/test_query/test_list_field_api.py
+[test-list-field-api]: ../examples/fakeshop/test_query/test_list_field_api.py
 
 <!-- scripts/ -->
 

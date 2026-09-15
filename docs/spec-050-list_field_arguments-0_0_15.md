@@ -1205,9 +1205,15 @@ docstring and migration note carry that as the recommendation it is.
 `limit` and zero offset work on querysets, materialized sequences, and ordinary iterables.
 The public list-field pipeline permits nonzero offset only for a queryset carrying the
 visible order guarantee below; an opaque Python iterable cannot establish it. Once the
-single bounding seam is handed validated coordinates, a queryset receives `[start:stop]`,
-a sequence receives the same slice, and a non-subscriptable iterable uses
-`itertools.islice(start, stop)`. That lower-level arithmetic remains shape-complete and is
+single bounding seam is handed validated coordinates, the window is applied with an operation
+the package owns the meaning of: a queryset receives `[start:stop]`, because slicing is what
+carries the bound into SQL as `LIMIT`; an exact built-in sequence receives the same slice and
+keeps its type; and every other shape — a subclass of one of those types, a mapping, a
+non-subscriptable iterable — is counted into a fresh list with
+`itertools.islice(start, stop)`. Which operation applies follows from what the value IS,
+never from whether a subscript happened to answer, because `__getitem__` on a consumer's own
+sequence type is consumer code and a bound enforced by calling it is a bound the bounded party
+decides. That lower-level arithmetic remains shape-complete and is
 unit-pinned, but it does not widen the list field's order precondition, and the two tiers must
 not be blurred: positive-offset arithmetic over an async iterator is pinned against the helper
 directly in [`tests/test_resource_policy.py`][test-resource-policy], while every LIVE
@@ -1573,6 +1579,12 @@ the [rationale][rationale-d13] for the rejected shared-gate design.
 - An offset beyond the available row count returns `[]` when it remains within policy.
 - `trusted_max_rows=True` with no `max_rows` remains inert, matching shipped behavior.
 - `trusted_max_rows=True, max_rows=P+N` widens returned rows but not accepted offset.
+- The row window is applied only through an operation the package owns. A queryset and an
+  exact `list` / `tuple` / `str` / `bytes` / `bytearray` are sliced; a subclass of one of
+  those, a mapping, and any other iterable are counted through `islice` into a fresh list, so
+  a sequence type whose `__getitem__` ignores the slice cannot answer a bounded request with
+  every row it holds. The zero-width window follows the same split, because
+  `result[start:start]` is as much a consumer call as `result[start:stop]`.
 - The exported `bounded_rows` / `bounded_rows_async` take no `offset` or `requested_limit`;
   supplying either is a `TypeError` from the signature itself. The client window rides only
   on the package-private seam beneath them, behind the argument normalizer's ceiling check.
@@ -1736,7 +1748,10 @@ the shipped SDL.
     source shapes without altering the shipped fakeshop SDL. The materialized/`None` fields
     prove limit/zero-offset behavior, while any non-null `orderBy` (including `[]`) returns
     `queryset_required` and nonzero offset returns `order_required`; the nullable field
-    preserves `None` under limit/zero offset.
+    preserves `None` under limit/zero offset. A holder field whose resolver returns a `list`
+    SUBCLASS overriding `__getitem__` proves the row ceiling holds over a materialized source
+    the package does not own the slice of, with the unwindowed, windowed, and zero-limit
+    requests each bounded.
 13. `branches_presliced` proves, under the
     [error-policy pass-through][glossary-production-error-policy] fixture, that both
     omitted and active arguments retain the shared visibility boundary's actionable

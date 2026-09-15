@@ -84,6 +84,8 @@ from ..resource_policy import (
     DST_RESOURCE_POLICY,
     ResourceLimitExceeded,
     ResourcePolicy,
+    _operation_policy,
+    armed_resource_policy,
     begin_resource_budget,
     end_resource_budget,
 )
@@ -273,6 +275,11 @@ def _nested_specs_map(spec: Any) -> Mapping[str, Any] | None:
     if not nested:
         return None
     return {nested_spec.graphql_name: nested_spec for nested_spec in nested}
+
+
+#: The sequence types whose ``__len__`` and iteration are the interpreter's own,
+#: so a member list does not have to be built to count them honestly.
+_EXACT_SEQUENCE_TYPES = (list, tuple)
 
 
 def _closes_a_cycle(container: Any, path: tuple[Any, ...]) -> bool:
@@ -492,18 +499,32 @@ class _ValueBudget:
         keeping a self-referential value from spinning the walk. Every other
         reference to a container - including a second reference to one already
         charged elsewhere in the request - is charged in full.
+
+        The width charged is the number of members this walk is about to QUEUE,
+        counted on a list this package holds, not the number the container
+        reports. A custom scalar's ``parse_value`` can return a ``list`` or
+        ``Mapping`` SUBCLASS, and that object's ``__len__`` is consumer code
+        answering for the size of work the request is asking for: one that says
+        zero while iteration yields a hundred members charges every width-shaped
+        bound - the container width itself, and the membership, node-id,
+        nested-row and relation-id families ``_charge_list_family`` derives from
+        it - at a number no part of the request costs. Counting what is enumerated
+        is what makes the charge and the queued work the same quantity. An exact
+        ``list`` or ``tuple`` is already such a list and is used as it stands,
+        because at an exact type ``len`` is the interpreter's own.
         """
         if isinstance(value, Mapping):
             if _closes_a_cycle(value, path):
                 return True
+            entries = list(value.items())
             self._reject(
                 "max_container_width",
-                len(value),
+                len(entries),
                 "an input object carries more fields than the policy allows",
             )
             item_type = node_type.fields if isinstance(node_type, GraphQLInputObjectType) else None
             child_path = (*path, value)
-            for name, item in value.items():
+            for name, item in entries:
                 field_def = item_type.get(name) if item_type is not None else None
                 # Specs resolve only under a declared input object: a hostile
                 # mapping parked under a scalar argument is charged, never
@@ -524,7 +545,8 @@ class _ValueBudget:
             return False
         if _closes_a_cycle(value, path):
             return True
-        width = len(value)
+        members = value if type(value) in _EXACT_SEQUENCE_TYPES else list(value)
+        width = len(members)
         self._reject(
             "max_container_width",
             width,
@@ -555,7 +577,7 @@ class _ValueBudget:
                 None,
                 item_specs_map,
             )
-            for item in value
+            for item in members
         )
         return True
 
@@ -654,6 +676,19 @@ class _ValueBudget:
         package-configured resource rejection - stating the reach honestly is
         the point, since a bound the package does not own is not a bound it can
         promise.
+
+        Both sizes are taken through the operation the type itself defines, not
+        through a method the value carries. A custom scalar's ``parse_value``
+        may return a ``str`` or ``bytes`` SUBCLASS, and on one of those
+        ``value.encode(...)`` and ``len(value)`` are consumer code: an
+        ``encode`` answering one byte for a hundred thousand characters is a
+        charge the bound cannot reject, and a ``__len__`` that raises replaces a
+        typed rejection with a raw error out of the value walk. ``str.encode``
+        is the unbound built-in applied to the value, and ``memoryview`` reads a
+        buffer's size through the C buffer protocol - which is also why the size
+        is no longer reached for through ``getattr(value, "nbytes", len(value))``,
+        whose default argument evaluates the hostile ``__len__`` before the
+        attribute it was meant to stand in for is ever looked at.
         """
         named = get_named_type(node_type) if node_type is not None else None
         if named is not None and named.name == _UPLOAD_SCALAR_NAME:
@@ -662,13 +697,13 @@ class _ValueBudget:
         if isinstance(value, str):
             self._reject(
                 "max_scalar_bytes",
-                len(value.encode("utf-8", errors="surrogatepass")),
+                len(str.encode(value, "utf-8", errors="surrogatepass")),
                 "a scalar value is larger than the policy allows",
             )
         elif isinstance(value, (bytes, bytearray, memoryview)):
             self._reject(
                 "max_scalar_bytes",
-                getattr(value, "nbytes", len(value)),
+                memoryview(value).nbytes,
                 "a scalar value is larger than the policy allows",
             )
 
@@ -1019,10 +1054,23 @@ class DjangoResourcePolicyExtension(SchemaExtension):
     """
 
     def __init__(self, *, policy: ResourcePolicy | None = None) -> None:
-        self._policy = policy
+        # Canonicalized HERE, where the configuration is accepted, rather than
+        # at each hook that reads it. An explicit policy arrives straight from a
+        # consumer and has been through none of the schema-construction
+        # normalization ``DjangoSchema(resource_policy=...)`` applies, so until
+        # it is read out once into an exact ``ResourcePolicy`` every bound read
+        # off it is consumer code that may answer differently each time it is
+        # asked - which is the whole distance between "the extension holds a
+        # policy" and "the operation has a budget".
+        self._policy = None if policy is None else _operation_policy(policy)
 
     def _resolved_policy(self) -> ResourcePolicy:
-        """The explicit policy, else the schema's, else the package defaults."""
+        """The explicit policy, else the schema's, else the package defaults.
+
+        Consulted once per operation, by :meth:`on_operation`, which arms what
+        it returns; every later charge in that operation reads the armed
+        snapshot instead (:func:`resource_policy.armed_resource_policy`).
+        """
         if self._policy is not None:
             return self._policy
         schema_policy = getattr(self.execution_context.schema, "resource_policy", None)
@@ -1034,6 +1082,11 @@ class DjangoResourcePolicyExtension(SchemaExtension):
 
     def on_operation(self) -> Iterator[None]:
         """Arm the policy, charge the document, and restore nested execution state.
+
+        The one point in the operation where the configuration is consulted.
+        What every later charge reads is the snapshot armed here, so the token
+        scan, the document walk, the value walk and the per-field collection
+        seams cannot be enforcing different budgets within one request.
 
         Two scopes, closed in the order they were opened: the published context
         mirror is restored by ``restored_context_keys``, and the armed budget -
@@ -1052,18 +1105,31 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         with restored_context_keys(context, DST_RESOURCE_POLICY, DST_RESOURCE_DEADLINE):
             token = begin_resource_budget(context, policy)
             try:
-                scan_document_text(policy, self.execution_context.query)
+                # The ARMED snapshot, not the object it was resolved from: the
+                # scan and the seams that run under it must charge one policy.
+                scan_document_text(armed_resource_policy(), self.execution_context.query)
                 yield
             finally:
                 end_resource_budget(token)
 
     def on_execute(self) -> Iterator[None]:
-        """Charge the validated document's shape and every argument value, then execute."""
+        """Charge the validated document's shape and every argument value, then execute.
+
+        Runs inside :meth:`on_operation`'s scope, so the budget it charges
+        against is the one armed there. Re-resolving the configuration at this
+        hook would re-read it, and a policy object whose field reads are its own
+        code can answer the second read differently from the first: the document
+        would then be scanned against a bound the request never has to satisfy.
+        A plain ``strawberry.Schema`` whose consumer calls ``on_execute`` with no
+        operation scope around it has nothing armed, and falls back to the
+        configuration exactly as the arming hook would have resolved it.
+        """
         execution_context = self.execution_context
         document = execution_context.graphql_document
         if document is not None:
+            policy = armed_resource_policy()
             charge_document(
-                self._resolved_policy(),
+                policy if policy is not None else self._resolved_policy(),
                 execution_context.schema._schema,
                 document,
                 execution_context.variables or {},

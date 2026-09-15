@@ -18,6 +18,7 @@ from django_strawberry_framework.extensions.error_policy import DjangoErrorPolic
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
 from django_strawberry_framework.resource_policy import ResourcePolicy, bounded_rows
 from django_strawberry_framework.schema import (
+    _SCHEMA_ENFORCEMENT,
     DjangoMutationExecutionContext,
     DjangoSchema,
     _async_mutation_lock,
@@ -500,6 +501,83 @@ def test_a_schema_policy_attribute_answers_with_a_copy(attribute, policy):
     assert first == second
     assert first is not second
     assert first is not policy
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    ["_resource_policy", "_error_policy"],
+    ids=["resource", "error"],
+)
+def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute):
+    """``info.schema`` is not a seam onto what the next request is held to.
+
+    The property answers with a copy, which settles what a WRITE THROUGH it can
+    do and nothing about what a write BESIDE it can do: an instance attribute is
+    an ordinary name, and the schema is process-lived, so one assignment from
+    one resolver would have widened - or unmasked - every request the process
+    served afterwards. Both spellings are exercised - through ``__dict__``, which
+    is what gets past a property, and as a plain assignment - because the
+    authority is not an attribute of this object at all and neither write lands
+    anywhere a bound is read from.
+    """
+
+    @strawberry.type
+    class _Query:
+        @strawberry.field
+        def widen(self, info: strawberry.Info) -> int:
+            info.schema.__dict__[attribute] = ResourcePolicy(max_list_rows=999)
+            setattr(info.schema, attribute, ResourcePolicy(max_list_rows=999))
+            return 1
+
+    schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=2))
+    assert schema.execute_sync("{ widen }").data == {"widen": 1}
+    assert schema.resource_policy.max_list_rows == 2
+
+
+def test_a_resolver_cannot_disarm_enforcement_by_replacing_the_extension_list():
+    """A ``DjangoSchema`` enforces because it is one, not because a list still says so.
+
+    ``schema.extensions`` is an ordinary attribute of the object every resolver
+    holds. Emptying it removed the budget and the masking from every later
+    operation on the process, which is a wider primitive than widening one
+    bound: the next request runs with no policy extension instantiated at all.
+    """
+
+    @strawberry.type
+    class _Query:
+        @strawberry.field
+        def rows(self, info: strawberry.Info) -> list[str]:
+            info.schema.__dict__["extensions"] = ()
+            return list(bounded_rows(["a", "b", "c"], info, None))
+
+    schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=1))
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    second = schema.execute_sync("{ rows }")
+    assert second.errors is None, second.errors
+    assert second.data == {"rows": ["a"]}
+    resolved = schema.get_extensions(sync=True)
+    assert any(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved)
+    assert any(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved)
+
+
+def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults():
+    """The fail-closed miss path: no record means the tightest budget, never none.
+
+    Reachable through a subclass that never completes ``DjangoSchema.__init__``.
+    The answer is the package default rather than an error, because a schema
+    that cannot say what it was configured with is still a schema that has to
+    bound the request in front of it.
+    """
+
+    class _Unregistered(DjangoSchema):
+        def __init__(self):
+            pass
+
+    schema = _Unregistered()
+    assert schema not in _SCHEMA_ENFORCEMENT
+    assert schema.resource_policy == ResourcePolicy()
+    assert schema.error_policy == ErrorPolicy()
 
 
 def test_widening_a_schema_policy_copy_leaves_the_schemas_own_bound():

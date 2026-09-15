@@ -32,7 +32,11 @@ REPLACING it; and the armed object is reachable from no consumer-visible name,
 so a resolver cannot widen it by MUTATING it either. Everything a resolver can
 reach - the schema attribute, the published mirror, whatever
 ``policy_from_info`` returns - is a copy (``utils/policies.py::copy_policy``).
-Being a frozen dataclass is not what makes that true: frozen rejects ``setattr``
+The policy those copies are taken from is not an attribute of the schema either
+(``schema.py::_SCHEMA_ENFORCEMENT``): ``info.schema`` is handed to every resolver
+in every operation, so an ordinary attribute would be reachable by assignment and
+through ``schema.__dict__`` past a property that has no setter. Being a frozen
+dataclass is not what makes any of it true: frozen rejects ``setattr``
 and admits ``__dict__`` writes, so on a process-lived object it would have been
 one write away from widening every later request on the process. The same call publishes the
 policy and its derived deadline under ``DST_RESOURCE_POLICY`` /
@@ -64,6 +68,7 @@ from dataclasses import dataclass, fields, replace
 from itertools import islice
 from typing import Any
 
+from django.db.models import QuerySet
 from graphql import GraphQLError
 
 from .conf import resource_policy_setting
@@ -77,6 +82,7 @@ __all__ = (
     "DEFAULT_RESOURCE_POLICY",
     "DST_RESOURCE_DEADLINE",
     "DST_RESOURCE_POLICY",
+    "MAX_RESOURCE_BOUND",
     "RESOURCE_LIMIT_ERROR_CODE",
     "ResourceLimitExceeded",
     "ResourcePolicy",
@@ -202,6 +208,24 @@ def _is_valid_deadline(value: Any) -> bool:
         return False
 
 
+#: The largest value any bound may hold: the signed 64-bit maximum.
+#:
+#: A bound is not an abstract number. Every collection bound is handed to the
+#: database as ``LIMIT`` / ``OFFSET``, where the adapter must bind it as an
+#: integer the backend has - SQLite's is 64-bit signed, and PostgreSQL's
+#: ``bigint`` is the same width - so a wider one fails inside the driver as a
+#: backend error, on the query the bound was supposed to be permitting. Every
+#: bound is also rendered into the message and ``extensions`` of the
+#: ``ResourceLimitExceeded`` it drives, and CPython refuses to render an integer
+#: past ``sys.get_int_max_str_digits`` (4300 digits by default), so a wider one
+#: raises a bare ``ValueError`` out of the constructor of the typed rejection
+#: that was the deployment's whole reason for configuring it. A bound this
+#: package cannot put in a query or in an error is not a looser bound, it is a
+#: configuration with no working rejection, and it fails at construction where
+#: the deployment can still fix it.
+MAX_RESOURCE_BOUND = 2**63 - 1
+
+
 def _require_positive_int(value: Any, label: str) -> None:
     """Reject a non-positive-integer bound under whatever name declared it.
 
@@ -219,10 +243,19 @@ def _require_positive_int(value: Any, label: str) -> None:
     values ``ResourceLimitExceeded`` formats into the message and ``extensions``
     of every rejection the bound drives. Admitting only the built-in type is
     what keeps those on values the package owns.
+
+    The domain is bounded ABOVE as well, at :data:`MAX_RESOURCE_BOUND`, because
+    a bound is only as configurable as the query and the rejection it has to
+    survive.
     """
     if type(value) is not int or value < 1:
         raise ConfigurationError(
             f"{label} must be a positive integer; got {describe_value(value)}.",
+        )
+    if value > MAX_RESOURCE_BOUND:
+        raise ConfigurationError(
+            f"{label} must be at most {MAX_RESOURCE_BOUND}, the largest value a bound can "
+            f"carry into a database query and into the rejection it drives.",
         )
 
 
@@ -552,6 +585,29 @@ def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:
     return _active_budget.set(_RequestBudget(armed, deadline))
 
 
+def armed_resource_policy() -> ResourcePolicy | None:
+    """The snapshot armed for this operation, or ``None`` when nothing armed one.
+
+    The package's own way of asking "which policy is this operation being
+    bounded by", for the seams that run inside an armed scope but hold no
+    ``info``: :func:`policy_from_info` answers the same question for a resolver
+    and falls back to the published mirror, while a caller of this one wants to
+    know whether a budget is armed at all.
+
+    What comes back is the armed object itself rather than a copy, and it is not
+    exported: it has already been through :func:`_operation_policy`, so its
+    fields are the package's own, and the callers are package code charging
+    against the budget in force rather than consumer code that could retain it.
+    Charging the armed snapshot is what keeps one operation's accounting on ONE
+    policy - a hook that re-resolves its configuration per call can be handed a
+    different answer each time by a policy object whose reads are consumer code,
+    and then the document is scanned against one budget while the request runs
+    under another.
+    """
+    budget = _active_budget.get()
+    return None if budget is None else budget.policy
+
+
 def end_resource_budget(token: Any) -> None:
     """Disarm the budget armed by :func:`begin_resource_budget`."""
     _active_budget.reset(token)
@@ -700,6 +756,26 @@ def check_deadline(info: Any) -> None:
     )
 
 
+#: The collection representations whose own slice is the operation that bounds
+#: them. A ``QuerySet`` is sliced because slicing is the only thing that carries
+#: the bound into SQL as ``LIMIT``, so a queryset is never evaluated unbounded;
+#: the exact built-in sequences are sliced because at an exact type ``[a:b]`` is
+#: the interpreter's own subscript rather than a method the value brought with
+#: it. Everything else is bounded by COUNTING instead - see ``_windowed_rows``.
+_SLICE_BOUNDED_ROW_TYPES = (
+    list,
+    tuple,
+    str,
+    bytes,
+    bytearray,
+)
+
+
+def _bounds_by_its_own_slice(result: Any) -> bool:
+    """Whether slicing ``result`` is an operation this package owns the meaning of."""
+    return type(result) in _SLICE_BOUNDED_ROW_TYPES or isinstance(result, QuerySet)
+
+
 def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -> int:
     """Deadline check plus the effective raw-list row bound, spelled once for both colors.
 
@@ -731,6 +807,18 @@ def _windowed_rows(
     are an accepted-coordinate ceiling on skipped and returned items, not a
     guarantee on total physical rows scanned by the underlying database query.
 
+    The window is applied with an operation this package owns. Slicing a value
+    runs whatever ``__getitem__`` the value brought with it, so on a consumer's
+    own sequence type the bound is enforced by consumer code and a slice can
+    answer with every row it was asked to drop; ``[start:stop]`` is therefore
+    reached only for the representations in ``_SLICE_BOUNDED_ROW_TYPES`` and for
+    a ``QuerySet``, whose slice is what pushes ``LIMIT`` into SQL. Every other
+    shape - a subclass of those types, a mapping, a bare iterable, a relation
+    accessor's sequence proxy - is bounded by COUNTING through ``islice`` into a
+    list this package built, which cannot return more items than it was asked
+    for whatever the source does, and a zero-width window on such a shape is the
+    empty list rather than a subscript nobody can predict the answer to.
+
     Package-private because a coordinate pair is a claim this seam cannot check:
     a window wider than the request's own ceiling would silently widen the bound
     ``bounded_rows`` advertises to everyone who imports it.
@@ -743,34 +831,16 @@ def _windowed_rows(
     limit = _raw_list_bound(info, declared, trusted=trusted)
     if result is None:
         return None
+    by_slice = _bounds_by_its_own_slice(result)
     if offset is None and requested_limit is None:
-        try:
-            return result[:limit]
-        except (TypeError, KeyError):
-            # A relation accessor can hand back a non-subscriptable iterable (a
-            # consumer-assigned sequence proxy, a custom manager's cached rows).
-            # Falling back to ``islice`` bounds it rather than letting it through:
-            # the alternative to slicing an unsliceable value is NOT "return it
-            # whole", which would be a bound that silently stops applying to
-            # exactly the shapes nobody anticipated. ``KeyError`` joins
-            # ``TypeError`` because a MAPPING-shaped result - a plain ``dict``, or a
-            # dict subclass whose ``__getitem__`` guards its keys - answers a slice
-            # subscript with ``KeyError`` on interpreters where slices hash, and a
-            # bound seam must never let that raw ``KeyError`` escape a resolver.
-            return list(islice(result, limit))
+        return result[:limit] if by_slice else list(islice(result, limit))
 
     start = offset if offset is not None else 0
     window = requested_limit if requested_limit is not None else limit
-    stop = start + window
     if window == 0:
-        try:
-            return result[start:start]
-        except (TypeError, KeyError):
-            return []
-    try:
-        return result[start:stop]
-    except (TypeError, KeyError):
-        return list(islice(result, start, stop))
+        return result[start:start] if by_slice else []
+    stop = start + window
+    return result[start:stop] if by_slice else list(islice(result, start, stop))
 
 
 def bounded_rows(
@@ -790,14 +860,18 @@ def bounded_rows(
     accepted-row ceiling on what the response can carry, not a guarantee on total
     physical rows scanned by the underlying database query.
 
-    It is applied by SLICING, so a ``QuerySet`` carries the bound into SQL as
+    A ``QuerySet`` is bounded by SLICING, so it carries the bound into SQL as
     ``LIMIT`` and is never evaluated unbounded; a value that is already a
     materialized sequence (a consumer resolver's return, or Django's prefetch
     cache) is truncated in Python, which cannot un-fetch those rows but does
-    stop the response from serializing them. Non-row collections follow standard
-    Python slice semantics: sequences like ``str`` or ``bytes`` are sliced directly,
-    while mappings (e.g. ``dict``) fall back via ``itertools.islice`` to return a
-    sliced list of keys.
+    stop the response from serializing them. Which operation does the truncating
+    follows from what the value IS, never from whether a subscript happened to
+    answer: an exact ``list``, ``tuple``, ``str``, ``bytes`` or ``bytearray`` is
+    sliced and keeps its type, and every other shape - a subclass of one of
+    those, a mapping, a bare iterable - is counted into a fresh list instead,
+    which is how the ceiling stays a ceiling on a sequence type whose own
+    ``__getitem__`` is consumer code. A mapping therefore still comes back as a
+    bounded list of its keys.
 
     A raw list is the one collection shape Relay pagination does not bound, so
     this is the only thing between a client and the whole table. It is
@@ -930,10 +1004,10 @@ async def _windowed_rows_async(
     row-scan guarantee: the helper discards exactly ``offset`` items, collects at
     most ``window`` items (where ``window`` is the prevalidated
     ``requested_limit``, defaulting to the effective limit), and closes the
-    iterator early without over-requesting subsequent items. Synchronous
-    iterables fall back to ``_windowed_rows``, preserving standard Python slice
-    semantics (including character/byte slicing for ``str``/``bytes`` and
-    key-slicing fallback for mappings).
+    iterator early without over-requesting subsequent items - the rows it
+    returns are collected into a list of its own, so an async source bounds the
+    same way a non-sliceable sync one does. Synchronous iterables fall back to
+    ``_windowed_rows`` and are bounded there on its terms.
     """
     if not is_async_only_iterable(result):
         return _windowed_rows(

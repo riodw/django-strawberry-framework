@@ -357,19 +357,41 @@ properties follow, and each is load-bearing:
   consumer code. The same domain holds for every other number that crosses into the budget
   machinery from outside it — a consumer-written deadline mirror, an uploaded file's reported
   `size`, a `first` / `last` page bound supplied through a variable, any amount charged
-  against a bound — stated once as `resource_policy.py::_is_builtin_number`.
+  against a bound — stated once as `resource_policy.py::_is_builtin_number`. It is also
+  bounded ABOVE, at `resource_policy.py::MAX_RESOURCE_BOUND`: a bound is handed to the
+  backend's adapter as a `LIMIT` and rendered into the message and `extensions` of the
+  rejection it drives, so a value past the signed 64-bit maximum is a configuration whose
+  rejection cannot be constructed, not a looser one.
+
+- **Owned representations only.** The same rule reaches past numbers to the shapes the
+  package measures and bounds. A width is charged from the members the value walk queues
+  rather than from a container's own `__len__`; text is sized with `str.encode` and a buffer
+  through the C buffer protocol rather than through methods the value carries; and a row
+  window is applied by slicing only a queryset or an exact built-in sequence, with every
+  other shape counted through `islice` into a list the package built. A custom scalar's
+  `parse_value` can put a `list`, `Mapping`, `str` or `bytes` SUBCLASS into any of those
+  positions, and a bound whose measurement or whose enforcement calls that object's own code
+  is a bound the bounded party decides the value of.
 
 Frozen is what makes the first two of those true, and it is not what makes the third true.
 A frozen dataclass rejects `setattr`; it admits `policy.__dict__[bound] = wider` and
 `object.__setattr__`, so freezing is an accident guard and never an authority boundary. What
 holds the bound is that no consumer-visible name reaches the object a bound is read from:
-the resolved policy lives behind `schema.py::DjangoSchema.resource_policy`, which answers
-every read with a copy; the operation's own budget is a private snapshot taken at the arm
-point; the published mirror is a third object; and `policy_from_info` returns a copy of the
-snapshot rather than the snapshot. A resolver may write any of those freely, and writes its
-own duplicate every time. `error_policy.py::ErrorPolicy` is held on exactly the same terms —
-the same shape, the same process-lived object, and a write to it would put raw exception text
-on the wire rather than widen a row count.
+the resolved policy is stored in `schema.py::_SCHEMA_ENFORCEMENT`, a package-owned mapping
+keyed by schema identity, and `schema.py::DjangoSchema.resource_policy` answers every read
+from it with a copy; the operation's own budget is a private snapshot taken at the arm point;
+the published mirror is a third object; and `policy_from_info` returns a copy of the snapshot
+rather than the snapshot. A resolver may write any of those freely, and writes its own
+duplicate every time. Holding the authority OFF the schema object is what makes that
+complete: the schema is process-lived and `info.schema` is handed to every resolver in every
+operation, so a policy kept in an ordinary instance attribute is reachable both by assignment
+and through `schema.__dict__` past a property that has no setter, and one such write would
+widen every later request the process served rather than the one that made it.
+`error_policy.py::ErrorPolicy` is held in the same record on exactly the same terms - the
+same shape, the same process-lived object, and a write to it would put raw exception text on
+the wire rather than widen a row count. Enforcement does not depend on the schema's mutable
+`extensions` list either: `DjangoSchema.get_extensions` reinstates a missing package
+extension, so emptying that list costs a consumer their own extensions and nothing else.
 
 The policy object a schema stores is also held to the EXACT class. `isinstance` admits a
 subclass, and a subclass's field reads are consumer code that `__post_init__` cannot speak

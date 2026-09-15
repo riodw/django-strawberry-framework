@@ -30,7 +30,12 @@ Row groups, in the order a request meets them:
 - introspection, charged like any other document shape rather than exempted;
 - the collection bounds the fields enforce (raw-list rows, connection page size,
   and the list sibling that used to bypass the connection cap);
-- the cooperative deadline, one row per seam that hands work to the database; and
+- the cooperative deadline, one row per seam that hands work to the database;
+- the enforcement authority a resolver can reach through ``info.schema``, proven
+  across two requests because the write and the request it would widen are
+  different requests, alongside the custom scalar that is the live route by
+  which a value the framework did not build reaches the budget, and the largest
+  configurable bound executing as a real ``LIMIT``; and
 - the cross-cutting proofs: zero ORM work after a rejection, and one typed error
   code shared by the sync and async transports.
 
@@ -44,8 +49,10 @@ from __future__ import annotations
 
 import json
 from functools import cache
+from typing import NewType
 
 import pytest
+import strawberry
 from apps.library import models as library_models
 from apps.products.services import seed_data
 from django.conf import settings
@@ -61,6 +68,11 @@ from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
     DjangoSchema,
     strawberry_config,
+)
+from django_strawberry_framework.resource_policy import (
+    MAX_RESOURCE_BOUND,
+    ResourcePolicy,
+    bounded_rows,
 )
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
@@ -175,8 +187,77 @@ _VALUE_BOUNDS = {
     "max_scalar_bytes": MAX_SCALAR_BYTES,
 }
 
+
+class _UnderreportingList(list):
+    """A sequence that reports no members and yields all of them.
+
+    The shape a custom scalar can put into the value walk. Its ``__len__`` is
+    what every width-shaped bound used to be charged from.
+    """
+
+    def __len__(self):
+        return 0
+
+
+#: A custom scalar whose ``parse_value`` returns a sequence type of its own.
+#:
+#: This is the reachable route by which a value that is not an exact built-in
+#: arrives at the budget: a real request carries JSON, so the coercer's output
+#: is exact until a consumer-defined scalar replaces it with something else.
+HostileScalar = strawberry.scalar(
+    NewType("HostileScalar", object),
+    serialize=lambda value: value,
+    parse_value=lambda value: _UnderreportingList(value) if isinstance(value, list) else value,
+)
+
+
+@strawberry.type
+class _AuthorityQuery:
+    """The two seams a resolver can reach through ``info.schema``, plus a bounded list."""
+
+    @strawberry.field
+    def widen(self, info: strawberry.Info) -> int:
+        """Replace the schema's stored policy and its whole extension list."""
+        info.schema.__dict__["_resource_policy"] = ResourcePolicy(max_list_rows=999)
+        info.schema.__dict__["extensions"] = ()
+        return 1
+
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
+
+    @strawberry.field
+    def take(self, payload: HostileScalar = None) -> str:
+        return "ok"
+
+
+@cache
+def _authority_schema() -> DjangoSchema:
+    return DjangoSchema(
+        query=_AuthorityQuery,
+        config=strawberry_config(),
+        resource_policy={"max_list_rows": 1, "max_container_width": MAX_CONTAINER_WIDTH},
+    )
+
+
+def _authority_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_authority_schema())
+    return built(request, *args, **kwargs)
+
+
+_authority_view.csrf_exempt = True
+
+
 urlpatterns = [
     path("", include("config.urls")),
+    path("rp-authority/", _authority_view),
+    path(
+        "rp-max-bound/",
+        _probe_view(
+            max_list_rows=MAX_RESOURCE_BOUND,
+            max_collection_cost=MAX_RESOURCE_BOUND,
+        ),
+    ),
     path("rp-tokens/", _probe_view(max_document_tokens=MAX_TOKENS)),
     path("rp-depth/", _probe_view(max_depth=MAX_DEPTH)),
     path(
@@ -1256,6 +1337,85 @@ def test_an_unarmed_deadline_never_rejects():
     """The default policy carries no deadline, so no seam may reject on one."""
     seed_data(1)
     _no_rejection(_post("/rp-rows/", "{ allLibraryBranchesViaListField { name } }"))
+
+
+# ---------------------------------------------------------------------------
+# Enforcement authority: what a resolver reaches through ``info.schema``
+# ---------------------------------------------------------------------------
+
+
+def test_a_resolver_cannot_widen_the_next_request_through_the_schema():
+    """The budget survives a resolver writing both names it can reach.
+
+    ``info.schema`` is handed to every resolver, and the schema outlives the
+    request, so an ordinary attribute holding the policy is a process-lived
+    widening primitive rather than a same-request one: the first request sets
+    it, every later request on that worker runs under it. Emptying the extension
+    list is the wider version of the same reach - the next operation would arm
+    no budget at all. Two requests, in order, are what make the claim: the write
+    happens in the first, and the second is the one that must still be bounded.
+    """
+    assert _post("/rp-authority/", "{ widen }")["data"] == {"widen": 1}
+
+    second = _post("/rp-authority/", "{ rows }")
+    _no_rejection(second)
+    assert second["data"]["rows"] == ["a"]
+
+    third = _post(
+        "/rp-authority/",
+        "query T($p: HostileScalar) { take(payload: $p) }",
+        {"p": list(range(MAX_CONTAINER_WIDTH + 1))},
+    )
+    assert _rejection(third)["bound"] == "max_container_width"
+
+
+def test_a_scalar_defined_value_is_charged_for_the_members_it_carries():
+    """A custom scalar is the live route by which a non-exact shape reaches the walk.
+
+    ``parse_value`` runs after the JSON body is decoded and before the value
+    budget sees the argument, so whatever it returns is what every width-shaped
+    bound is charged from. A sequence reporting no members while carrying
+    ``MAX_CONTAINER_WIDTH + 1`` of them is charged for what it carries.
+    """
+    payload = _post(
+        "/rp-authority/",
+        "query T($p: HostileScalar) { take(payload: $p) }",
+        {"p": list(range(MAX_CONTAINER_WIDTH + 1))},
+    )
+    extensions = _rejection(payload)
+    assert extensions["bound"] == "max_container_width"
+    assert extensions["charged"] == MAX_CONTAINER_WIDTH + 1
+
+
+def test_a_scalar_defined_value_within_the_bound_still_executes():
+    """The control: the same scalar, one member under the bound, runs."""
+    payload = _post(
+        "/rp-authority/",
+        "query T($p: HostileScalar) { take(payload: $p) }",
+        {"p": list(range(MAX_CONTAINER_WIDTH))},
+    )
+    _no_rejection(payload)
+    assert payload["data"] == {"take": "ok"}
+
+
+@pytest.mark.django_db
+def test_a_bound_at_the_representable_maximum_reaches_the_database():
+    """The largest configurable bound has to work as a real ``LIMIT``.
+
+    A bound is handed to the backend's adapter, which binds it as an integer of
+    the backend's own width, so the top of the accepted domain is only the top
+    if a request configured there executes. The row runs against whichever
+    backend the suite is running on, so the sqlite tier and the Postgres tier
+    each prove it for themselves.
+
+    ``max_collection_cost`` is raised with it because the pre-execution cost
+    charge is ``max_list_rows`` itself: left at its default, the request is
+    refused by the cost bound before it can say anything about the row bound.
+    """
+    seed_data(2)
+    payload = _post("/rp-max-bound/", "{ allLibraryBranchesViaListField { name } }")
+    _no_rejection(payload)
+    assert payload["data"]["allLibraryBranchesViaListField"] is not None
 
 
 # ---------------------------------------------------------------------------

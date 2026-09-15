@@ -1024,6 +1024,50 @@ def test_holder_trusted_widened_field():
 
 
 @pytest.mark.django_db
+def test_holder_materialized_sequence_subclass_is_still_row_bounded():
+    """A materialized source is bounded by this package, not by its own subscript.
+
+    ``DjangoListField(resolver=...)`` is a public path: whatever the resolver
+    returns is what the raw-list ceiling is applied to, and applying it used to
+    mean calling that value's ``__getitem__``. A ``list`` subclass overriding
+    the slice therefore decided its own bound, and answered a windowed request
+    with every row it held - past the row ceiling and past the client's own
+    ``limit`` - which is the whole table on the one collection shape Relay
+    pagination does not cover.
+    """
+
+    class _EscapingRows(list):
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                return list(self)
+            return super().__getitem__(key)
+
+    @strawberry.type
+    class _EscapeQuery:
+        branches_escaping: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            max_rows=2,
+            resolver=lambda root, info: _EscapingRows(library_models.Branch.objects.all()),
+        )
+
+    schema = DjangoSchema(query=_EscapeQuery, config=strawberry_config())
+    for index in range(9):
+        library_models.Branch.objects.create(name=f"Branch {index}", city="Boston")
+
+    payload = _post_sync(schema, "{ branchesEscaping { name } }")
+    assert "errors" not in payload, payload
+    assert len(payload["data"]["branchesEscaping"]) == 2
+
+    payload_windowed = _post_sync(schema, "{ branchesEscaping(limit: 1) { name } }")
+    assert "errors" not in payload_windowed, payload_windowed
+    assert len(payload_windowed["data"]["branchesEscaping"]) == 1
+
+    payload_zero = _post_sync(schema, "{ branchesEscaping(limit: 0) { name } }")
+    assert "errors" not in payload_zero, payload_zero
+    assert payload_zero["data"]["branchesEscaping"] == []
+
+
+@pytest.mark.django_db
 def test_holder_materialized_and_nullable_none_fields():
     @strawberry.type
     class _NonQsQuery:

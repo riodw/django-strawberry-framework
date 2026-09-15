@@ -63,6 +63,7 @@ from django_strawberry_framework.resource_policy import (
     DEFAULT_RESOURCE_POLICY,
     DST_RESOURCE_DEADLINE,
     DST_RESOURCE_POLICY,
+    MAX_RESOURCE_BOUND,
     ResourceLimitExceeded,
     ResourcePolicy,
     _cleanup_rejected_async_iterable,
@@ -190,6 +191,50 @@ def test_the_package_default_policy_is_bounded_on_every_axis():
 def test_a_policy_is_frozen():
     with pytest.raises(Exception, match="cannot assign to field"):
         DEFAULT_RESOURCE_POLICY.max_page_size = 1
+
+
+def test_a_bound_at_the_representable_maximum_is_accepted_and_can_reject():
+    """The largest accepted bound must still reach SQL and render its own rejection.
+
+    A ceiling is only real if the configuration at it works end to end, so this
+    row builds the policy AND renders the typed rejection the bound drives -
+    which is where an over-large value fails, inside CPython's integer-to-string
+    conversion limit, rather than at construction.
+    """
+    policy = ResourcePolicy(max_list_rows=MAX_RESOURCE_BOUND)
+    assert policy.max_list_rows == MAX_RESOURCE_BOUND
+    rejection = ResourceLimitExceeded(
+        "max_list_rows",
+        policy.max_list_rows,
+        policy.max_list_rows + 1,
+        "detail",
+    )
+    assert str(MAX_RESOURCE_BOUND) in rejection.message
+    assert rejection.extensions["limit"] == MAX_RESOURCE_BOUND
+
+
+@pytest.mark.parametrize(
+    "value",
+    [MAX_RESOURCE_BOUND + 1, 10**10000],
+    ids=["one-past-the-maximum", "unrenderable-magnitude"],
+)
+def test_a_bound_past_the_representable_maximum_is_rejected_at_construction(value):
+    """A bound no query and no rejection can carry fails the deployment at startup.
+
+    ``10**10000`` is the shape that made this a defect rather than a curiosity:
+    it passes a "positive integer" test, then the first request over the bound
+    raises a bare ``ValueError`` out of the constructor of the typed error the
+    deployment configured the bound to produce.
+    """
+    with pytest.raises(ConfigurationError, match="must be at most"):
+        ResourcePolicy(max_list_rows=value)
+
+
+def test_a_field_declared_collection_bound_shares_the_representable_maximum():
+    """The two spellings of one bound domain reject the same magnitudes."""
+    validate_collection_bound(MAX_RESOURCE_BOUND, field="max_rows")
+    with pytest.raises(ConfigurationError, match="must be at most"):
+        validate_collection_bound(MAX_RESOURCE_BOUND + 1, field="max_rows")
 
 
 # ---------------------------------------------------------------------------
@@ -898,6 +943,66 @@ def test_bounded_rows_bounds_a_mapping_shaped_result(mapping_cls):
         else mapping_cls({"a": 1, "b": 2, "c": 3})
     )
     assert bounded_rows(source, info) == ["a", "b"]
+
+
+@pytest.mark.parametrize("container", [list, tuple], ids=["list", "tuple"])
+def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(container):
+    """A sequence type may override ``__getitem__``; the bound must not run through it.
+
+    ``result[:limit]`` is the operation the raw-list ceiling is made of, and on a
+    ``list`` or ``tuple`` SUBCLASS that operation is consumer code. One that
+    ignores the slice and answers with every row it was asked to drop turns the
+    only thing standing between a client and the whole table into a call the
+    client's own object gets to decide the result of.
+    """
+
+    class _Escape(container):
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                return container(self)
+            return super().__getitem__(key)
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    assert bounded_rows(_Escape(range(10)), info) == [0, 1]
+
+
+@pytest.mark.parametrize(
+    ("offset", "limit", "expected"),
+    [(1, 1, [1]), (0, 0, []), (2, None, [2, 3])],
+    ids=["window", "zero-width-window", "offset-to-the-ceiling"],
+)
+def test_a_windowed_sequence_subclass_is_bounded_on_every_coordinate(offset, limit, expected):
+    """The offset window and the zero-width window bound the hostile shape too.
+
+    ``result[start:start]`` is as much a consumer call as ``result[start:stop]``,
+    so a zero-row window is a place a hostile subscript can put rows into a
+    response that contractually carries none.
+    """
+
+    class _Escape(list):
+        def __getitem__(self, key):
+            if isinstance(key, slice):
+                return list(self)
+            return super().__getitem__(key)
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    assert (
+        _windowed_rows(_Escape(range(10)), info, offset=offset, requested_limit=limit) == expected
+    )
+
+
+def test_bounded_rows_bounds_a_hostile_mapping_subclass():
+    """A ``dict`` subclass is counted, never subscripted, so its guard cannot matter."""
+
+    class _Escape(dict):
+        def __getitem__(self, key):
+            return list(self)
+
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    assert bounded_rows(_Escape({"a": 1, "b": 2, "c": 3}), info) == ["a", "b"]
 
 
 def test_bounded_rows_honours_a_trusted_widening():
@@ -2247,6 +2352,134 @@ def test_a_type_whose_edges_field_is_not_a_list_is_not_a_connection():
 
 
 # ---------------------------------------------------------------------------
+# Values the walk cannot take at their word
+# ---------------------------------------------------------------------------
+
+
+def test_a_container_is_charged_for_what_it_yields_not_for_what_it_reports():
+    """A width-shaped bound must not be settled by the container's own ``__len__``.
+
+    A custom scalar's ``parse_value`` can hand the walk a ``list`` subclass, and
+    every width the budget charges - the container width here, and the
+    membership, node-id, nested-row and relation-id families derived from it -
+    was read off that object. One reporting zero while iteration yields a
+    hundred members puts a hundred values through the coercer and the ORM at a
+    charge of nothing.
+    """
+
+    class _LyingWidth(list):
+        def __len__(self):
+            return 0
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _LyingWidth(range(100))},
+            policy=ResourcePolicy(max_container_width=1),
+        )
+    assert caught.value.bound == "max_container_width"
+    assert caught.value.charged == 100
+
+
+def test_a_mapping_is_charged_for_the_entries_the_walk_queues():
+    """The mapping half of the same rule, on a ``dict`` subclass."""
+
+    class _LyingWidth(dict):
+        def __len__(self):
+            return 0
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _LyingWidth({str(index): index for index in range(50)})},
+            policy=ResourcePolicy(max_container_width=1),
+        )
+    assert caught.value.bound == "max_container_width"
+    assert caught.value.charged == 50
+
+
+def test_an_ordinary_container_still_charges_its_own_width():
+    """The control: nothing about an exact ``list`` or ``dict`` changed."""
+    _charge(
+        "query T($p: JSON) { blob(payload: $p) }",
+        {"p": [1, 2]},
+        policy=ResourcePolicy(max_container_width=2),
+    )
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": {"a": 1, "b": 2, "c": 3}},
+            policy=ResourcePolicy(max_container_width=2),
+        )
+    assert caught.value.charged == 3
+
+
+def test_a_text_leaf_is_measured_by_the_built_in_encoding_not_its_own():
+    """``max_scalar_bytes`` measures the text, not what the text says about itself.
+
+    A ``str`` SUBCLASS carries its own ``encode``, and the byte count the bound
+    compares against was that method's return value.
+    """
+
+    class _LyingEncode(str):
+        def encode(self, *args, **kwargs):
+            return b"x"
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _LyingEncode("y" * 100)},
+            policy=ResourcePolicy(max_scalar_bytes=1),
+        )
+    assert caught.value.bound == "max_scalar_bytes"
+    assert caught.value.charged == 100
+
+
+def test_a_buffer_leaf_is_measured_through_the_buffer_protocol():
+    """A buffer's size comes from the C protocol, never from a Python ``__len__``.
+
+    Reaching for it as ``getattr(value, "nbytes", len(value))`` evaluates the
+    default argument first, so a raising ``__len__`` replaced the typed
+    rejection with a bare ``RuntimeError`` out of the value walk - before the
+    attribute that was supposed to stand in for it was ever looked at.
+    """
+
+    class _RaisingLength(bytes):
+        def __len__(self):
+            raise RuntimeError("length exploded")
+
+    _charge(
+        "query T($p: JSON) { blob(payload: $p) }",
+        {"p": _RaisingLength(b"ab")},
+        policy=ResourcePolicy(max_scalar_bytes=2),
+    )
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _RaisingLength(b"abc")},
+            policy=ResourcePolicy(max_scalar_bytes=2),
+        )
+    assert caught.value.bound == "max_scalar_bytes"
+    assert caught.value.charged == 3
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(b"abc", 3), (bytearray(b"abcd"), 4), (memoryview(b"abcde"), 5)],
+    ids=["bytes", "bytearray", "memoryview"],
+)
+def test_every_buffer_shape_keeps_charging_its_real_size(value, expected):
+    """The control for the three buffer types the leaf charge admits."""
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": value},
+            policy=ResourcePolicy(max_scalar_bytes=1),
+        )
+    assert caught.value.charged == expected
+
+
+# ---------------------------------------------------------------------------
 # The extension's own wiring
 # ---------------------------------------------------------------------------
 
@@ -2291,6 +2524,62 @@ def test_the_context_is_cleared_even_when_the_document_scan_rejects():
     with pytest.raises(ResourceLimitExceeded):
         next(extension.on_operation())
     assert DST_RESOURCE_POLICY not in context
+
+
+class _DriftingPolicy(ResourcePolicy):
+    """A valid policy whose first read of a bound is narrow and the rest are wide.
+
+    Every check a ``ResourcePolicy`` performs on itself happens at construction,
+    so a subclass answering honestly then and differently afterwards is a policy
+    that passed validation and enforces nothing. The drift starts only once
+    ``_armed`` is set, which is what lets ``__post_init__`` validate real values.
+    """
+
+    def __getattribute__(self, name):
+        state = object.__getattribute__(self, "__dict__")
+        if name == "max_document_tokens" and state.get("_armed"):
+            state["_reads"] = state.get("_reads", 0) + 1
+            return 1 if state["_reads"] == 1 else 1_000_000
+        return object.__getattribute__(self, name)
+
+
+def test_an_explicit_extension_policy_is_read_out_once_when_it_is_accepted():
+    """One operation is bounded by ONE policy, whatever its configuration answers.
+
+    The extension used to return its explicit ``_policy`` raw from every hook:
+    the armed budget got a canonical snapshot, while the pre-parse scan and the
+    post-validation document walk each re-read the consumer object. A policy
+    whose reads are its own code could hand those hooks a different bound than
+    the one the request is actually running under - a one-token budget for the
+    snapshot and a million-token budget for the scan that was supposed to
+    enforce it.
+    """
+    drifting = _DriftingPolicy()
+    object.__getattribute__(drifting, "__dict__")["_armed"] = True
+
+    @strawberry.type
+    class _Query:
+        @strawberry.field
+        def echo(self) -> str:
+            return "ok"
+
+    schema = strawberry.Schema(
+        query=_Query,
+        extensions=[lambda: DjangoResourcePolicyExtension(policy=drifting)],
+    )
+    result = schema.execute_sync("{ echo }")
+    assert result.data is None
+    assert isinstance(result.errors[0], ResourceLimitExceeded)
+    assert result.errors[0].bound == "max_document_tokens"
+    assert object.__getattribute__(drifting, "__dict__")["_reads"] == 1
+
+
+def test_an_explicit_extension_policy_is_stored_as_an_exact_policy():
+    """What the extension holds after construction is the package's own class."""
+    drifting = _DriftingPolicy()
+    extension = DjangoResourcePolicyExtension(policy=drifting)
+    assert type(extension._policy) is ResourcePolicy
+    assert extension._policy is not drifting
 
 
 @pytest.mark.parametrize(

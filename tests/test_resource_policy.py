@@ -242,9 +242,12 @@ def test_a_field_declared_collection_bound_shares_the_representable_maximum():
 # ---------------------------------------------------------------------------
 
 
-def test_an_explicit_policy_instance_is_used_as_is():
+def test_an_explicit_policy_instance_is_taken_as_a_private_duplicate():
+    """The argument supplies values; the object every bound is read from is the package's."""
     policy = ResourcePolicy(max_depth=3)
-    assert resolve_resource_policy(policy) is policy
+    resolved = resolve_resource_policy(policy)
+    assert resolved == policy
+    assert resolved is not policy
 
 
 def test_an_explicit_mapping_is_applied_over_the_package_defaults():
@@ -257,18 +260,22 @@ def test_no_source_at_all_resolves_to_the_package_defaults():
     assert resolve_resource_policy(None) is DEFAULT_RESOURCE_POLICY
 
 
-def test_an_instance_through_the_setting_slot_is_used_as_is(settings):
+def test_an_instance_through_the_setting_slot_resolves_on_the_same_terms(settings):
     """The setting slot and the explicit argument are one ladder with two spellings.
 
-    A pre-validated ``ResourcePolicy`` behind ``RESOURCE_POLICY`` is the same
-    trusted declaration the ``DjangoSchema(resource_policy=...)`` argument
-    accepts, so it must resolve to exactly that instance. (Probed by the hunt:
-    rejecting it here produced a typed message naming ``ResourcePolicy`` as the
-    received type while claiming the value must be a ``ResourcePolicy``.)
+    A ``ResourcePolicy`` behind ``RESOURCE_POLICY`` is the same declaration the
+    ``DjangoSchema(resource_policy=...)`` argument accepts, so it is admitted -
+    and, being admitted, it is duplicated rather than enforced in place: a
+    module-level settings object outlives every schema built from it. (Probed by
+    the hunt: rejecting it here produced a typed message naming
+    ``ResourcePolicy`` as the received type while claiming the value must be a
+    ``ResourcePolicy``.)
     """
     policy = ResourcePolicy(max_depth=3)
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RESOURCE_POLICY": policy}
-    assert resolve_resource_policy(None) is policy
+    resolved = resolve_resource_policy(None)
+    assert resolved == policy
+    assert resolved is not policy
 
 
 def test_the_setting_supplies_the_policy_when_no_argument_does(settings):
@@ -2356,37 +2363,196 @@ def test_a_type_whose_edges_field_is_not_a_list_is_not_a_connection():
 # ---------------------------------------------------------------------------
 
 
+class _CountingList(list):
+    """A sequence that reports no members, yields all of them, and counts advances."""
+
+    def __init__(self, members):
+        super().__init__(members)
+        self.advances = 0
+
+    def __len__(self):
+        return 0
+
+    def __iter__(self):
+        for member in list.__iter__(self):
+            self.advances += 1
+            yield member
+
+
 def test_a_container_is_charged_for_what_it_yields_not_for_what_it_reports():
     """A width-shaped bound must not be settled by the container's own ``__len__``.
 
-    A custom scalar's ``parse_value`` can hand the walk a ``list`` subclass, and
-    every width the budget charges - the container width here, and the
-    membership, node-id, nested-row and relation-id families derived from it -
-    was read off that object. One reporting zero while iteration yields a
+    An in-process caller's ``variable_values`` can hand the walk a ``list``
+    subclass, and every width the budget charges - the container width here, and
+    the membership, node-id, nested-row and relation-id families derived from it
+    - was read off that object. One reporting zero while iteration yields a
     hundred members puts a hundred values through the coercer and the ORM at a
     charge of nothing.
     """
-
-    class _LyingWidth(list):
-        def __len__(self):
-            return 0
+    value = _CountingList(range(100))
 
     with pytest.raises(ResourceLimitExceeded) as caught:
         _charge(
             "query T($p: JSON) { blob(payload: $p) }",
-            {"p": _LyingWidth(range(100))},
+            {"p": value},
             policy=ResourcePolicy(max_container_width=1),
         )
     assert caught.value.bound == "max_container_width"
-    assert caught.value.charged == 100
+    assert caught.value.charged == 2
+    assert value.advances == 2
+
+
+def test_a_container_within_the_bound_is_charged_the_width_it_yields():
+    """Under the bound the charge is the real width, and the walk queues those members.
+
+    The reader stops one past the limit, so a container that fits was read in
+    full: what it yielded is both the width charged and the work queued. Three
+    members are two nodes short of the node budget here, which is what proves
+    the members reached the walk rather than being counted and dropped.
+    """
+    value = _CountingList(range(3))
+    _charge(
+        "query T($p: JSON) { blob(payload: $p) }",
+        {"p": value},
+        policy=ResourcePolicy(max_container_width=3, max_input_nodes=4),
+    )
+    assert value.advances == 3
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _CountingList(range(3))},
+            policy=ResourcePolicy(max_container_width=3, max_input_nodes=3),
+        )
+    assert caught.value.bound == "max_input_nodes"
+
+
+def test_a_container_is_not_advanced_once_its_width_is_already_proven():
+    """Measuring an over-wide container costs what the bound allows, not what it holds.
+
+    Copying the container first charged the request for every member of an input
+    it was about to refuse, and made a value whose iterator never ends a walk
+    that never returns. What proves the stop is the probe's own log of what it
+    handed out, read after the rejection: a reader's refusal cannot be evidence
+    about the reader, because an unmeasurable value and an over-wide one are
+    deliberately the same typed rejection with the same charge. The poison
+    beyond the last member stays as a second signal, not as the witness.
+    """
+    advances = []
+
+    def _members():
+        for member in (1, 2, 3):
+            advances.append(member)
+            yield member
+        raise AssertionError("advanced past the last member")
+
+    class _Endless(list):
+        def __iter__(self):
+            return _members()
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _Endless([1, 2, 3])},
+            policy=ResourcePolicy(max_container_width=1),
+        )
+    assert caught.value.bound == "max_container_width"
+    assert caught.value.charged == 2
+    assert advances == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [_CountingList(()), _CountingList((1, 2))],
+    ids=["empty", "members"],
+)
+def test_a_custom_sequence_is_measurable_at_the_largest_bound_a_policy_admits(value):
+    """The reader's lookahead has to reach the whole domain the bound declares.
+
+    ``MAX_RESOURCE_BOUND`` is ``sys.maxsize``, so a reader that asks for one
+    member past the limit asks for one past what a stop argument can express.
+    Its own argument error would then be caught as an unmeasurable input, and
+    every custom sequence in the request would be refused at the setting that
+    was supposed to permit everything.
+    """
+    _charge(
+        "query T($p: JSON) { blob(payload: $p) }",
+        {"p": value},
+        policy=ResourcePolicy(max_container_width=MAX_RESOURCE_BOUND),
+    )
+
+
+def test_a_custom_mapping_is_measurable_at_the_largest_bound_a_policy_admits():
+    """The mapping half reads through the same bounded reader and the same bound."""
+
+    class _CountingMapping(dict):
+        def items(self):
+            yield from dict.items(self)
+
+    _charge(
+        "query T($p: JSON) { blob(payload: $p) }",
+        {"p": _CountingMapping({"a": 1, "b": 2})},
+        policy=ResourcePolicy(max_container_width=MAX_RESOURCE_BOUND),
+    )
+
+
+def test_a_container_that_cannot_be_read_is_refused_rather_than_raised():
+    """A member the framework cannot obtain is unmeasurable, which is a refusal."""
+
+    class _Unreadable(list):
+        def __iter__(self):
+            raise RuntimeError("iteration exploded")
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _Unreadable([1, 2])},
+            policy=ResourcePolicy(max_container_width=4),
+        )
+    assert caught.value.bound == "max_container_width"
+    assert caught.value.charged == 5
+
+
+def test_a_container_whose_length_raises_is_still_measured():
+    """The width comes from the members, so a raising ``__len__`` is never consulted.
+
+    Materializing the container asked it for a size hint first, which turned a
+    hostile ``__len__`` into a raw error out of the value walk - the same shape
+    the buffer leaf had. Both verdicts are pinned: within the bound the value
+    passes, past it the refusal is typed.
+    """
+
+    class _LengthBomb(list):
+        def __len__(self):
+            raise RuntimeError("length exploded")
+
+    _charge(
+        "query T($p: JSON) { blob(payload: $p) }",
+        {"p": _LengthBomb([1, 2])},
+        policy=ResourcePolicy(max_container_width=2),
+    )
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        _charge(
+            "query T($p: JSON) { blob(payload: $p) }",
+            {"p": _LengthBomb([1, 2, 3])},
+            policy=ResourcePolicy(max_container_width=2),
+        )
+    assert caught.value.bound == "max_container_width"
+    assert caught.value.charged == 3
 
 
 def test_a_mapping_is_charged_for_the_entries_the_walk_queues():
     """The mapping half of the same rule, on a ``dict`` subclass."""
+    advances = []
 
     class _LyingWidth(dict):
         def __len__(self):
             return 0
+
+        def items(self):
+            for pair in dict.items(self):
+                advances.append(pair)
+                yield pair
 
     with pytest.raises(ResourceLimitExceeded) as caught:
         _charge(
@@ -2395,11 +2561,17 @@ def test_a_mapping_is_charged_for_the_entries_the_walk_queues():
             policy=ResourcePolicy(max_container_width=1),
         )
     assert caught.value.bound == "max_container_width"
-    assert caught.value.charged == 50
+    assert caught.value.charged == 2
+    assert len(advances) == 2
 
 
 def test_an_ordinary_container_still_charges_its_own_width():
-    """The control: nothing about an exact ``list`` or ``dict`` changed."""
+    """The control: an exact ``list`` or ``dict`` is measured by the interpreter.
+
+    At an exact type ``len`` is the package's own answer, so the container is
+    charged its real width even when that is far past the bound, and nothing is
+    copied to find out.
+    """
     _charge(
         "query T($p: JSON) { blob(payload: $p) }",
         {"p": [1, 2]},
@@ -2498,7 +2670,7 @@ def test_a_schema_without_a_policy_falls_back_to_the_package_defaults():
 
 
 def test_an_operation_with_no_parsed_document_charges_no_document_budget():
-    """``on_execute`` runs even when the parse produced nothing to walk."""
+    """``on_validate`` runs even when the parse produced nothing to walk."""
     extension = DjangoResourcePolicyExtension()
     extension.execution_context = SimpleNamespace(
         schema=SimpleNamespace(),
@@ -2506,6 +2678,36 @@ def test_an_operation_with_no_parsed_document_charges_no_document_budget():
         variables=None,
         operation_name=None,
     )
+    hook = extension.on_validate()
+    next(hook)
+    with pytest.raises(StopIteration):
+        next(hook)
+
+
+def test_an_operation_the_budget_rejected_does_not_begin_executing():
+    """A published rejection means nothing runs, restated where running starts.
+
+    Publishing is what makes validation stand down, and every seam that reads a
+    pre-execution error stops there - except a streaming path that yields the
+    error frame and then executes the operation anyway, which some releases in
+    the supported range do. The hook execution begins from is entered only when
+    an operation is about to run, so it is where that contradiction is closed.
+    """
+    extension = DjangoResourcePolicyExtension()
+    rejection = ResourceLimitExceeded("max_container_width", 1, 2, "a list argument is too wide")
+    extension.execution_context = SimpleNamespace(pre_execution_errors=[rejection])
+
+    with pytest.raises(ResourceLimitExceeded) as caught:
+        next(extension.on_execute())
+
+    assert caught.value is rejection
+
+
+def test_an_operation_the_budget_admitted_executes():
+    """The other verdict: an admitted operation passes the same hook untouched."""
+    extension = DjangoResourcePolicyExtension()
+    extension.execution_context = SimpleNamespace(pre_execution_errors=None)
+
     hook = extension.on_execute()
     next(hook)
     with pytest.raises(StopIteration):
@@ -2580,6 +2782,42 @@ def test_an_explicit_extension_policy_is_stored_as_an_exact_policy():
     extension = DjangoResourcePolicyExtension(policy=drifting)
     assert type(extension._policy) is ResourcePolicy
     assert extension._policy is not drifting
+
+
+def test_an_explicit_extension_policy_cannot_be_replaced_or_written():
+    """An accepted instance entry stays reachable, so what it holds cannot be a seam.
+
+    ``info.schema.extensions`` hands every resolver the entries the schema was
+    configured with, and an instance entry is the object itself - so the policy
+    it answers with bounds the NEXT operation, not the one that reached it.
+    Rebinding is refused where it is made, and the object handed out is a
+    duplicate, so writing a bound on it changes only the writer's copy.
+    """
+    extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+
+    with pytest.raises(AttributeError):
+        extension._policy = ResourcePolicy(max_list_rows=999)
+
+    handed_out = extension._policy
+    handed_out.__dict__["max_list_rows"] = 999
+
+    assert extension._policy.max_list_rows == 1
+    assert extension._policy is not handed_out
+
+
+def test_an_explicit_extension_policy_forged_behind_the_attribute_is_not_read():
+    """The policy is read back only through what accepted it, so a forgery is not it.
+
+    Falling back to the schema's configuration is the fail-closed answer: an
+    extension that cannot say what it was configured with is enforcing whatever
+    the schema settled, never whatever was written onto it.
+    """
+    extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+    extension.__dict__["_explicit_policy"] = ResourcePolicy(max_list_rows=999)
+    extension.execution_context = SimpleNamespace(schema=SimpleNamespace())
+
+    assert extension._policy is None
+    assert extension._resolved_policy() is DEFAULT_RESOURCE_POLICY
 
 
 @pytest.mark.parametrize(
@@ -2669,13 +2907,14 @@ def test_an_upload_that_cannot_report_its_size_is_rejected(size):
     assert caught.value.bound == "max_upload_file_bytes"
 
 
-def test_a_scalar_that_reports_an_unmeasurable_byte_count_is_rejected():
-    """Every charge is an amount the package can compare, not one the value decides.
+def test_a_buffer_that_advertises_its_own_byte_count_is_measured_anyway():
+    """A charge is an amount the package produced, never one the value announced.
 
-    A buffer's ``nbytes`` is read off the value the request carried in, so a
-    subclass can answer the very comparison that would reject it. An amount
-    outside the built-in integers charges the bound at one past its limit rather
-    than passing as free.
+    An attribute a buffer carries is consumer code answering for a number, and
+    the ``>`` that would decide the rejection is then that number's own. The
+    size comes through the C buffer protocol instead, which a ``bytes`` subclass
+    cannot answer for, so an amount no bound could ever exceed sits on the value
+    unread.
     """
 
     class _Bytes(bytes):
@@ -2689,7 +2928,7 @@ def test_a_scalar_that_reports_an_unmeasurable_byte_count_is_rejected():
             policy=ResourcePolicy(max_scalar_bytes=4),
         )
     assert caught.value.bound == "max_scalar_bytes"
-    assert caught.value.charged == 5
+    assert caught.value.charged == 10
 
 
 def test_an_upload_size_descriptor_that_raises_is_rejected():

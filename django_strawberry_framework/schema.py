@@ -49,9 +49,8 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
-from weakref import WeakKeyDictionary
 
 import strawberry
 from django.db import transaction
@@ -59,11 +58,13 @@ from graphql.execution.execute import ExecutionContext
 from strawberry.utils.inspect import in_async_context
 
 from .error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, resolve_error_policy
+from .exceptions import ConfigurationError
 from .extensions.error_policy import DjangoErrorPolicyExtension
 from .extensions.resource_policy import DjangoResourcePolicyExtension
 from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import DEFAULT_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
 from .utils.policies import copy_policy
+from .utils.private_state import PrivateState
 from .utils.querysets import run_in_one_sync_boundary
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
@@ -366,40 +367,52 @@ class DjangoMutationExecutionContext(ExecutionContext):
 class _SchemaEnforcement:
     """What one ``DjangoSchema`` construction settled, held where no attribute write reaches.
 
-    The two resolved policies plus the record of which enforcement extensions
-    this constructor had to install itself.
+    The two resolved policies, the record of which enforcement extensions this
+    constructor had to install itself, and the extension configuration the
+    schema was accepted with. ``extensions`` is ``None`` until the base
+    constructor settles it, which is the one write
+    ``DjangoSchema.extensions`` admits.
     """
 
     resource_policy: ResourcePolicy
     error_policy: ErrorPolicy
     auto_resource_extension: bool
     auto_error_extension: bool
+    extensions: tuple[Any, ...] | None = None
 
 
-#: Every ``DjangoSchema``'s enforcement record, keyed by schema identity.
+#: Every ``DjangoSchema``'s enforcement record, held by the schema it belongs to.
 #:
-#: An instance attribute cannot hold this. ``info.schema`` is handed to every
-#: resolver in every operation, so an ordinary ``self._resource_policy`` entry is
-#: a name any resolver can assign - directly, or through ``schema.__dict__`` past
-#: a property that has no setter - and the schema is process-lived, so one such
-#: write widens or disarms every later request the process serves rather than
-#: the one that made it. The same reach covers Strawberry's own ``extensions``
-#: list, which is why the record also carries what the constructor installed:
-#: ``DjangoSchema.get_extensions`` reinstates a missing enforcement extension
-#: from here rather than trusting that the list it was put in still holds it.
+#: An instance attribute cannot hold this on its own. ``info.schema`` is handed
+#: to every resolver in every operation, so an ordinary ``self._resource_policy``
+#: entry is a name any resolver can assign - directly, or through
+#: ``schema.__dict__`` past a property that has no setter - and the schema is
+#: process-lived, so one such write widens or disarms every later request the
+#: process serves rather than the one that made it.
 #:
-#: Reaching this mapping means importing this module's private name and holding
-#: the schema object, which is not a thing a resolver does by accident and not a
-#: seam ``info.schema`` opens. Keying it weakly is what keeps a schema built per
-#: test or per tenant collectable: the record dies with the schema, so there is
-#: no lifetime to clean up by hand.
-_SCHEMA_ENFORCEMENT: WeakKeyDictionary[Any, _SchemaEnforcement] = WeakKeyDictionary()
+#: A module-global mapping cannot hold it either, and for a reason that has
+#: nothing to do with resolvers: an extension instance reaches its schema
+#: through the execution context, and a schema subclass may configure
+#: ``extensions=[self.make_extension]``, so a global holding the record STRONGLY
+#: is a root that keeps every such schema - and its last request's context and
+#: variables - alive for the life of the process. A weak key does not help when
+#: the chain back to the referent runs through the value.
+#:
+#: ``utils/private_state.py::PrivateState`` is where those two demands are
+#: reconciled: the schema holds its own record, and this object holds the
+#: evidence of which record was accepted. Reaching it means importing this
+#: module's private name and holding the schema object, which is not a thing a
+#: resolver does by accident and not a seam ``info.schema`` opens.
+_SCHEMA_ENFORCEMENT: PrivateState[_SchemaEnforcement] = PrivateState("_django_enforcement")
 
 #: The record answered for a schema that never completed ``DjangoSchema.__init__``
 #: (a subclass that skipped ``super().__init__``, or an object whose construction
-#: raised). Fail closed: the package defaults are the tightest budget and the
-#: masking error policy, and both extensions count as automatic so a consumer
-#: entry still wins the deduplication.
+#: raised), and for one whose accepted record was replaced behind the attribute
+#: holding it. Fail closed in the sense that enforcement still happens: the
+#: package defaults bound the request and the masking error policy applies, and
+#: both extensions count as automatic so a consumer entry still wins the
+#: deduplication. The defaults are not a claim to be narrower than a policy some
+#: deployment configured - they are what a schema that declared nothing gets.
 _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
     resource_policy=DEFAULT_RESOURCE_POLICY,
     error_policy=DEFAULT_ERROR_POLICY,
@@ -409,8 +422,9 @@ _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
 
 
 def _enforcement(schema: Any) -> _SchemaEnforcement:
-    """The enforcement record for ``schema``, or the fail-closed default."""
-    return _SCHEMA_ENFORCEMENT.get(schema, _FALLBACK_ENFORCEMENT)
+    """The record ``schema`` was accepted with, or the fail-closed default."""
+    record = _SCHEMA_ENFORCEMENT.recall(schema)
+    return _FALLBACK_ENFORCEMENT if record is None else record
 
 
 class DjangoSchema(strawberry.Schema):
@@ -466,16 +480,62 @@ class DjangoSchema(strawberry.Schema):
             for extension in extensions
         )
         kwargs["extensions"] = _with_error_policy_extension(extensions)
-        # Recorded BEFORE the base constructor runs, because ``get_extensions``
-        # is reachable from inside it and must see this schema's own record
-        # rather than the fail-closed stand-in for one that has none.
-        _SCHEMA_ENFORCEMENT[self] = _SchemaEnforcement(
-            resource_policy=resolved_resource,
-            error_policy=resolved_error,
-            auto_resource_extension=auto_resource,
-            auto_error_extension=auto_error,
+        # Recorded BEFORE the base constructor runs: that constructor's one
+        # write to ``self.extensions`` is what settles the accepted extension
+        # configuration, and the setter that takes it reads this record.
+        _SCHEMA_ENFORCEMENT.remember(
+            self,
+            _SchemaEnforcement(
+                resource_policy=resolved_resource,
+                error_policy=resolved_error,
+                auto_resource_extension=auto_resource,
+                auto_error_extension=auto_error,
+            ),
         )
         super().__init__(*args, **kwargs)
+
+    @property
+    def extensions(self) -> tuple[Any, ...]:
+        """The extension configuration this schema was accepted with.
+
+        Not an instance attribute, and for the reason the policies are not one
+        either. ``strawberry.Schema.get_extensions`` builds every operation's
+        extension list out of this, and ``info.schema`` puts it in reach of
+        every resolver: as an ordinary attribute it is the seam that decides
+        what enforces the NEXT request. Assigning a list carrying a
+        ``DjangoResourcePolicyExtension`` with a wider policy of its own
+        nominates a new enforcement authority, and assigning an empty one leaves
+        a bounded schema running with no budget and no masking at all - either
+        one for the life of the process, not for the operation that did it.
+        Deduplication and presence checks cannot tell those lists apart from a
+        configured one, because by then they are the configuration.
+
+        Reading is unchanged. A schema's extensions are settled once, by its
+        constructor, which is the moment the deployment chose them.
+        """
+        accepted = _enforcement(self).extensions
+        return () if accepted is None else accepted
+
+    @extensions.setter
+    def extensions(self, value: Any) -> None:
+        """Settle the accepted configuration, once, from the base constructor.
+
+        ``strawberry.Schema.__init__`` materializes its ``extensions=`` argument
+        into this attribute, and that write is the one that settles it. Every
+        later write is refused rather than ignored: a consumer composing
+        extensions after construction is making a configuration statement this
+        schema cannot act on, and saying so is the difference between a
+        deployment that fixes it and one that believes it took effect.
+        """
+        record = _enforcement(self)
+        if record.extensions is not None:
+            raise ConfigurationError(
+                "A schema's extensions are settled when the schema is constructed; "
+                "assigning schema.extensions afterwards would let what enforces an "
+                "operation be chosen after the schema was accepted. Pass every "
+                "extension to DjangoSchema(extensions=[...]).",
+            )
+        _SCHEMA_ENFORCEMENT.remember(self, replace(record, extensions=tuple(value)))
 
     @property
     def resource_policy(self) -> ResourcePolicy:
@@ -490,9 +550,9 @@ class DjangoSchema(strawberry.Schema):
         just the one that made it. Each read therefore answers with a duplicate
         (``utils/policies.py::copy_policy``): reading a bound is unchanged,
         writing one changes only the reader's own copy. The authority the copy
-        is taken from lives in ``_SCHEMA_ENFORCEMENT``, not in an attribute of
-        this object, so REPLACING it is not reachable through ``info.schema``
-        either.
+        is taken from is the accepted enforcement record, which no name on
+        this object answers with, so REPLACING it is not reachable through
+        ``info.schema`` either.
         """
         return copy_policy(_enforcement(self).resource_policy)
 
@@ -505,8 +565,8 @@ class DjangoSchema(strawberry.Schema):
         writing it on the stored object would turn masking off for every later
         request on the process and put the raw exception text on the wire, and
         so would replacing the attribute it was read from - which is why this
-        one is held in ``_SCHEMA_ENFORCEMENT`` beside the resource policy rather
-        than on the schema.
+        one is held in the accepted enforcement record beside the resource
+        policy rather than on the schema.
         """
         return copy_policy(_enforcement(self).error_policy)
 
@@ -537,16 +597,13 @@ class DjangoSchema(strawberry.Schema):
         first of its kind, and the resource-policy entry is APPENDED, so it is
         the last.
 
-        What comes back always ENFORCES. The entries this reads are
-        ``self.extensions``, an ordinary attribute of an object every resolver
-        holds as ``info.schema``, so the list the constructor composed is not
-        the same thing as the list in force at the next operation - assigning an
-        empty one is all it takes to leave a bounded schema running with no
-        budget and no masking at all, for the life of the process.
-        ``_with_enforcement_restored`` is what makes that assignment cost the
-        consumer their own extensions and nothing else: the deduplication above
-        decides which of two policy extensions of a kind survives, and this
-        decides that the count is never zero.
+        What comes back always ENFORCES. The entries resolved here are the
+        ones :attr:`extensions` settled at construction, and where a settled
+        configuration cannot be answered for - a schema that never finished
+        constructing, or one whose accepted record was replaced behind the
+        attribute holding it - :func:`_with_enforcement_present` puts the
+        package's own entries back. Deduplication decides only which of two
+        policy extensions of a kind survives.
         """
         enforcement = _enforcement(self)
         resolved = super().get_extensions(sync=sync)
@@ -562,26 +619,42 @@ class DjangoSchema(strawberry.Schema):
                 DjangoResourcePolicyExtension,
                 automatic=-1,
             )
-        return _with_enforcement_restored(resolved)
+        return _with_enforcement_present(resolved)
 
 
-def _with_enforcement_restored(resolved: list[Any]) -> list[Any]:
-    """Reinstate whichever enforcement extension is missing from ``resolved``.
+def _is_extension(extension: Any, extension_type: type) -> bool:
+    """Whether a RESOLVED entry is of ``extension_type``, by its type alone.
 
-    A ``DjangoSchema`` enforces its policies because it is that class, not
-    because an extension list still says so. Each package extension is restored
-    at the position the constructor uses for it and for the same reason
-    (``_with_error_policy_extension`` / ``_with_resource_policy_extension``):
-    masking tears down last so it is FIRST, and the budget is armed last so it
-    is LAST. A consumer entry of either kind is already in the list and is left
-    exactly where it is.
+    ``isinstance`` consults ``__class__``, which a consumer object answers with
+    whatever it likes - and every use of this predicate decides whether an
+    operation already has an enforcing extension, so an object that claims to be
+    one is an object that disarms the request it appears in. ``type()`` cannot
+    be answered.
     """
-    restored = resolved
-    if not any(isinstance(extension, DjangoResourcePolicyExtension) for extension in restored):
-        restored = [*restored, DjangoResourcePolicyExtension()]
-    if not any(isinstance(extension, DjangoErrorPolicyExtension) for extension in restored):
-        restored = [DjangoErrorPolicyExtension(), *restored]
-    return restored
+    return issubclass(type(extension), extension_type)
+
+
+def _with_enforcement_present(resolved: list[Any]) -> list[Any]:
+    """Return ``resolved`` with the package's enforcement entries reinstated.
+
+    A ``DjangoSchema`` whose accepted configuration can be read back always
+    resolves both entries, because its constructor put them there; this runs for
+    the schema that cannot - one whose accepted record was replaced behind the
+    attribute holding it, or one that never completed ``__init__`` - where the
+    configuration answered is the empty one and nothing else would enforce the
+    operation at all.
+
+    What each reinstated entry enforces is the fail-closed record, not a policy
+    read off the list: an entry added here carries no explicit policy, so it
+    reads the schema's, and what a wider entry in a replacement list declares
+    for itself is not consulted by anything. The positions are the constructor's
+    - masking first so it tears down last, the budget last so it sets up last.
+    """
+    if not any(_is_extension(extension, DjangoErrorPolicyExtension) for extension in resolved):
+        resolved = [DjangoErrorPolicyExtension(), *resolved]
+    if not any(_is_extension(extension, DjangoResourcePolicyExtension) for extension in resolved):
+        resolved = [*resolved, DjangoResourcePolicyExtension()]
+    return resolved
 
 
 def _without_automatic_policy(
@@ -600,7 +673,9 @@ def _without_automatic_policy(
     and the list is returned untouched.
     """
     indexes = [
-        index for index, extension in enumerate(resolved) if isinstance(extension, extension_type)
+        index
+        for index, extension in enumerate(resolved)
+        if _is_extension(extension, extension_type)
     ]
     if len(indexes) <= 1:
         return resolved

@@ -3,11 +3,12 @@
 ``resource_policy.py::resolve_resource_policy`` and ``error_policy.py::
 resolve_error_policy`` are deliberately the same shape - a consumer who has
 learned how one schema-construction policy is configured has learned both -
-so that shape lives here once: an explicit policy instance is canonicalized and
-used, an absent one falls back to the configured setting and then to the
-fail-closed package default, a non-mapping override is rejected, unknown keys
-are rejected naming the valid vocabulary, and a mapping is applied over the
-dataclass defaults. A mapping override is MATERIALIZED ONCE into a plain ``dict`` before
+so that shape lives here once: an explicit policy instance is canonicalized into
+a private validated duplicate and used, an absent one falls back to the
+configured setting and then to the fail-closed package default, a non-mapping
+override is rejected, unknown keys are rejected naming the valid vocabulary, and
+a mapping is applied over the dataclass defaults. A mapping override is
+MATERIALIZED ONCE into a plain ``dict`` before
 anything reads it, so validation and construction see the same keys even when
 the mapping is stateful, one-shot, or otherwise hostile - a Mapping that
 diverges between passes, yields an unhashable key, or raises mid-iteration is
@@ -55,24 +56,33 @@ def copy_policy(policy: PolicyT) -> PolicyT:
 
 
 def canonical_policy(policy: Any, *, policy_cls: type[PolicyT], display_name: str) -> PolicyT:
-    """Return ``policy`` as an EXACT ``policy_cls``, reading a subclass out once.
+    """Return a private, validated ``policy_cls`` built from ``policy``'s fields.
 
-    ``isinstance`` admits a subclass, and a subclass's field reads are consumer
-    code. A ``__getattribute__`` or property that answers honestly while the
-    constructor validates and differently afterwards passes every check the class
-    performs on itself and then hands an enforcement seam whatever it likes - an
-    ``int`` subclass whose ``__gt__`` raises turns a bound comparison into a raw
-    error out of a collection resolver. ``__post_init__`` is a statement about
-    one past read, never a property of the object.
+    ALWAYS a new object, never the one handed in, and the exact type is not a
+    reason to skip the copy. What an enforcement seam reads has to be an object
+    no one outside this package holds a reference to: a caller who keeps the
+    instance they passed to ``DjangoSchema(resource_policy=...)`` - or who
+    leaves one in ``settings`` - still holds the thing every bound would be read
+    from, and a frozen dataclass admits ``policy.__dict__[bound] = wider`` by
+    the same route the schema attribute does. The copy is what makes a bound
+    settled at construction stay settled; the schema is process-lived, so
+    without it one write after startup widens every later request.
 
-    So a subclass is read out ONCE, here, and those values build an exact
-    instance that validates them on the ordinary terms; the subclass is then
-    discarded and no seam downstream ever calls it again. A read that raises is a
-    typed ``ConfigurationError`` rather than a raw error, because this runs at
-    schema construction and a policy that cannot be read is a deployment fault.
+    The fields are also re-read and re-validated rather than trusted, for two
+    reasons that meet here. ``isinstance`` admits a SUBCLASS, whose field reads
+    are consumer code: a ``__getattribute__`` or property answering honestly
+    while the constructor validates and differently afterwards passes every
+    check the class performs on itself and then hands an enforcement seam
+    whatever it likes - an ``int`` subclass whose ``__gt__`` raises turns a
+    bound comparison into a raw error out of a collection resolver. And an
+    EXACT instance's ``__post_init__`` is a statement about the values it was
+    built with, never about the ones it carries now. Each field is therefore
+    read once, here, and those values build an instance that validates them on
+    the ordinary terms; the original is discarded and no seam downstream ever
+    calls it again. A read that raises is a typed ``ConfigurationError`` rather
+    than a raw error, because this runs at schema construction and a policy
+    that cannot be read is a deployment fault.
     """
-    if type(policy) is policy_cls:
-        return policy
     values: dict[str, Any] = {}
     reading = ""
     try:
@@ -105,10 +115,9 @@ def resolve_policy(
 
     Precedence, highest first: the ``explicit`` argument, the deployment value
     read through ``read_setting``, and ``default``. An instance from either
-    override slot is admitted without re-validating its bounds - it validated
-    them at construction - but it is put through :func:`canonical_policy` first,
-    so what the schema stores is an exact ``policy_cls`` whose every field read
-    is the package's own.
+    override slot is put through :func:`canonical_policy` first, so what the
+    schema stores is a private, freshly validated ``policy_cls`` that no caller
+    holds a reference to.
 
     ``display_name`` is the human name used in messages ("resource policy") and
     ``unit`` is what one override key is called there ("bound" / "option"); the
@@ -121,11 +130,11 @@ def resolve_policy(
     if overrides is None:
         return default
     if isinstance(overrides, policy_cls):
-        # A pre-validated instance behind the SETTING slot is the same trusted
-        # declaration the explicit argument accepts - the two override sources
-        # are one ladder with two spellings, so an instance from either passes
-        # through unchanged. (Rejecting it here made the typed message name the
-        # policy class as the received type while claiming it must be one.)
+        # An instance behind the SETTING slot is the same declaration the
+        # explicit argument accepts - the two override sources are one ladder
+        # with two spellings, so an instance from either is canonicalized on the
+        # same terms. (Rejecting it here made the typed message name the policy
+        # class as the received type while claiming it must be one.)
         return canonical_policy(overrides, policy_cls=policy_cls, display_name=display_name)
     if not isinstance(overrides, Mapping):
         raise ConfigurationError(

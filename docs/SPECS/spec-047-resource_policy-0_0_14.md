@@ -356,8 +356,10 @@ properties follow, and each is load-bearing:
   deadline, an exact `float`), so nothing the policy later does with a bound can dispatch
   consumer code. The same domain holds for every other number that crosses into the budget
   machinery from outside it — a consumer-written deadline mirror, an uploaded file's reported
-  `size`, a `first` / `last` page bound supplied through a variable, any amount charged
-  against a bound — stated once as `resource_policy.py::_is_builtin_number`. It is also
+  `size`, a `first` / `last` page bound supplied through a variable — stated once as
+  `resource_policy.py::_is_builtin_number`, and applied where the value is READ rather than
+  where it is compared, because the site that reads it is the only one that can say what an
+  unusable answer there means. It is also
   bounded ABOVE, at `resource_policy.py::MAX_RESOURCE_BOUND`: a bound is handed to the
   backend's adapter as a `LIMIT` and rendered into the message and `extensions` of the
   rejection it drives, so a value past the signed 64-bit maximum is a configuration whose
@@ -368,17 +370,33 @@ properties follow, and each is load-bearing:
   rather than from a container's own `__len__`; text is sized with `str.encode` and a buffer
   through the C buffer protocol rather than through methods the value carries; and a row
   window is applied by slicing only a queryset or an exact built-in sequence, with every
-  other shape counted through `islice` into a list the package built. A custom scalar's
-  `parse_value` can put a `list`, `Mapping`, `str` or `bytes` SUBCLASS into any of those
-  positions, and a bound whose measurement or whose enforcement calls that object's own code
-  is a bound the bounded party decides the value of.
+  other shape counted through `islice` into a list the package built. A `list`, `Mapping`,
+  `str` or `bytes` SUBCLASS reaches those positions from an in-process caller's
+  `variable_values` and from whatever a consumer's collection resolver returns, and a bound
+  whose measurement or whose enforcement calls that object's own code is a bound the bounded
+  party decides the value of.
+
+- **Measuring is inside the budget too.** A container that is not an exact built-in is read
+  one member past the width bound and no further, so an over-wide value is refused for what
+  it proved rather than enumerated in full to report a size nothing downstream will use, and
+  a value whose iterator does not end is refused just as quickly. Nothing is asked about how
+  many members there are: materializing the container would consult `__len__` as a sizing
+  hint, which is the answer the rule above exists to ignore, and a `__len__` that raises
+  would replace the typed refusal with a raw error. A container that cannot be read at all is
+  unmeasurable rather than free, and is refused on the same terms as an upload whose size
+  cannot be read. The lookahead is the walk's own counter rather than a stop argument handed
+  to a slicing helper, because the largest bound a policy accepts is `MAX_RESOURCE_BOUND` and
+  one past that is one past what such an argument can express — a reader that asked for it
+  would turn its own argument error into an unmeasurable-input refusal, at the one setting
+  that was supposed to permit everything. What this cannot bound is a single arbitrary
+  advance that neither returns nor raises, and it does not claim to.
 
 Frozen is what makes the first two of those true, and it is not what makes the third true.
 A frozen dataclass rejects `setattr`; it admits `policy.__dict__[bound] = wider` and
 `object.__setattr__`, so freezing is an accident guard and never an authority boundary. What
 holds the bound is that no consumer-visible name reaches the object a bound is read from:
-the resolved policy is stored in `schema.py::_SCHEMA_ENFORCEMENT`, a package-owned mapping
-keyed by schema identity, and `schema.py::DjangoSchema.resource_policy` answers every read
+the resolved policy is held in the enforcement record `schema.py::_SCHEMA_ENFORCEMENT`
+accepted for that schema, and `schema.py::DjangoSchema.resource_policy` answers every read
 from it with a copy; the operation's own budget is a private snapshot taken at the arm point;
 the published mirror is a third object; and `policy_from_info` returns a copy of the snapshot
 rather than the snapshot. A resolver may write any of those freely, and writes its own
@@ -389,17 +407,54 @@ and through `schema.__dict__` past a property that has no setter, and one such w
 widen every later request the process served rather than the one that made it.
 `error_policy.py::ErrorPolicy` is held in the same record on exactly the same terms - the
 same shape, the same process-lived object, and a write to it would put raw exception text on
-the wire rather than widen a row count. Enforcement does not depend on the schema's mutable
-`extensions` list either: `DjangoSchema.get_extensions` reinstates a missing package
-extension, so emptying that list costs a consumer their own extensions and nothing else.
+the wire rather than widen a row count. Enforcement does not depend on what the schema's
+`extensions` attribute says at request time either. That attribute would otherwise be the
+widest reach of all — a replacement list carrying a resource-policy extension with a wider
+policy of its own passes every presence and deduplication check there is, and an empty one
+leaves a bounded schema running with no budget and no masking at all — so it is not an
+instance attribute: `schema.py::DjangoSchema.extensions` is settled by the constructor, which
+is the moment the deployment chose it, and a later assignment is refused rather than
+reconciled. Each operation's extensions are resolved from what was settled, so an accepted
+factory still runs once per request, and where no settled configuration can be answered for,
+`schema.py::_with_enforcement_present` puts the package's own entries back rather than
+letting the empty answer be the operation's configuration.
+
+An accepted extension INSTANCE carries the last piece of that authority, and it is the piece
+a container cannot protect. Strawberry hands such an entry back unchanged, so it stays
+reachable through `info.schema.extensions` for the life of the schema, and the policy it
+holds is what the NEXT operation arms — an ordinary attribute there is a seam a resolver
+rebinds once to widen every later request. The explicitly configured policy is therefore held
+as private state too (`extensions/resource_policy.py::_EXPLICIT_POLICY`), read back as a copy,
+and unreachable by assignment.
+
+How that state is HELD is a second question from who may read it, and the two answers pull
+opposite ways. A module-global mapping owning a schema's configuration is a root: an
+extension instance reaches its schema through the execution context it acquires when the
+operation runs, and a schema subclass may configure `extensions=[self.make_extension]`, so a
+global holding the configuration strongly keeps every such schema — and its last request's
+context and variables — alive for the life of the process, which no weak KEY can help with
+when the chain back to the referent runs through the value. So the owner holds its own
+record, which is the correct lifetime — the record being part of what the owner IS — and
+`utils/private_state.py::PrivateState` holds only a weak reference to the record that was
+accepted: reading verifies the stored object against that reference, so a record forged
+behind the attribute is not mistaken for the accepted one and the fail-closed default answers
+instead.
+The key is `id()`, not the owner itself — a mapping that found its entries by hash and
+equality would be finding them by methods a schema subclass may define, letting one schema's
+record answer for another that merely compares equal to it, and refusing a subclass that
+declares `__eq__` without a hash outright.
 
 The policy object a schema stores is also held to the EXACT class. `isinstance` admits a
 subclass, and a subclass's field reads are consumer code that `__post_init__` cannot speak
 for: a read that validates honestly at construction and answers differently afterwards
 passes every check the class performs on itself and then hands a bound whatever it likes. So
-a subclass is read out once at schema construction and an exact instance is built from those
+a policy is read out once at schema construction and an exact instance is built from those
 values (`utils/policies.py::canonical_policy`), which is the object-level statement of the
-same rule the bounds themselves follow below.
+same rule the bounds themselves follow below. That happens for an EXACT instance too, and
+for the same reason twice over: `__post_init__` speaks for the values an object was built
+with and not for the ones it carries now, and a caller who keeps the instance they passed —
+or who leaves one at module scope in `settings` — would otherwise still hold the object every
+bound is read from.
 
 The integer-bound domain is the EXACT built-in type, `type(value) is int`. That is what
 rejects `bool` — `isinstance(True, int)` is `True`, so a bound accepting `True` would
@@ -411,14 +466,16 @@ use of the bound would then run consumer dunders — `narrowed()`'s comparison, 
 `limit` / `charged` values `ResourceLimitExceeded` formats into the message and `extensions`
 of every rejection that bound drives.
 
-The same reasoning is why an amount CHARGED against a bound is held to the same domain. A
-charge is compared (`charged > limit`), accumulated into a running total, and formatted into a
-rejection, so a subclass reaching one answers all three: its `__gt__` decides the rejection
-that would have caught it, and its reflected `__radd__` / `__rmul__` — which take priority over
-the built-in's own — turn the running total into `nan`, which is over no limit ever again. An
-amount outside the built-in integers is therefore unmeasurable rather than free, and rejects
-at one past its limit, the spelling this subsystem already uses for an upload whose size
-cannot be read.
+The same reasoning is why every amount CHARGED against a bound is one the package itself
+produced — a counter the walk keeps, the length of a list it built, a size read through an
+operation the type defines. A charge is compared (`charged > limit`), accumulated into a
+running total, and formatted into a rejection, so a subclass reaching one would answer all
+three: its `__gt__` decides the rejection that would have caught it, and its reflected
+`__radd__` / `__rmul__` — which take priority over the built-in's own — turn the running total
+into `nan`, which is over no limit ever again. The guarantee is therefore established at each
+measurement, not re-checked at the comparison; the one amount read off a value the request
+carried in is an uploaded file's `size`, which is refused there when it is not a size, at one
+past its limit.
 
 *Alternatives rejected: see the [rationale][rationale] (a per-bound settings read, a
 mutable dataclass with `freeze()`, Pydantic).*
@@ -533,7 +590,7 @@ depth `ValidationRule`, a regex or `str.count` over the document).*
 ### Decision 4 — The document and value budgets are one iterative walk
 
 Expanded selections, aliases, collection cost, and every value bound are charged by a
-single iterative walk over the validated AST in `on_execute`, before execution.
+single iterative walk over the parsed AST in `on_validate`, before validation.
 
 - **Iterative, with an explicit stack.** The card requires it, and the reason is the same
   one that puts the text scan before the parse: a recursive walker whose job is to bound a
@@ -545,6 +602,24 @@ single iterative walk over the validated AST in `on_execute`, before execution.
   spread path also makes a cyclic fragment set terminate, which matters because validation
   normally rejects cycles but a schema that disabled validation would hand one straight to
   this walk.
+- **Before VALIDATION, not merely before execution.** Validation is already work the
+  request asked for: graphql-core's `ValuesOfCorrectTypeRule` parses every literal argument
+  and every variable-definition default through the scalar it is typed as, which for an
+  ordinary custom scalar is the consumer's own `parse_value`. A budget charged after that
+  would leave three of the four places a value enters a request — inline literal, variable
+  default, and a nested input object built from either — measured only once their conversion
+  had already run. The consequence is that every shape validation would have rejected is a
+  shape this walk meets: a field the parent type does not have, a selection under a leaf, an
+  argument the field does not take, a variable the operation never defined. None of them is
+  an error here; what rejects such a document is validation, which runs next and says so in
+  its own words.
+- **The rejection is published, not raised.** A pre-execution error is what makes validation
+  stand down — nothing else runs it, so nothing else parses a literal — and it is the one
+  failure shape every transport already renders into the response envelope. It also says
+  nothing runs, so the refusal is restated at the hook execution begins from, which is where a
+  streaming path that yields the error frame and then executes anyway meets it. Raising is
+  correct there and wrong at the charging hook: that one is entered for every operation, and
+  an exception out of it leaves a streaming operation with no frame at all.
 - **Directives change what is RETURNED, never what is charged.** `@skip(if: true)` would
   otherwise be a free pass around every document bound.
 - **Aliases are charged per alias.** The same expensive field under twenty aliases is
@@ -558,14 +633,22 @@ single iterative walk over the validated AST in `on_execute`, before execution.
   map has no entry for its name). The default is a source in its own right because a
   document can carry its whole payload there — `query($p: [Int!] = [ … 5000 items … ])
   { … }` supplies no variables map at all — and a walk that charges only what the map holds
-  charges nothing for it.
+  charges nothing for it. Every one of the four is the value as the REQUEST carried it, before
+  coercion or a custom scalar's `parse_value`, which is the stage boundary
+  [Decision 13](#decision-13--what-this-policy-does-not-bound-and-why-each-boundary-is-deliberate)
+  states.
 
-**Why after validation.** The walk resolves field and argument definitions against the
-schema; running it on an unvalidated document would mean reimplementing validation's
-type-resolution error handling. Execution has not begun, so "reject before ORM work" holds
-either way. The degenerate inputs an invalid document would present (unknown fragment,
-unknown argument, a selection under a leaf, an operation kind the schema lacks) are each
-handled and tested regardless, because a schema may disable validation.
+**Why before validation.** Validating a document parses every literal argument and every
+variable-definition default through the scalar it is typed as, so a walk that ran after
+validation would be charging arguments a consumer's own `parse_value` had already been handed.
+The walk resolves field and argument definitions against the schema without needing a valid
+document to do it: it charges a node it cannot type for the selection it is and does not
+descend, and it charges a value that resolves to nothing as the value it resolves to. The
+degenerate inputs an invalid document presents — unknown fragment, unknown field, unknown
+argument, a selection under a leaf, an undefined variable, an operation kind the schema
+lacks — are each handled and tested, which was already required because a schema may disable
+validation and is now the ordinary path. Reporting them stays validation's job, which runs
+next and is unchanged.
 
 **Value families are classified by the write's own BIND SPEC first, by TYPE second, and
 never by argument name.** The ladder is stated once here rather than inferred, in the order
@@ -861,16 +944,26 @@ envelope renders it identically with no translation layer, which is what makes t
 a structural property rather than three code paths kept in step.
 
 **Where the parity ends, stated rather than assumed.** *Enforcement* is transport-independent:
-Strawberry enters the extension's `on_operation` and `on_execute` hooks for HTTP execution
-and for a WebSocket subscribe alike, so every pass runs on every operation. *Rendering* is
-not. Sync HTTP, async HTTP, and WebSocket **queries and mutations** all route through
-Strawberry's `execute`, which converts a pre-execution exception into an ordinary `errors`
-entry. Strawberry's `subscribe` path has no such conversion: a rejected WebSocket
-**subscription** is refused just as hard — nothing executes — but its client observes the
-operation completing without data rather than an error entry carrying `extensions.code`.
-That is upstream's shape, not this package's choice, and building a package-owned
-subscription error envelope to paper over it is not in this card's scope; the claim is
-narrowed to what is true instead.
+Strawberry enters the extension's `on_operation` and `on_validate` hooks for HTTP execution
+and for a WebSocket subscribe alike, so every pass runs on every operation. *Rendering* follows
+from HOW each pass refuses, and the two passes refuse differently because they must.
+
+The document and value walk (passes 2 and 3) PUBLISHES its rejection as the operation's
+pre-execution error rather than raising it, which is what makes validation stand down, and
+that is the shape every transport renders into an `errors` entry carrying `extensions.code` —
+the subscribe path included. Because a published rejection also says nothing runs, it is
+restated at the hook execution begins from, so a streaming path that yields the error frame
+and then executes the operation regardless — which releases inside the supported range do —
+is refused there instead. Nothing executes on any transport, on any release in the range.
+
+The pre-parse text scan (pass 1) cannot: its whole job is to refuse before the parser runs,
+and a published error does not stop the parse. It raises, and upstream's streaming path has no
+conversion for an exception out of that hook, so a WebSocket **subscription** over the token or
+structural-depth bound is refused just as hard — nothing parses, nothing executes — but its
+client observes the operation completing without data rather than an error entry. That is
+upstream's shape, not this package's choice, and building a package-owned subscription error
+envelope to paper over it is not in this card's scope; the claim is narrowed to what is true
+instead.
 
 `extensions.code` is the single constant `RESOURCE_LIMIT_EXCEEDED`; `bound`, `limit`, and
 `charged` ride alongside so a client can act on the rejection without parsing prose. The
@@ -910,19 +1003,24 @@ authoring-time board scan could not have known better, is in the [rationale][rat
 
 ### Decision 13 — What this policy does not bound, and why each boundary is deliberate
 
-**Decision.** The five boundaries below are not oversights and must not be re-derived. Three are
+**Decision.** The six boundaries below are not oversights and must not be re-derived. Three are
 transport-adjacent bounds this walker is the wrong layer to carry, and they are carried as scope
-on card `TODO-ALPHA-051-0.0.15`; two are audited exclusions that a later pass must not "fix".
-Each is a boundary of the shipped contract rather than a gap in it.
+on card `TODO-ALPHA-051-0.0.15`; one is the STAGE this walk runs at; two are audited exclusions
+that a later pass must not "fix". Each is a boundary of the shipped contract rather than a gap in
+it.
 
-**Not this layer — a package-owned subscription rejection envelope.** Enforcement is not the gap;
-**rendering** is. A subscription enters `extensions_runner.operation()` and `executing()` exactly
-as a query does, so both the document text scan and the value walk *do* run and a violating
-subscription *is* refused. What differs is what the client sees: upstream's non-streaming path
-converts a pre-execution exception into an `errors` entry and its streaming path does not, so a
-rejected subscription closes with `complete` instead of carrying
-`extensions.code == "RESOURCE_LIMIT_EXCEEDED"`. *The `except`-clause asymmetry that produces
-this is traced in the [rationale][rationale].*
+**Not this layer — a package-owned subscription rejection envelope for the TEXT SCAN.**
+Enforcement is not the gap; **rendering** is, and only for the one pass that has to raise. A
+subscription enters `extensions_runner.operation()`, `validation()` and `executing()` exactly as a
+query does, so the document text scan and the value walk both run and a violating subscription
+*is* refused either way. The value walk publishes its rejection as a pre-execution error, which
+the streaming path renders like any other, so that half carries
+`extensions.code == "RESOURCE_LIMIT_EXCEEDED"` on every transport and executes on none. The
+text scan cannot publish — a published error does not stop the parse it exists to prevent — so
+it raises, and upstream's non-streaming path converts a pre-execution exception into an
+`errors` entry while its streaming path does not: a subscription refused on tokens or
+structural depth closes with `complete` instead. *The `except`-clause asymmetry that produces this is traced in the
+[rationale][rationale].*
 
 **State the behaviour, never the private method name.** A fix here must be written against that
 broad-versus-narrow `except` asymmetry and must pin no private upstream symbol: the declared floor
@@ -949,6 +1047,20 @@ coercion, so an enormous integer literal *is* refused — but as a malformed-inp
 a typed resource rejection carrying this policy's code. A configured bound means a pre-coercion
 scan of the raw variables JSON, which duplicates the body cap's layer; `_charge_leaf` and
 [Edge cases](#edge-cases-and-constraints) document the behaviour rather than promising the bound.
+
+**Not this stage — what a custom scalar's `parse_value` returns.** The walk reads the RAW
+argument values a request carried: `execution_context.variables` as the transport decoded them,
+and literal arguments through `value_from_ast_untyped`. It runs before validation, which is the
+one stage that would otherwise have converted an argument first — graphql-core validates a
+literal by parsing it through the scalar it is typed as — so an over-wide raw container is
+refused before any parser is called at all, whether it arrived as a supplied variable, an inline
+literal, or a variable definition's default. A `parse_value` that turns one admitted string into
+a thousand-member list produces a value this pass never saw. The ordering is the contract rather
+than a gap in it — admission control belongs before costly conversion and ORM work, and charging
+the converted values as well would mean either walking every value twice or invoking a consumer's
+parser for accounting. What this policy bounds is the shape the CLIENT sent; what a resolver then
+builds is bounded where a resolver's own output is, at the collection seams of
+[Decision 6](#decision-6--every-raw-list-is-bounded-at-one-seam).
 
 **Audited exclusion — `utils/connections.py` gets no `check_deadline` call.** Every function in
 it was read: `connection_sidecar_inputs_from_kwargs`, `window_range_plan`, `split_window_rows`,
@@ -1287,8 +1399,8 @@ is in the [rationale][rationale].*
       overrides narrow only, and the schema-construction policy is the sole trusted
       declaration that may widen.
 - [x] Document tokens and structural depth are charged **before** the parse; expanded
-      selections, aliases, and multiplicative collection cost are charged after validation
-      and before execution, with fragments, aliases, and directives unable to evade
+      selections, aliases, and multiplicative collection cost are charged after the parse
+      and before validation, with fragments, aliases, and directives unable to evade
       accounting.
 - [x] One iterative, cycle-safe value walker charges input nodes, container width, value
       nesting depth, membership items, node-refetch ids, per-mutation and aggregate relation

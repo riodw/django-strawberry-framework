@@ -116,9 +116,11 @@ def resolve_error_policy(explicit: ErrorPolicy | Mapping[str, Any] | None) -> Er
 
     Precedence, highest first: the ``DjangoSchema(error_policy=...)`` argument,
     the ``DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]`` mapping, and the package
-    defaults. An ``ErrorPolicy`` instance passed explicitly is used as-is (it has
-    already validated itself); a mapping from either source is applied over the
-    package defaults so a deployment overrides only what it cares about.
+    defaults. An ``ErrorPolicy`` instance from either override slot supplies its
+    values to a private duplicate that validates them again
+    (``utils/policies.py::canonical_policy``), never the object masking is then
+    decided from; a mapping from either source is applied over the package
+    defaults so a deployment overrides only what it cares about.
 
     The structural twin of ``resource_policy.py::resolve_resource_policy`` -
     both delegate the shared resolution contract to

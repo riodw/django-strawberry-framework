@@ -16,7 +16,7 @@ Row groups, in the order a request meets them:
 
 - the document text bounds (tokens, structural depth) - charged before the parse;
 - the expanded-document bounds (selections, aliases, collection cost) - charged
-  after validation, with fragment / alias / directive evasion rows;
+  before validation, with fragment / alias / directive evasion rows;
 - the value bounds (node ids, membership items, relation ids, nested rows,
   container width, value depth, input nodes, scalar bytes, uploads) - charged
   over a TINY document carrying a LARGE variable payload, which is the shape
@@ -33,9 +33,13 @@ Row groups, in the order a request meets them:
 - the cooperative deadline, one row per seam that hands work to the database;
 - the enforcement authority a resolver can reach through ``info.schema``, proven
   across two requests because the write and the request it would widen are
-  different requests, alongside the custom scalar that is the live route by
-  which a value the framework did not build reaches the budget, and the largest
-  configurable bound executing as a real ``LIMIT``; and
+  different requests, together with the two things that authority is identified
+  and taken by - the schema's own identity and a private copy of the policy the
+  deployment supplied, and the policy an accepted extension instance holds -
+  alongside the boundary the value budget sits on - the raw argument the request
+  carried, charged before a custom scalar converts it, whichever of the three
+  places a request can carry one it came from - and the largest configurable
+  bound executing as a real ``LIMIT``; and
 - the cross-cutting proofs: zero ORM work after a rejection, and one typed error
   code shared by the sync and async transports.
 
@@ -48,6 +52,7 @@ degenerate inputs.
 from __future__ import annotations
 
 import json
+import warnings
 from functools import cache
 from typing import NewType
 
@@ -68,6 +73,9 @@ from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
     DjangoSchema,
     strawberry_config,
+)
+from django_strawberry_framework.extensions.resource_policy import (
+    DjangoResourcePolicyExtension,
 )
 from django_strawberry_framework.resource_policy import (
     MAX_RESOURCE_BOUND,
@@ -188,38 +196,50 @@ _VALUE_BOUNDS = {
 }
 
 
-class _UnderreportingList(list):
-    """A sequence that reports no members and yields all of them.
-
-    The shape a custom scalar can put into the value walk. Its ``__len__`` is
-    what every width-shaped bound used to be charged from.
-    """
-
-    def __len__(self):
-        return 0
+# Every argument value the custom scalar below was asked to parse, in order. The
+# value budget charges the RAW argument the request carried, which is before any
+# custom scalar converts it, so this is what says whether a given request was
+# admitted as far as conversion at all.
+_scalar_parses: list[object] = []
 
 
-#: A custom scalar whose ``parse_value`` returns a sequence type of its own.
+def _record_parse(value):
+    """Parse a scalar argument by recording it and handing it back unchanged."""
+    _scalar_parses.append(value)
+    return value
+
+
+#: A custom scalar that accepts whatever shape the request carried.
 #:
-#: This is the reachable route by which a value that is not an exact built-in
-#: arrives at the budget: a real request carries JSON, so the coercer's output
-#: is exact until a consumer-defined scalar replaces it with something else.
-HostileScalar = strawberry.scalar(
-    NewType("HostileScalar", object),
+#: An argument typed by one of these is how a raw JSON container reaches the
+#: value budget without a declared input object shaping it first, and its parser
+#: is the observable marker for the boundary the budget sits on.
+OpaqueValue = NewType("OpaqueValue", object)
+
+_OPAQUE_SCALAR = strawberry.scalar(
+    name="OpaqueValue",
     serialize=lambda value: value,
-    parse_value=lambda value: _UnderreportingList(value) if isinstance(value, list) else value,
+    parse_value=_record_parse,
 )
 
 
 @strawberry.type
 class _AuthorityQuery:
-    """The two seams a resolver can reach through ``info.schema``, plus a bounded list."""
+    """The seams a resolver can reach through ``info.schema``, plus a bounded list."""
 
     @strawberry.field
     def widen(self, info: strawberry.Info) -> int:
-        """Replace the schema's stored policy and its whole extension list."""
-        info.schema.__dict__["_resource_policy"] = ResourcePolicy(max_list_rows=999)
+        """Write past the properties holding the policy and the extension list."""
+        info.schema.__dict__["resource_policy"] = ResourcePolicy(max_list_rows=999)
         info.schema.__dict__["extensions"] = ()
+        return 1
+
+    @strawberry.field
+    def nominate(self, info: strawberry.Info) -> int:
+        """Replace the extension list with one carrying a wider policy of its own."""
+        info.schema.extensions = [
+            lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=999)),
+        ]
         return 1
 
     @strawberry.field
@@ -227,7 +247,7 @@ class _AuthorityQuery:
         return list(bounded_rows(["a", "b", "c"], info, None))
 
     @strawberry.field
-    def take(self, payload: HostileScalar = None) -> str:
+    def take(self, payload: OpaqueValue = None) -> str:
         return "ok"
 
 
@@ -235,7 +255,7 @@ class _AuthorityQuery:
 def _authority_schema() -> DjangoSchema:
     return DjangoSchema(
         query=_AuthorityQuery,
-        config=strawberry_config(),
+        config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
         resource_policy={"max_list_rows": 1, "max_container_width": MAX_CONTAINER_WIDTH},
     )
 
@@ -248,9 +268,137 @@ def _authority_view(request, *args, **kwargs):
 _authority_view.csrf_exempt = True
 
 
+class _EqualSchema(DjangoSchema):
+    """A supported subclass that gives its instances VALUE equality.
+
+    Nothing about a schema requires identity semantics from a consumer, so a
+    registry that found its entries by hash and equality would let this class
+    decide which schema's bounds answer for which schema.
+    """
+
+    def __hash__(self):
+        return 1
+
+    def __eq__(self, other):
+        return isinstance(other, _EqualSchema)
+
+
+@cache
+def _equal_schema(rows: int) -> DjangoSchema:
+    return _EqualSchema(
+        query=_AuthorityQuery,
+        config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
+        resource_policy={"max_list_rows": rows, "max_container_width": MAX_CONTAINER_WIDTH},
+    )
+
+
+def _equal_view(rows: int):
+    """One mount per equal-but-distinct schema, so two live requests can differ."""
+
+    def view(request, *args, **kwargs):
+        built = DjangoGraphQLView.as_view(schema=_equal_schema(rows))
+        return built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+@strawberry.type
+class _AcceptedInstanceQuery:
+    """The seams a resolver can reach on an extension INSTANCE the schema accepted."""
+
+    @strawberry.field
+    def rebind(self, info: strawberry.Info) -> str:
+        """Point the accepted entry's policy at a wider one."""
+        entry = _accepted_resource_entry(info)
+        try:
+            entry._policy = ResourcePolicy(max_list_rows=999)
+        except AttributeError as exc:
+            return type(exc).__name__
+        return "assigned"
+
+    @strawberry.field
+    def overwrite(self, info: strawberry.Info) -> str:
+        """Write a wider bound onto the policy object the accepted entry answers with."""
+        _accepted_resource_entry(info)._policy.__dict__["max_list_rows"] = 999
+        return "written"
+
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
+
+
+def _accepted_resource_entry(info):
+    """The resource extension a resolver reaches through ``info.schema.extensions``."""
+    return next(
+        entry
+        for entry in info.schema.extensions
+        if isinstance(entry, DjangoResourcePolicyExtension)
+    )
+
+
+@cache
+def _accepted_instance_schema() -> DjangoSchema:
+    """A schema configured with an extension INSTANCE carrying its own policy.
+
+    Strawberry deprecates instance entries because one instance shares its
+    charge counters across every request; this package still accepts them as
+    configuration, which is exactly why what one holds must not be a seam. The
+    warning is suppressed HERE rather than at each row, because the mount is
+    built inside a request and a warning raised there would be a response, not
+    a test outcome.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return DjangoSchema(
+            query=_AcceptedInstanceQuery,
+            extensions=[
+                DjangoResourcePolicyExtension(
+                    policy=ResourcePolicy(
+                        max_list_rows=1,
+                        max_container_width=MAX_CONTAINER_WIDTH,
+                    ),
+                ),
+            ],
+        )
+
+
+def _accepted_instance_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_accepted_instance_schema())
+    return built(request, *args, **kwargs)
+
+
+_accepted_instance_view.csrf_exempt = True
+
+
+#: The policy object a deployment hands to a schema and then keeps a reference to.
+RETAINED_POLICY = ResourcePolicy(max_list_rows=1, max_container_width=MAX_CONTAINER_WIDTH)
+
+
+@cache
+def _retained_schema() -> DjangoSchema:
+    return DjangoSchema(
+        query=_AuthorityQuery,
+        config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
+        resource_policy=RETAINED_POLICY,
+    )
+
+
+def _retained_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_retained_schema())
+    return built(request, *args, **kwargs)
+
+
+_retained_view.csrf_exempt = True
+
+
 urlpatterns = [
     path("", include("config.urls")),
     path("rp-authority/", _authority_view),
+    path("rp-equal-narrow/", _equal_view(1)),
+    path("rp-equal-wide/", _equal_view(3)),
+    path("rp-retained/", _retained_view),
+    path("rp-accepted-instance/", _accepted_instance_view),
     path(
         "rp-max-bound/",
         _probe_view(
@@ -1348,12 +1496,14 @@ def test_a_resolver_cannot_widen_the_next_request_through_the_schema():
     """The budget survives a resolver writing both names it can reach.
 
     ``info.schema`` is handed to every resolver, and the schema outlives the
-    request, so an ordinary attribute holding the policy is a process-lived
+    request, so a policy held as an ordinary attribute is a process-lived
     widening primitive rather than a same-request one: the first request sets
     it, every later request on that worker runs under it. Emptying the extension
     list is the wider version of the same reach - the next operation would arm
-    no budget at all. Two requests, in order, are what make the claim: the write
-    happens in the first, and the second is the one that must still be bounded.
+    no budget at all. Both are written through ``__dict__``, which is the
+    spelling that gets past an ordinary property. Two requests, in order, are
+    what make the claim: the write happens in the first, and the second is the
+    one that must still be bounded.
     """
     assert _post("/rp-authority/", "{ widen }")["data"] == {"widen": 1}
 
@@ -1363,39 +1513,157 @@ def test_a_resolver_cannot_widen_the_next_request_through_the_schema():
 
     third = _post(
         "/rp-authority/",
-        "query T($p: HostileScalar) { take(payload: $p) }",
+        "query T($p: OpaqueValue) { take(payload: $p) }",
         {"p": list(range(MAX_CONTAINER_WIDTH + 1))},
     )
     assert _rejection(third)["bound"] == "max_container_width"
 
 
-def test_a_scalar_defined_value_is_charged_for_the_members_it_carries():
-    """A custom scalar is the live route by which a non-exact shape reaches the walk.
+def test_a_resolver_cannot_nominate_a_new_policy_authority_over_the_wire():
+    """Presence of an enforcement extension is not evidence that it was configured.
 
-    ``parse_value`` runs after the JSON body is decoded and before the value
-    budget sees the argument, so whatever it returns is what every width-shaped
-    bound is charged from. A sequence reporting no members while carrying
-    ``MAX_CONTAINER_WIDTH + 1`` of them is charged for what it carries.
+    A replacement list can carry an ordinary resource-policy extension with a
+    wider policy of its own, which every presence and deduplication check
+    accepts while the configured bound is gone for the life of the process. The
+    assignment is refused where it is made, so the request that tried it fails
+    and the next one is still held to what the deployment configured.
     """
-    payload = _post(
-        "/rp-authority/",
-        "query T($p: HostileScalar) { take(payload: $p) }",
-        {"p": list(range(MAX_CONTAINER_WIDTH + 1))},
-    )
+    attacked = _post("/rp-authority/", "{ nominate }")
+    assert attacked.get("errors")
+
+    second = _post("/rp-authority/", "{ rows }")
+    _no_rejection(second)
+    assert second["data"]["rows"] == ["a"]
+
+
+def test_two_schemas_that_compare_equal_bound_their_own_requests():
+    """A request is held to ITS schema's policy, not to one that compares equal to it.
+
+    Two mounts, two equal-but-distinct schemas, two different row bounds: a
+    registry keyed by hash and equality would answer both requests with whichever
+    schema was constructed last, and would drop the survivor's configuration when
+    the other was collected.
+    """
+    narrow = _post("/rp-equal-narrow/", "{ rows }")
+    _no_rejection(narrow)
+    assert narrow["data"]["rows"] == ["a"]
+
+    wide = _post("/rp-equal-wide/", "{ rows }")
+    _no_rejection(wide)
+    assert wide["data"]["rows"] == ["a", "b", "c"]
+
+    assert _post("/rp-equal-narrow/", "{ rows }")["data"]["rows"] == ["a"]
+
+
+def test_a_policy_the_deployment_still_holds_cannot_widen_a_later_request():
+    """Configuration intake copies; the object a deployment keeps is not the authority.
+
+    An exact policy instance used to pass through intake unchanged, so the
+    reference a deployment kept - a module-level object, or one a resolver can
+    reach through any import - was the object every bound was read from, and a
+    frozen dataclass admits ``policy.__dict__[bound] = wider``.
+    """
+    first = _post("/rp-retained/", "{ rows }")
+    _no_rejection(first)
+    assert first["data"]["rows"] == ["a"]
+
+    RETAINED_POLICY.__dict__["max_list_rows"] = 999
+    try:
+        second = _post("/rp-retained/", "{ rows }")
+    finally:
+        RETAINED_POLICY.__dict__["max_list_rows"] = 1
+    _no_rejection(second)
+    assert second["data"]["rows"] == ["a"]
+
+
+def _opaque_request(source, width):
+    """One request carrying ``width`` members to the scalar argument, by ``source``.
+
+    The three places a value enters an operation. A supplied variable arrives
+    beside the document; an inline literal and a variable definition's default
+    arrive INSIDE it, and those two are the ones GraphQL's own validation parses
+    through the argument's scalar before execution begins.
+    """
+    members = list(range(width))
+    literal = "[" + ", ".join(str(member) for member in members) + "]"
+    if source == "variable":
+        return "query T($p: OpaqueValue) { take(payload: $p) }", {"p": members}, members
+    if source == "literal":
+        return f"{{ take(payload: {literal}) }}", None, members
+    return f"query T($p: OpaqueValue = {literal}) {{ take(payload: $p) }}", None, members
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["variable", "literal", "default"],
+    ids=["supplied-variable", "inline-literal", "variable-default"],
+)
+def test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried(source):
+    """The value budget charges the RAW argument, before any scalar converts it.
+
+    The walk reads the variables the request supplied and the argument ASTs the
+    document carries, so an argument typed by a custom scalar is measured as the
+    JSON container the client sent. Charging it before VALIDATION is what makes
+    that true of all three sources: graphql-core validates a literal by parsing
+    it through the scalar it is typed as, so a budget that ran after validation
+    would have let the parser do its work on an argument the request was going
+    to be refused for.
+    """
+    _scalar_parses.clear()
+    query, variables, _ = _opaque_request(source, MAX_CONTAINER_WIDTH + 1)
+    payload = _post("/rp-authority/", query, variables)
     extensions = _rejection(payload)
     assert extensions["bound"] == "max_container_width"
     assert extensions["charged"] == MAX_CONTAINER_WIDTH + 1
+    assert _scalar_parses == []
 
 
-def test_a_scalar_defined_value_within_the_bound_still_executes():
-    """The control: the same scalar, one member under the bound, runs."""
-    payload = _post(
-        "/rp-authority/",
-        "query T($p: HostileScalar) { take(payload: $p) }",
-        {"p": list(range(MAX_CONTAINER_WIDTH))},
-    )
+@pytest.mark.parametrize(
+    "source",
+    ["variable", "literal", "default"],
+    ids=["supplied-variable", "inline-literal", "variable-default"],
+)
+def test_a_scalar_argument_within_the_bound_reaches_its_parser(source):
+    """The control, and the other half of the boundary: an admitted argument converts.
+
+    One member under the bound the same request runs, and the parser sees the
+    raw container the budget already charged - which is what makes the empty
+    parse log in the rejecting row mean refused-before-conversion rather than
+    never-wired-up.
+    """
+    _scalar_parses.clear()
+    query, variables, members = _opaque_request(source, MAX_CONTAINER_WIDTH)
+    payload = _post("/rp-authority/", query, variables)
     _no_rejection(payload)
     assert payload["data"] == {"take": "ok"}
+    assert _scalar_parses
+    assert all(parsed == members for parsed in _scalar_parses)
+
+
+@pytest.mark.parametrize(
+    ("field", "reported"),
+    [("rebind", "AttributeError"), ("overwrite", "written")],
+    ids=["rebind", "overwrite"],
+)
+def test_an_accepted_extension_instance_cannot_widen_a_later_request(field, reported):
+    """An instance entry stays reachable, so what it holds bounds the NEXT request.
+
+    Strawberry hands back an accepted instance unchanged, and
+    ``info.schema.extensions`` puts it in front of every resolver. The policy it
+    arms each operation with is therefore held where no name on it answers with
+    it: rebinding is refused where it is made, and the object it does hand out
+    is a duplicate, so a bound written onto that changes only the writer's copy.
+    """
+    first = _post("/rp-accepted-instance/", "{ rows }")
+    _no_rejection(first)
+    assert first["data"]["rows"] == ["a"]
+
+    attacked = _post("/rp-accepted-instance/", "{ %s }" % field)
+    assert attacked["data"] == {field: reported}, attacked
+
+    second = _post("/rp-accepted-instance/", "{ rows }")
+    _no_rejection(second)
+    assert second["data"]["rows"] == ["a"]
 
 
 @pytest.mark.django_db

@@ -302,6 +302,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── policies.py               # Shared schema-construction policy normalization.
+    ├── private_state.py          # State an object owns, that consumer code can neither read out nor forge.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.
@@ -433,6 +434,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── policies.py               # Shared schema-construction policy normalization.
     ├── predicates.py             # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
+    ├── private_state.py          # State an object owns, that consumer code can neither read out nor forge.
     ├── querysets.py              # Shared query-source, field-coercion, sync/async hook, and visibility contracts.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── sessions.py               # The session-engine resolver and the connection actor lease, shared across the opt-in boundary.

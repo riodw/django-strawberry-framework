@@ -13,8 +13,8 @@ Three passes, in the order a request meets them:
    document counts tokens and structural nesting. It must run before the parse
    because graphql-core's parser is recursive-descent: a bound applied after the
    parse cannot stop the parse from exhausting the interpreter's stack.
-2. **Document budget** (``on_execute``, before execution). One iterative,
-   fragment-expanding walk over the validated AST charges expanded selections,
+2. **Document budget** (``on_validate``, before validation). One iterative,
+   fragment-expanding walk over the parsed AST charges expanded selections,
    aliases, and the multiplicative collection cost. Fragment spreads are charged
    at every spread site and cycle-guarded by the spread path, so neither a
    fragment nor a directive can hide a selection from accounting.
@@ -35,23 +35,33 @@ Three passes, in the order a request meets them:
 Where each pass reaches, stated as the boundary rather than as parity:
 
 - Passes 2 and 3 run on **every** operation, on every transport: Strawberry
-  enters the ``on_execute`` hook for HTTP execution and for a WebSocket
-  subscribe alike.
+  enters the ``on_validate`` hook for HTTP execution and for a WebSocket
+  subscribe alike, and enters it whether or not that operation has validation
+  rules to run.
 - Pass 1 likewise runs on every operation that carries a document, which is
   every operation the package's transports accept.
-- The **rendering** of a rejection is where the transports differ, and only for
-  subscriptions. Sync HTTP, async HTTP, and WebSocket queries / mutations all
-  route through Strawberry's ``execute``, which turns a pre-execution exception
-  into an ordinary ``errors`` entry - so a ``ResourceLimitExceeded``, being a
-  ``GraphQLError``, needs no per-transport translation. Strawberry's
-  ``subscribe`` path has no such conversion: a rejected WebSocket subscription
-  is refused just as hard, but its client observes the operation completing
-  without data rather than an error entry carrying ``extensions.code``.
+- A rejection is rendered the same way on all of them, because pass 2 does not
+  raise it: it publishes the ``ResourceLimitExceeded`` as the operation's
+  pre-execution error. That is the shape every transport already renders into
+  an ``errors`` entry carrying ``extensions.code``, the subscribe path
+  included, and it is also what makes graphql-core's validation stand down -
+  which is the point of the stage boundary, since validating a document parses
+  every literal argument through the scalar it is typed as. A published
+  rejection also says nothing runs, so the refusal is restated at the hook
+  execution begins from: a streaming path that yields the error frame and then
+  executes the operation anyway - which some releases in the supported range
+  do - meets it there instead.
+- Pass 1 is the one that still raises, because its whole job is to refuse
+  before the parser runs and a published error does not stop a parse. On a
+  transport whose streaming path has no conversion for an exception out of that
+  hook, a subscription over the token or structural-depth bound is refused just
+  as hard - nothing parses, nothing executes - but its client sees the
+  operation complete without data rather than an error entry.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from graphql import (
@@ -93,6 +103,8 @@ from ..utils.context import (
     restored_context_keys,
 )
 from ..utils.inputs import RELATION_MULTI
+from ..utils.policies import copy_policy
+from ..utils.private_state import PrivateState
 from ..utils.typing import unwrap_non_null
 
 __all__ = ("DjangoResourcePolicyExtension",)
@@ -336,29 +348,62 @@ class _ValueBudget:
         charged: int,
         detail: str,
     ) -> None:
-        """Reject unless ``charged`` is a measurable amount within ``bound``.
+        """Reject unless ``charged`` is within ``bound``.
 
-        The amount must BE a built-in integer. Most charges are this walk's own
-        counters and lengths, but some are read off a value the request carried
-        in - an uploaded file's ``size``, a buffer's ``nbytes`` - and a numeric
-        SUBCLASS there is consumer code answering for a number: the ``>`` that
-        decides this rejection, and the ``__format__`` the rejection's own
-        message would then run, are both its own. An amount that is not a
-        built-in integer is therefore unmeasurable rather than free, and is
-        rejected on the same typed path an over-budget one takes, charged at one
-        past the limit - the spelling this module uses wherever a budget is
-        exceeded by an amount it cannot put a number to.
+        Every amount reaching here is a built-in integer this walk produced - a
+        counter it keeps, the length of a list it built, or a size read through
+        an operation the type itself defines - and that is a property of the
+        measurements, not a check performed here. It has to be: the ``>`` that
+        decides this rejection and the ``__format__`` the rejection's own
+        message runs are both the amount's own code, so a numeric SUBCLASS
+        arriving as a charge would be consumer code answering for whether it is
+        over the limit. The one place an amount is read off a value the request
+        carried in - an uploaded file's ``size`` - refuses a non-integer where
+        it reads it (:meth:`_charge_upload`), which is the only place that can
+        say what an unusable answer there means.
         """
         limit = getattr(self.policy, bound)
-        if type(charged) is not int:
+        if charged > limit:
+            raise ResourceLimitExceeded(bound, limit, charged, detail)
+
+    def _bounded_members(self, members: Callable[[], Any], bound: str) -> list[Any]:
+        """Read ``members()`` until ``bound`` is proven exceeded, and no further.
+
+        The measurement is itself work the request asked for, so it is bounded
+        by the same number the width is bounded by: the read stops one member
+        past the limit, which is the smallest count that distinguishes "within"
+        from "over". A container that would answer a million members costs two
+        advances against a width bound of one.
+
+        Nothing here consults the container's own idea of its size.
+        ``list(value)`` would: it asks for a length hint first, so a ``__len__``
+        that raises turns a width check into a raw error out of the request,
+        and one that lies sizes the allocation. The counter is this walk's own,
+        which is also why the full declared bound domain works - ``islice``
+        refuses a stop argument above ``sys.maxsize``, and the largest bound a
+        policy accepts is exactly ``sys.maxsize``.
+
+        What this cannot bound is ONE advance: a container whose ``__next__``
+        blocks or runs forever before yielding anything is inside consumer code
+        the framework has no seam under. Every advance after the first is what
+        this bounds, and a refusal to measure is a typed rejection of the bound
+        being measured rather than whatever the container raised.
+        """
+        limit = getattr(self.policy, bound)
+        collected: list[Any] = []
+        try:
+            for member in members():
+                collected.append(member)
+                if len(collected) > limit:
+                    break
+        except Exception as exc:
             raise ResourceLimitExceeded(
                 bound,
                 limit,
                 limit + 1,
                 "a value charges this bound by an amount the framework cannot measure",
-            )
-        if charged > limit:
-            raise ResourceLimitExceeded(bound, limit, charged, detail)
+            ) from exc
+        return collected
 
     def begin_mutation_field(self) -> None:
         """Reset the per-mutation-field relation-id counter.
@@ -501,25 +546,37 @@ class _ValueBudget:
         charged elsewhere in the request - is charged in full.
 
         The width charged is the number of members this walk is about to QUEUE,
-        counted on a list this package holds, not the number the container
-        reports. A custom scalar's ``parse_value`` can return a ``list`` or
-        ``Mapping`` SUBCLASS, and that object's ``__len__`` is consumer code
-        answering for the size of work the request is asking for: one that says
-        zero while iteration yields a hundred members charges every width-shaped
-        bound - the container width itself, and the membership, node-id,
-        nested-row and relation-id families ``_charge_list_family`` derives from
-        it - at a number no part of the request costs. Counting what is enumerated
-        is what makes the charge and the queued work the same quantity. An exact
-        ``list`` or ``tuple`` is already such a list and is used as it stands,
-        because at an exact type ``len`` is the interpreter's own.
+        never the number the container reports. At an EXACT ``list``, ``tuple``
+        or ``dict`` those are the same thing, because ``len`` is then the
+        interpreter's own and the members are already a sequence this package
+        can queue from; the container is used exactly as it stands and nothing
+        is copied.
+
+        Anything else is read out by :meth:`_bounded_members`, one member past
+        the width bound and no further. Such an object's ``__len__`` is consumer
+        code answering for the size of work the request is asking for: one that
+        says zero while iteration yields a hundred members charges every
+        width-shaped bound - the container width itself, and the membership,
+        node-id, nested-row and relation-id families ``_charge_list_family``
+        derives from it - at a number no part of the request costs. Counting
+        what is enumerated is what makes the charge and the queued work the same
+        quantity, and stopping one past the bound is what keeps the counting
+        itself inside the budget: an over-wide container is refused for what it
+        proved, at one past the limit, rather than enumerated in full so the
+        refusal can quote an exact size nothing downstream will use.
         """
         if isinstance(value, Mapping):
             if _closes_a_cycle(value, path):
                 return True
-            entries = list(value.items())
+            if type(value) is dict:
+                entries: Any = value.items()
+                width = len(value)
+            else:
+                entries = self._bounded_members(lambda: value.items(), "max_container_width")
+                width = len(entries)
             self._reject(
                 "max_container_width",
-                len(entries),
+                width,
                 "an input object carries more fields than the policy allows",
             )
             item_type = node_type.fields if isinstance(node_type, GraphQLInputObjectType) else None
@@ -545,8 +602,12 @@ class _ValueBudget:
             return False
         if _closes_a_cycle(value, path):
             return True
-        members = value if type(value) in _EXACT_SEQUENCE_TYPES else list(value)
-        width = len(members)
+        if type(value) in _EXACT_SEQUENCE_TYPES:
+            members: Any = value
+            width = len(value)
+        else:
+            members = self._bounded_members(lambda: value, "max_container_width")
+            width = len(members)
         self._reject(
             "max_container_width",
             width,
@@ -678,17 +739,18 @@ class _ValueBudget:
         promise.
 
         Both sizes are taken through the operation the type itself defines, not
-        through a method the value carries. A custom scalar's ``parse_value``
-        may return a ``str`` or ``bytes`` SUBCLASS, and on one of those
-        ``value.encode(...)`` and ``len(value)`` are consumer code: an
-        ``encode`` answering one byte for a hundred thousand characters is a
+        through a method the value carries. An in-process caller's
+        ``variable_values`` may carry a ``str`` or ``bytes`` SUBCLASS, and on
+        one of those ``value.encode(...)`` and ``len(value)`` are consumer code:
+        an ``encode`` answering one byte for a hundred thousand characters is a
         charge the bound cannot reject, and a ``__len__`` that raises replaces a
         typed rejection with a raw error out of the value walk. ``str.encode``
         is the unbound built-in applied to the value, and ``memoryview`` reads a
-        buffer's size through the C buffer protocol - which is also why the size
-        is no longer reached for through ``getattr(value, "nbytes", len(value))``,
-        whose default argument evaluates the hostile ``__len__`` before the
-        attribute it was meant to stand in for is ever looked at.
+        buffer's size through the C buffer protocol, which a ``bytes`` subclass
+        cannot answer for. Neither size is reached for as
+        ``getattr(value, "nbytes", len(value))``: that default argument
+        evaluates a hostile ``__len__`` before the attribute it stands in for is
+        ever looked at.
         """
         named = get_named_type(node_type) if node_type is not None else None
         if named is not None and named.name == _UPLOAD_SCALAR_NAME:
@@ -922,9 +984,16 @@ def charge_document(
 
     The walk expands fragments at every spread site (so a fragment cannot hide a
     selection, and spreading one fragment ten times costs ten times) and carries
-    the spread path so a cyclic fragment set - which validation rejects, but
-    which this pass may meet under a schema that disabled validation - terminates
-    instead of looping.
+    the spread path so a cyclic fragment set terminates instead of looping.
+
+    Every shape validation would have rejected is a shape this walk meets,
+    because it runs BEFORE validation: a cyclic fragment set, a field the parent
+    type does not have, a selection under a leaf, an argument the field does not
+    take, a variable the operation never defined. None of them is an error here.
+    A node the schema cannot type is charged for the selection it is and then
+    not descended into, and a value that resolves to nothing is charged as the
+    value it resolves to; what rejects such a document is validation, which runs
+    next and says so in its own words.
     """
     safe_variables = variables if variables is not None else {}
     fragments = {
@@ -1035,6 +1104,16 @@ def charge_document(
             )
 
 
+#: The policy each explicitly configured extension was handed, held by the
+#: extension it configures. An instance entry is accepted as itself, so it stays
+#: reachable through ``info.schema.extensions`` for as long as the schema lives;
+#: what it holds is what bounds the next operation, and an attribute holding
+#: that is a name a resolver writes once to widen every later request. See
+#: ``utils/private_state.py::PrivateState`` for why the extension owns the
+#: policy and this holds only the evidence of which one was accepted.
+_EXPLICIT_POLICY: PrivateState[ResourcePolicy] = PrivateState("_explicit_policy")
+
+
 class DjangoResourcePolicyExtension(SchemaExtension):
     """Enforce the schema's ``ResourcePolicy`` on every operation.
 
@@ -1062,7 +1141,24 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         # off it is consumer code that may answer differently each time it is
         # asked - which is the whole distance between "the extension holds a
         # policy" and "the operation has a budget".
-        self._policy = None if policy is None else _operation_policy(policy)
+        if policy is not None:
+            _EXPLICIT_POLICY.remember(self, _operation_policy(policy))
+
+    @property
+    def _policy(self) -> ResourcePolicy | None:
+        """The explicit policy this extension was configured with, as a copy.
+
+        An extension instance passed to ``extensions=[...]`` is accepted as the
+        entry itself, so it stays reachable through ``info.schema.extensions``
+        for the life of the schema - and what it holds is the authority the NEXT
+        operation is bounded by. An ordinary attribute is therefore a seam a
+        resolver widens every later request through, by rebinding it or by
+        writing a bound on the object it answers with. The configuration is held
+        as ``utils/private_state.py::PrivateState`` instead, which no name on
+        this object answers with, and each read hands out a duplicate.
+        """
+        accepted = _EXPLICIT_POLICY.recall(self)
+        return None if accepted is None else copy_policy(accepted)
 
     def _resolved_policy(self) -> ResourcePolicy:
         """The explicit policy, else the schema's, else the package defaults.
@@ -1071,8 +1167,9 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         it returns; every later charge in that operation reads the armed
         snapshot instead (:func:`resource_policy.armed_resource_policy`).
         """
-        if self._policy is not None:
-            return self._policy
+        explicit = self._policy
+        if explicit is not None:
+            return explicit
         schema_policy = getattr(self.execution_context.schema, "resource_policy", None)
         return (
             schema_policy
@@ -1112,27 +1209,68 @@ class DjangoResourcePolicyExtension(SchemaExtension):
             finally:
                 end_resource_budget(token)
 
-    def on_execute(self) -> Iterator[None]:
-        """Charge the validated document's shape and every argument value, then execute.
+    def on_validate(self) -> Iterator[None]:
+        """Charge the document's shape and every argument value, before validation.
 
         Runs inside :meth:`on_operation`'s scope, so the budget it charges
         against is the one armed there. Re-resolving the configuration at this
         hook would re-read it, and a policy object whose field reads are its own
         code can answer the second read differently from the first: the document
         would then be scanned against a bound the request never has to satisfy.
-        A plain ``strawberry.Schema`` whose consumer calls ``on_execute`` with no
+        A plain ``strawberry.Schema`` whose consumer calls this hook with no
         operation scope around it has nothing armed, and falls back to the
         configuration exactly as the arming hook would have resolved it.
+
+        This is the stage boundary, and it is BEFORE validation rather than
+        before execution because validation is already work the request paid
+        for: graphql-core's ``ValuesOfCorrectTypeRule`` parses every literal
+        argument and every variable default through the scalar it is typed as,
+        which for an ordinary custom scalar is the consumer's own
+        ``parse_value``. Charging after that would leave three of the four
+        places a value enters a request - inline literal, variable default, and
+        a nested input object built from either - measured only once their
+        conversion had already run.
+
+        The rejection is PUBLISHED rather than raised. A pre-execution error is
+        what makes graphql-core's validation stand down (nothing else runs it,
+        so nothing else parses a literal), and it is the one failure shape every
+        transport renders into the response envelope - including the streaming
+        one, where an exception out of this hook would leave the operation with
+        no frame at all.
         """
         execution_context = self.execution_context
         document = execution_context.graphql_document
         if document is not None:
             policy = armed_resource_policy()
-            charge_document(
-                policy if policy is not None else self._resolved_policy(),
-                execution_context.schema._schema,
-                document,
-                execution_context.variables or {},
-                execution_context.operation_name,
-            )
+            try:
+                charge_document(
+                    policy if policy is not None else self._resolved_policy(),
+                    execution_context.schema._schema,
+                    document,
+                    execution_context.variables or {},
+                    execution_context.operation_name,
+                )
+            except ResourceLimitExceeded as rejection:
+                execution_context.pre_execution_errors = [rejection]
+        yield
+
+    def on_execute(self) -> Iterator[None]:
+        """Refuse to begin executing an operation the budget already rejected.
+
+        A published rejection is a statement that nothing runs, and on every
+        seam that reads it nothing does. Where a release's streaming path
+        yields the pre-execution error and then goes on to execute the
+        operation anyway, execution BEGINNING is the contradiction, so the
+        refusal is restated at the hook execution starts from - which is the
+        seam that same path already converts into an error entry. Raising is
+        correct here and wrong at the charging hook: this one is entered only
+        when an operation is about to run.
+        """
+        rejected = [
+            error
+            for error in self.execution_context.pre_execution_errors or ()
+            if isinstance(error, ResourceLimitExceeded)
+        ]
+        if rejected:
+            raise rejected[0]
         yield

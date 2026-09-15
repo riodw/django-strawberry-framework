@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import weakref
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -505,7 +507,7 @@ def test_a_schema_policy_attribute_answers_with_a_copy(attribute, policy):
 
 @pytest.mark.parametrize(
     "attribute",
-    ["_resource_policy", "_error_policy"],
+    ["resource_policy", "error_policy"],
     ids=["resource", "error"],
 )
 def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute):
@@ -515,10 +517,9 @@ def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute):
     do and nothing about what a write BESIDE it can do: an instance attribute is
     an ordinary name, and the schema is process-lived, so one assignment from
     one resolver would have widened - or unmasked - every request the process
-    served afterwards. Both spellings are exercised - through ``__dict__``, which
-    is what gets past a property, and as a plain assignment - because the
-    authority is not an attribute of this object at all and neither write lands
-    anywhere a bound is read from.
+    served afterwards. The ``__dict__`` spelling is the one that gets past an
+    ordinary property, and it lands nowhere a bound is read from because the
+    authority is not an attribute of this object at all.
     """
 
     @strawberry.type
@@ -526,21 +527,24 @@ def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute):
         @strawberry.field
         def widen(self, info: strawberry.Info) -> int:
             info.schema.__dict__[attribute] = ResourcePolicy(max_list_rows=999)
-            setattr(info.schema, attribute, ResourcePolicy(max_list_rows=999))
             return 1
 
     schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=2))
     assert schema.execute_sync("{ widen }").data == {"widen": 1}
     assert schema.resource_policy.max_list_rows == 2
 
+    with pytest.raises(AttributeError):
+        setattr(schema, attribute, ResourcePolicy(max_list_rows=999))
 
-def test_a_resolver_cannot_disarm_enforcement_by_replacing_the_extension_list():
+
+def test_a_resolver_cannot_disarm_enforcement_by_emptying_the_extension_list():
     """A ``DjangoSchema`` enforces because it is one, not because a list still says so.
 
-    ``schema.extensions`` is an ordinary attribute of the object every resolver
-    holds. Emptying it removed the budget and the masking from every later
-    operation on the process, which is a wider primitive than widening one
-    bound: the next request runs with no policy extension instantiated at all.
+    Emptying ``schema.extensions`` would remove the budget and the masking from
+    every later operation on the process, which is a wider primitive than
+    widening one bound: the next request would run with no policy extension
+    instantiated at all. The attribute is a property, so the ``__dict__``
+    spelling that gets past an ordinary one lands in a name nothing reads.
     """
 
     @strawberry.type
@@ -561,13 +565,109 @@ def test_a_resolver_cannot_disarm_enforcement_by_replacing_the_extension_list():
     assert any(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved)
 
 
+def test_a_resolver_cannot_nominate_a_wider_policy_by_replacing_the_extension_list():
+    """Presence of an enforcement extension is not evidence that it was configured.
+
+    A replacement list can carry an ordinary ``DjangoResourcePolicyExtension``
+    of its own with a wider policy: deduplication and presence checks both
+    succeed on it, and the accepted bound is gone for the life of the process.
+    What enforces an operation is what the schema was constructed with, so the
+    assignment is refused where it is made rather than reconciled afterwards.
+    """
+
+    @strawberry.type
+    class _Query:
+        @strawberry.field
+        def rows(self, info: strawberry.Info) -> list[str]:
+            return list(bounded_rows(["a", "b", "c"], info, None))
+
+        @strawberry.field
+        def widen(self, info: strawberry.Info) -> int:
+            info.schema.extensions = [
+                lambda: DjangoResourcePolicyExtension(
+                    policy=ResourcePolicy(max_list_rows=999),
+                ),
+            ]
+            return 1
+
+    schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=1))
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    attacked = schema.execute_sync("{ widen }")
+    assert attacked.errors is not None
+    assert "settled when the schema is constructed" in attacked.errors[0].message
+
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+
+@strawberry.type
+class _BoundedRowQuery:
+    """One field whose rows are bounded by whatever policy the operation armed."""
+
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
+
+
+def _assert_entry_survives_a_replacement_attempt(schema):
+    """One accepted configuration keeps enforcing, and keeps exactly one entry."""
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    with pytest.raises(ConfigurationError):
+        schema.extensions = []
+
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    resolved = schema.get_extensions(sync=True)
+    assert sum(isinstance(e, DjangoResourcePolicyExtension) for e in resolved) == 1
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        DjangoResourcePolicyExtension,
+        lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1)),
+    ],
+    ids=["class", "factory"],
+)
+def test_an_accepted_extension_entry_still_enforces_after_a_replacement_attempt(entry):
+    """Two configuration spellings, one thing to protect.
+
+    A class and a factory are different things to resolve - one is constructed
+    per operation by Strawberry, the other is opaque until it is called - and
+    the entry the deployment supplied is what each operation is built from,
+    whatever a resolver assigns afterwards.
+    """
+    schema = DjangoSchema(
+        query=_BoundedRowQuery,
+        extensions=[entry],
+        resource_policy=ResourcePolicy(max_list_rows=1),
+    )
+    _assert_entry_survives_a_replacement_attempt(schema)
+
+
+def test_an_accepted_extension_instance_still_enforces_after_a_replacement_attempt():
+    """The third configuration spelling, which Strawberry itself deprecates.
+
+    An instance entry shares one set of counters across every request, so
+    Strawberry warns on it; the package still accepts it as configuration, and
+    accepted configuration is what enforces.
+    """
+    with pytest.warns(DeprecationWarning):
+        schema = DjangoSchema(
+            query=_BoundedRowQuery,
+            extensions=[DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))],
+            resource_policy=ResourcePolicy(max_list_rows=1),
+        )
+    _assert_entry_survives_a_replacement_attempt(schema)
+
+
 def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults():
-    """The fail-closed miss path: no record means the tightest budget, never none.
+    """The fail-closed miss path: no record means the package defaults, never none.
 
     Reachable through a subclass that never completes ``DjangoSchema.__init__``.
-    The answer is the package default rather than an error, because a schema
-    that cannot say what it was configured with is still a schema that has to
-    bound the request in front of it.
+    The answer is what a schema that declared nothing gets rather than an error,
+    because a schema that cannot say what it was configured with is still a
+    schema that has to bound the request in front of it.
     """
 
     class _Unregistered(DjangoSchema):
@@ -575,9 +675,239 @@ def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults(
             pass
 
     schema = _Unregistered()
-    assert schema not in _SCHEMA_ENFORCEMENT
+    assert _SCHEMA_ENFORCEMENT.recall(schema) is None
     assert schema.resource_policy == ResourcePolicy()
     assert schema.error_policy == ErrorPolicy()
+    assert schema.extensions == ()
+
+
+def test_two_schemas_that_compare_equal_keep_their_own_enforcement():
+    """An enforcement record belongs to one object, not to everything equal to it.
+
+    A registry that finds its entries by hash and equality hands a consumer
+    subclass the choice of which schema's bounds answer for which schema: the
+    second construction overwrites the first schema's record, and the first
+    schema's collection takes the entry the second is still being enforced by.
+    """
+
+    class _EqualSchema(DjangoSchema):
+        def __hash__(self):
+            return 1
+
+        def __eq__(self, other):
+            return isinstance(other, _EqualSchema)
+
+    narrow = _EqualSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=1))
+    wide = _EqualSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=999))
+
+    assert narrow.resource_policy.max_list_rows == 1
+    assert wide.resource_policy.max_list_rows == 999
+
+    del narrow
+    gc.collect()
+
+    assert wide.resource_policy.max_list_rows == 999
+
+
+def test_a_schema_that_cannot_be_hashed_is_still_constructible_and_bounded():
+    """Identity needs no hash, so declaring ``__eq__`` cannot cost a schema its record."""
+
+    class _UnhashableSchema(DjangoSchema):
+        __hash__ = None
+
+        def __eq__(self, other):
+            return self is other
+
+    schema = _UnhashableSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=3))
+
+    assert schema.resource_policy.max_list_rows == 3
+
+
+class _ContextSentinel:
+    """A value one request's context carries, so a retained context is observable."""
+
+
+class _FactorySchema(DjangoSchema):
+    """A schema configured with a BOUND METHOD, which is the non-deprecated factory."""
+
+    def make_extension(self):
+        """Build this schema's resource-policy extension, fresh per operation."""
+        return DjangoResourcePolicyExtension()
+
+    def __init__(self, **kwargs):
+        super().__init__(extensions=[self.make_extension], **kwargs)
+
+
+def _reachability_after_dropping(make_schema, *, execute):
+    """Whether the schema, its record, and one request's context survive collection."""
+    schema = make_schema()
+    record = _SCHEMA_ENFORCEMENT.recall(schema)
+    assert record is not None
+    schema_ref = weakref.ref(schema)
+    record_ref = weakref.ref(record)
+    sentinel = _ContextSentinel()
+    sentinel_ref = weakref.ref(sentinel)
+    if execute:
+        result = schema.execute_sync("{ hello }", context_value={"sentinel": sentinel})
+        assert result.errors is None, result.errors
+
+    del schema, record, sentinel
+    gc.collect()
+
+    return (schema_ref(), record_ref(), sentinel_ref())
+
+
+@pytest.mark.parametrize(
+    ("configure", "execute"),
+    [
+        (lambda: DjangoSchema(query=DummyQuery), False),
+        (lambda: DjangoSchema(query=DummyQuery), True),
+        (lambda: _FactorySchema(query=DummyQuery), False),
+    ],
+    ids=["class-entry", "class-entry-after-execution", "bound-method-factory"],
+)
+def test_a_schema_stays_collectable_whatever_configured_it(configure, execute):
+    """Holding a schema's configuration must not hold the schema.
+
+    An extension instance acquires its execution context when the operation
+    runs, and that context owns the schema; a factory can be a bound method,
+    which owns the schema before any request at all. Either one reached from a
+    module-global root would keep every schema built per test or per tenant
+    alive for the life of the process - and with it the last request's context
+    and variables. What owns a record is therefore the schema itself, and what
+    this package holds is a weak reference to it.
+    """
+    assert _reachability_after_dropping(configure, execute=execute) == (None, None, None)
+
+
+def test_an_accepted_extension_instance_does_not_outlive_its_schema():
+    """The instance spelling, whose extension holds the execution context it ran under."""
+    with pytest.warns(DeprecationWarning):
+        alive = _reachability_after_dropping(
+            lambda: DjangoSchema(query=DummyQuery, extensions=[DjangoResourcePolicyExtension()]),
+            execute=True,
+        )
+    assert alive == (None, None, None)
+
+
+def test_a_forged_enforcement_record_still_leaves_the_operation_enforced():
+    """The record a schema carries is read back only through what accepted it.
+
+    Writing the attribute it is held under is a write ``info.schema`` puts in
+    reach of every resolver, and a forged record would otherwise nominate its
+    own policies. The forgery is not the accepted one, so what answers is the
+    fail-closed default - and the entries that enforce it are put back rather
+    than taken from a configuration that can no longer be read.
+    """
+    schema = DjangoSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=1))
+    assert schema.resource_policy.max_list_rows == 1
+
+    schema.__dict__["_django_enforcement"] = SimpleNamespace(
+        resource_policy=ResourcePolicy(max_list_rows=999),
+        error_policy=ErrorPolicy(),
+        auto_resource_extension=False,
+        auto_error_extension=False,
+        extensions=(),
+    )
+
+    assert schema.resource_policy == ResourcePolicy()
+    assert schema.extensions == ()
+    resolved = schema.get_extensions(sync=True)
+    assert sum(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved) == 1
+    assert sum(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved) == 1
+    assert isinstance(resolved[0], DjangoErrorPolicyExtension)
+    assert isinstance(resolved[-1], DjangoResourcePolicyExtension)
+
+
+@pytest.mark.parametrize(
+    (
+        "argument",
+        "policy",
+        "field",
+        "widened",
+    ),
+    [
+        (
+            "resource_policy",
+            ResourcePolicy(max_list_rows=1),
+            "max_list_rows",
+            999,
+        ),
+        (
+            "error_policy",
+            ErrorPolicy(),
+            "enabled",
+            False,
+        ),
+    ],
+    ids=["resource", "error"],
+)
+def test_a_retained_policy_argument_is_not_the_one_the_schema_enforces(
+    argument,
+    policy,
+    field,
+    widened,
+):
+    """The caller keeps their object; the schema keeps a duplicate of its values.
+
+    An exact instance used to pass through configuration intake unchanged, so a
+    caller who retained the argument - or who left one in ``settings`` - still
+    held the object every bound was read from, and a frozen dataclass admits
+    ``policy.__dict__[bound] = wider`` by the same route the schema attribute
+    does.
+    """
+    schema = DjangoSchema(query=DummyQuery, **{argument: policy})
+
+    policy.__dict__[field] = widened
+
+    assert getattr(getattr(schema, argument), field) != widened
+
+
+def test_a_retained_policy_argument_cannot_widen_a_later_request():
+    """The observable half: a bound settled at construction stays settled."""
+
+    @strawberry.type
+    class _Query:
+        @strawberry.field
+        def rows(self, info: strawberry.Info) -> list[str]:
+            return list(bounded_rows(["a", "b", "c"], info, None))
+
+    policy = ResourcePolicy(max_list_rows=1)
+    schema = DjangoSchema(query=_Query, resource_policy=policy)
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    policy.__dict__["max_list_rows"] = 999
+
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+
+def test_a_policy_behind_the_setting_is_snapshotted_like_an_explicit_one(settings):
+    """The two override slots are one ladder, so they detach on the same terms.
+
+    A settings-supplied instance is the one a deployment is most likely to keep
+    a reference to: it lives at module scope for the life of the process.
+    """
+    policy = ResourcePolicy(max_list_rows=2)
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RESOURCE_POLICY": policy}
+    schema = DjangoSchema(query=DummyQuery)
+
+    policy.__dict__["max_list_rows"] = 999
+
+    assert schema.resource_policy.max_list_rows == 2
+
+
+def test_an_exact_policy_corrupted_before_intake_is_rejected_at_construction():
+    """``__post_init__`` spoke for the values an instance was BUILT with.
+
+    Admitting an exact instance without re-reading it made the type the evidence
+    and the fields an assumption, so a bound written onto the object after it
+    validated reached the schema as configuration.
+    """
+    policy = ResourcePolicy()
+    policy.__dict__["max_list_rows"] = 0
+
+    with pytest.raises(ConfigurationError):
+        DjangoSchema(query=DummyQuery, resource_policy=policy)
 
 
 def test_widening_a_schema_policy_copy_leaves_the_schemas_own_bound():

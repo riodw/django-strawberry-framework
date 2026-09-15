@@ -159,10 +159,16 @@ def test_the_policy_is_frozen_so_a_resolver_cannot_widen_its_own_request():
 # ---------------------------------------------------------------------------
 
 
-def test_an_explicit_instance_is_returned_unchanged():
-    """An ``ErrorPolicy`` has already validated itself, so it is used as-is."""
+def test_an_explicit_instance_is_taken_as_a_private_duplicate():
+    """An ``ErrorPolicy`` argument supplies values, never the object enforcement reads.
+
+    The caller keeps what they passed, so what a schema masks with cannot be
+    rewritten afterwards through the reference they still hold.
+    """
     policy = ErrorPolicy(message="Nope.")
-    assert resolve_error_policy(policy) is policy
+    resolved = resolve_error_policy(policy)
+    assert resolved == policy
+    assert resolved is not policy
 
 
 def test_an_explicit_mapping_is_applied_over_the_package_defaults():

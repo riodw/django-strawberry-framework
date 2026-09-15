@@ -442,10 +442,11 @@ def resolve_resource_policy(explicit: ResourcePolicy | Mapping[str, Any] | None)
 
     Precedence, highest first: the ``DjangoSchema(resource_policy=...)``
     argument, the ``DJANGO_STRAWBERRY_FRAMEWORK["RESOURCE_POLICY"]`` mapping, and
-    the package defaults. A ``ResourcePolicy`` instance passed explicitly is used
-    as-is (it has already validated itself); a mapping from either source is
-    applied over the package defaults so a deployment overrides only the bounds
-    it cares about.
+    the package defaults. A ``ResourcePolicy`` instance from either override slot
+    supplies its values to a private duplicate that validates them again
+    (``utils/policies.py::canonical_policy``), never the object a bound is then
+    read from; a mapping from either source is applied over the package defaults
+    so a deployment overrides only the bounds it cares about.
 
     Both override sources are *trusted declarations* and may therefore widen a
     package default - that is the distinction the narrowing rule draws between a
@@ -554,16 +555,14 @@ def _operation_policy(policy: ResourcePolicy) -> ResourcePolicy:
     """The private, exact policy one operation is bounded by.
 
     Taken once per operation rather than per bound read, so the per-field seams
-    pay nothing for it. Two properties are established here and nowhere else:
-    the object is an exact ``ResourcePolicy``, so every field read a bound
-    performs is the package's own rather than a subclass's
-    (``utils/policies.py::canonical_policy``); and it is a fresh object no caller
-    of :func:`begin_resource_budget` retained a reference to, so the budget
-    cannot be widened afterwards by writing the object that was passed in.
+    pay nothing for it. ``utils/policies.py::canonical_policy`` establishes both
+    properties an armed budget needs: the object is an exact ``ResourcePolicy``,
+    so every field read a bound performs is the package's own rather than a
+    subclass's, and it is a fresh object no caller of
+    :func:`begin_resource_budget` retained a reference to, so the budget cannot
+    be widened afterwards by writing the object that was passed in.
     """
-    return copy_policy(
-        canonical_policy(policy, policy_cls=ResourcePolicy, display_name="resource policy"),
-    )
+    return canonical_policy(policy, policy_cls=ResourcePolicy, display_name="resource policy")
 
 
 def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:

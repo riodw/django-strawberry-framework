@@ -1,200 +1,251 @@
-# Adversarial Implementation Review: Spec-050 (`list_field_arguments-0_0_15`)
+# Adversarial review: enforcement ownership and execution lifecycle
 
-**Verdict: NOT ACCEPTED.** The implementation is not ready to certify. The review covers the
-current `HEAD` (`648214b4`), the production code it contains, the complete
-[Spec-050][spec-050], the [build record][build-050], and the repository rules in
-[AGENTS.md][agents] and [GOAL.md][goal]. I used static inspection and live `uv run python`
-probes against the fakeshop database; no pytest run was performed because the repository rules
-prohibit running it after edits unless explicitly requested.
+Verdict: **changes required**. Reviewed the uncommitted production remediation over HEAD
+`11928077`, its policy/schema tests and live resource-policy tests, the relevant
+[Spec-047][spec-047] contracts, and the [Spec-050 build record][build-050]. This reviews
+the working changes, not a claim that HEAD contains them or that every unrelated concurrent
+test migration was audited. Criteria: [AGENTS.md][agents], [START.md][start], [GOAL.md][goal],
+and the [live-test contract][live-readme].
 
-The most serious defect is not in the query compiler seal: it is in the supposedly universal raw
-list bounding seam. A consumer can return a sequence object whose slice operation ignores the
-requested window, and the package returns every row. Two independent policy-authority problems
-remain as well. They invalidate the spec's claims that the budget is unreachable from resolver
-code and that one immutable policy is used throughout an operation.
+Evidence comes from fresh `uv run python` probes and source tracing. The policy-mutation and
+scalar-stage reproductions also ran over HTTP through `DjangoGraphQLView` and
+`django.test.Client`, using an in-memory URL module and `DEBUG=False`. No pytest was run;
+no production file or database was edited. The mutation used to assess a test was a
+process-local replacement of one method, restored in that process.
 
-## P1-1 — A materialized sequence subclass can return an unbounded page
+## P1-1 — An accepted extension instance still exposes the next request's policy
 
-Spec-050 Decision 8 promises that materialized sequences receive the same `[start:stop]` window
-as a queryset, and `resource_policy.py::bounded_rows` documents an unconditional raw-list bound.
-The implementation does not enforce that contract. `resource_policy.py::_windowed_rows` dispatches
-directly to `result[:limit]` or `result[start:stop]` and only falls back for `TypeError` and
-`KeyError`. Python permits a `list` or `tuple` subclass to override `__getitem__`, including for
-slice objects, so the operation being used as the security boundary is consumer-controlled.
+Locations: `django_strawberry_framework/schema.py::DjangoSchema.extensions`,
+`django_strawberry_framework/schema.py::DjangoSchema.get_extensions` ([schema][schema]), and
+`django_strawberry_framework/extensions/resource_policy.py::DjangoResourcePolicyExtension._resolved_policy`
+([extension][resource-extension]).
 
-This is reachable through the public `DjangoListField` materialized-source path, not merely a
-private helper. The following real schema probe used a `DjangoSchema`, a registered fakeshop
-`BranchType`, and `ResourcePolicy(max_list_rows=2)`:
-
-```python
-class Escape(list):
-    def __getitem__(self, key):
-        if isinstance(key, slice):
-            return list(self)          # ignores the requested limit
-        return super().__getitem__(key)
-
-def resolver(root, info):
-    return Escape(Branch.objects.all())
-```
-
-Executing `{ branches { id } }` returned all 23 database rows with no GraphQL error, despite the
-policy being two rows. The same defect is present for the offset window and for `limit: 0`:
-`result[start:start]` still dispatches the hostile slice and can return data where the contract
-requires an empty result. A tuple subclass has the same behavior. This bypasses both the response
-row ceiling and the amount of data a caller can make the GraphQL executor serialize.
-
-**Root-cause correction:** make the bounding seam operate only on framework-owned sequence
-representations. Either reject sequence subclasses before slicing or use exact built-in
-operations (`list.__getitem__` / `tuple.__getitem__`) and verify the returned representation and
-length before it leaves the seam. Do not treat a successful arbitrary `__getitem__` call as proof
-that a bound was applied, and do not solve this with a post-hoc test-only length assertion that
-itself calls a hostile `__len__`. The same policy must cover the zero-window branch and both
-sync/async colors. Add package tests for hostile list/tuple/mapping slicing and a live
-`examples/fakeshop/test_query/` test using a materialized subclass; that is a public path under
-the live-test rule in [test-query README][live-readme].
-
-## P1-2 — The schema's private policy and extension registry remain writable by resolvers
-
-The code comments claim that the armed policy is reachable from no consumer-visible name. That
-is false for the schema object itself. `DjangoSchema` stores the authority in an ordinary
-`_resource_policy` entry in `schema.__dict__`, and Strawberry stores the extension list in the
-ordinary `extensions` entry. `info.schema` is available to every resolver, so a resolver can write
-both without using any undocumented framework hook:
+The tuple prevents replacing entries, but does not detach or protect its objects. An accepted
+`DjangoResourcePolicyExtension` instance is returned unchanged by Strawberry and remains
+reachable through `info.schema.extensions`. Its `_policy` is the authority consulted on the
+next operation. A resolver can do this without importing the private registry:
 
 ```python
-info.schema.__dict__["_resource_policy"] = ResourcePolicy(max_list_rows=999)
-info.schema.__dict__["extensions"] = ()
+extension = next(
+    entry for entry in info.schema.extensions
+    if isinstance(entry, DjangoResourcePolicyExtension)
+)
+extension._policy = ResourcePolicy(max_list_rows=999)
 ```
 
-I verified both mutations against a live `DjangoSchema` with a two-row policy and 23 Branch rows.
-The first request correctly returned two rows. After the resolver replaced `_resource_policy`, the
-next request returned 23 rows. After the resolver replaced `extensions`, the next request also
-returned 23 rows because the resource extension was no longer instantiated and the field fell
-back to the package default. This is a process-lived, cross-request widening and extension-removal
-primitive, not a same-request ContextVar race.
+Verified over HTTP on a schema initially configured with an instance carrying bound 1:
 
-The property-copy defense only protects reads through `schema.resource_policy`; it does not
-protect direct `__dict__` writes, and the extension auto-installation logic cannot help once the
-consumer has replaced its source tuple. This contradicts Spec-047's authority invariant carried
-into Spec-050 and the explicit live policy-authority claims in the build plan.
+| Request | Result |
+| --- | --- |
+| `{ rows }` | `{"data": {"rows": ["a"]}}` |
+| `{ attack }` | `{"data": {"attack": 1}}` |
+| `{ rows }` | `{"data": {"rows": ["a", "b", "c"]}}` |
 
-**Root-cause correction:** remove enforcement authority from mutable consumer-reachable schema
-attributes. Keep an exact, package-owned policy/extension registry keyed to the schema or an
-execution handle, and have every operation resolve the registry entry without consulting mutable
-schema `__dict__` state. Freeze or copy the extension configuration at construction, and make
-schema lifetime cleanup explicit so the registry cannot leak. Tests must mutate the private
-attribute and extension tuple exactly as above, then issue a second real request; testing only
-the public property is insufficient.
+All three responses were HTTP 200 without errors. The rows resolver uses the actual
+`bounded_rows` helper. No extension-list assignment occurs, so the new setter never intervenes.
+Strawberry deprecates instance entries, but this package explicitly accepts and newly tests
+them; deprecation does not discharge the supported-path invariant.
 
-## P1-3 — Explicit extension policies are not one operation snapshot
+Root correction: capture package enforcement configuration independently of mutable extension
+instances, and ensure operation arming cannot re-read a consumer-reachable instance as policy
+authority. Preserve explicit-policy precedence and fresh-per-operation factories; do not
+eagerly invoke factories or merely wrap the same objects in another immutable container.
+The accepted-instance path needs a genuine private policy snapshot, not another presence check.
 
-`extensions/resource_policy.py::DjangoResourcePolicyExtension._resolved_policy` returns the raw
-explicit `_policy` object. `on_operation` passes it through `begin_resource_budget`, which creates a
-canonical private snapshot, but `scan_document_text` still receives the raw object. Later,
-`on_execute` calls `_resolved_policy()` again and charges the raw object again. Thus the scanner,
-the armed budget, and the post-parse/value walk can observe different policies.
+Tests: retain replacement-refusal tests, but add an HTTP sequence that mutates the
+accepted instance and then requests rows. Check mutation of the stored policy object as well
+as replacement of `_policy`, with separate node IDs. This is the remaining branch of the
+prior extension-authority defect, not a claim about remote clients installing Python.
 
-This is exploitable with a valid `ResourcePolicy` subclass whose first post-construction read of
-`max_document_tokens` is `1` and subsequent reads are `1_000_000`. The canonical snapshot receives
-the restrictive value, while the scanner's subsequent reads see the wide value and `{ x }` runs
-instead of being rejected as a one-token document. The same pattern can widen selection, value,
-collection, or upload bounds. A shared exact policy object is also mutable through its `__dict__`
-if the consumer retains the explicit extension instance.
+## P2-1 — The identity registry now permanently roots some schemas
 
-**Root-cause correction:** canonicalize and copy an explicit policy once when the extension
-configuration is accepted, then capture that exact object for the complete operation. Both
-`on_operation` and `on_execute` must consume the same snapshot (and the extension factory must not
-re-read consumer policy attributes per hook). Add an extension-level test with a stateful policy
-subclass and a plain `strawberry.Schema`, because the existing schema-construction canonicalization
-test does not cover this separate explicit-extension path.
+Locations: `django_strawberry_framework/schema.py::_SchemaEnforcement`,
+`django_strawberry_framework/schema.py::_remember_enforcement`, and
+`django_strawberry_framework/schema.py::DjangoSchema.extensions` ([schema][schema]).
 
-## P1-4 — Value-budget accounting still trusts consumer-controlled shapes
+The registry's key reference is weak, but its value now strongly owns the complete extension
+configuration. Extension objects and factories can point back to their schema. That creates
+a path from a module-global root back to the weak referent, preventing collection and therefore
+preventing the cleanup callback from ever running.
 
-The same exact-type rule used for policy numbers is not propagated through the value walker:
+Two independent reproductions:
 
-- `extensions/resource_policy.py::_ValueBudget._charge_container` accepts `list`/`tuple` and
-  `Mapping` subclasses, calls their dynamic `__len__`, and iterates them directly;
-- `_ValueBudget._charge_leaf` accepts `str` subclasses and calls their overridden `encode`;
-- the bytes branch evaluates `len(value)` eagerly as the default argument to `getattr`, so a
-  bytes subclass can raise before `nbytes` is considered.
+- An ordinary accepted extension instance acquires `execution_context` during execution.
+  That context owns `schema`. After one successful query and deletion of all local owners,
+  `gc.collect()` leaves a weak reference to the schema alive. The rooted chain is registry,
+  record, extension tuple, extension instance, execution context, schema. It also retains the
+  last request context and variables through that execution context.
+- A supported schema subclass passes `extensions=[self.make_extension]`, where the bound
+  method returns a fresh resource extension. The registry owns that bound method, which owns
+  `self`. This schema cannot be collected even before its first request; it uses the
+  non-deprecated factory path.
 
-Direct probes produced all three failure modes: a list subclass reporting length zero but yielding
-100 elements was accepted under `max_container_width=1`; a string subclass whose `encode` returned
-one byte was accepted under `max_scalar_bytes=1` despite being 100 characters; and a bytes subclass
-whose `__len__` raised escaped as a raw `RuntimeError`. A custom scalar's `parse_value` can return
-these subclasses, so this is not limited to an artificial direct call.
+Controls: a class entry was collectable both before and after execution; an instance entry
+was collectable before execution. Thus this is not merely an external probe reference keeping
+the schema alive. The new lifecycle test constructs a default schema with class entries and
+does not exercise either back-reference.
 
-**Root-cause correction:** normalize custom-scalar/container values to exact framework-owned
-representations before accounting, or reject non-exact sequence/mapping/text/buffer shapes as
-unmeasurable. Read a buffer's size through a safe exact-type path without an eagerly evaluated
-hostile fallback. Add live custom-scalar probes and package tests for benign and raising subclasses
-for every value-bound family; do not add isolated `try` blocks around only the examples above.
+Root correction: redesign configuration ownership so the global registry does not strongly
+own arbitrary extension object graphs. Schema/configuration cycles must remain collectable;
+identity validation and assignment integrity are separate concerns from lifetime ownership.
+Changing weak-reference callback logic cannot fix a callback that is never eligible to run.
+Do not require callers to manually clear request state or unregister schemas to compensate.
 
-## P2-1 — Positive integer policy values have no representability boundary
+Tests: package-level weak-reference lifecycle rows for class, instance-after-execution, and
+bound-method factory configurations. Assert that the schema and a request-context sentinel
+become unreachable after external owners are dropped. Keep these mechanics package-side;
+they cannot be proved by an HTTP response alone.
 
-`resource_policy.py::_require_positive_int` accepts an exact integer of arbitrary magnitude. The
-wire-visible `ResourceLimitExceeded` constructor then interpolates `limit` and `charged` directly
-with f-strings. A schema policy containing `10**10000` is accepted, but a normal list query reaches
-the collection-cost rejection with a built-in `ValueError` from CPython's integer-to-string digit
-limit while constructing that supposed typed resource error. With smaller oversized values, the
-query reaches SQLite and fails with a backend `IntegrityError` because the generated LIMIT cannot
-be represented by the database adapter.
+## P2-2 — Literal scalar parsing precedes the claimed raw-value admission boundary
 
-This leaves a configuration that passes schema construction but cannot produce the promised
-typed rejection or a valid bounded query. Define and validate a backend-safe magnitude for every
-bound that reaches SQL or error payloads, or canonicalize to a documented safe ceiling. Keep the
-error renderer safe for all accepted values. Add construction and live execution tests at the
-largest accepted magnitude on every supported database backend.
+Locations: `django_strawberry_framework/extensions/resource_policy.py::DjangoResourcePolicyExtension.on_execute`
+([extension][resource-extension]); Spec-047's value-source paragraph and Decision 13;
+the glossary's [value-budget description][value-budget];
+`examples/fakeshop/test_query/test_resource_policy_api.py::test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried`
+([live tests][live-resource-tests]).
 
-## P2-2 — Verification and test evidence do not certify this tree
+The corrected variable test is valid, but the documentation generalizes its ordering to all
+four input sources. GraphQL validation executes scalar `parse_literal` before `on_execute`.
+With the ordinary scalar definition that supplies only `parse_value`, graphql-core's default
+literal parser calls that `parse_value` too. Therefore the value budget is not universally
+before custom conversion.
 
-The [build record][build-050] records the final default/sharded/floor gate at `207c7328`, then
-explicitly says the policy-authority remediation was implemented and **ungated**. The current
-production history includes later policy and ordering commits through `17bc2cfb` and the current
-`HEAD` is `648214b4`; no full default, sharded, or declared 17-path floor gate is recorded at this
-delivery tree. The working tree also contains concurrent uncommitted test/document/database
-changes, so the old figures are not a reproducible release proof.
+Verified with the same scalar parser recording calls, an over-width `[1, 2]`, and width bound 1:
 
-The tests cover ordinary lists and guarded mapping fallback, but there is no adversarial
-`__getitem__`-ignoring sequence test, no live materialized-subclass list-field case, and no
-stateful explicit-extension-policy test. Those are exactly the public and lifecycle seams that the
-probes above break. Under [AGENTS.md][agents], the root production fixes must land with tests in
-the correct package/live tiers and the complete gate must be rerun before certification.
+| Input source | Parser calls before typed width rejection |
+| --- | --- |
+| Supplied variable | 0 |
+| Inline literal | 1, carrying `[1, 2]` |
+| Variable-definition default | 1, carrying `[1, 2]` |
 
-## Required disposition
+All three HTTP responses rejected with `RESOURCE_LIMIT_EXCEEDED`, charged 2. The distinction is
+work already performed, not whether a resolver ultimately ran. A costly scalar parser can
+therefore perform work the new prose says admission prevents. The pre-parse token/depth
+limits do not establish the separately configurable container-width or scalar-byte limits.
 
-Do not mark Spec-050 complete yet. First close the three P1 authority/accounting defects with
-framework-owned representations and one operation snapshot, then add the live/package coverage
-for those paths. Re-run the full default, sharded, and declared floor suites at the delivery
-commit, update the build record with that exact commit, and only then reassess the lower-severity
-representability issue.
+Root correction: put the raw-value admission needed to protect scalar conversion before
+validation can invoke a scalar parser. Reuse the existing value-accounting implementation and
+schema metadata; do not run custom parsers to measure their input, parse twice for accounting,
+or duplicate GraphQL's entire validator. Preserve accurate malformed-document handling and
+one charge per intended argument occurrence. Until that ordering is implemented, the spec and
+glossary must not promise rejection before conversion for literals/defaults.
+
+Tests: parameterize supplied variable, inline literal, and variable default, each with parser
+call observations outside the guarded code and both admission/rejection verdicts over HTTP.
+The current variable-only test cannot prove the all-sources sentence. Update the glossary's
+database source when correcting its rendered description, per the repository rules.
+
+## P2-3 — The largest accepted width overflows the new bounded reader
+
+Location: `django_strawberry_framework/extensions/resource_policy.py::_ValueBudget._bounded_members`
+([extension][resource-extension]).
+
+`MAX_RESOURCE_BOUND` permits `9223372036854775807`. The new reader passes `limit + 1` as
+`islice`'s stop argument, which must fit `sys.maxsize`. On this supported 64-bit interpreter,
+that is one too large. Its own argument error is caught and mislabeled as an unmeasurable input.
+
+Verified through `charge_document` with `ResourcePolicy(max_container_width=MAX_RESOURCE_BOUND)`:
+
+| Value | Result |
+| --- | --- |
+| Exact empty list | Accepted |
+| Empty subclass of list, with no overrides | Rejected, charged `9223372036854775808` |
+| Same subclass carrying one integer | Same rejection |
+
+The chained cause is `ValueError: Stop argument for islice() must be None or an integer:
+0 <= x <= sys.maxsize.` No hostile iterator is needed. The mapping-subclass branch uses the
+same helper and therefore the same invalid stop value. This is an in-process input contract
+defect, not a claim that decoded JSON produces list subclasses.
+
+Root correction: use a bounded reader whose lookahead counter supports the full declared
+policy domain without submitting an out-of-range stop to `islice`. Preserve exactly one
+lookahead, no length hints, typed failures for genuinely unreadable inputs, and no unbounded
+fallback at the maximum. Do not lower the global policy ceiling to hide a helper mismatch.
+
+Tests: accepted empty and nonempty custom sequences/mappings at the maximum, alongside the
+small-bound excess cases. A row proving the maximum reaches SQL does not test this consumer
+of the same bound.
+
+## P3-1 — The new poison-advance proof catches its own failure
+
+Location: `tests/test_resource_policy.py::test_a_container_is_not_advanced_once_its_width_is_already_proven`
+([package tests][package-resource-tests]).
+
+The generator raises `AssertionError` on its third advance. `_bounded_members` catches every
+`Exception` and converts it to `ResourceLimitExceeded(bound, limit, limit + 1)`. At width 1,
+that produces exactly the bound and charged value the test asserts. The test therefore passes
+when the reader advances into the forbidden position.
+
+Verified by replacing only `return list(islice(members(), limit + 1))` with
+`return list(members())` in a process-local copy of the actual method, retaining its actual
+exception handler, and calling `charge_document`:
+
+| Reader | Advances | Current test's bound/charged assertions |
+| --- | --- | --- |
+| Current implementation | 1, 2 | Pass |
+| Unbounded mutation | 1, 2, 3; then assertion raised | Pass |
+
+This does not mean the production stop is currently absent: it works at ordinary bounds.
+The neighboring finite counting tests provide useful protection too. It means this separately
+named proof does not establish its claim, contrary to START's rule that failability evidence
+must be observed outside the guard under test.
+
+Root correction: record each advance in a probe-owned log and assert the exact log after the
+typed rejection. Keep the poison as a secondary diagnostic, not the only witness. The
+unbounded mutation above must fail that external assertion. This is an internal iterator
+mechanic, so package test placement is appropriate.
+
+## Verified corrections and limits
+
+- Distinct equal schemas now kept bounds 1 and 999; collecting the first left the second at
+  999. The identity-key correction addresses the old equality collision.
+- Mutating a retained exact policy after schema construction left a subsequent bounded-row
+  query at one row. The intake copy addresses the explicit-object alias.
+- Assigning `schema.extensions = []` now raises `ConfigurationError`. The remaining finding
+  concerns mutation of an object inside the accepted tuple, not failure of that setter.
+- Normal small-width custom-container reads stopped after one excess member. The old eager
+  full-copy defect is corrected; the maximum-bound and poison-proof defects above are distinct.
+- The raw-variable scalar test now measures the stage it claims for supplied variables. The
+  literal/default siblings reveal the remaining overstatement.
+- The build record still certifies `207c7328` and explicitly excludes descendants. Default,
+  sharded, and the declared seventeen-path floor gate remain unverified for this delivery
+  tree. These probes do not establish coverage, full-suite success, or floor parity.
+- Post-edit formatting left all 445 Python files unchanged. Repository-wide lint reported
+  ten errors in the pre-existing untracked root `models.py` (undefined names, missing
+  docstrings/annotation, and commented-out code). No automatic fixes were available; that
+  unrelated file was left untouched. This review does not report a clean lint gate.
+
+Fix the shared enforcement ownership/lifetime design first, then the admission-stage and
+reader defects, with production changes and their tests together. Preserve the `Meta`-driven
+consumer API. Observable request behavior belongs in the live tier; lifetime and iterator
+instrumentation belong in package tests with their reachability rationale.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../AGENTS.md
 [goal]: ../GOAL.md
+[start]: ../START.md
 
 <!-- docs/ -->
-[spec-050]: spec-050-list_field_arguments-0_0_15.md
+[value-budget]: GLOSSARY.md#value-budget-walker
 
 <!-- docs/SPECS/ -->
+[spec-047]: SPECS/spec-047-resource_policy-0_0_14.md
 
 <!-- docs/builder/ -->
 [build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
-[resource-policy]: ../django_strawberry_framework/resource_policy.py
-[resource-policy-extension]: ../django_strawberry_framework/extensions/resource_policy.py
+[resource-extension]: ../django_strawberry_framework/extensions/resource_policy.py
 [schema]: ../django_strawberry_framework/schema.py
-[list-field]: ../django_strawberry_framework/list_field.py
 
 <!-- tests/ -->
-[test-resource-policy]: ../tests/test_resource_policy.py
+[package-resource-tests]: ../tests/test_resource_policy.py
 
 <!-- examples/ -->
 [live-readme]: ../examples/fakeshop/test_query/README.md
-[test-list-field-api]: ../examples/fakeshop/test_query/test_list_field_api.py
+[live-resource-tests]: ../examples/fakeshop/test_query/test_resource_policy_api.py
 
 <!-- scripts/ -->
 

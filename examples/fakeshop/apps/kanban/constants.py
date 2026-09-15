@@ -108,6 +108,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/utils/inputs.py",
     "django_strawberry_framework/utils/permissions.py",
     "django_strawberry_framework/utils/policies.py",
+    "django_strawberry_framework/utils/private_state.py",
     "django_strawberry_framework/utils/querysets.py",
     "django_strawberry_framework/utils/relations.py",
     "django_strawberry_framework/utils/sessions.py",

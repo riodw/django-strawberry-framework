@@ -1,32 +1,27 @@
 # Today
 
-`TODAY.md` is the current-state playbook for **what `django-strawberry-framework` (the package) can do right now**, demonstrated through one canonical example: `examples/fakeshop/apps/products/`. It answers: "if I wire a model app with this package today, what works?"
+**This file is the mile-marker.** [`GOAL.md`][goal] owns the destination: an `astronomy` app of seven files that runs verbatim at `1.0.0`. [`KANBAN.md`][kanban] owns delivery and acceptance, card by card. This file owns the current capability boundary: what a consumer can build with the package right now, where each of GOAL's eight success criteria stands, and what has to change in the `astronomy` files to run them on today's implementation. It connects the other two without repeating either. It is not the changelog; [`CHANGELOG.md`][changelog] carries history, and [`docs/GLOSSARY.md`][glossary] carries per-capability shipped / planned status.
 
-> **Scope — keep it this way.** This document covers **package capabilities**, not the example apps. `products` is the *single canonical demonstration vehicle* and the only app this file discusses. The other fakeshop apps (`library`, `scalars`, `kanban`, `glossary`, `accounts`) deliberately re-exercise the same package surface against different model shapes — cataloguing them here would only repeat these capabilities. Do **not** broaden this file to enumerate the other apps; keep every example products-centric and capability-focused.
->
-> For the package-wide capability catalog, shipped/planned status, optimizer hints, strictness modes, and future work, see [`docs/GLOSSARY.md`][glossary].
+## Snapshot contract
 
-## What products demonstrates today
+"Today" means **the current checkout of `main`**, not the last published release and not the board's `Done` column. Verdicts describe implementation; acceptance (the card's board state) and evidence (which live or package test pins it) are reported beside the verdict, never folded into it. The two diverge in one place at the moment: the [`DjangoListField` argument surface][kanban-list-field-args] (`offset` / `limit` / `orderBy`) is implemented and live-tested while its card is still `WIP`.
 
-`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.15` it exercises, end to end, the capabilities a real consumer reaches for:
+Three verdict words are used throughout:
 
-- **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root Relay connection fields (`allCategories` / `allItems` / `allProperties` / `allEntries`, each a `DjangoConnectionField` as of `0.0.9`).
-- **Relay nodes** — every type declares `Meta.interfaces = (relay.Node,)`, so each `id` is a Relay `GlobalID` (own-PK GlobalID filtering, `node(id:)` refetch shape). As of `0.0.9` the default `GlobalID` payload is the Django model label (`products.item:<pk>`) rather than the GraphQL type name, so a `CategoryType` → `ProductCategoryType` rename no longer invalidates cached IDs; `Meta.globalid_strategy` / `RELAY_GLOBALID_STRATEGY` select `model` (default) / `type` (legacy opt-out) / `type+model` (transitional) / callable.
-- **Filtering** — `Meta.filterset_class` on every type (declared in `apps/products/filters.py`), surfaced on each connection field via a synthesized `filter:` argument. Includes a per-field `check_name_permission` denial gate on `CategoryFilter` (active-input-only).
-- **Ordering** — `Meta.orderset_class` on every type (declared in `apps/products/orders.py`), surfaced via a synthesized `orderBy:` argument. Includes the matching `check_name_permission` gate on `CategoryOrder`.
-- **Optimizer cooperation** — `DjangoConnectionField` hands its pre-slice `QuerySet` to `DjangoOptimizerExtension`, which plans `select_related` / `prefetch_related` / `only()` across the connection's `edges { node }` selection (and any nested `<field>Connection`s) without per-resolver boilerplate.
-- **Filter + order composition** — each connection runs the same `get_queryset` visibility → `filter` → `orderBy` → deterministic pk-order → optimizer-plan → cursor-slice pipeline the hand-written resolvers used to spell (visibility scopes, filter narrows, order arranges).
-- **`DjangoMutation` write surface** — as of `0.0.11` products exposes a live `Mutation` (`createItem` / `updateItem` / `deleteItem` + `createCategory`), each an unannotated `DjangoMutationField` over a `DjangoMutation` subclass, with the shared `errors: list[FieldError]` envelope, `DjangoModelPermission` write authorization, `get_queryset`-scoped update/delete lookups, and an optimizer-backed post-write re-fetch (see "Mutations on products today").
-- **Form-based mutation write surface** — as of `0.0.12` products exposes form-validated mutations on the same `Mutation` type: `createItemViaForm` / `updateItemViaForm` (a `DjangoModelFormMutation` over an `ItemModelForm`, the `ModelForm` flavor reusing the same `FieldError` envelope), `createItemWithFileViaForm` (a multipart `Upload` through a form `FileField`) / `updateItemWithFileViaForm` (the preserve half: a partial update omitting `attachment` leaves the stored file untouched), `createStampedItemViaForm` (a `get_form_kwargs` override injecting `user`), `createDefaultCategoryItemViaForm` (a form whose `Meta.fields` omits the injected `category`, so a duplicate skips `_post_clean` and reaches a write-time `IntegrityError` mapped to the `"__all__"` envelope), `submitContact` (a model-less `DjangoFormMutation` over a plain `ContactForm`, returning the `{ ok, errors }` payload, opted into anonymous access via an explicit `permission_classes = []`), and `submitPing` (the deny-by-default sibling: leaves `Meta.permission_classes` unset, so every live call is rejected by the `DenyAll` default before the form runs). Input shape derives from each form's declared fields; `form.errors` maps onto the same envelope (`clean_<field>` keyed to its field; the `unique_item_per_category` constraint keyed to `"__all__"`). See "Mutations on products today".
-- **DRF-serializer mutation write surface** — as of `0.0.13` products exposes serializer-validated mutations on the same `Mutation` type: `createItemViaSerializer` / `updateItemViaSerializer` (a `SerializerMutation` over an `ItemSerializer` `ModelSerializer`, the third write flavor on the same `FieldError` envelope), plus `createItemViaRenamedSerializer` (a serializer with a renamed scalar and a renamed relation, proving decode and validation errors key to the GraphQL wire name — `displayName` / `categoryPk` — not the serializer field or model column). Input shape derives from the serializer's declared fields; `serializer.errors` maps onto the same envelope (`validate_<field>` keyed to its field; the cross-field object `validate()` and the `unique_item_per_category` `UniqueTogetherValidator` keyed to `"__all__"`). It rides the same `DjangoMutation` base as the model and form flavors, so the `DjangoModelPermission` write-auth default, the visibility-scoped `update` locate, and the optimizer post-write re-fetch carry over unchanged. See "Mutations on products today".
+- **Available.** Implemented in the current checkout.
+- **Partially available.** Implemented for a stated subset; the boundary and the card that widens it are named.
+- **Not implemented.** No code; the owning card is named.
 
-The live `/graphql/` HTTP suite at `examples/fakeshop/test_query/test_products_api.py` pins all of the above end to end.
+Evidence is a live test under `examples/fakeshop/test_query/` wherever a request can reach the surface; where it cannot, the package suite under `tests/` is named instead.
 
-## What's in `products/schema.py` today
+The demonstration app is `examples/fakeshop/apps/products/` (`Category` / `Item` / `Property` / `Entry`, FK-only). It is the same shape as `astronomy`'s `Galaxy` / `CelestialBody`, so "products runs it" is the operational meaning of "available" for the GOAL comparison below.
 
-One representative type (`ItemType` / `PropertyType` / `EntryType` follow the same `class Meta` shape), the connections-only `Query`, and — as of `0.0.11` — the `Mutation` write surface. As of `0.0.9` the four root fields are `DjangoConnectionField` class attributes — the `django-graphene-filters` cookbook mirror — and the hand-written `filter:` / `orderBy:` resolver signatures are gone: `DjangoConnectionField` synthesizes those arguments from the same `Meta.filterset_class` / `Meta.orderset_class` sidecars and runs the same `get_queryset` → `filter` → `orderBy` → deterministic-order → optimizer composition. The `Mutation` block declares one `DjangoMutation` subclass per operation (`class Meta` with `model` + `operation`), each surfaced as an unannotated `DjangoMutationField` — no Strawberry decorators on the mutation classes, the same Meta-driven shape as the types.
+## What you can build today
+
+The maintained end-to-end walkthrough is the [Quick start in `docs/README.md`][readme-quick-start]. The compressed products-shaped version, complete enough to run, is:
 
 ```python
+# apps/products/schema.py
 import strawberry
 from strawberry import relay
 
@@ -36,39 +31,75 @@ from django_strawberry_framework import (
     DjangoMutation,
     DjangoMutationField,
     DjangoType,
+    apply_cascade_permissions,
 )
+from django_strawberry_framework.filters import FilterSet, RelatedFilter
+from django_strawberry_framework.orders import OrderSet, RelatedOrder
 
-from . import filters, models, orders
+from . import models
+
+
+class CategoryFilter(FilterSet):
+    class Meta:
+        model = models.Category
+        fields = {"id": "__all__", "name": "__all__", "description": ["exact", "icontains"]}
+
+
+class ItemFilter(FilterSet):
+    category = RelatedFilter(CategoryFilter, field_name="category")
+
+    class Meta:
+        model = models.Item
+        fields = {"id": "__all__", "name": "__all__", "category__name": ["exact"]}
+
+
+class CategoryOrder(OrderSet):
+    class Meta:
+        model = models.Category
+        fields = "__all__"
+
+
+class ItemOrder(OrderSet):
+    category = RelatedOrder(CategoryOrder, field_name="category")
+
+    class Meta:
+        model = models.Item
+        fields = ["name"]
+
+
+def _staff_or_public(cls, queryset, info):
+    user = getattr(getattr(info.context, "request", None), "user", None)
+    if user and user.is_staff:
+        return queryset
+    return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
 class CategoryType(DjangoType):
     class Meta:
         model = models.Category
-        fields = (
-            "id",
-            "name",
-            "description",
-            "items",
-            "properties",
-            "is_private",
-            "created_date",
-            "updated_date",
-        )
+        fields = ("id", "name", "description", "items", "is_private")
         interfaces = (relay.Node,)
-        filterset_class = filters.CategoryFilter
-        orderset_class = orders.CategoryOrder
-        # Future Layer-3 keys — uncomment each as the relevant card ships:
-        # search_fields = ("name", "description")        # 0.1.2
-        # aggregate_class = aggregates.CategoryAggregate # 0.1.3
-        # fields_class = fieldsets.CategoryFieldSet      # 0.1.1
+        filterset_class = CategoryFilter
+        orderset_class = CategoryOrder
+
+    get_queryset = classmethod(_staff_or_public)
+
+
+class ItemType(DjangoType):
+    class Meta:
+        model = models.Item
+        fields = ("id", "name", "description", "category", "is_private")
+        interfaces = (relay.Node,)
+        filterset_class = ItemFilter
+        orderset_class = ItemOrder
+
+    get_queryset = classmethod(_staff_or_public)
 
 
 @strawberry.type
 class Query:
     all_categories: DjangoConnection[CategoryType] = DjangoConnectionField(CategoryType)
     all_items: DjangoConnection[ItemType] = DjangoConnectionField(ItemType)
-    all_properties: DjangoConnection[PropertyType] = DjangoConnectionField(PropertyType)
-    all_entries: DjangoConnection[EntryType] = DjangoConnectionField(EntryType)
 
 
 class CreateItem(DjangoMutation):
@@ -77,194 +108,33 @@ class CreateItem(DjangoMutation):
         operation = "create"
 
 
-class UpdateItem(DjangoMutation):
-    class Meta:
-        model = models.Item
-        operation = "update"
-
-
-class DeleteItem(DjangoMutation):
-    class Meta:
-        model = models.Item
-        operation = "delete"
-
-
-class CreateCategory(DjangoMutation):
-    class Meta:
-        model = models.Category
-        operation = "create"
-
-
 @strawberry.type
 class Mutation:
-    # Each field is an unannotated DjangoMutationField — the <Name>Payload return
-    # is materialized at finalization, so the factory types the field via a
-    # strawberry.lazy forward-ref. Defaults apply: DjangoModelPermission write-auth.
     create_item = DjangoMutationField(CreateItem)
-    update_item = DjangoMutationField(UpdateItem)
-    delete_item = DjangoMutationField(DeleteItem)
-    create_category = DjangoMutationField(CreateCategory)
-    # ... plus the form-backed (0.0.12) and serializer-backed (0.0.13) fields —
-    # see "Mutations on products today" below.
 ```
-
-## What to put in `config/schema.py` today
-
-Enable the optimizer at the project-schema boundary and finalize every imported `DjangoType` before constructing the Strawberry schema:
 
 ```python
+# config/schema.py
 import strawberry
-from apps.products.schema import Mutation as ProductsMutation
-from apps.products.schema import Query as ProductsQuery
+from apps.products.schema import Mutation, Query
 
-from django_strawberry_framework import (
-    DjangoOptimizerExtension,
-    finalize_django_types,
-    strawberry_config,
-)
-
-
-@strawberry.type
-class Query(ProductsQuery):
-    """Top-level Query — extend with each app's Query as bases."""
-
-
-@strawberry.type
-class Mutation(ProductsMutation):
-    """Top-level Mutation — extend with each app's Mutation as bases."""
-
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema, finalize_django_types, strawberry_config
 
 finalize_django_types()
-
 _optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(
-    query=Query,
-    mutation=Mutation,
-    config=strawberry_config(),
-    extensions=[lambda: _optimizer],
-)
+schema = DjangoSchema(query=Query, mutation=Mutation, config=strawberry_config(), extensions=[lambda: _optimizer])
 ```
 
-Two rules the package enforces: `finalize_django_types()` must run **after** every module defining `DjangoType` classes is imported and **before** `strawberry.Schema(...)` is constructed — the same call materializes each mutation's `<Model>Input` / `<Model>PartialInput` / `<Name>Payload` classes and binds every `DjangoMutationField`, so the schema build can resolve their lazy references; and the optimizer is a module-level `DjangoOptimizerExtension` singleton wrapped in a factory (`extensions=[lambda: _optimizer]`), which preserves the instance-bound plan cache and emits no deprecation warning.
+The two [`FilterSet`][glossary-filterset]s and two [`OrderSet`][glossary-orderset]s are inlined so the snippet registers a `DjangoType` for every model its fields and sidecars reach; `finalize_django_types()` raises `ConfigurationError` for a relation whose target model has no registered type, rather than substituting a stub. The live products sidecars in `apps/products/filters.py` / `apps/products/orders.py` span all four models and add the `check_<field>_permission` gates GOAL's `filters.py` shows.
 
-## Package scalar conversions
-
-`DjangoType` converts these model fields to Strawberry scalars. **Products exercises the integer / text / boolean / datetime subset** (its models are `TextField` / `BooleanField` / `DateTimeField` + FK + the `BigAutoField` PK); the remaining conversions are package capabilities covered by the package test suite.
-
-- `BigAutoField` / `AutoField` / `IntegerField` → `int`  *(products: every PK)*
-- `TextField` / `CharField` → `str`  *(products: `name` / `value` / `description`)*
-- `BooleanField` → `bool`  *(products: `is_private`)*
-- `DateTimeField` / `DateField` / `TimeField` → Python-native time types  *(products: `created_date` / `updated_date`)*
-- `BigIntegerField` / `PositiveBigIntegerField` → `BigInt` (JSON-safe string-serialized; `PositiveBigIntegerField` switched from `int` to `BigInt` in `0.0.6` — breaking wire-format change)
-- `DecimalField` → `decimal.Decimal`
-- `FloatField` → `float`
-- `UUIDField` → `uuid.UUID`
-- **Absent from the default map:** `DurationField` and `BinaryField` — a column of either type raises `ConfigurationError` at type creation, because Strawberry ships no first-party scalar for `datetime.timedelta` or `bytes`. The consumer recourses are registering one, a consumer annotation override, or `Meta.exclude`. See [`docs/GLOSSARY.md#scalar-field-conversion`][glossary-scalar-field-conversion].
-- `FileField` / `ImageField` → structured `DjangoFileType` / `DjangoImageType` read output — the output object itself is **nullable by default** (an empty / absent stored file resolves to `null`, regardless of the column's `null` / `blank`; `required_overrides` is the opt-in to a non-null object), with `name` non-null and `size` / `url`, plus image `width` / `height`, nullable / storage-safe inside it; via `FIELD_OUTPUT_TYPE_MAP`; switched from `str` in `0.0.11` — breaking wire-format change. The server's absolute filesystem `path` left this default in `0.0.14` (a second, deliberate wire-format break) and is opted into per column through `Meta.filesystem_path_fields`, which swaps that column onto `DjangoFilePathType` / `DjangoImagePathType`; the `scalars` app demonstrates both halves, with `MediaSpecimenType` pathless and `MediaSpecimenWithPathType` opting `attachment` in and leaving `image` out. The filter / scalar-input value stays `str`; the generated `DjangoMutation` input is the `Upload` scalar
-- `JSONField` → `strawberry.scalars.JSON`
-- PostgreSQL `ArrayField` → `list[T]` (recursive through `field.base_field`; soft-registered when `django.contrib.postgres.fields` imports)
-- PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered)
-- `null=True` → `T | None`
-- `CharField` / `TextField` with `choices` → generated Strawberry enum
-- Relay `GlobalID` when `Meta.interfaces = (relay.Node,)` is declared  *(products: every type)*
-
-## Package relation conversions
-
-- forward `ForeignKey` → related `DjangoType`  *(products: `Item.category` / `Property.category` / `Entry.item` / `Entry.property`)*
-- reverse `ForeignKey` → `list[RelatedType]` **+ a `<field>Connection` Relay sibling**  *(products: `Category.items` / `Category.properties` / `Item.entries` / `Property.entries`, each also live as `itemsConnection` / `propertiesConnection` / `entriesConnection`)*
-- forward `OneToOneField` → related `DjangoType` or `None`
-- reverse `OneToOneField` → related `DjangoType` or `None`
-- forward `ManyToManyField` → `list[RelatedType]` **+ a `<field>Connection` Relay sibling**
-- reverse `ManyToManyField` → `list[RelatedType]` **+ a `<field>Connection` Relay sibling**
-
-Every to-many relation between two Relay-Node-shaped types renders as a paginated `<field>Connection` — the relation-as-connection upgrade that carries the package's **Relay-node-shaped output** north star (see [`GOAL.md`][goal]) down into nested relations rather than weakening rich relations into generic lists. The connection arrived in `0.0.9` beside the plain `list[T]` field; since `0.0.14` it is the default shape **alone**, and the raw list is an explicit opt-in. Products exercises it directly: `CategoryType`'s `itemsConnection` / `propertiesConnection` and the `Item` / `Property` `entriesConnection`s are all live, each accepting the target type's synthesized `filter:` / `orderBy:` arguments and `first` / `last` pagination. `CategoryType.properties` is reachable only through `propertiesConnection`, while products opts `items` / `entries` back into `"both"` explicitly so the bounded raw-list shape stays covered; the per-relation selector is documented in [`docs/GLOSSARY.md#metarelation_shapes`][glossary-metarelation_shapes].
-
-Products' graph is FK-only; `OneToOneField` and `ManyToManyField` conversions are package capabilities covered by the package test suite.
-
-## Optimized products queries that work today
-
-The connection fields hand their pre-slice `QuerySet`s to `DjangoOptimizerExtension` (added in `config/schema.py`), so the `edges { node }` selection is planned into one ORM query.
-
-```graphql
-{
-  allItems {
-    edges {
-      node {
-        name
-        category {
-          name
-        }
-      }
-    }
-  }
-}
-```
-
-Expected: `select_related("category")`.
-
-```graphql
-{
-  allEntries {
-    edges {
-      node {
-        value
-        item {
-          name
-          category {
-            name
-          }
-        }
-        property {
-          name
-          category {
-            name
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-Expected: nested `select_related` paths and `only()` projections. (A connection with no `first` / `last` caps the default page at `relay_max_results` and appends a deterministic `ORDER BY pk`.)
-
-A nested relation `<field>Connection` plans the same way — one windowed `Prefetch` per relation, no per-parent query:
-
-```graphql
-{
-  allCategories {
-    edges {
-      node {
-        name
-        itemsConnection(
-          first: 2
-        ) {
-          edges {
-            node {
-              name
-            }
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-Expected: one root-slice query plus one windowed `itemsConnection` prefetch covering every category's first two items (a `RowNumber()` window bounds each parent's page; `totalCount`, when opted in, rides a `Count(1) OVER`) — the N+1-safe nested planning of [`GOAL.md`][goal] success-criterion 5, now reaching connection-shaped relations.
-
-## Filtering and ordering on products today
-
-Both ship in `0.0.8`; as of `0.0.9` the `filter:` / `orderBy:` arguments are synthesized onto every products connection field from the type's `Meta.filterset_class` / `Meta.orderset_class` sidecars (no hand-written `filter_input_type(...)` / `order_input_type(...)` signatures). `filter:` narrows, `orderBy:` arranges, and they compose:
+**Read.** Every connection accepts `first` / `last` / `before` / `after`, plus a `filter:` and `orderBy:` argument synthesized from the type's sidecars (lookup names are camel-cased on the wire: `icontains` is `iContains`). The request runs the type's `get_queryset` first, then filter, then order, then a pk tiebreak, then the optimizer plan for the selected `edges { node }` tree, then the cursor slice. An anonymous caller sees no private row through any path: root connection, nested relation, or node refetch.
 
 ```graphql
 {
   allItems(
     filter: {
-      category: {
-        id: {
-          exact: "<GlobalID: base64 of products.category:<pk>>"
-        }
+      name: {
+        iContains: "widget"
       }
     }
     orderBy: [
@@ -272,9 +142,11 @@ Both ship in `0.0.8`; as of `0.0.9` the `filter:` / `orderBy:` arguments are syn
         name: ASC
       }
     ]
+    first: 10
   ) {
     edges {
       node {
+        id
         name
         category {
           name
@@ -285,61 +157,19 @@ Both ship in `0.0.8`; as of `0.0.9` the `filter:` / `orderBy:` arguments are syn
 }
 ```
 
-`CategoryFilter` / `CategoryOrder` additionally declare a `check_name_permission` gate, so an anonymous request that filters or orders by `Category.name` is denied — the gate fires only when the input actually names the gated field (active-input-only scope).
-
-> **Breaking wire-format change in `0.0.9` (the model-anchored `GlobalID` default).** Through `0.0.8` a products `GlobalID` was the base64 of `<GraphQL type name>:<pk>` (`CategoryType:42`). As of `0.0.9` the default is the Django model label (`products.category:42`), so **every emitted products `GlobalID` changes** and the filter examples above use the model-label payload. This parallels the `PositiveBigIntegerField → BigInt` `0.0.6` break; it is acceptable pre-`1.0.0` and there is a clean per-type / project-wide opt-out (`type` reproduces the byte-identical pre-`0.0.9` payload). In `0.0.9` the break lands **live** alongside its consumer — root `node(id:)` / `nodes(ids:)` (`DONE-032-0.0.9`) decode every emitted ID, so every old client-cached type-anchored ID is undecodable under the `model` default the moment the upgrade deploys. The migration-safe upgrade sequence for a deployed schema:
->
-> 1. Deploy `RELAY_GLOBALID_STRATEGY = "type+model"` **while the old GraphQL type names still exist** — new IDs emit model-anchored, old type-anchored IDs still decode.
-> 2. Let clients receive model-label IDs and age out the cached old type-name IDs.
-> 3. **Only then** rename GraphQL types (or `Meta.name`) or flip to `model`.
->
-> The step-3 ordering is load-bearing: `type+model` decodes an old type-anchored ID only while its old GraphQL type name still resolves. Renaming a type / `Meta.name` *during* the window still orphans cached old-type-name IDs — `type+model` is a strategy bridge, **not** a rename-history alias map (that is `BACKLOG.md` item 39). A consumer who must rename mid-window owns a consumer alias / callable migration until then.
->
-> **One more upgrade hazard — multiple `DjangoType`s over one model.** A model-label payload (`app_label.model:pk`) is shared by *every* type registered for that model and always decodes to the model's **primary** type (`Meta.primary`). So if two Relay-Node types map to one model and both take the `model` default, the secondary's `GlobalID`s become byte-identical to the primary's and refetch *as* the primary — the secondary's distinct identity and `get_queryset` visibility scope silently collapse onto the primary's. Under the pre-`0.0.9` type-name default those two types had distinct, self-routing IDs, so this is a behavioral change on upgrade, not just a cache-invalidation. Finalization emits a warning naming the collapsing secondaries. If the two types need disjoint identity / auth scopes (the public-vs-admin pattern), set `Meta.globalid_strategy = "type"` on the secondary so its IDs stay self-routing.
-
-## Visibility filtering via `get_queryset`
-
-A `DjangoConnectionField` applies the type's `get_queryset` visibility hook automatically as the first step of its composition pipeline (already part of the filter/order chain above), so a root connection respects the same rules a type declares:
-
-```python
-class ItemType(DjangoType):
-    class Meta:
-        model = models.Item
-        fields = (
-            "id",
-            "name",
-            "description",
-            "category",
-            "is_private",
-        )
-
-    @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
-        user = getattr(info.context, "user", None)
-        if user and user.is_staff:
-            return queryset
-        return queryset.filter(is_private=False)
-```
-
-Relation traversal into a type with a custom `get_queryset` is handled by the optimizer with a `Prefetch` downgrade, so target visibility filters are not bypassed by raw joins. As of `0.0.10` the four `products/schema.py` types' `get_queryset` hooks are live and call `apply_cascade_permissions(cls, ..., info)`, so visibility cascades across the `Entry → Item → Category` / `Entry → Property → Category` FK chain: an anonymous request loses any entry whose item or property points at a private category, staff sees everything, and a `view_<model>` user sees non-private rows but still loses entries under hidden targets (the cascade composes per edge). See [`docs/GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
-
-## Mutations on products today
-
-As of `0.0.11` products exposes a `Mutation` type (in `products/schema.py`) alongside its connections-only `Query` — the package's write side, declared in the same `class Meta` shape as everything else (no Strawberry decorators). It carries `createItem` / `updateItem` / `deleteItem` plus `createCategory`, each an unannotated `DjangoMutationField` over a `DjangoMutation` subclass; as of `0.0.12` the form-backed mutations (`createItemViaForm` / `updateItemViaForm` / `createItemWithFileViaForm` / `updateItemWithFileViaForm` / `createDefaultCategoryItemViaForm` / `createStampedItemViaForm` / `submitContact` / `submitPing`), and as of `0.0.13` the serializer-backed mutations (`createItemViaSerializer` / `updateItemViaSerializer` / `createItemViaRenamedSerializer`), see below. `config/schema.py` wires `mutation=Mutation` into the project schema. The full pipeline runs live over `/graphql/`:
+**Write.** `createItem` takes a generated `ItemInput!` whose required-ness follows the column's `default` / `blank` / `null`; the FK is `categoryId`, a `GlobalID` taken from any `id` the read side returned and type-checked against `Category` at decode. The permission boundary has two layers that never mix: a caller without the Django `products.add_item` permission (anonymous included) is refused with a top-level `GraphQLError` before any write; a caller who passes it but fails `full_clean()` or a model constraint gets a `null` node and one `FieldError` per offending field in `errors`, with `"__all__"` for multi-field constraints. The whole operation, including serialization of the returned `node`, runs inside one transaction because `DjangoSchema` installs the execution context that holds it open.
 
 ```graphql
 mutation {
   createItem(
     data: {
       name: "Widget"
-      categoryId: "<GlobalID: products.category:<pk>>"
+      categoryId: "<id from allCategories>"
     }
   ) {
     node {
+      id
       name
-      category {
-        name
-      }
     }
     errors {
       field
@@ -349,73 +179,107 @@ mutation {
 }
 ```
 
-- **`create` / `update` / `delete`.** `createItem` takes a generated `ItemInput!` (each editable field required only when it has no usable Django `default` / `blank` / `null`, so `name` / `categoryId` are required while `description` / `isPrivate` are optional); `updateItem(id:, data:)` takes the all-optional `ItemPartialInput!`; `deleteItem(id:)` takes just the id. Forward FK becomes `categoryId` (a Relay `GlobalID`, type-checked against `Category` at decode — a wrong-type id is a `FieldError`, never a cross-model lookup).
-- **The shared `errors: list[FieldError]` envelope.** A `full_clean()` failure does not raise at the GraphQL boundary — it returns the payload with a null `node` and one `FieldError` (`field` + `messages`) per offending field. A duplicate that trips `Item`'s `unique_item_per_category` constraint is caught by `validate_constraints()` before `save()` and keyed to Django's `"__all__"` sentinel (the multi-field-constraint key).
-- **Permission-scoped `update` / `delete` lookups.** Both locate the row through `ItemType.get_queryset(...)`, so a caller who cannot *see* a private item gets a not-found `FieldError` on `id` — never an existence leak. Visibility (`get_queryset`) and write authorization are separate layers.
-- **Separate write authorization (`DjangoModelPermission`).** Every operation runs `Meta.permission_classes` (default `[DjangoModelPermission]`, the Django `add` / `change` / `delete` model perms). An anonymous caller or one missing the model perm is denied with a top-level `GraphQLError` before any write — distinct from the field-keyed `FieldError` envelope, and distinct from `get_queryset` visibility (can-view ≠ can-write).
-- **Optimizer-backed post-write re-fetch.** On success the payload's `node` is the mutated row re-fetched and optimizer-planned for the response selection. Because the operation is a mutation, the `spec-035` **G2** gate keeps `select_related` / `prefetch_related` but suppresses `.only(...)` column deferral — so selecting `node { category { name } }` plans the join without a deferred-field set. The live `CaptureQueriesContext` test pins the bounded query count.
+Live evidence for this journey: `examples/fakeshop/test_query/test_products_api.py` (reads, filters, orders, every write path and both permission layers), `test_products_visibility_api.py` (visibility through planned and unplanned relations), `test_connection_pagination_api.py` (cursor semantics), `test_mutation_atomicity.py` (the response-spanning transaction).
 
-The live `/graphql/` suite at `examples/fakeshop/test_query/test_products_api.py` pins all of the above — the happy paths, the constraint envelope (including a partial update that collides on `unique_item_per_category` by changing only `name`), write-auth denial vs. success, the visibility-scoped not-found, the wrong-type `GlobalID`, and the G2 query-shape assertion that discharges the `spec-035` live-test handoff. See [`docs/GLOSSARY.md#djangomutation`][glossary-djangomutation].
+## GOAL success criteria, compared
 
-**Form-backed mutations (`0.0.12`).** The form-validated write flavor — the same `class Meta` shape, `Meta.form_class` instead of `model` + `operation`. `createItemViaForm` / `updateItemViaForm` wrap an `ItemModelForm` (a `forms.ModelForm` over `Item`) in `DjangoModelFormMutation`: the input shape derives from the form's declared fields, the FK writes through the form's `category` field via the generated `categoryId`, a `clean_name` failure keys to `name`, and the `unique_item_per_category` constraint surfaces through `_post_clean` keyed to `"__all__"` — all on the shared `FieldError` envelope, with the `ModelForm` returning the post-save object in the uniform `node` / `result` slot (re-fetched and optimizer-planned). `createItemWithFileViaForm` drives a multipart `Upload` through a form `FileField` (a raw `django.test.Client` multipart request) and `updateItemWithFileViaForm` pins the preserve half - a partial update that omits `attachment` resolves it from the bound form's `initial`, so the stored file is neither re-supplied nor cleared; `createStampedItemViaForm` exercises a `get_form_kwargs` override injecting `user` at runtime, and `createDefaultCategoryItemViaForm` injects the default `Category` into a form whose `Meta.fields` omits it, so `unique_item_per_category` is never checked by `_post_clean` and a duplicate `name` surfaces as a genuine write-time `IntegrityError` on the `"__all__"` envelope rather than a top-level `GraphQLError`. `submitContact` wraps a model-less plain `ContactForm` in `DjangoFormMutation`, returning the pinned `{ ok, errors }` payload — a model-less form has no `DjangoModelPermission` default, so an unset `Meta.permission_classes` falls to `DenyAll` deny-by-default: `submitContact` opts into anonymous access with an explicit `permission_classes = []` while its sibling `submitPing` leaves the key unset and has every live call rejected with a top-level `GraphQLError` before the form runs (the deny posture earned over a real `/graphql/` request). `test_products_api.py` pins the create / update / partial-update preservation, the `form.errors` envelope, write authorization, the visibility-scoped update, the multipart upload, the plain form's success / validation-failure shapes, and the `submitPing` deny-by-default denial. See [`docs/GLOSSARY.md#djangoformmutation`][glossary-djangoformmutation].
+| # | GOAL criterion | Today | Limitation | Evidence | Owning card |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Rich model-backed types in one `class Meta` | Partially available | `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields` not accepted | `test_products_api.py`, `test_library_api.py` | [Aggregation][kanban-aggregation], [`FieldSet`][kanban-fieldset], [`search_fields`][kanban-search-fields] |
+| 2 | Collections without hand-written resolvers | Available | None in implementation; the `DjangoListField` `offset` / `limit` / `orderBy` arguments are not yet accepted (card `WIP`) | `test_products_api.py`, `test_list_field_api.py` | [`DjangoListField` arguments][kanban-list-field-args] |
+| 3 | Nested filtering / ordering / aggregation / search | Partially available | Filtering and ordering nested through `RelatedFilter` / `RelatedOrder`. No aggregation, no search. Filter / logic key names fixed | `test_products_api.py`, `test_scalars_filter_api.py` | [Aggregation][kanban-aggregation], [`search_fields`][kanban-search-fields], [full-text primitives][kanban-full-text-search], [filter key namespace][kanban-filter-keys] |
+| 4 | Row, field, and cascade permissions, one hook for reads and writes | Partially available | Row and cascade cover connections, nested traversal, refetch, and the mutation locate. Cascade crosses forward single-column FK / O2O edges only; to-many edges are unresolved. No field-level gates | `test_products_visibility_api.py`, `test_products_api.py` | [Graph substrate][kanban-graph-substrate], [`FieldSet`][kanban-fieldset] |
+| 5 | Automatic ORM optimization from one selection walk | Partially available | `select_related` / `prefetch_related` / `only()` from the selection tree, `Prefetch` downgrade for consumer querysets, FK-id elision, strictness modes. A nested connection is window-batched only when it carries no `filter:` / `orderBy:`; with either it resolves per parent row. No explain view | `test_single_parent_fastpath_api.py`, `test_optimizer_auto_api.py`, `test_connection_pagination_api.py` | [Nested sidecar batching][kanban-nested-batching], [Explain mode][kanban-explain-mode] |
+| 6 | Declarative mutations from `ModelForm`, `ModelSerializer`, or generated inputs | Available | Three flavors, one envelope, `Upload`, deny-by-default, response-spanning transaction. No idempotency keys | `test_products_api.py`, `test_uploads_api.py`, `test_mutation_atomicity.py` | [Idempotency keys][kanban-idempotency] |
+| 7 | Migrate from four upstream stacks without the source package | Partially available | GOAL's migration diffs run as written and the DRF `FilterSet` parent swap is real. No written guides; filter / logic key names not configurable; six small parity gaps open; cookbook port not started | GOAL diffs, `test_library_api.py` | [Migration guides][kanban-migration-guides], [filter key namespace][kanban-filter-keys], [parity-gap closure][kanban-parity-gaps], [cookbook parity][glossary-cookbook-parity] (glossary obligation, no card) |
+| 8 | Internet-facing from the docs alone | Partially available | Package defaults: error masking with a correlation id, execution resource bounds, request-body cap, UTF-8 wire contract, path-free file output. Deployment-owned: rate limiting, cache policy, upload content handling, the production mount. The package describes itself as not production-ready | `test_error_policy_api.py`, `test_resource_policy_api.py`, `test_transport_api.py` | [Production security profile][readme-production-security-profile] (row-by-row enforcement is the `1.0.0` gate), [Adversarial suite][kanban-adversarial] |
 
-**Serializer-backed mutations (`0.0.13`).** The third write flavor — the same `class Meta` shape, `Meta.serializer_class` instead of `model` + `operation`. `createItemViaSerializer` / `updateItemViaSerializer` wrap an `ItemSerializer` (a `rest_framework.serializers.ModelSerializer` over `Item`, declared the standard DRF way with no package imports) in `SerializerMutation`: the input shape derives from the serializer's declared fields, the FK writes through the serializer's `category` `PrimaryKeyRelatedField` via the generated `categoryId` (the same reverse-map decode), a `validate_name` failure keys to `name`, and both the cross-field object `validate()` reading `self.context["request"].user` and the `unique_item_per_category` `UniqueTogetherValidator` surface under the `"__all__"` non-field bucket — all on the shared `FieldError` envelope, with `serializer.save()` returning the post-save object in the uniform `node` / `result` slot (re-fetched and optimizer-planned). Because `SerializerMutation` subclasses `DjangoMutation` (it resolves the model from `Meta.serializer_class.Meta.model`), the `DjangoModelPermission` write-auth default (`add_item` / `change_item`), the visibility-scoped `update` locate, and the G2-gated optimizer re-fetch carry over unchanged. The DRF dependency is **soft**: the package imports without `djangorestframework`, and `SerializerMutation` is a lazy root export resolved through the package `__getattr__` (never in `__all__`). A third field, `createItemViaRenamedSerializer`, wraps a `RenamedRelationItemSerializer` that renames its scalar (`display_name` → wire `displayName`, source `name`) and its relation (`category_pk` → wire `categoryPk`, source `category`), proving both the generated input and every decode / validation `FieldError` key to the GraphQL **wire** name rather than the serializer field or model column. `test_products_api.py` pins the create / update / partial-update preservation, the `serializer.errors` envelope (field-level, object-level, and unique-together), write authorization, the visibility-scoped update, the request-context `validate()` proof, a real multipart `Upload` routed through the serializer's `data`, and the renamed-field wire-name matrix. See [`docs/GLOSSARY.md#serializermutation`][glossary-serializermutation].
+The "Owning card" column names the card that widens the row; it is not a claim that the card alone completes the criterion.
 
-## What products is still waiting for
+## Running `astronomy` today
 
-Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) shipped in `0.0.9` and products' four root fields are now connections. The root `node(id:)` / `nodes(ids:)` entry points and `Meta.connection` (`totalCount`) opt-ins also **shipped in `0.0.9`** (`DONE-032`) — see "Shipped package capabilities not exercised by products" below — products simply hasn't wired them into its connections-only `Query` yet (deferred to the fakeshop-activation card, `TODO-BETA-062-0.1.5`).
+What changes in GOAL's seven files to run them on the current implementation, and nothing else:
 
-- `Meta.fields_class` — `FieldSet` (`0.1.1`)
-- `Meta.search_fields` (`0.1.2`)
-- `Meta.aggregate_class` — aggregation (`0.1.3`)
+| GOAL file | Today | Adaptation |
+| --- | --- | --- |
+| `models.py` | Available | None. The `TextChoices` column becomes an enum ([choice enum generation][glossary-choice-enum-generation]); the enum's name is not yet overridable ([naming override][kanban-choice-enum-naming]) |
+| `schema.py` | Partially available | Drop the `aggregates` and `fields` imports and the three `Meta` keys `aggregate_class` / `fields_class` / `search_fields`. Everything else runs: `fields = "__all__"`, `relay.Node`, both sidecar keys, `get_queryset` with `apply_cascade_permissions`, `DjangoNodeField`, `DjangoConnectionField`, `finalize_django_types`, `DjangoSchema`, `DjangoOptimizerExtension(strictness="raise")`, `strawberry_config` |
+| `mutations.py` | Available | None |
+| `filters.py` | Available | None. Dict-form `Meta.fields`, per-field `"__all__"`, `RelatedFilter` by class or string, `queryset=` scope boundary, relation-path keys, `check_<field>_permission` |
+| `orders.py` | Available | None. `"__all__"` or explicit list, `RelatedOrder` by class or string, `check_<field>_permission` |
+| `aggregates.py` | Not implemented | Delete the file until [Aggregation subsystem][kanban-aggregation] ships |
+| `fields.py` | Not implemented | Delete the file until [`FieldSet`][kanban-fieldset] ships |
 
-## Shipped package capabilities not exercised by products
+Products is this adaptation plus two local choices: its `Query` is connections-only with no `DjangoNodeField` roots (the library app runs `node` / `nodes` live; products adopts them on the [activation card][kanban-fakeshop-activation]), and its project schema runs the optimizer at the default strictness rather than GOAL's `"raise"`.
 
-These ship today but products' model shapes don't reach them — most are demonstrated instead by the sibling apps: `library` covers `Meta.primary`, `Meta.exclude`, `Meta.name`, `Meta.description`, `Meta.connection` (`totalCount`), `DjangoListField`, `DjangoNodeField`, and `DjangoNodesField`; `scalars` covers `BigInt`, the JSON / UUID / Decimal / date / time conversions, the file/image read output, and the `Upload` scalar. The rest are covered by the package test suite (see [`docs/GLOSSARY.md`][glossary]):
+## Other available capabilities
 
-- **`Meta.primary`** (shipped `0.0.6`) — multiple `DjangoType` subclasses per model with one explicit primary. Products declares one type per model. See [`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary].
-- **Consumer override semantics for scalar fields** (shipped `0.0.6`) — annotation-only and `strawberry.field` scalar overrides bypass `convert_scalar`; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time. Products exercises no scalar override. See [`docs/GLOSSARY.md#scalar-field-override-semantics`][glossary-scalar-field-override-semantics].
-- **OneToOne / M2M relation conversion, choice-enum generation, and the specialized scalar conversions** (`BigInt`, `JSON`, `UUID`, `Decimal`, `Array`, `HStore`) — products has no OneToOne, M2M, `choices`, or those field types.
-- **`Meta.nullable_overrides` / `Meta.required_overrides`** (shipped `0.0.9`) — force a non-relation field's GraphQL nullability independent of its Django column (`T!`→`T` or `T`→`T!`), validated at type creation; the scope is non-relation model fields — scalar columns and, as of `0.0.11`, the file/image output objects (e.g. `required_overrides = ("attachment",)` asserts a non-null `DjangoFileType!`), not relations. Products declares no override; the library app's `NullabilityOverrideBookType` exercises both directions. See [`docs/GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
-- **Root `node(id:)` / `nodes(ids:)` refetch fields** (`DjangoNodeField` / `DjangoNodesField`, shipped `0.0.9`) — the single-object and batch Relay refetch entry points that [`GOAL.md`][goal]'s astronomy `Query` declares (`galaxy: GalaxyNode | None = DjangoNodeField(GalaxyNode)`). Each decodes a model-anchored `GlobalID` to its type and reruns that type's `get_queryset`; resolution is nullable by contract (a decodable id identifying no row resolves to `null` / a positional `null` hole with no existence-probing query), while an undecodable payload surfaces a `GLOBALID_INVALID` error. `nodes` batches one query per decoded type and returns results in input order, preserving duplicates and null holes. Products' `Query` is connections-only, so it declares neither yet (`TODO-BETA-062-0.1.5`). See [`docs/GLOSSARY.md#djangonodefield`][glossary-djangonodefield] / [`#djangonodesfield`][glossary-djangonodesfield].
-- **`Meta.connection` (`totalCount`)** (shipped `0.0.9`) — opts a connection into the Relay `totalCount` field, served from a `Count(1) OVER` window on the optimizer fast path. Products' connections omit it; the library app's `GenreType` declares `connection = {"total_count": True}`. See [`docs/GLOSSARY.md#metaconnection`][glossary-metaconnection].
-- **`Upload` scalar + file/image mapping** (shipped `0.0.11`) — the re-exported `Upload` scalar, the structured `DjangoFileType` / `DjangoImageType` read output, and the generated `DjangoMutation` `FileField` / `ImageField` → `Upload` mutation-input mapping. **Products** exercises the mutation-input half only — its `Item.attachment` `FileField` maps to the `Upload` scalar in the live `CreateItemWithFileViaForm` mutation, while `ItemType` exposes no file/image read output. The structured read output is demonstrated by the **`scalars` acceptance app** via its `MediaSpecimen` model — live `/graphql/` tests in `examples/fakeshop/test_query/test_uploads_api.py` cover the read output objects, the default-nullable SDL shape, the empty-file object-`null` case, the `Upload` input SDL, and a real multipart upload. The synthetic-model package tests retain the storage-backend fault-injection / corrupt-image edges (unreachable from a live request). The broader products/fakeshop activation stays `TODO-BETA-062-0.1.5`. See [`docs/GLOSSARY.md#upload-scalar`][glossary-upload-scalar] / [`#djangofiletype`][glossary-djangofiletype] / [`#djangoimagetype`][glossary-djangoimagetype].
-- **Session-auth mutations** (shipped `0.0.13`) — the opt-in `login` / `logout` / `register` field factories and the `current_user` (`me`) query helper, imported from the `django_strawberry_framework.auth` submodule (never a package-root export). Products stays the canonical connections + write-flavor vehicle and declares no auth surface; the live demonstration is the sibling **`accounts` app** (`examples/fakeshop/apps/accounts/`), which builds a `UserType` over `auth.User` and wires `login` / `logout` / `register` / `me` onto its own schema — exercised over `/graphql/` by `examples/fakeshop/test_query/test_auth_api.py` (the login/session-cookie/logout round trip, register → login → `me`, the `"__all__"` wrong-credentials envelope, and the anonymous `me: null`). The permission-gate variants (exact denial strings, the `IsAuthenticated`-style `me` gate) live in the package suite under `tests/auth/`, unreachable from the AllowAny-default live surface. See [`docs/GLOSSARY.md#auth-mutations`][glossary-auth-mutations].
-- **Channels ASGI router** (`0.0.14`, `DONE-041`; redesigned by the transport-security card `DONE-046`) — `DjangoGraphQLProtocolRouter`, imported from `django_strawberry_framework.routers` (a lazy PEP 562 submodule export, never a package-root export): a `channels.routing.ProtocolTypeRouter` subclass whose `"http"` value **is** the required `django_application` (dispatched directly, so every HTTP request traverses the project's real `MIDDLEWARE`) and whose `"websocket"` value is the package's private `DjangoWebSocketHostValidator` (the `Host` check) over `AllowedHostsOriginValidator` (the `Origin` check) over `AuthMiddlewareStack` over a `URLRouter` holding one exact-matched `re_path` onto a GraphQL WebSocket consumer — by default the package's own revalidating consumer, otherwise one injected through `websocket_consumer_class=`. It no longer serves GraphQL over HTTP and is no longer constructor-compatible with upstream `strawberry_django.routers.AuthGraphQLProtocolTypeRouter`: `django_application` is required, `url_pattern` became `websocket_url_pattern` (exact, `r"^graphql/?$"`), and the Channels HTTP branch is gone. `channels` is the package's second **soft** dependency (after `djangorestframework`): importing the package or the submodule stays channels-free; only symbol access raises the install-hint `ImportError`. Fakeshop runs WSGI-only with no `asgi.py`, so no example app demonstrates the router; the tests live in `tests/test_routers.py` (the documented genuinely-unreachable-live case). The migration note is in [`docs/README.md`][readme-docs]. See [`docs/GLOSSARY.md#djangographqlprotocolrouter`][glossary-djangographqlprotocolrouter].
-- **Debug-toolbar middleware** (`0.0.14`, `DONE-042`) — `DebugToolbarMiddleware`, imported from `django_strawberry_framework.middleware.debug_toolbar` (the leaf-module import is the opt-in boundary, never a package-root export): a subclass of the stock `debug_toolbar.middleware.DebugToolbarMiddleware` that teaches `django-debug-toolbar`'s SQL panel to see Strawberry `/graphql/` traffic — tagging Strawberry-view requests and injecting a `debugToolbar` panel payload into JSON operation responses. `django-debug-toolbar` is the package's third **soft** dependency: importing the package stays toolbar-free; only importing this leaf raises the install-hint `ImportError`. Products declares no development middleware; the live behavior is exercised by `examples/fakeshop/test_query/test_debug_toolbar_api.py`, with the package-tier mechanics in `tests/middleware/test_debug_toolbar.py`. See [`docs/GLOSSARY.md#debug-toolbar-middleware`][glossary-debug-toolbar-middleware].
-- **Test-client family** (`0.0.14`, `DONE-043`) — `TestClient` / `AsyncTestClient` and the `GraphQLTestMixin` / `GraphQLTestCase` unittest family, imported from `django_strawberry_framework.testing`: each drives Django's in-process test client against `/graphql/`, decodes the GraphQL response, and returns a typed `Response` carrying `errors` / `data` / `extensions` / the raw Django response, with a documented endpoint-selection precedence and multipart-upload support. A test-authoring tool rather than a schema surface, so products declares nothing for it; exercised by `examples/fakeshop/test_query/test_client_api.py`, with the package-tier mechanics in `tests/testing/`. See [`docs/GLOSSARY.md#testclient`][glossary-testclient] / [`#graphqltestcase`][glossary-graphqltestcase].
-- **`DjangoDebugExtension`** (`0.0.14`, `DONE-044`) — a Strawberry `SchemaExtension`, imported from `django_strawberry_framework.extensions` and added to an aggregate schema's `extensions=` list (never a package-root export, one fresh instance per operation, requiring `strawberry-graphql>=0.316.0`): captures a GraphQL operation's SQL (through Django's own debug cursor, one bracket per `connections.all()` alias) and raised resolver exceptions into the response's `extensions.debug` map — the Strawberry-native equivalent of graphene-django's `DjangoDebugMiddleware` / `_debug` field, never for an internet-facing production schema since it returns interpolated SQL and unmasked exception messages. Products' aggregate schema deliberately opts out; the live payload is exercised by `examples/fakeshop/test_query/test_debug_extension_api.py`, with the lifecycle mechanics in `tests/extensions/test_debug.py`. See [`docs/GLOSSARY.md#djangodebugextension`][glossary-djangodebugextension].
+Shipped surfaces that products' FK-only, text / boolean / datetime / one-file model shape does not reach. Each links its glossary entry; the sibling app named is where it runs live, otherwise the package suite under `tests/` covers it.
+
+- **Relations.** Forward and reverse `OneToOneField` / `ManyToManyField`; every to-many relation as a `<field>Connection` by default with the raw list as an opt-in through `Meta.relation_shapes`. Library app. [Relation handling][glossary-relation-handling].
+- **Scalars.** `BigInt`, `Decimal`, `UUID`, `JSON`, PostgreSQL `ArrayField` / `HStoreField`, date / time types, structured file and image output with the filesystem path as a per-column opt-in. Scalars app. [Scalar field conversion][glossary-scalar-field-conversion].
+- **Type configuration.** `Meta.primary`, `Meta.exclude`, `Meta.name` / `Meta.description`, `Meta.nullable_overrides` / `Meta.required_overrides`, `Meta.connection` for `totalCount`, `Meta.globalid_strategy`, `Meta.optimizer_hints`. Library app. [`DjangoType`][glossary-djangotype].
+- **Root refetch.** `DjangoNodeField` / `DjangoNodesField`. Library app. [`DjangoNodeField`][glossary-djangonodefield].
+- **Model-less forms.** `DjangoFormMutation` over a plain `Form` shares the `FieldError` envelope and the deny-by-default posture (`DenyAll` when `Meta.permission_classes` is unset) but has no model row to locate or re-fetch; the model-backed flavors share the full write pipeline. Products app. [`DjangoFormMutation`][glossary-djangoformmutation].
+- **Session auth.** `login` / `logout` / `register` and the `me` query from the `auth` submodule. Accounts app. [Auth mutations][glossary-auth-mutations].
+- **Multiple databases.** Router-aware reads, one write alias per mutation; fakeshop's sharded mode behind `FAKESHOP_SHARDED=1`. [Multi-database cooperation][glossary-multi-database-cooperation].
+- **Transport.** The Channels ASGI router for WebSocket subscriptions; no example app, since fakeshop is WSGI-only. [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter].
+- **Development tooling.** Response debug extension, debug-toolbar middleware, `TestClient` / `GraphQLTestCase`, each behind a leaf import. [`DjangoDebugExtension`][glossary-djangodebugextension], [debug-toolbar middleware][glossary-debug-toolbar-middleware], [`TestClient`][glossary-testclient].
+
+## Remaining distance, by population
+
+Three different populations, kept apart:
+
+**Literal `astronomy` gaps.** The three unshipped sidecars: [`FieldSet`][kanban-fieldset], [`Meta.search_fields`][kanban-search-fields] with its [Postgres primitives][kanban-full-text-search], and the [Aggregation subsystem][kanban-aggregation].
+
+**Success-criterion gaps beyond the seven files.** [Graph substrate][kanban-graph-substrate] (to-many cascade semantics, row-preserving predicate composition), [nested sidecar batching][kanban-nested-batching], [filter / logic key namespace][kanban-filter-keys], [migration guides][kanban-migration-guides], [node-sentinel redaction][kanban-redaction], [explain mode][kanban-explain-mode], [idempotency keys][kanban-idempotency], [adversarial suite][kanban-adversarial], and the cookbook port ([cookbook parity][glossary-cookbook-parity], a glossary obligation proven at `1.0.0` with no owning card today).
+
+**Release and acceptance work.** The `WIP` [`DjangoListField` arguments][kanban-list-field-args], the alpha `To Do` column through the [beta release card][kanban-beta-release] (parity-gap closure, the debug-extension extraction, boundary hardening, the conversion registry, federation, documentation-debt discharge), and on the beta line the [fakeshop activation][kanban-fakeshop-activation] and [product-catalog Layer 3 tests][kanban-layer3-tests] that turn shipped capability into products-level acceptance. The authoritative order is the board itself.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[changelog]: CHANGELOG.md
 [goal]: GOAL.md
 [kanban]: KANBAN.md
+[kanban-adversarial]: KANBAN.html#adversarial_non_live_test_suite
+[kanban-aggregation]: KANBAN.html#aggregation_subsystem
+[kanban-beta-release]: KANBAN.html#beta_release_cleanup_verification_alpha_beta
+[kanban-choice-enum-naming]: KANBAN.html#stable_choice_enum_naming_override
+[kanban-explain-mode]: KANBAN.html#optimizer_explain_mode
+[kanban-fakeshop-activation]: KANBAN.html#fakeshop_graphql_schema_activation
+[kanban-fieldset]: KANBAN.html#fieldset_declarative_field_level_behavior_metafields_class
+[kanban-filter-keys]: KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key
+[kanban-full-text-search]: KANBAN.html#postgres_full_text_search_filter_primitives
+[kanban-graph-substrate]: KANBAN.html#graph_substrate_shared_graph_policy_and_dependency_planning
+[kanban-idempotency]: KANBAN.html#mutation_idempotency_keys
+[kanban-layer3-tests]: KANBAN.html#product_catalog_layer_3_http_graphql_tests
+[kanban-list-field-args]: KANBAN.html#djangolistfield_argument_surface_offset_limit_and_orderby
+[kanban-migration-guides]: KANBAN.html#migration_and_adoption_guides
+[kanban-nested-batching]: KANBAN.html#structural_optimization_templates_and_nested_sidecar_batching
+[kanban-parity-gaps]: KANBAN.html#upstream_parity_gap_closure
+[kanban-redaction]: KANBAN.html#opt_in_node_sentinel_redaction_tier_metaredaction_mode
+[kanban-search-fields]: KANBAN.html#metasearch_fields_support
 
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
-[glossary-apply-cascade-permissions]: docs/GLOSSARY.md#apply_cascade_permissions
 [glossary-auth-mutations]: docs/GLOSSARY.md#auth-mutations
+[glossary-choice-enum-generation]: docs/GLOSSARY.md#choice-enum-generation
+[glossary-cookbook-parity]: docs/GLOSSARY.md#cookbook-parity
 [glossary-debug-toolbar-middleware]: docs/GLOSSARY.md#debug-toolbar-middleware
 [glossary-djangodebugextension]: docs/GLOSSARY.md#djangodebugextension
-[glossary-djangofiletype]: docs/GLOSSARY.md#djangofiletype
 [glossary-djangoformmutation]: docs/GLOSSARY.md#djangoformmutation
 [glossary-djangographqlprotocolrouter]: docs/GLOSSARY.md#djangographqlprotocolrouter
-[glossary-djangoimagetype]: docs/GLOSSARY.md#djangoimagetype
-[glossary-djangomutation]: docs/GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: docs/GLOSSARY.md#djangonodefield
-[glossary-djangonodesfield]: docs/GLOSSARY.md#djangonodesfield
-[glossary-graphqltestcase]: docs/GLOSSARY.md#graphqltestcase
-[glossary-metaconnection]: docs/GLOSSARY.md#metaconnection
-[glossary-metanullable_overrides]: docs/GLOSSARY.md#metanullable_overrides
-[glossary-metaprimary]: docs/GLOSSARY.md#metaprimary
-[glossary-metarelation_shapes]: docs/GLOSSARY.md#metarelation_shapes
+[glossary-djangotype]: docs/GLOSSARY.md#djangotype
+[glossary-filterset]: docs/GLOSSARY.md#filterset
+[glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
+[glossary-orderset]: docs/GLOSSARY.md#orderset
+[glossary-relation-handling]: docs/GLOSSARY.md#relation-handling
 [glossary-scalar-field-conversion]: docs/GLOSSARY.md#scalar-field-conversion
-[glossary-scalar-field-override-semantics]: docs/GLOSSARY.md#scalar-field-override-semantics
-[glossary-serializermutation]: docs/GLOSSARY.md#serializermutation
 [glossary-testclient]: docs/GLOSSARY.md#testclient
-[glossary-upload-scalar]: docs/GLOSSARY.md#upload-scalar
-[readme-docs]: docs/README.md
+[readme-production-security-profile]: docs/README.md#production-security-profile
+[readme-quick-start]: docs/README.md#quick-start
 
 <!-- docs/SPECS/ -->
 

@@ -101,9 +101,11 @@ same move makes things worse.
     reason < none; the next author honors it.
 11. **Ask whether the abstraction should exist.** Deletion = first-class outcome: indirection w/
     one real caller, helper w/ no readers, token whose only job is being checked. What breaks if
-    removed + inlined? Constant/helper pair can be dead code → delete, don't extract. One
-    legitimate "nothing breaks, keep": the wrapper is the only site stating a pairing/separation
-    in words; keep it, record the keep on it so the question isn't re-raised.
+    removed + inlined? Constant/helper pair can be dead code → delete, don't extract. Keep a
+    one-caller wrapper only for a concrete responsibility it carries: a boundary name callers
+    depend on, effect isolation, an extension point. Prose is movable: the pairing/separation the
+    wrapper explains goes to the surviving owner or caller when the machinery goes; words alone
+    never keep code. Record keep or move at the owner so the question isn't re-raised.
 
 Measurement follows the rule. Primary evidence: fewer independently maintained definitions.
 Secondary: net source change over a fixed baseline + population, counting added drivers / tables
@@ -174,9 +176,13 @@ carry no round-trip pair or async twin).
    One grammar, two halves, routinely separated by module.
 5. **Contracts restated in another medium** — production code, test expectations, `docs/` prose,
    generated artifact. Count every medium a change forces to move; classify each site by role.
-6. **Enforcement by omission** — rule enforced on some family members, not others. Flavors lacking
-   the guard = second owner by absence; invisible to every search for a second implementation.
-   Enumerate the family, check each member.
+6. **Enforcement by omission** — rule enforced on some family members, not others; invisible to
+   every search for a second implementation. Enumerate the family, check each member. Absence ≠
+   second definition: it is a possible enforcement gap. Sibling behavior justifies the
+   investigation, never the verdict; a contract source (spec, glossary anchor, owner prose, oracle)
+   must establish the rule applies to the missing member. Established → behavior defect under
+   `## Defects`, separate from any consolidation of the existing guards; ambiguous or newly
+   proposed → route to Rio. Adding a guard changes what is accepted: never "behavior-preserving".
 
 ### The change challenge
 
@@ -199,8 +205,8 @@ definition, not that it reasoned. Orientation tools; never findings, never a gat
 First try to DISPROVE shared responsibility: inputs, outputs, errors, state transitions, timing,
 framework hooks, extension points, reasons to change. Read test bodies + public docs; names +
 structure ≠ proof. Uncertain behavior → small executable experiment under
-`docs/dry/temp-tests/<scope>/` (untracked). Source-mutating experiments run on a COPY there, never
-the live tree. Record command + what it proved.
+`docs/dry/temp-tests/<scope>/` (untracked), read-only against the live package. Anything that
+mutates source runs only in the disposable workspace ("Tests"). Record command + what it proved.
 
 Confirmed family → ownership decision (principle 7), then the shape: reuse/extend an existing
 owner; move policy from callers into the owning object/lifecycle; parallel representations → one
@@ -218,14 +224,23 @@ Every finding, consolidated or rejected:
   any stored derivation.
 - **Migration** — what each former definition becomes (call, declaration, deletion).
 - **Distinct behavior** — what stays separate/compatible; where recorded.
-- **Proof** — tests/experiments showing observable equivalence (principle 8), each
-  `static-reviewed` | `execution-deferred` | `execution-verified`.
-- **Gate** — the oracle that fails on re-divergence + evidence it CAN fail (asserting a name or
-  existence passes for a hand-rolled copy). One owner + no oracle able to detect a second = a
-  finding; the gate is its deliverable.
+- **Behavioral proof** — tests/experiments showing observable equivalence (principle 8), each
+  `static-reviewed` | `execution-deferred` | `execution-verified`, each naming the wrong result it
+  rejects + what discharges it (inspection alone: import moves, body composed by name; execution:
+  anything ordering, transactional, async). `execution-deferred` = listed under the artifact's
+  `## Pending execution` w/ the exact command.
+- **Structural gate** — oracle that fails when the owner is bypassed, w/ its negative control: a
+  behavior-preserving hand copy of the owner's body. Every behavior oracle passes that control
+  (the copy is correct); so does a name/existence assertion
+  ([test_resolvers.py][test-resolvers]`::test_write_flavors_share_resolver_entry_factory` asserts
+  `__name__` thrice). Owner already single + no gate = `gate-only` finding: distinct outcome, not
+  a consolidation; needs a justified population (which mechanism, which bypass is plausible),
+  never a bespoke existence test per helper.
 - **Coupling** — findings that must land together + why (generated slot collides, import moves).
   Visible to a reviewer reading one finding alone.
-- **Freshness** — inputs inspected; any change reopens the finding.
+- **Freshness** — fingerprint of every input inspected: blob id per file (`git hash-object
+  <path>`; `HEAD:<path>` when clean), searched population, tests, contract sources. A path name
+  can't say later whether its bytes changed. Any fingerprint change reopens the finding.
 
 Fields only where they apply; a finding is a decision aid, not a catalog entry. Finding line
 estimate = per finding; plan outcomes measure the cycle over the baseline diff; the two need not
@@ -243,15 +258,29 @@ trigger to check, never a substitute for a fresh trace; "reviewed once" ≠ perm
 Remove tests of deleted internals only when each distinct behavior demonstrably survives as a case
 on the owner. Boundary tests stay at the [AGENTS.md][agents] tier; oracles never rewritten to read
 from the owner they check. Owner coverage ≠ every former behavior still runs. Intentional test
-repetition stays when it keeps behaviors independently legible. Every oracle a finding relies on
-must be shown able to fail for the divergence it guards (`scripts/prove_failability.py`).
+repetition stays when it keeps behaviors independently legible. Every gate a finding relies on must
+be shown able to fail for the divergence it guards (`scripts/prove_failability.py`).
+
+That runner mutates and restores the checkout it lives in: root from its own path, targets
+resolved against it, pytest run inside it, scratch root refused inside it. Copying a target under
+`temp-tests/` redirects nothing; running the live script on a package target edits the shared tree
+and its restore can erase a concurrent edit ([HUNT.md][hunt] "A scratch directory is not a
+sandbox"). Rule: `git archive HEAD | tar -x -C <scratch>/dry-ws`; copy every dirty/untracked input
+the proof depends on by explicit path (list them in the artifact); run THAT copy's runner via
+`uv run --project <scratch>/dry-ws ...` w/ `--scratch-root` outside both trees; before any verdict
+print the imported package `__file__` + the database target from inside the workspace; never
+branch. The runner's pytest subprocess is a test run: Rio's authorization covers it, or the proof
+waits as `execution-deferred`.
 
 ### Defects found while tracing
 
 Reading for contract finds non-duplication bugs: docstring contradicting its body, guard one flavor
-lacks, layering claim the imports contradict. → `## Defects` in the artifact; never fixed inside the
-item; never dropped. Before closeout Worker 0 homes each on a NAMED owning card (unowned deferral
-dies).
+lacks (axis 6, contract source found), layering claim the imports contradict. → `## Defects` in the
+artifact w/ owner; never fixed inside the item; never dropped. Before closeout Worker 0 homes each
+on a NAMED owning card (unowned deferral dies). Defect a consolidation can't land without → the
+finding's Coupling names it and the family stays open: Rio authorizes a combined fix, or the
+consolidation is redesigned to stand alone. Carding the repair while accepting the dependent
+consolidation is not a resolution.
 
 ### Zero-edit result
 
@@ -275,16 +304,34 @@ uv run python docs/dry/export_dry_review.py plan \
 integration, final test gate. Artifacts: `dry-file-<path>.md` (`/`→`__`, `.py` dropped),
 `dry-folder-<path>.md`, `dry-project.md`. Worker 0 appends what the planner doesn't generate:
 `## Responsibility index` (family, owner, files covered, holding item, status); `## Families` (one
-`dry-rule-<family>.md` item per discovered family, added as found); `## Outcomes` (closeout). Plan
-already exists for the release → continue it under a dated `## Run` heading, never replace; reopen
-items whose inspected inputs changed since verification.
+`dry-rule-<family>.md` item per discovered family, added as found); `## Owned changes` (ledger,
+"Baseline and ownership"); `## Outcomes` (closeout); fills the `Cycle baseline:` line. Plan already
+exists for the release → continue under `## Run <release> <date>-<n>` (the run id every artifact's
+`Run:` line repeats), never replace. Before a run's first dispatch, and again before the final
+gate, reconcile the plan w/ the current inventory: `.py` added → new item; removed/renamed → item
+closed w/ note, artifact re-keyed; family members found → index rows. Item w/o a freshness
+fingerprint the finding record can compare = unverified, whatever its checkbox says: reopen, don't
+tick. Fingerprint changed → reopen.
 
-### Baseline
+### Baseline and ownership
 
-Per item Worker 0 records `ITEM_BASELINE=$(git stash create)` (empty → compare w/ `HEAD`) +
-`git status --short` + untracked files under the package. Stash object = tracked changes only;
-listings = the rest. Baseline-dirty files = concurrent work: never edited, reverted, tidied.
-Item-scoped diff = `git diff <baseline> -- <paths the item touched>`.
+Cycle entry: Worker 0 records `CYCLE_BASELINE=$(git stash create)` (empty → `HEAD`) +
+`git status --short` + untracked files under the package, on the plan's `Cycle baseline:` line.
+Stash object = tracked changes only; listings = the rest. Everything dirty there = concurrent work:
+never edited, reverted, tidied; final net change = diff vs this object + the untracked listing.
+
+Per item: `ITEM_BASELINE=$(git stash create)` + the same listings, for the item-scoped comparison
+only. Item-scoped diff = `git diff <item baseline> -- <paths touched>` PLUS every file the item
+added (`git diff --no-index /dev/null <new>`): a new owner and its tests never drop out of review
+for being unstaged.
+
+Dirty ≠ untouchable. Each item landing tracked edits or new files appends to the plan's
+`## Owned changes`: path, item, symbols changed. A later item may build on a path listed there.
+Attribute by content, never by dirty status: before editing a dirty path, diff vs
+`git show HEAD:<path>` and match every hunk to the ledger or the cycle baseline; a hunk in neither
+= external edit → stop, report to Worker 0, who reconciles w/ Rio. Same stop when the item-scoped
+diff shows hunks the worker didn't make. A file clean at cycle entry, dirty w/o a ledger row =
+external.
 
 ### Workers
 
@@ -300,10 +347,14 @@ doc is canonical.
    Worker 0 routes to a Worker 1 w/ edit rights or to Rio.
 2. **Worker 2** re-traces independently; challenges equivalence + ownership; confirms matrix
    discharged against the target's REAL surface (claimed inapplicability judged on its reason);
-   confirms definition counts; zero-edit item → searches for a real consolidation before
-   accepting. `verified` or `revision-needed` w/ concrete named candidates.
-3. Revisions → Worker 1. Worker 2 alone completes a plan item. Verification stale (item reopens)
-   when any input its freshness field names changes.
+   confirms definition counts; confirms each gate fails its negative control. Zero-edit family /
+   folder / project item → searches for a real consolidation before accepting; zero-edit FILE item
+   → validates coverage + assignment and routes any candidate to its holding family (a file item
+   never owes a production edit). `verified` (`## Pending execution` intact → plan item marked
+   `verified, pending execution`) or `revision-needed` w/ concrete named candidates.
+3. Revisions → Worker 1. Worker 2 alone completes a plan item. `pause-after-each-item`: Worker 0
+   reports each verified item and dispatches nothing until Rio says go; `autonomous`: advance.
+   Verification stale (item reopens) when any freshness fingerprint changes.
 
 Worker 0 coordinates + preserves baseline; never reviews, implements, approves. Cross-file changes
 expected when a family reveals a package-owned rule. Unrelated cleanup out of scope.
@@ -318,6 +369,7 @@ authorization; worker prose never converts dispatch into it; a proof needing a r
 # DRY review: `<family or path>`
 
 Status: investigating | designed | fix-implemented | revision-needed | verified
+Run: <release> <date>-<n>
 
 ## System trace
 
@@ -341,6 +393,10 @@ One finding record per rule, consolidated or rejected.
 
 Non-duplication defects found while tracing, each w/ the owner it routes to.
 
+## Pending execution
+
+Each `execution-deferred` proof: exact command, what it discharges. Absent when none.
+
 ## Judgment
 
 Short overall conclusion.
@@ -352,17 +408,25 @@ reasoning. No inventories, copied tool output, empty placeholders.
 
 ### Final gate and closeout
 
-All file/family/folder/project items verified → Worker 1 asks Rio to authorize `uv run pytest`
-(unless already given). Passes only when the suite passes + package coverage stays 100%. Record
-failures, coverage, skips, xfails; route each failure to its owning item. Package source change
-after the gate invalidates it.
+Every item but the gate verified + inventory re-reconciled → Worker 0 asks Rio to authorize
+`uv run pytest` (unless already given), then dispatches the gate Worker 1. Gate = full suite +
+package coverage 100% + every `## Pending execution` command from every artifact, run as listed (a
+green unmutated suite discharges no failability proof). Record failures, coverage, skips, xfails,
+collected/selected counts, `FAKESHOP_SHARDED` mode: sharded-only tests skip by default, so their
+behaviors stay unverified unless Rio also authorizes a `FAKESHOP_SHARDED=1` run. Bind the result:
+`git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + mode. Change to
+package source, tests, fixtures, pytest/coverage config, dependencies or mode invalidates it; prose
+doesn't. Worker 2 completes the gate row by confirming the bound inputs still match the tree and
+each pending command ran; failures route to their owning item.
 
-Worker 0 fills `## Outcomes` BEFORE deleting anything: families whose definition count dropped
-(before/after owners); machinery deleted; rejections w/ triggers; families left open; coupling
-introduced; net source change over baseline; test result; concurrent work untouched. Item artifacts
-= per-cycle scratch; their evidence survives only here. Then remove only this run's
-`docs/dry/temp-tests/<scope>/` dirs + `docs/dry/worker-memory/` contents, by explicit path. Never
-recursively clear `docs/dry/`; never delete another run's scratch.
+Worker 0 fills `## Outcomes` BEFORE deleting anything. Artifacts are untracked; Outcomes is the
+only record a later run can invalidate a verdict from. Per finding: rule, owner before/after, each
+challenge w/ count, freshness fingerprints, proof commands + status, negative control, verifier
+judgment. Per run: machinery deleted; rejections w/ triggers; families left open; coupling
+introduced; net source change vs cycle baseline; gate record; concurrent work untouched. Then
+remove only this run's `docs/dry/temp-tests/<scope>/` dirs, `<scratch>/dry-ws`, +
+`docs/dry/worker-memory/` contents, by explicit path. Never recursively clear `docs/dry/`; never
+delete another run's scratch.
 
 <!-- LINK DEFINITIONS -->
 
@@ -372,6 +436,7 @@ recursively clear `docs/dry/`; never delete another run's scratch.
 
 <!-- docs/ -->
 [export]: export_dry_review.py
+[hunt]: ../bug_hunt/HUNT.md
 [worker-0]: worker-0.md
 [worker-1]: worker-1.md
 [worker-2]: worker-2.md
@@ -389,6 +454,7 @@ recursively clear `docs/dry/`; never delete another run's scratch.
 [utils-inputs]: ../../django_strawberry_framework/utils/inputs.py
 
 <!-- tests/ -->
+[test-resolvers]: ../../tests/mutations/test_resolvers.py
 
 <!-- examples/ -->
 

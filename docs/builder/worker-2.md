@@ -84,6 +84,8 @@ On a re-pass after `revision-needed`, run focused tests for both the file you fi
 
 Before adding logic, check whether an existing helper already owns the responsibility; whether the new behavior belongs in the target module or a shared utility; whether a string literal, error-message fragment, tuple, or marker should be named once; whether a branch duplicates a shape used by another slice; and whether tests can share local fixtures/helpers without hiding important behavior. New helpers must have one clear reason to exist — do not extract one just to reduce line count if it makes the code less readable.
 
+The shape to build is defined once in `docs/dry/DRY.md` "Design principles". Read it before implementing and hold every new helper, record, branch, or cached value to it; this file adds only the implementer's obligations above.
+
 ## Static helper use
 
 Use `scripts/review_inspect.py` when the plan or prior review asks for it, always with `--output-dir <scratch>/inspect`. Record any shadow-file or overview use in `### Notes for Worker 3`, and cite original source-file line numbers, never shadow-file line numbers (`BUILD.md` `### Output files, and why their line numbers are NOT canonical`).

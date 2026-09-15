@@ -131,6 +131,8 @@ Treat DRY findings as build defects, not polish. Flag:
 
 Before flagging a duplication as a consolidation target, grep its readers — a "constant/helper pair" can be **dead code** (zero readers) rather than a live duplication, where the fix is deletion, not extraction. Recommend the most readable reusable shape, not the most abstract shape.
 
+Judge every finding against `docs/dry/DRY.md` "Design principles" and its vocabulary: count authoritative definitions, not consumers, oracles, or projections; never recommend rewriting an independent oracle to read from the owner it checks; and require observable equivalence, not Boolean agreement, before accepting a consolidation.
+
 ### The existence challenge
 
 Worker 3's DRY authority is not limited to "this logic appears twice". You are explicitly empowered — and expected — to ask whether an abstraction should exist **at all**: what would break if this helper, registry, token, fingerprint, or indirection layer were deleted and its one real caller inlined? Recommending deletion is a first-class DRY finding, not scope creep.

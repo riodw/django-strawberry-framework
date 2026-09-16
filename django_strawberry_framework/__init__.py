@@ -44,7 +44,11 @@ from .resource_policy import (  # noqa: E402
     ResourcePolicy,
 )
 from .scalars import BigInt, Upload, strawberry_config  # noqa: E402
-from .schema import DjangoMutationExecutionContext, DjangoSchema  # noqa: E402
+from .schema import (  # noqa: E402
+    SCHEMA_CONFIGURATION_ERROR_CODE,
+    DjangoMutationExecutionContext,
+    DjangoSchema,
+)
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 from .types.converters import (  # noqa: E402
     DjangoFilePathType,
@@ -126,6 +130,7 @@ __all__ = (
     "DEFAULT_ERROR_POLICY",
     "DEFAULT_RESOURCE_POLICY",
     "RESOURCE_LIMIT_ERROR_CODE",
+    "SCHEMA_CONFIGURATION_ERROR_CODE",
     "BigInt",
     "DjangoConnection",
     "DjangoConnectionField",

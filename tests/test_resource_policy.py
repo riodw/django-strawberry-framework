@@ -40,6 +40,7 @@ import copy
 import math
 import pickle
 import time
+from collections.abc import AsyncGenerator
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
@@ -47,6 +48,8 @@ import pytest
 import strawberry
 from graphql import GraphQLError, parse
 from graphql.language.token_kind import TokenKind
+from strawberry.extensions import ValidationCache
+from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types import Info
 
 from django_strawberry_framework import DjangoSchema, Upload
@@ -56,6 +59,7 @@ from django_strawberry_framework.extensions.resource_policy import (
     _OPEN_TOKEN_KINDS,
     _STRUCTURAL_DELIMITER_PAIRS,
     DjangoResourcePolicyExtension,
+    _AdmissionGuard,
     charge_document,
     scan_document_text,
 )
@@ -69,6 +73,7 @@ from django_strawberry_framework.resource_policy import (
     _cleanup_rejected_async_iterable,
     _windowed_rows,
     _windowed_rows_async,
+    admission_rejection,
     begin_resource_budget,
     bounded_rows,
     bounded_rows_async,
@@ -77,6 +82,7 @@ from django_strawberry_framework.resource_policy import (
     effective_bound,
     end_resource_budget,
     policy_from_info,
+    record_admission_rejection,
     resolve_resource_policy,
     stash_resource_policy,
     validate_collection_bound,
@@ -2670,7 +2676,7 @@ def test_a_schema_without_a_policy_falls_back_to_the_package_defaults():
 
 
 def test_an_operation_with_no_parsed_document_charges_no_document_budget():
-    """``on_validate`` runs even when the parse produced nothing to walk."""
+    """The admission hook runs even when the parse produced nothing to walk."""
     extension = DjangoResourcePolicyExtension()
     extension.execution_context = SimpleNamespace(
         schema=SimpleNamespace(),
@@ -2678,27 +2684,41 @@ def test_an_operation_with_no_parsed_document_charges_no_document_budget():
         variables=None,
         operation_name=None,
     )
-    hook = extension.on_validate()
+    hook = extension.on_parse()
     next(hook)
     with pytest.raises(StopIteration):
         next(hook)
 
 
+def test_a_verdict_recorded_outside_an_operation_is_not_kept():
+    """There is no operation for it to belong to, and no later one inherits it."""
+    record_admission_rejection(
+        ResourceLimitExceeded("max_container_width", 1, 2, "a list argument is too wide"),
+    )
+    assert admission_rejection() is None
+    with _armed({}, DEFAULT_RESOURCE_POLICY):
+        assert admission_rejection() is None
+
+
 def test_an_operation_the_budget_rejected_does_not_begin_executing():
-    """A published rejection means nothing runs, restated where running starts.
+    """A rejection means nothing runs, restated where running starts.
 
     Publishing is what makes validation stand down, and every seam that reads a
     pre-execution error stops there - except a streaming path that yields the
     error frame and then executes the operation anyway, which some releases in
     the supported range do. The hook execution begins from is entered only when
     an operation is about to run, so it is where that contradiction is closed.
+    What it reads is the recorded verdict rather than the published error,
+    because the published error is a field anything in the extension chain
+    writes.
     """
     extension = DjangoResourcePolicyExtension()
     rejection = ResourceLimitExceeded("max_container_width", 1, 2, "a list argument is too wide")
-    extension.execution_context = SimpleNamespace(pre_execution_errors=[rejection])
 
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        next(extension.on_execute())
+    with _armed({}, DEFAULT_RESOURCE_POLICY):
+        record_admission_rejection(rejection)
+        with pytest.raises(ResourceLimitExceeded) as caught:
+            next(extension.on_execute())
 
     assert caught.value is rejection
 
@@ -2706,12 +2726,134 @@ def test_an_operation_the_budget_rejected_does_not_begin_executing():
 def test_an_operation_the_budget_admitted_executes():
     """The other verdict: an admitted operation passes the same hook untouched."""
     extension = DjangoResourcePolicyExtension()
-    extension.execution_context = SimpleNamespace(pre_execution_errors=None)
 
-    hook = extension.on_execute()
-    next(hook)
-    with pytest.raises(StopIteration):
+    with _armed({}, DEFAULT_RESOURCE_POLICY):
+        hook = extension.on_execute()
         next(hook)
+        with pytest.raises(StopIteration):
+            next(hook)
+
+
+class _StreamWitness(SchemaExtension):
+    """Record that the executing stage was entered, from ahead of the package's entries."""
+
+    entered: list[str] = []
+
+    def on_execute(self):
+        _StreamWitness.entered.append(self.execution_context.query or "")
+        yield
+
+
+@strawberry.type
+class _StreamedQuery:
+    """One field, so a streaming schema has a query type to be built with."""
+
+    @strawberry.field
+    def hello(self) -> str:
+        return "ok"
+
+
+@strawberry.type
+class _StreamedSubscription:
+    """One subscription whose events only arrive if the operation was admitted."""
+
+    @strawberry.subscription
+    async def ticks(self) -> AsyncGenerator[int, None]:
+        yield 1
+
+
+@pytest.mark.parametrize(
+    "extensions",
+    [[], [ValidationCache]],
+    ids=["no-cache", "with-a-validation-cache"],
+)
+@pytest.mark.parametrize("verdict", ["rejected", "admitted"])
+async def test_the_streaming_path_carries_the_same_admission_verdict(extensions, verdict):
+    """One verdict per request, on the entry point that yields frames rather than a body.
+
+    A streaming transport drives the schema's own generator, so a refusal that
+    raised would reach it as an exception with no frame at all - which is why
+    admission publishes. The cache row is here because the composed path has to
+    answer the same way: what the client receives is one frame carrying the
+    typed rejection, and no event from the subscription behind it.
+    """
+    schema = DjangoSchema(
+        query=_StreamedQuery,
+        subscription=_StreamedSubscription,
+        extensions=[
+            _StreamWitness,
+            lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=1)),
+            *extensions,
+        ],
+    )
+    query = (
+        "subscription { a: ticks b: ticks }"
+        if verdict == "rejected"
+        else "subscription { a: ticks }"
+    )
+
+    _StreamWitness.entered.clear()
+    frames = [frame async for frame in await schema.subscribe(query)]
+
+    assert len(frames) == 1
+    if verdict == "rejected":
+        assert frames[0].data is None
+        assert len(frames[0].errors) == 1
+        assert frames[0].errors[0].extensions["bound"] == "max_aliases"
+        assert _StreamWitness.entered == []
+    else:
+        assert frames[0].errors is None
+        assert frames[0].data == {"a": 1}
+        assert _StreamWitness.entered == [query]
+
+
+@pytest.mark.parametrize(
+    "extension_type",
+    [DjangoResourcePolicyExtension, _AdmissionGuard],
+    ids=["the-enforcing-entry", "the-appended-guard"],
+)
+def test_a_rejection_an_extension_erased_is_restated_before_execution_is_decided(extension_type):
+    """The published error is a mutable field; the verdict is what survives it.
+
+    A validation extension that runs its own pass assigns the result over
+    whatever is published - Strawberry's ``ValidationCache`` does exactly that.
+    Upstream decides whether to execute from INSIDE the validation stage, so the
+    restatement has to happen while the hook is setting up, and the two entries
+    that make it are the enforcing one and the guard appended behind every
+    consumer entry.
+    """
+    extension = extension_type()
+    rejection = ResourceLimitExceeded("max_aliases", 1, 2, "too many aliases")
+    extension.execution_context = SimpleNamespace(pre_execution_errors=[])
+
+    with _armed({}, DEFAULT_RESOURCE_POLICY):
+        record_admission_rejection(rejection)
+        hook = extension.on_validate()
+        next(hook)
+
+        assert extension.execution_context.pre_execution_errors == [rejection]
+        with pytest.raises(StopIteration):
+            next(hook)
+
+
+@pytest.mark.parametrize(
+    "extension_type",
+    [DjangoResourcePolicyExtension, _AdmissionGuard],
+    ids=["the-enforcing-entry", "the-appended-guard"],
+)
+def test_an_admitted_operation_keeps_whatever_validation_published(extension_type):
+    """The restatement is a restatement, not an unconditional write."""
+    extension = extension_type()
+    validation_error = GraphQLError("Cannot query field 'nope'.")
+    extension.execution_context = SimpleNamespace(pre_execution_errors=[validation_error])
+
+    with _armed({}, DEFAULT_RESOURCE_POLICY):
+        hook = extension.on_validate()
+        next(hook)
+        with pytest.raises(StopIteration):
+            next(hook)
+
+    assert extension.execution_context.pre_execution_errors == [validation_error]
 
 
 def test_the_context_is_cleared_even_when_the_document_scan_rejects():
@@ -2805,19 +2947,115 @@ def test_an_explicit_extension_policy_cannot_be_replaced_or_written():
     assert extension._policy is not handed_out
 
 
-def test_an_explicit_extension_policy_forged_behind_the_attribute_is_not_read():
-    """The policy is read back only through what accepted it, so a forgery is not it.
+@pytest.mark.parametrize(
+    "attack",
+    [
+        lambda extension: extension.__dict__.update(
+            _explicit_policy=ResourcePolicy(max_list_rows=999),
+        ),
+        lambda extension: extension.__dict__.clear(),
+    ],
+    ids=["write-an-attribute", "empty-the-instance-dictionary"],
+)
+def test_an_accepted_extension_policy_survives_every_write_to_the_instance(attack):
+    """The accepted policy is held where no name on the extension answers with it.
 
-    Falling back to the schema's configuration is the fail-closed answer: an
-    extension that cannot say what it was configured with is enforcing whatever
-    the schema settled, never whatever was written onto it.
+    Nothing written onto the instance can stand in for it and nothing removed
+    from the instance can lose it, which is the difference between detecting a
+    forgery and preserving what was configured: an extension that fell back to
+    the schema's policy - or to the package defaults - when its own went missing
+    would answer a deleted attribute with a WIDER budget than the deployment
+    accepted.
     """
     extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
-    extension.__dict__["_explicit_policy"] = ResourcePolicy(max_list_rows=999)
+    attack(extension)
+    extension.execution_context = SimpleNamespace(schema=SimpleNamespace())
+
+    assert extension._policy.max_list_rows == 1
+    assert extension._resolved_policy().max_list_rows == 1
+
+
+@pytest.mark.parametrize(
+    "accepted",
+    [ResourcePolicy(max_list_rows=1), None],
+    ids=["explicit-policy", "inherited-policy"],
+)
+def test_an_accepted_extension_cannot_be_reconfigured_by_running_its_constructor(accepted):
+    """An accepted entry is reachable from every resolver, and so is its ``__init__``.
+
+    A second call would nominate the budget for every later operation, which is
+    the widening no write to the instance achieves either. Both supported
+    configurations are closed to it, because construction is what the refusal
+    reads and an extension deliberately built with no override is constructed:
+    taking the presence of a policy for the record would leave the inheriting
+    half of the configuration space - the half a consumer writes when they want
+    their schema's bounds - the one that can be handed a ceiling after it was
+    accepted.
+    """
+    extension = DjangoResourcePolicyExtension(policy=accepted)
+
+    with pytest.raises(ConfigurationError, match="configured when it is constructed"):
+        extension.__init__(policy=ResourcePolicy(max_list_rows=999))
+
+    assert extension._policy == accepted
+
+
+def test_an_extension_configured_with_no_policy_reads_the_schemas():
+    """The absent case the preservation rule must not swallow."""
+    extension = DjangoResourcePolicyExtension()
     extension.execution_context = SimpleNamespace(schema=SimpleNamespace())
 
     assert extension._policy is None
     assert extension._resolved_policy() is DEFAULT_RESOURCE_POLICY
+
+
+def test_a_refused_reconstruction_leaves_an_inheriting_extension_inheriting():
+    """Closing the constructor must not pin what the extension was never given.
+
+    Recording the construction of an extension that has no override records
+    exactly that, so the policy it enforces is still the one its schema resolves
+    per operation rather than whatever was in reach when it was built.
+    """
+    extension = DjangoResourcePolicyExtension()
+
+    with pytest.raises(ConfigurationError, match="configured when it is constructed"):
+        extension.__init__(policy=ResourcePolicy(max_list_rows=999))
+
+    extension.execution_context = SimpleNamespace(
+        schema=SimpleNamespace(resource_policy=ResourcePolicy(max_list_rows=2)),
+    )
+    assert extension._policy is None
+    assert extension._resolved_policy().max_list_rows == 2
+
+
+def test_a_factory_entry_is_constructed_fresh_and_configured_for_every_operation():
+    """Refusing a SECOND call on one instance is not refusing construction.
+
+    A factory entry is how a consumer configures an extension per operation, so
+    each operation must still get an instance of its own that accepts the policy
+    it was handed.
+    """
+
+    @strawberry.type
+    class _Query:
+        @strawberry.field
+        def rows(self, info: Info) -> list[str]:
+            return list(bounded_rows(["a", "b", "c"], info, None))
+
+    built = []
+
+    def factory():
+        extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+        built.append(extension)
+        return extension
+
+    schema = DjangoSchema(query=_Query, extensions=[factory])
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    assert len(built) == 2
+    assert built[0] is not built[1]
+    assert all(extension._policy.max_list_rows == 1 for extension in built)
 
 
 @pytest.mark.parametrize(

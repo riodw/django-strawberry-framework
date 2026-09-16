@@ -68,10 +68,16 @@ from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
 from graphql_client import graphql_payload
+from strawberry.extensions import ValidationCache
+from strawberry.extensions.base_extension import SchemaExtension
+from strawberry.extensions.validation_cache import _get_validate_cache
 
 from django_strawberry_framework import (
+    DEFAULT_ERROR_POLICY,
     RESOURCE_LIMIT_ERROR_CODE,
+    SCHEMA_CONFIGURATION_ERROR_CODE,
     DjangoSchema,
+    ErrorPolicy,
     strawberry_config,
 )
 from django_strawberry_framework.extensions.resource_policy import (
@@ -235,6 +241,62 @@ class _AuthorityQuery:
         return 1
 
     @strawberry.field
+    def reachable_authorities(self, info: strawberry.Info) -> list[str]:
+        """Every name on the schema answering with a policy, directly or at one remove.
+
+        Asked by CONTENT rather than by name: a row that spelled out the
+        attribute it expects to be absent would pass the moment that attribute
+        was renamed, while this one fails for any name at all that puts an
+        enforcement policy back in a resolver's reach. Both policies count - one
+        record settled them together, and writing the masking one puts raw
+        exception text on the wire exactly as writing the other widens a row
+        count.
+        """
+        found = []
+        for name, value in vars(info.schema).items():
+            for kind, attribute in (
+                (ResourcePolicy, "resource_policy"),
+                (ErrorPolicy, "error_policy"),
+            ):
+                if isinstance(value, kind):
+                    found.append(name)
+                if isinstance(getattr(value, attribute, None), kind):
+                    found.append(f"{name}.{attribute}")
+        return sorted(found)
+
+    @strawberry.field
+    def boom(self) -> str:
+        """Raise an exception whose text must never reach a client."""
+        raise RuntimeError(UNMASKED_SENTINEL)
+
+    @strawberry.field
+    def unmask(self, info: strawberry.Info) -> list[str]:
+        """Turn masking off through every name on the schema that could carry it."""
+        turned_off = []
+        for name, value in list(vars(info.schema).items()):
+            policy = (
+                value if isinstance(value, ErrorPolicy) else getattr(value, "error_policy", None)
+            )
+            if isinstance(policy, ErrorPolicy):
+                policy.__dict__["enabled"] = False
+                turned_off.append(name)
+        return turned_off
+
+    @strawberry.field
+    def reconfigure(self, info: strawberry.Info) -> str:
+        """Run the schema's own constructor again, with a wider policy."""
+        try:
+            type(info.schema).__init__(
+                info.schema,
+                query=_AuthorityQuery,
+                config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
+                resource_policy={"max_list_rows": 999},
+            )
+        except Exception as exc:
+            return type(exc).__name__
+        return "reconfigured"
+
+    @strawberry.field
     def nominate(self, info: strawberry.Info) -> int:
         """Replace the extension list with one carrying a wider policy of its own."""
         info.schema.extensions = [
@@ -324,6 +386,32 @@ class _AcceptedInstanceQuery:
         return "written"
 
     @strawberry.field
+    def empty_the_entry(self, info: strawberry.Info) -> list[str]:
+        """Delete everything the accepted entry carries, bar the context it is mid-request on."""
+        held = _accepted_resource_entry(info).__dict__
+        dropped = sorted(name for name in held if name != "execution_context")
+        for name in dropped:
+            del held[name]
+        return dropped
+
+    @strawberry.field
+    def reachable_authorities(self, info: strawberry.Info) -> list[str]:
+        """Every name on the accepted entry answering with a policy, asked by content."""
+        entry = _accepted_resource_entry(info)
+        return sorted(
+            name for name, value in vars(entry).items() if isinstance(value, ResourcePolicy)
+        )
+
+    @strawberry.field
+    def reconfigure(self, info: strawberry.Info) -> str:
+        """Run the accepted entry's own constructor again, with a wider policy."""
+        try:
+            _accepted_resource_entry(info).__init__(policy=ResourcePolicy(max_list_rows=999))
+        except Exception as exc:
+            return type(exc).__name__
+        return "reconfigured"
+
+    @strawberry.field
     def rows(self, info: strawberry.Info) -> list[str]:
         return list(bounded_rows(["a", "b", "c"], info, None))
 
@@ -371,6 +459,355 @@ def _accepted_instance_view(request, *args, **kwargs):
 _accepted_instance_view.csrf_exempt = True
 
 
+@cache
+def _inherited_instance_schema() -> DjangoSchema:
+    """A schema configured with an extension instance that declares NO policy of its own.
+
+    The other supported configuration of the same entry: it enforces the policy
+    its schema resolved, per operation, rather than one it was handed. Having no
+    override is a configuration, so this instance is as settled as the one that
+    carries a policy - and closed to the same second construction.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return DjangoSchema(
+            query=_AcceptedInstanceQuery,
+            resource_policy=ResourcePolicy(
+                max_list_rows=1,
+                max_container_width=MAX_CONTAINER_WIDTH,
+            ),
+            extensions=[DjangoResourcePolicyExtension()],
+        )
+
+
+def _inherited_instance_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_inherited_instance_schema())
+    return built(request, *args, **kwargs)
+
+
+_inherited_instance_view.csrf_exempt = True
+
+
+def _widening_factory():
+    """The entry a resolver would rather the next operation resolved."""
+    return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=999))
+
+
+@strawberry.type
+class _MembershipQuery:
+    """A bounded list beside the writes that aim at WHICH extensions run it.
+
+    The schema behind this query declared no extensions of its own, so the
+    entries it accepted are the package's two classes - objects their modules
+    name, which no write to the schema can take away. What each row here changes
+    is therefore the membership and nothing else, which is the question these
+    rows exist to ask: whether a later operation runs the extensions that were
+    accepted or the ones that were written where the accepted ones are held.
+    """
+
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
+
+    @strawberry.field
+    def boom(self) -> str:
+        """Raise an exception whose text must never reach a client."""
+        raise RuntimeError(UNMASKED_SENTINEL)
+
+    @strawberry.field
+    def empty_the_entries(self, info: strawberry.Info) -> list[str]:
+        """Leave the schema carrying no extension entries at all."""
+        return _write_entries(info, ())
+
+    @strawberry.field
+    def widen_the_entries(self, info: strawberry.Info) -> list[str]:
+        """Nominate an entry carrying a policy the deployment never accepted."""
+        return _write_entries(info, (_widening_factory,))
+
+    @strawberry.field
+    def rewrite_behind_the_names(self, info: strawberry.Info) -> list[str]:
+        """Write one layer in, through whatever object each private name answers with.
+
+        The write that replaces nothing the package filed: a carrier holding the
+        entries keeps its identity while its contents change, so a schema that
+        authenticated the holder would hand this membership to the next
+        operation. Asked by content, so the row still means something when the
+        name or the shape behind it changes.
+        """
+        written = []
+        for name, value in sorted(vars(info.schema).items()):
+            held = getattr(value, "__dict__", None)
+            if not name.startswith("_django") or held is None:
+                continue
+            for field in sorted(held):
+                held[field] = ()
+                written.append(f"{name}.{field}")
+        return written
+
+
+def _write_entries(info, entries):
+    """Write ``entries`` over every private name the schema carries."""
+    written = []
+    for name in sorted(vars(info.schema)):
+        if name.startswith("_django"):
+            info.schema.__dict__[name] = entries
+            written.append(name)
+    return written
+
+
+@cache
+def _membership_schema(mount: str) -> DjangoSchema:
+    """One schema per row, so a membership one row rewrites is not another's."""
+    assert mount
+    return DjangoSchema(query=_MembershipQuery, resource_policy=ResourcePolicy(max_list_rows=1))
+
+
+def _membership_view(mount: str):
+    def view(request, *args, **kwargs):
+        built = DjangoGraphQLView.as_view(schema=_membership_schema(mount))
+        return built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+#: Every extension this mount's factory has built, one per operation it served.
+_FACTORY_BUILDS: list[DjangoResourcePolicyExtension] = []
+
+
+def _narrow_extension_factory():
+    """A fresh extension per operation, configured the way a consumer's own would be."""
+    built = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+    _FACTORY_BUILDS.append(built)
+    return built
+
+
+@strawberry.type
+class _FactoryQuery:
+    """The legitimate per-operation construction that closing reconstruction must keep."""
+
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
+
+    @strawberry.field
+    def builds(self) -> int:
+        """How many extensions this mount's factory has built so far."""
+        return len(_FACTORY_BUILDS)
+
+
+@cache
+def _factory_schema() -> DjangoSchema:
+    return DjangoSchema(query=_FactoryQuery, extensions=[_narrow_extension_factory])
+
+
+def _factory_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_factory_schema())
+    return built(request, *args, **kwargs)
+
+
+_factory_view.csrf_exempt = True
+
+
+@strawberry.type
+class _DroppableQuery:
+    """A bounded list beside the one write that loses a schema's accepted entries."""
+
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
+
+    @strawberry.field
+    def forge(self, info: strawberry.Info) -> list[str]:
+        """Replace every private name the schema carries with something of the same shape."""
+        held = info.schema.__dict__
+        replaced = sorted(name for name in held if name.startswith("_django"))
+        for name in replaced:
+            held[name] = ()
+        return replaced
+
+    @strawberry.field
+    def drop(self, info: strawberry.Info) -> list[str]:
+        """Delete every private name the schema carries."""
+        held = info.schema.__dict__
+        dropped = sorted(name for name in held if name.startswith("_django"))
+        for name in dropped:
+            del held[name]
+        return dropped
+
+
+@cache
+def _droppable_schema(mount: str) -> DjangoSchema:
+    """One schema per destructive row, so a refused schema cannot leak into another row."""
+    assert mount
+    return DjangoSchema(
+        query=_DroppableQuery,
+        extensions=[
+            DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1)),
+        ],
+    )
+
+
+def _droppable_view(mount: str):
+    def view(request, *args, **kwargs):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            schema = _droppable_schema(mount)
+        built = DjangoGraphQLView.as_view(schema=schema)
+        return built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+@cache
+def _census_schema() -> DjangoSchema:
+    """A schema no row writes through, so a census of what it carries means something."""
+    return DjangoSchema(
+        query=_AuthorityQuery,
+        config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
+        resource_policy={"max_list_rows": 1},
+    )
+
+
+def _census_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_census_schema())
+    return built(request, *args, **kwargs)
+
+
+_census_view.csrf_exempt = True
+
+
+@strawberry.type
+class _WitnessQuery:
+    """A bounded list on a schema that records whether execution ever began."""
+
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
+
+
+class _ExecutionWitness(SchemaExtension):
+    """Record that the executing stage was entered, from outside the guard under test.
+
+    A refusal asserted from inside the extension that issues it cannot tell
+    "nothing ran" from "something ran and was stopped on its way out". This
+    entry sits ahead of the package's own in the chain, so its hook runs first
+    and its record is the operation's own answer to whether execution began.
+    """
+
+    entered: list[str] = []
+
+    def on_execute(self):
+        """Record the query executing began for, as a generator hook like the package's."""
+        _ExecutionWitness.entered.append(self.execution_context.query or "")
+        yield
+
+
+@cache
+def _witness_schema(order: str) -> DjangoSchema:
+    """One witnessed schema per position the validation cache can take.
+
+    The witness is listed ahead of everything the package appends, so its hook
+    is the first thing the executing stage would enter. Both orders are needed:
+    with the cache FIRST the enforcing entry's own hook is still behind it and
+    can restate the verdict itself, and with the cache LAST nothing but the
+    guard appended behind every consumer entry is.
+    """
+    if order == "cache-first":
+        return DjangoSchema(
+            query=_WitnessQuery,
+            resource_policy={"max_aliases": CACHE_ALIASES},
+            extensions=[_ExecutionWitness, ValidationCache],
+        )
+    return DjangoSchema(
+        query=_WitnessQuery,
+        extensions=[
+            _ExecutionWitness,
+            lambda: DjangoResourcePolicyExtension(
+                policy=ResourcePolicy(max_aliases=CACHE_ALIASES),
+            ),
+            ValidationCache,
+        ],
+    )
+
+
+def _witness_view(order: str):
+    def view(request, *args, **kwargs):
+        built = DjangoGraphQLView.as_view(schema=_witness_schema(order))
+        return built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+def _witness_async_view(order: str):
+    async def view(request, *args, **kwargs):
+        built = AsyncDjangoGraphQLView.as_view(schema=_witness_schema(order))
+        return await built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+#: The aliases one operation may carry on the validation-cache mounts. Small
+#: enough that an ordinary two-alias document is over it, which is what gives the
+#: composition matrix a rejecting row that involves no custom scalar at all.
+CACHE_ALIASES = 1
+
+#: Exception text a masked response must never carry.
+UNMASKED_SENTINEL = "resource-policy-unmasked-sentinel"
+
+
+@cache
+def _cache_schema(order: str) -> DjangoSchema:
+    """One schema per position a validation cache can take relative to admission.
+
+    ``ValidationCache`` is an ordinary supported extension that runs the
+    validation pass itself and assigns the result over the operation's
+    pre-execution errors. Where it sits relative to the package's own entry is
+    the consumer's choice, and both choices are configurations this package
+    accepts, so both are mounted.
+    """
+    policy = ResourcePolicy(
+        max_aliases=CACHE_ALIASES,
+        max_container_width=MAX_CONTAINER_WIDTH,
+    )
+    config = strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR})
+    if order == "none":
+        return DjangoSchema(query=_AuthorityQuery, config=config, resource_policy=policy)
+    if order == "cache-first":
+        return DjangoSchema(
+            query=_AuthorityQuery,
+            config=config,
+            resource_policy=policy,
+            extensions=[ValidationCache],
+        )
+    return DjangoSchema(
+        query=_AuthorityQuery,
+        config=config,
+        extensions=[lambda: DjangoResourcePolicyExtension(policy=policy), ValidationCache],
+    )
+
+
+def _cache_view(order: str):
+    def view(request, *args, **kwargs):
+        built = DjangoGraphQLView.as_view(schema=_cache_schema(order))
+        return built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+def _cache_async_view(order: str):
+    async def view(request, *args, **kwargs):
+        built = AsyncDjangoGraphQLView.as_view(schema=_cache_schema(order))
+        return await built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
 #: The policy object a deployment hands to a schema and then keeps a reference to.
 RETAINED_POLICY = ResourcePolicy(max_list_rows=1, max_container_width=MAX_CONTAINER_WIDTH)
 
@@ -399,6 +836,22 @@ urlpatterns = [
     path("rp-equal-wide/", _equal_view(3)),
     path("rp-retained/", _retained_view),
     path("rp-accepted-instance/", _accepted_instance_view),
+    path("rp-inherited-instance/", _inherited_instance_view),
+    path("rp-factory-entry/", _factory_view),
+    path("rp-emptied-entries/", _membership_view("emptied")),
+    path("rp-widened-entries/", _membership_view("widened")),
+    path("rp-rewritten-entries/", _membership_view("rewritten")),
+    path("rp-forged-entries/", _droppable_view("forged")),
+    path("rp-dropped-entries/", _droppable_view("dropped")),
+    path("rp-census/", _census_view),
+    path("rp-witness-cache-first/", _witness_view("cache-first")),
+    path("rp-witness-cache-last/", _witness_view("cache-last")),
+    path("rp-witness-cache-last-async/", _witness_async_view("cache-last")),
+    path("rp-cache-none/", _cache_view("none")),
+    path("rp-cache-first/", _cache_view("cache-first")),
+    path("rp-cache-last/", _cache_view("cache-last")),
+    path("rp-cache-first-async/", _cache_async_view("cache-first")),
+    path("rp-cache-last-async/", _cache_async_view("cache-last")),
     path(
         "rp-max-bound/",
         _probe_view(
@@ -1640,10 +2093,187 @@ def test_a_scalar_argument_within_the_bound_reaches_its_parser(source):
     assert all(parsed == members for parsed in _scalar_parses)
 
 
+def test_no_name_on_a_schema_answers_with_the_policy_enforcing_it():
+    """The authority is not an attribute, asked by content rather than by name.
+
+    A row naming the attribute it expects to be absent passes the moment that
+    attribute is renamed, and detecting a forged one and then continuing under
+    the fallback is not preservation either - the fallback may be wider than
+    what the deployment configured. Nothing ``info.schema`` puts in reach is a
+    policy or holds one, so there is nothing to forge.
+    """
+    payload = _post("/rp-census/", "{ reachableAuthorities }")
+    _no_rejection(payload)
+    assert payload["data"] == {"reachableAuthorities": []}
+
+
+@pytest.mark.parametrize("attempt", ["before", "after"])
+def test_a_resolver_cannot_put_raw_exception_text_on_the_wire(attempt):
+    """The record that settles the budget settles masking, and neither is reachable.
+
+    Under ``DEBUG=False`` an unexpected resolver exception reaches the client as
+    the policy's stable message plus a correlation id. A resolver that could
+    reach the accepted error policy would turn that off for every later request
+    the process served, so the sentinel is looked for in the response BEFORE the
+    attempt and in the one AFTER it.
+    """
+    if attempt == "after":
+        assert _post("/rp-authority/", "{ unmask }")["data"] == {"unmask": []}
+
+    payload = _post("/rp-authority/", "{ boom }")
+    assert payload["data"] is None
+    error = payload["errors"][0]
+    assert UNMASKED_SENTINEL not in json.dumps(payload)
+    assert error["message"] == DEFAULT_ERROR_POLICY.message
+    assert error["extensions"][DEFAULT_ERROR_POLICY.correlation_extension_key]
+
+
+@pytest.mark.parametrize(
+    "mount",
+    ["/rp-accepted-instance/", "/rp-inherited-instance/"],
+    ids=["explicit-policy", "inherited-policy"],
+)
+def test_no_name_on_an_accepted_extension_answers_with_the_policy_it_enforces(mount):
+    """The same question of the entry a schema was configured WITH.
+
+    Both configurations of that entry are asked: one that carries a policy, and
+    one that carries none and reads its schema's. Neither holds a policy under
+    any name a resolver reaches.
+    """
+    payload = _post(mount, "{ reachableAuthorities }")
+    _no_rejection(payload)
+    assert payload["data"] == {"reachableAuthorities": []}
+
+
+@pytest.mark.parametrize(
+    ("mount", "field"),
+    [
+        ("/rp-authority/", "reconfigure"),
+        ("/rp-accepted-instance/", "reconfigure"),
+        ("/rp-inherited-instance/", "reconfigure"),
+    ],
+    ids=["schema", "accepted-extension", "accepted-extension-inheriting"],
+)
+def test_rerunning_a_constructor_over_the_wire_does_not_widen_a_later_request(mount, field):
+    """An object a resolver reaches is one whose ``__init__`` a resolver can call.
+
+    A second construction would settle a new ceiling for every later request the
+    process serves, which is the widening no attribute write achieves. It is
+    refused where it is made, and what the deployment configured is what still
+    bounds the next request.
+
+    The initial configuration is varied because it is what the refusal has to
+    read the construction from. An extension built with no override of its own
+    is configured - it enforces the policy its schema resolves - so an object
+    that took the policy for the record would leave exactly that configuration
+    open to being handed a ceiling after the deployment accepted it, while the
+    row that carries a policy passed.
+    """
+    first = _post(mount, "{ rows }")
+    _no_rejection(first)
+    assert first["data"]["rows"] == ["a"]
+
+    attacked = _post(mount, "{ %s }" % field)
+    assert attacked["data"] == {field: "ConfigurationError"}, attacked
+
+    second = _post(mount, "{ rows }")
+    _no_rejection(second)
+    assert second["data"]["rows"] == ["a"]
+
+
+@pytest.mark.parametrize(
+    ("mount", "field", "written"),
+    [
+        ("/rp-emptied-entries/", "emptyTheEntries", ["_django_extensions"]),
+        ("/rp-widened-entries/", "widenTheEntries", ["_django_extensions"]),
+        ("/rp-rewritten-entries/", "rewriteBehindTheNames", []),
+    ],
+    ids=["empty-the-entries", "replace-the-entries", "rewrite-behind-the-names"],
+)
+def test_writing_the_accepted_extensions_does_not_choose_what_runs_the_next_request(
+    mount,
+    field,
+    written,
+):
+    """Membership is what decides whether an operation is bounded and masked at all.
+
+    Keeping the policy values private answers a different question: a resolver
+    that cannot reach a bound can still aim at which extensions read one. Each
+    row rewrites the membership a different way and then asks a LATER request
+    what enforced it - the already-resolved chain of the attacking request is
+    not the acceptance criterion - and the answer is the configuration
+    construction accepted: the row bound the deployment chose, and an unexpected
+    exception still reaching the client masked.
+    """
+    first = _post(mount, "{ rows }")
+    _no_rejection(first)
+    assert first["data"]["rows"] == ["a"]
+
+    attacked = _post(mount, "{ %s }" % field)
+    assert attacked["data"] == {field: written}, attacked
+
+    second = _post(mount, "{ rows }")
+    _no_rejection(second)
+    assert second["data"]["rows"] == ["a"]
+
+    masked = _post(mount, "{ boom }")
+    assert masked["data"] is None
+    assert UNMASKED_SENTINEL not in json.dumps(masked)
+    assert masked["errors"][0]["message"] == DEFAULT_ERROR_POLICY.message
+    assert masked["errors"][0]["extensions"][DEFAULT_ERROR_POLICY.correlation_extension_key]
+
+
+def test_an_extension_factory_still_builds_one_per_operation():
+    """Refusing a SECOND construction of one instance is not refusing construction.
+
+    A factory entry is how a consumer configures an extension per operation, and
+    it is called once per operation by design. Each request must still get an
+    instance of its own that accepts the policy the factory hands it.
+    """
+    before = _post("/rp-factory-entry/", "{ builds }")
+    _no_rejection(before)
+
+    bounded = _post("/rp-factory-entry/", "{ rows }")
+    _no_rejection(bounded)
+    assert bounded["data"]["rows"] == ["a"]
+
+    after = _post("/rp-factory-entry/", "{ builds }")
+    _no_rejection(after)
+    assert after["data"]["builds"] > before["data"]["builds"]
+
+
+@pytest.mark.parametrize(
+    ("mount", "field"),
+    [("/rp-forged-entries/", "forge"), ("/rp-dropped-entries/", "drop")],
+    ids=["forge-the-accepted-entries", "delete-the-accepted-entries"],
+)
+def test_losing_the_accepted_extensions_refuses_the_next_request(mount, field):
+    """A configuration that cannot be read back is refused, never widened.
+
+    The accepted entries are the only record of what a consumer extension
+    declared, so resolving the list that replaced them - or falling back to the
+    schema's own policy, which here is the package default - would answer a
+    deleted attribute with a budget three times wider than the one the
+    deployment configured. Each row gets its own mount because the schema it
+    breaks stays broken.
+    """
+    first = _post(mount, "{ rows }")
+    _no_rejection(first)
+    assert first["data"]["rows"] == ["a"]
+
+    attacked = _post(mount, "{ %s }" % field)
+    assert attacked["data"] == {field: ["_django_extensions"]}, attacked
+
+    second = _post(mount, "{ rows }")
+    assert second["data"] is None, second
+    assert len(second["errors"]) == 1
+    assert second["errors"][0]["extensions"] == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
+
+
 @pytest.mark.parametrize(
     ("field", "reported"),
-    [("rebind", "AttributeError"), ("overwrite", "written")],
-    ids=["rebind", "overwrite"],
+    [("rebind", "AttributeError"), ("overwrite", "written"), ("emptyTheEntry", [])],
+    ids=["rebind", "overwrite", "empty-the-instance-dictionary"],
 )
 def test_an_accepted_extension_instance_cannot_widen_a_later_request(field, reported):
     """An instance entry stays reachable, so what it holds bounds the NEXT request.
@@ -1651,8 +2281,12 @@ def test_an_accepted_extension_instance_cannot_widen_a_later_request(field, repo
     Strawberry hands back an accepted instance unchanged, and
     ``info.schema.extensions`` puts it in front of every resolver. The policy it
     arms each operation with is therefore held where no name on it answers with
-    it: rebinding is refused where it is made, and the object it does hand out
-    is a duplicate, so a bound written onto that changes only the writer's copy.
+    it: rebinding is refused where it is made, the object it does hand out is a
+    duplicate so a bound written onto that changes only the writer's copy, and
+    emptying the instance finds nothing to delete - which is the difference
+    between detecting the write and preserving the configuration, since an
+    entry that fell back when its own policy went missing would answer the
+    deletion with the schema's wider one.
     """
     first = _post("/rp-accepted-instance/", "{ rows }")
     _no_rejection(first)
@@ -1664,6 +2298,180 @@ def test_an_accepted_extension_instance_cannot_widen_a_later_request(field, repo
     second = _post("/rp-accepted-instance/", "{ rows }")
     _no_rejection(second)
     assert second["data"]["rows"] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# Composition: admission and an installed validation extension
+# ---------------------------------------------------------------------------
+
+#: The two positions a consumer can give a validation extension relative to the
+#: package's own, both of them supported configurations, plus the control.
+CACHE_ORDERS = ["none", "cache-first", "cache-last"]
+
+CACHE_ORDER_IDS = [
+    "no-cache",
+    "cache-before-the-automatic-entry",
+    "explicit-entry-before-the-cache",
+]
+
+
+def _empty_validation_cache() -> None:
+    """Empty the module-level store ``ValidationCache`` shares across schemas.
+
+    The cache is keyed by its ``maxsize`` and lives in upstream's module, not on
+    any schema, so "cold" is a state of the process rather than of the mount and
+    naming a row cold proves nothing unless the row puts the process in it.
+    """
+    _get_validate_cache(None).cache_clear()
+
+
+CACHE_MOUNTS = {
+    "none": "/rp-cache-none/",
+    "cache-first": "/rp-cache-first/",
+    "cache-last": "/rp-cache-last/",
+}
+
+
+@pytest.mark.parametrize("order", CACHE_ORDERS, ids=CACHE_ORDER_IDS)
+@pytest.mark.parametrize("cache_state", ["cold", "warm"])
+def test_an_alias_rejection_survives_an_installed_validation_extension(order, cache_state):
+    """A rejection is not the mutable field it is published in.
+
+    A validation extension that runs the pass itself assigns its own result over
+    ``pre_execution_errors``. The cache's store is module-level and shared by
+    every schema that asks for the same size, so the two states are set up
+    rather than named: cold is the store emptied immediately before the request,
+    warm is the same request made twice. Aliases are charged from the document's
+    shape alone, so this row needs no custom scalar at all - if the only witness
+    were a scalar parser, a rejection erased for an ordinary document would have
+    nothing to report it.
+    """
+    _empty_validation_cache()
+    query = "{ a: rows b: rows }"
+    if cache_state == "warm":
+        _rejection(_post(CACHE_MOUNTS[order], query))
+    extensions = _rejection(_post(CACHE_MOUNTS[order], query))
+    assert extensions["bound"] == "max_aliases"
+    assert extensions["limit"] == CACHE_ALIASES
+    assert extensions["charged"] == CACHE_ALIASES + 1
+
+
+@pytest.mark.parametrize("order", CACHE_ORDERS, ids=CACHE_ORDER_IDS)
+@pytest.mark.parametrize(
+    "source",
+    ["variable", "literal", "default"],
+    ids=["supplied-variable", "inline-literal", "variable-default"],
+)
+def test_an_over_bound_argument_is_refused_before_any_installed_validation_runs(order, source):
+    """Admission precedes the validation stage, whatever position the consumer chose.
+
+    An installed validation extension runs the pass itself, and that pass parses
+    every inline literal and every variable default through the scalar it is
+    typed as. Ordering the package's own entry earlier or later cannot fix that
+    for both halves of the matrix, so admission is not in the chain at all: it
+    charges once the document is parsed and before any validation hook is
+    entered, and a refused document is one nothing validates.
+    """
+    _scalar_parses.clear()
+    query, variables, _ = _opaque_request(source, MAX_CONTAINER_WIDTH + 1)
+    extensions = _rejection(_post(CACHE_MOUNTS[order], query, variables))
+    assert extensions["bound"] == "max_container_width"
+    assert extensions["charged"] == MAX_CONTAINER_WIDTH + 1
+    assert _scalar_parses == []
+
+
+@pytest.mark.parametrize("order", CACHE_ORDERS, ids=CACHE_ORDER_IDS)
+@pytest.mark.parametrize(
+    "source",
+    ["variable", "literal", "default"],
+    ids=["supplied-variable", "inline-literal", "variable-default"],
+)
+def test_an_argument_within_the_bound_still_executes_beside_a_validation_extension(order, source):
+    """The other verdict, which is what keeps the rejecting row from being vacuous."""
+    _scalar_parses.clear()
+    query, variables, members = _opaque_request(source, MAX_CONTAINER_WIDTH)
+    payload = _post(CACHE_MOUNTS[order], query, variables)
+    _no_rejection(payload)
+    assert payload["data"] == {"take": "ok"}
+    assert _scalar_parses
+    assert all(parsed == members for parsed in _scalar_parses)
+
+
+@pytest.mark.parametrize(
+    "mount",
+    ["/rp-witness-cache-first/", "/rp-witness-cache-last/", "/rp-witness-cache-last-async/"],
+    ids=[
+        "cache-before-the-enforcing-entry",
+        "cache-after-the-enforcing-entry",
+        "cache-after-the-enforcing-entry-async",
+    ],
+)
+@pytest.mark.parametrize("verdict", ["rejected", "admitted"])
+def test_a_rejected_operation_never_enters_the_executing_stage(mount, verdict):
+    """Asked from outside the guard, on a schema carrying a validation cache.
+
+    Upstream decides whether to execute from inside the validation stage, so
+    what that decision reads is whatever the LAST validation hook to set up
+    left published - and the cache publishes its own result there. The
+    difference between "nothing ran" and "something ran and was stopped on the
+    way out" is visible only to an entry in the chain ahead of the package's
+    own, which is what this one is. The admitted row keeps the witness honest.
+    """
+    _ExecutionWitness.entered.clear()
+    query = "{ a: rows b: rows }" if verdict == "rejected" else "{ a: rows }"
+    if mount.endswith("-async/"):
+        response = _await_response(
+            AsyncTestClient().query(query, assert_no_errors=False, url=mount),
+        )
+        payload = json.loads(response.response.content)
+    else:
+        payload = _post(mount, query)
+
+    if verdict == "rejected":
+        assert _rejection(payload)["bound"] == "max_aliases"
+        assert _ExecutionWitness.entered == []
+    else:
+        _no_rejection(payload)
+        assert payload["data"] == {"a": ["a", "b", "c"]}
+        assert _ExecutionWitness.entered == [query]
+
+
+@pytest.mark.parametrize("order", CACHE_ORDERS, ids=CACHE_ORDER_IDS)
+def test_ordinary_validation_still_answers_beside_the_admission_stage(order):
+    """Admission stands down a document's validation only when it refused it.
+
+    Emptying an admitted operation's validation rules would turn every schema
+    carrying a cache into one that accepts nonsense, so the row an unknown field
+    fails on is the control for the mechanism the refusing rows rely on.
+    """
+    payload = _post(CACHE_MOUNTS[order], "{ nosuchfield }")
+    _no_rejection(payload)
+    assert payload["data"] is None
+    assert "nosuchfield" in payload["errors"][0]["message"]
+
+
+@pytest.mark.parametrize(
+    ("order", "mount"),
+    [("cache-first", "/rp-cache-first-async/"), ("cache-last", "/rp-cache-last-async/")],
+    ids=["cache-before-the-automatic-entry", "explicit-entry-before-the-cache"],
+)
+def test_the_composed_admission_stage_answers_the_same_on_the_async_transport(order, mount):
+    """One verdict per request, whichever transport carried it."""
+    _scalar_parses.clear()
+    query, variables, _ = _opaque_request("literal", MAX_CONTAINER_WIDTH + 1)
+    sync_extensions = _rejection(_post(CACHE_MOUNTS[order], query, variables))
+
+    _scalar_parses.clear()
+    response = _await_response(
+        AsyncTestClient().query(
+            query,
+            variables=variables,
+            assert_no_errors=False,
+            url=mount,
+        ),
+    )
+    assert _rejection(json.loads(response.response.content)) == sync_extensions
+    assert _scalar_parses == []
 
 
 @pytest.mark.django_db

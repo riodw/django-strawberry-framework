@@ -69,6 +69,7 @@ def test_public_api_surface_is_pinned():
         "DEFAULT_ERROR_POLICY",
         "DEFAULT_RESOURCE_POLICY",
         "RESOURCE_LIMIT_ERROR_CODE",
+        "SCHEMA_CONFIGURATION_ERROR_CODE",
         "BigInt",
         "DjangoConnection",
         "DjangoConnectionField",

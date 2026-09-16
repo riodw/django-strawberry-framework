@@ -41,26 +41,35 @@ def _resolve(explicit: object = None, setting: object = None) -> _ProbePolicy:
     )
 
 
-def test_an_explicit_instance_passes_through_untouched():
-    """A constructed policy already validated itself; identity is preserved."""
+def test_an_explicit_instance_supplies_the_values_of_a_private_duplicate():
+    """The caller keeps their object; what a bound is read from is never it.
+
+    A caller who kept the instance they passed - or left one in ``settings`` -
+    would otherwise hold the object every bound is read from for the life of the
+    process, and a frozen dataclass admits ``policy.__dict__[bound] = wider``.
+    """
     policy = _ProbePolicy(width=3)
-    assert _resolve(policy) is policy
+    resolved = _resolve(policy)
+    assert resolved == policy
+    assert resolved is not policy
 
 
 def test_no_source_at_all_resolves_to_the_default():
     assert _resolve(None, None) is _PROBE_DEFAULT
 
 
-def test_an_instance_through_the_setting_slot_passes_through_untouched():
+def test_an_instance_through_the_setting_slot_is_taken_on_the_same_terms():
     """A validated instance behind the setting slot is the same trusted declaration.
 
-    The explicit argument and the setting read are two spellings of one
-    override source, so an instance from either passes through unchanged;
-    rejecting the setting spelling made the typed message name the policy class
-    as the received type while claiming it must be one.
+    The explicit argument and the setting read are two spellings of one override
+    source, so an instance from either supplies the values of a private
+    duplicate; rejecting the setting spelling made the typed message name the
+    policy class as the received type while claiming it must be one.
     """
     policy = _ProbePolicy(width=3)
-    assert _resolve(None, policy) is policy
+    resolved = _resolve(None, policy)
+    assert resolved == policy
+    assert resolved is not policy
 
 
 def test_the_setting_supplies_overrides_when_the_argument_is_absent():

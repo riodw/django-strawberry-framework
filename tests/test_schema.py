@@ -12,7 +12,7 @@ import pytest
 import strawberry
 from apps.library.models import Branch
 from django.db import connection
-from graphql import ExecutionContext
+from graphql import ExecutionContext, GraphQLError
 
 from django_strawberry_framework.error_policy import ErrorPolicy
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -21,6 +21,8 @@ from django_strawberry_framework.extensions.resource_policy import DjangoResourc
 from django_strawberry_framework.resource_policy import ResourcePolicy, bounded_rows
 from django_strawberry_framework.schema import (
     _SCHEMA_ENFORCEMENT,
+    _SCHEMA_EXTENSIONS,
+    SCHEMA_CONFIGURATION_ERROR_CODE,
     DjangoMutationExecutionContext,
     DjangoSchema,
     _async_mutation_lock,
@@ -45,6 +47,13 @@ class DummyQuery:
     @strawberry.field
     def hello(self) -> str:
         return "world"
+
+
+@strawberry.type
+class _RowQuery:
+    @strawberry.field
+    def rows(self, info: strawberry.Info) -> list[str]:
+        return list(bounded_rows(["a", "b", "c"], info, None))
 
 
 @strawberry.type
@@ -573,6 +582,10 @@ def test_a_resolver_cannot_nominate_a_wider_policy_by_replacing_the_extension_li
     succeed on it, and the accepted bound is gone for the life of the process.
     What enforces an operation is what the schema was constructed with, so the
     assignment is refused where it is made rather than reconciled afterwards.
+    The refusal reaches the client as any other unexpected exception out of a
+    resolver does - masked, with a correlation id - so what the row reads is
+    that the operation failed and that the next one is still held to the
+    accepted bound.
     """
 
     @strawberry.type
@@ -595,7 +608,7 @@ def test_a_resolver_cannot_nominate_a_wider_policy_by_replacing_the_extension_li
 
     attacked = schema.execute_sync("{ widen }")
     assert attacked.errors is not None
-    assert "settled when the schema is constructed" in attacked.errors[0].message
+    assert "correlationId" in attacked.errors[0].extensions
 
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
 
@@ -790,33 +803,199 @@ def test_an_accepted_extension_instance_does_not_outlive_its_schema():
     assert alive == (None, None, None)
 
 
-def test_a_forged_enforcement_record_still_leaves_the_operation_enforced():
-    """The record a schema carries is read back only through what accepted it.
+@pytest.mark.parametrize(
+    "attack",
+    [
+        lambda schema: schema.__dict__.update(
+            _django_enforcement=SimpleNamespace(
+                resource_policy=ResourcePolicy(max_list_rows=999),
+                error_policy=ErrorPolicy(enabled=False),
+            ),
+        ),
+        lambda schema: schema.__dict__.clear(),
+    ],
+    ids=["write-an-attribute", "empty-the-schema-dictionary"],
+)
+def test_the_accepted_policies_survive_every_write_to_the_schema(attack):
+    """No name on a schema answers with the policies it was accepted with.
 
-    Writing the attribute it is held under is a write ``info.schema`` puts in
-    reach of every resolver, and a forged record would otherwise nominate its
-    own policies. The forgery is not the accepted one, so what answers is the
-    fail-closed default - and the entries that enforce it are put back rather
-    than taken from a configuration that can no longer be read.
+    ``info.schema`` is handed to every resolver, so anything the schema holds a
+    reference to is a process-lived seam: rebinding it nominates new policies
+    for every later request, and deleting it selects whatever the fallback is.
+    Neither is available, because the policies are not held on the schema at
+    all - which is why nothing in this row has to be detected before it can be
+    refused.
     """
     schema = DjangoSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=1))
     assert schema.resource_policy.max_list_rows == 1
 
-    schema.__dict__["_django_enforcement"] = SimpleNamespace(
-        resource_policy=ResourcePolicy(max_list_rows=999),
-        error_policy=ErrorPolicy(),
-        auto_resource_extension=False,
-        auto_error_extension=False,
-        extensions=(),
+    attack(schema)
+
+    assert schema.resource_policy.max_list_rows == 1
+    assert schema.error_policy.enabled is True
+
+
+def test_no_name_on_a_schema_answers_with_a_policy():
+    """The census behind the row above, quantified over what the schema carries.
+
+    A row that names the attribute it expects to be absent passes once the
+    attribute is renamed. This one asks the question by CONTENT: nothing a
+    resolver reaches through ``info.schema`` is a policy, or holds one.
+    """
+    schema = DjangoSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=1))
+
+    held = list(vars(schema).values())
+    assert held
+    for value in held:
+        assert not isinstance(value, (ResourcePolicy, ErrorPolicy))
+        assert not isinstance(getattr(value, "resource_policy", None), ResourcePolicy)
+        assert not isinstance(getattr(value, "error_policy", None), ErrorPolicy)
+
+
+def test_a_schema_cannot_be_reconfigured_by_running_its_constructor():
+    """A constructed schema is reachable from every resolver, and so is its ``__init__``.
+
+    Re-running it would settle new policies for every later request the process
+    serves. The accepted record stays and the base constructor never runs, so
+    the schema is left exactly as the deployment built it.
+    """
+    schema = DjangoSchema(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=1))
+
+    with pytest.raises(ConfigurationError, match="configured when it is constructed"):
+        schema.__init__(query=DummyQuery, resource_policy=ResourcePolicy(max_list_rows=999))
+
+    assert schema.resource_policy.max_list_rows == 1
+    assert schema.execute_sync("{ hello }").errors is None
+
+
+def _schema_holding_an_unnamed_entry(rows=1):
+    """A schema whose accepted entries include one the attribute is the last hold on.
+
+    An entry that is a module-level class outlives any write to the attribute,
+    because the module still names it. A factory built into the
+    ``extensions=[...]`` argument is named by nothing else, so a write that
+    drops it is a write that ENDS it - which is the configuration loss the
+    refusal answers, and the one a consumer's own entry is most exposed to. It
+    is also the entry whose policy this package never sees: the factory is
+    called once per operation, and what it returns is the consumer's.
+    """
+
+    def narrow_extension():
+        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=rows))
+
+    return DjangoSchema(
+        query=DummyQuery,
+        resource_policy=ResourcePolicy(max_list_rows=rows),
+        extensions=[narrow_extension],
     )
 
-    assert schema.resource_policy == ResourcePolicy()
-    assert schema.extensions == ()
+
+def _widening_factory():
+    """An extension entry a resolver would rather the next operation resolved."""
+    return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=999))
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        lambda schema: schema.__dict__.update(_django_extensions=()),
+        lambda schema: schema.__dict__.update(_django_extensions=(_widening_factory,)),
+        lambda schema: schema.__dict__.pop("_django_extensions"),
+    ],
+    ids=["empty-the-entries", "replace-the-entries", "delete-the-entries"],
+)
+def test_the_accepted_extensions_are_answered_for_entry_by_entry(attack):
+    """What runs the next operation is a membership, not the identity of a carrier.
+
+    A carrier holding the entries is one whose identity a write to its contents
+    leaves exactly as accepted, so nothing about the carrier answers the
+    question that matters: WHICH extensions enforce the next request. Each entry
+    is therefore answered for on its own, and an entry written over the
+    attribute is one no construction accepted - it does not become this schema's
+    configuration by being put where the configuration is held.
+    """
+    schema = DjangoSchema(query=_RowQuery, resource_policy=ResourcePolicy(max_list_rows=1))
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    attack(schema)
+
+    assert schema.extensions == (DjangoErrorPolicyExtension, DjangoResourcePolicyExtension)
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
     resolved = schema.get_extensions(sync=True)
-    assert sum(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved) == 1
-    assert sum(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved) == 1
+    assert any(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved)
+    assert any(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved)
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        lambda schema: schema.__dict__.update(_django_extensions=("forged",)),
+        lambda schema: schema.__dict__.pop("_django_extensions"),
+    ],
+    ids=["forge-the-configuration", "delete-the-configuration"],
+)
+def test_an_operation_is_refused_when_the_accepted_extensions_cannot_be_read_back(attack):
+    """The accepted entries are the only record of what a consumer entry declared.
+
+    A factory's policy was never seen by this package at all, so there is
+    nothing to fall back to that is not wider than what the deployment chose.
+    The operation is refused, and the refusal is published rather than raised so
+    every transport renders it.
+    """
+    schema = _schema_holding_an_unnamed_entry()
+    assert schema.execute_sync("{ hello }").errors is None
+
+    attack(schema)
+
+    assert schema.extensions == ()
+    result = schema.execute_sync("{ hello }")
+    assert result.data is None
+    assert len(result.errors) == 1
+    assert result.errors[0].extensions == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
+
+    resolved = schema.get_extensions(sync=True)
     assert isinstance(resolved[0], DjangoErrorPolicyExtension)
-    assert isinstance(resolved[-1], DjangoResourcePolicyExtension)
+    assert not any(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved)
+
+
+def test_a_refused_schema_does_not_begin_executing_either():
+    """The refusal is restated where execution starts, for a path that got that far."""
+    schema = _schema_holding_an_unnamed_entry()
+    schema.__dict__.pop("_django_extensions")
+    refusal = schema.get_extensions(sync=True)[-1]
+
+    with pytest.raises(GraphQLError, match="could not be read back"):
+        refusal.on_execute()
+
+
+def test_replacing_the_accepted_extensions_does_not_make_a_schema_unconstructed():
+    """Losing an entry must not reopen the one write the setter admits."""
+    schema = _schema_holding_an_unnamed_entry()
+    schema.__dict__.pop("_django_extensions")
+
+    with pytest.raises(ConfigurationError, match="settled when the schema is constructed"):
+        schema.extensions = [DjangoResourcePolicyExtension(policy=ResourcePolicy())]
+
+    assert _SCHEMA_EXTENSIONS.recall(schema) is None
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [(), "DjangoResourcePolicyExtension", 7],
+    ids=["a-tuple", "a-name", "a-number"],
+)
+def test_an_extension_entry_the_schema_cannot_hold_as_accepted_is_refused(entry):
+    """Acceptance is per entry, so an entry that cannot be held is not configuration.
+
+    Every extension Strawberry resolves - a class, an instance, a factory - is an
+    object a weak reference can be taken of. A builtin value is not, and could
+    never be answered for as the entry construction accepted; installing it
+    would leave the schema resolving whatever the attribute happened to carry.
+    The refusal names it where it was supplied rather than at the first
+    operation that tried to resolve it.
+    """
+    with pytest.raises(ConfigurationError, match="cannot be held"):
+        DjangoSchema(query=DummyQuery, extensions=[entry])
 
 
 @pytest.mark.parametrize(

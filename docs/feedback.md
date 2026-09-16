@@ -1,234 +1,273 @@
-# Adversarial review: enforcement ownership and execution lifecycle
+# Adversarial review — release hardening
 
-Verdict: **changes required**. Reviewed the uncommitted production remediation over HEAD
-`11928077`, its policy/schema tests and live resource-policy tests, the relevant
-[Spec-047][spec-047] contracts, and the [Spec-050 build record][build-050]. This reviews
-the working changes, not a claim that HEAD contains them or that every unrelated concurrent
-test migration was audited. Criteria: [AGENTS.md][agents], [START.md][start], [GOAL.md][goal],
-and the [live-test contract][live-readme].
+Date: 2026-09-16
 
-Evidence comes from fresh `uv run python` probes and source tracing. The policy-mutation and
-scalar-stage reproductions also ran over HTTP through `DjangoGraphQLView` and
-`django.test.Client`, using an in-memory URL module and `DEBUG=False`. No pytest was run;
-no production file or database was edited. The mutation used to assess a test was a
-process-local replacement of one method, restored in that process.
+Reviewed: the uncommitted implementation above HEAD `1fcc5292`, including the latest
+`PrivateMembership` and inherited-policy construction fixes.
 
-## P1-1 — An accepted extension instance still exposes the next request's policy
+**Verdict: one verified P1 operation-isolation defect and one P2 callable-factory
+compatibility defect remain.** The two findings from the preceding review are closed by
+fresh HTTP verification. The P1 has two independently reproduced consequences: resource
+admission bypass and unexpected-error disclosure.
 
-Locations: `django_strawberry_framework/schema.py::DjangoSchema.extensions`,
-`django_strawberry_framework/schema.py::DjangoSchema.get_extensions` ([schema][schema]), and
-`django_strawberry_framework/extensions/resource_policy.py::DjangoResourcePolicyExtension._resolved_policy`
-([extension][resource-extension]).
+This pass follows the [repository rules][agents] and investigates the lifetime of operation
+state, beyond the previous configuration-mutation checks. The package is unreleased; the
+recommendations concern getting its release contract correct, without assuming an existing
+installed user base. This is a bounded review, not certification of every spec-050 requirement
+or of the concurrent test migration.
 
-The tuple prevents replacing entries, but does not detach or protect its objects. An accepted
-`DjangoResourcePolicyExtension` instance is returned unchanged by Strawberry and remains
-reachable through `info.schema.extensions`. Its `_policy` is the authority consulted on the
-next operation. A resolver can do this without importing the private registry:
+## P1 — Shared enforcement extensions read another operation's execution context
 
-```python
-extension = next(
-    entry for entry in info.schema.extensions
-    if isinstance(entry, DjangoResourcePolicyExtension)
-)
-extension._policy = ResourcePolicy(max_list_rows=999)
+**Owners:**
+
+- `django_strawberry_framework/schema.py::DjangoSchema.get_extensions`;
+- `django_strawberry_framework/extensions/resource_policy.py::DjangoResourcePolicyExtension.on_parse`;
+- `django_strawberry_framework/extensions/error_policy.py::DjangoErrorPolicyExtension.on_operation`.
+
+The accepted extension membership and its configuration now survive the previous writes.
+However, those protections do not isolate the mutable `execution_context` Strawberry assigns
+to every resolved extension. An accepted instance is returned unchanged; a factory may also
+return the same instance repeatedly. The resource and error extensions keep that context as
+an ordinary instance attribute.
+
+Two operations sharing the object therefore overwrite one another's document, variables,
+schema and result reference. The private resource-budget `ContextVar` does not fix this:
+the budget can belong to operation A while the document charged against it belongs to B.
+
+### Verified HTTP consequences
+
+Fresh schemas were mounted at `/graphql/` through both `DjangoGraphQLView` and
+`AsyncDjangoGraphQLView`. Independent `django.test.Client` requests exercised four
+configurations for each policy extension:
+
+| Extension entry | Oversized query during overlap | Unexpected exception during overlap |
+| --- | --- | --- |
+| Preconstructed instance | Executes successfully | Raw exception message disclosed |
+| Factory returning that same instance | Executes successfully | Raw exception message disclosed |
+| Factory constructing a fresh instance | Correct typed rejection | Correct masking and correlation ID |
+| Extension class | Correct typed rejection | Correct masking and correlation ID |
+
+Both view implementations produced the same results. Every response was HTTP 200.
+
+For resource enforcement, the configured policy was `ResourcePolicy(max_aliases=1)`.
+The target document was `{ a: hello b: hello }`, and the benign document was
+`{ hello }`.
+
+A consumer operation hook paused A after its resource budget was armed. B then completed
+normally, and A resumed. The hook only coordinated events; it never changed the schema,
+policy, document, execution context or result. The sync hook waited on a bounded
+`threading.Event`; the async hook awaited that event through `asyncio.to_thread`.
+Separate Clients drove the overlapping requests.
+
+Observed sequence with either shared spelling:
+
+```text
+A alone before overlap -> RESOURCE_LIMIT_EXCEEDED, max_aliases, limit=1, charged=2
+B while A is paused    -> {"hello": "world"}
+A after B completes    -> {"a": "world", "b": "world"}, no errors
+A alone after overlap  -> RESOURCE_LIMIT_EXCEEDED, max_aliases, limit=1, charged=2
 ```
 
-Verified over HTTP on a schema initially configured with an instance carrying bound 1:
+A's `on_parse` reads B's already-parsed document from the shared extension attribute, so it
+never records a rejection for A. The fresh `_AdmissionGuard` consequently has no rejection
+to restore. This is separate from the previously closed validation-cache issue.
 
-| Request | Result |
-| --- | --- |
-| `{ rows }` | `{"data": {"rows": ["a"]}}` |
-| `{ attack }` | `{"data": {"attack": 1}}` |
-| `{ rows }` | `{"data": {"rows": ["a", "b", "c"]}}` |
+For error masking, the target resolver raised
+`RuntimeError("REVIEW-CONCURRENT-PRIVATE-SENTINEL")`. Under `DEBUG=False`, it was masked
+before and after overlap. During overlap, the raw sentinel reached A's response with no
+correlation metadata. The shared error extension's teardown consulted B's healthy result,
+leaving A's unexpected exception untouched.
 
-All three responses were HTTP 200 without errors. The rows resolver uses the actual
-`bounded_rows` helper. No extension-list assignment occurs, so the new setter never intervenes.
-Strawberry deprecates instance entries, but this package explicitly accepts and newly tests
-them; deprecation does not discharge the supported-path invariant.
+The matrix comprised 16 cases and 64 HTTP requests: two policy extensions, two views and
+four entry forms, each with serial-before, overlapping A/B, and serial-after observations.
+Fresh-entry controls used the identical coordination hook and query shapes.
 
-Root correction: capture package enforcement configuration independently of mutable extension
-instances, and ensure operation arming cannot re-read a consumer-reachable instance as policy
-authority. Preserve explicit-policy precedence and fresh-per-operation factories; do not
-eagerly invoke factories or merely wrap the same objects in another immutable container.
-The accepted-instance path needs a genuine private policy snapshot, not another presence check.
+### A nested query reproduces disclosure without a scheduling race
 
-Tests: retain replacement-refusal tests, but add an HTTP sequence that mutates the
-accepted instance and then requests rows. Check mutation of the stored policy object as well
-as replacement of `_policy`, with separate node IDs. This is the remaining branch of the
-prior extension-authority defect, not a claim about remote clients installing Python.
+An additional eight HTTP requests covered both views and all four entry forms with this
+resolver shape:
 
-## P2-1 — The identity registry now permanently roots some schemas
+```python
+@strawberry.field
+def nested_failure(self, info: strawberry.Info) -> str:
+    inner = info.schema.execute_sync("{ hello }", context_value=info.context)
+    assert inner.errors is None
+    raise RuntimeError("REVIEW-NESTED-PRIVATE-SENTINEL")
+```
 
-Locations: `django_strawberry_framework/schema.py::_SchemaEnforcement`,
-`django_strawberry_framework/schema.py::_remember_enforcement`, and
-`django_strawberry_framework/schema.py::DjangoSchema.extensions` ([schema][schema]).
+The shared instance and shared-returning factory exposed the sentinel. The class and fresh
+factory returned the configured safe message and correlation ID.
 
-The registry's key reference is weak, but its value now strongly owns the complete extension
-configuration. Extension objects and factories can point back to their schema. That creates
-a path from a module-global root back to the weak referent, preventing collection and therefore
-preventing the cleanup callback from ever running.
+The inner execution replaces the same instance attribute and does not restore the outer
+context. On outer teardown, the error extension processes the completed inner result.
+This reproduction uses no extra extension, mutation of internals, patch or concurrency gate.
 
-Two independent reproductions:
+### Why this belongs in the release gate
 
-- An ordinary accepted extension instance acquires `execution_context` during execution.
-  That context owns `schema`. After one successful query and deletion of all local owners,
-  `gc.collect()` leaves a weak reference to the schema alive. The rooted chain is registry,
-  record, extension tuple, extension instance, execution context, schema. It also retains the
-  last request context and variables through that execution context.
-- A supported schema subclass passes `extensions=[self.make_extension]`, where the bound
-  method returns a fresh resource extension. The registry owns that bound method, which owns
-  `self`. This schema cannot be collected even before its first request; it uses the
-  non-deprecated factory path.
+The current code and [spec-047][spec-047] explicitly accept resource-extension instances and
+factory entries. Strawberry 0.324.0 warns for direct instances but still executes them. A
+singleton-returning factory emits no such warning and takes the same unsafe path.
 
-Controls: a class entry was collectable both before and after execution; an instance entry
-was collectable before execution. Thus this is not merely an external probe reference keeping
-the schema alive. The new lifecycle test constructs a default schema with class entries and
-does not exercise either back-reference.
+The automatic class configuration passed the controls; the finding is conditional on a shared
+policy extension. It is not evidence that every default installation leaks. It is also not
+attributed to the latest membership patch: that patch preserves membership, while this defect
+concerns the state of an accepted member during execution.
 
-Root correction: redesign configuration ownership so the global registry does not strongly
-own arbitrary extension object graphs. Schema/configuration cycles must remain collectable;
-identity validation and assignment integrity are separate concerns from lifetime ownership.
-Changing weak-reference callback logic cannot fix a callback that is never eligible to run.
-Do not require callers to manually clear request state or unregister schemas to compensate.
+The [extension-isolation glossary entry][extension-isolation] already distinguishes the
+optimizer's intentionally shared configuration/cache from operation state. Locally,
+`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.execution_context`
+uses a `ContextVar` specifically to prevent this shared-instance race. The policy extensions
+have not applied the same distinction.
 
-Tests: package-level weak-reference lifecycle rows for class, instance-after-execution, and
-bound-method factory configurations. Assert that the schema and a request-context sentinel
-become unreachable after external owners are dropped. Keep these mechanics package-side;
-they cannot be proved by an HTTP response alone.
+### Root correction
 
-## P2-2 — Literal scalar parsing precedes the claimed raw-value admission boundary
+Give enforcement hooks a binding to their own operation's execution context for the entire
+lifecycle. Keep accepted policy configuration separate from that binding. Cover both resource
+admission and error masking in the production correction.
 
-Locations: `django_strawberry_framework/extensions/resource_policy.py::DjangoResourcePolicyExtension.on_execute`
-([extension][resource-extension]); Spec-047's value-source paragraph and Decision 13;
-the glossary's [value-budget description][value-budget];
-`examples/fakeshop/test_query/test_resource_policy_api.py::test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried`
-([live tests][live-resource-tests]).
+Reuse or extract the relevant operation-context abstraction with the optimizer where
+appropriate, rather than adding separate context-storage conventions to each extension.
+The existing optimizer descriptor is useful prior art, but copying its setter alone does
+not prove nested-execution restoration: task-local storage still gets overwritten by a
+nested operation in the same task. Bind and restore at the actual operation lifecycle,
+including exceptional exit and cancellation, or provide independent operation instances
+whose context cannot be overwritten.
 
-The corrected variable test is valid, but the documentation generalizes its ordering to all
-four input sources. GraphQL validation executes scalar `parse_literal` before `on_execute`.
-With the ordinary scalar definition that supplies only `parse_value`, graphql-core's default
-literal parser calls that `parse_value` too. Therefore the value budget is not universally
-before custom conversion.
+Capturing a context only in `on_parse` or error teardown is too late. Also account for
+consumer hooks that yield before a policy hook starts. Do not repair only direct-instance
+registration; a factory returning the same object reproduces the same failure.
 
-Verified with the same scalar parser recording calls, an over-width `[1, 2]`, and width bound 1:
+Keep existing accepted-policy immutability, per-operation factory invocation and schema
+collectability. Avoid blind copying of arbitrary consumer extension objects or sharing their
+mutable request state under a new wrapper.
 
-| Input source | Parser calls before typed width rejection |
-| --- | --- |
-| Supplied variable | 0 |
-| Inline literal | 1, carrying `[1, 2]` |
-| Variable-definition default | 1, carrying `[1, 2]` |
+### Required regression evidence
 
-All three HTTP responses rejected with `RESOURCE_LIMIT_EXCEEDED`, charged 2. The distinction is
-work already performed, not whether a resolver ultimately ran. A costly scalar parser can
-therefore perform work the new prose says admission prevents. The pre-parse token/depth
-limits do not establish the separately configurable container-width or scalar-byte limits.
+Place the observable protections in the live HTTP tier, following [its rules][live-readme].
+Parametrize independent node IDs for view, entry form and claimed protection. Synchronize
+with bounded events and release them in `finally`; use no timing sleeps.
 
-Root correction: put the raw-value admission needed to protect scalar conversion before
-validation can invoke a scalar parser. Reuse the existing value-accounting implementation and
-schema metadata; do not run custom parsers to measure their input, parse twice for accounting,
-or duplicate GraphQL's entire validator. Preserve accurate malformed-document handling and
-one charge per intended argument occurrence. Until that ordering is implemented, the spec and
-glossary must not promise rejection before conversion for literals/defaults.
+For admission, assert the expected typed rejection and an external resolver/execution witness
+that remains untouched. For masking, assert the raw sentinel is absent, the configured message
+is present and the correlation ID survives. Check the benign request's response too. Retain
+serial controls, fresh-instance controls and the nested-query case. Include a recovery request
+after exceptions/cancellation to establish that cleanup did not strand operation state.
 
-Tests: parameterize supplied variable, inline literal, and variable default, each with parser
-call observations outside the guarded code and both admission/rejection verdicts over HTTP.
-The current variable-only test cannot prove the all-sources sentence. Update the glossary's
-database source when correcting its rendered description, per the repository rules.
+The new authority and sequential factory tests do not exercise overlapping or nested
+execution. Passing them therefore does not establish this invariant.
 
-## P2-3 — The largest accepted width overflows the new bounded reader
+## P2 — Membership authentication rejects a valid callable factory without weak-reference support
 
-Location: `django_strawberry_framework/extensions/resource_policy.py::_ValueBudget._bounded_members`
-([extension][resource-extension]).
+**Owners:**
+`django_strawberry_framework/utils/private_state.py::PrivateMembership.accept` and
+`django_strawberry_framework/schema.py::DjangoSchema.extensions`.
 
-`MAX_RESOURCE_BOUND` permits `9223372036854775807`. The new reader passes `limit + 1` as
-`islice`'s stop argument, which must fit `sys.maxsize`. On this supported 64-bit interpreter,
-that is one too large. Its own argument error is caught and mislabeled as an unmeasurable input.
+`accept` takes `weakref.ref(member)` for every entry. The setter and its new package test
+justify this with the claim that every class, instance or factory Strawberry accepts supports
+weak references. That claim is false for an ordinary callable object with slots:
 
-Verified through `charge_document` with `ResourcePolicy(max_container_width=MAX_RESOURCE_BOUND)`:
+```python
+class ExtensionFactory:
+    __slots__ = ()
 
-| Value | Result |
-| --- | --- |
-| Exact empty list | Accepted |
-| Empty subclass of list, with no overrides | Rejected, charged `9223372036854775808` |
-| Same subclass carrying one integer | Same rejection |
+    def __call__(self):
+        return ProbeExtension()
+```
 
-The chained cause is `ValueError: Stop argument for islice() must be None or an integer:
-0 <= x <= sys.maxsize.` No hostile iterator is needed. The mapping-subclass branch uses the
-same helper and therefore the same invalid stop value. This is an in-process input contract
-defect, not a claim that decoded JSON produces list subclasses.
+Using the same factory and a valid `SchemaExtension` subclass:
 
-Root correction: use a bounded reader whose lookahead counter supports the full declared
-policy domain without submitting an out-of-range stop to `islice`. Preserve exactly one
-lookahead, no length hints, typed failures for genuinely unreadable inputs, and no unbounded
-fallback at the maximum. Do not lower the global policy ceiling to hide a helper mismatch.
+```text
+strawberry.Schema(..., extensions=[factory])
+    -> builds; { hello } returns {"hello": "world"}
 
-Tests: accepted empty and nonempty custom sequences/mappings at the maximum, alongside the
-small-bound excess cases. A row proving the maximum reaches SQL does not test this consumer
-of the same bound.
+DjangoSchema(..., extensions=[factory])
+    -> ConfigurationError: ... contains an entry that cannot be held
+```
 
-## P3-1 — The new poison-advance proof catches its own failure
+Adding only `"__weakref__"` to the factory's slots makes `DjangoSchema` accept it and execute
+the query. Thus the failure is the new storage requirement, not an invalid extension return,
+invalid schema, missing Django settings or an incorrect callable signature.
 
-Location: `tests/test_resource_policy.py::test_a_container_is_not_advanced_once_its_width_is_already_proven`
-([package tests][package-resource-tests]).
+This is a startup compatibility defect in the documented callable surface, not an admission
+bypass. No existing production deployment is assumed.
 
-The generator raises `AssertionError` on its third advance. `_bounded_members` catches every
-`Exception` and converts it to `ResourceLimitExceeded(bound, limit, limit + 1)`. At width 1,
-that produces exactly the bound and charged value the test asserts. The test therefore passes
-when the reader advances into the forbidden position.
+### Root correction and tests
 
-Verified by replacing only `return list(islice(members(), limit + 1))` with
-`return list(members())` in a process-local copy of the actual method, retaining its actual
-exception handler, and calling `charge_document`:
+Separate acceptance of a supported extension entry from whether the original object supports
+weak references. The ownership/authentication representation should be able to retain an
+opaque callable with the schema's lifetime and verify the accepted entry without requiring
+the consumer to add Python memory-layout features.
 
-| Reader | Advances | Current test's bound/charged assertions |
-| --- | --- | --- |
-| Current implementation | 1, 2 | Pass |
-| Unbounded mutation | 1, 2, 3; then assertion raised | Pass |
+Any intermediary holder must authenticate the entry it supplies, not merely its own identity;
+otherwise it restores the previous carrier-content flaw. Retain the tests for mutation,
+loss of the only strong reference, and bound-factory/schema collection. Do not globally root
+a callable graph that can point back at its schema.
 
-This does not mean the production stop is currently absent: it works at ordinary bounds.
-The neighboring finite counting tests provide useful protection too. It means this separately
-named proof does not establish its claim, contrary to START's rule that failability evidence
-must be observed outside the guard under test.
+Add the valid slotted callable as a construction regression in the package tier, with a
+weak-reference-capable callable as its control. The existing
+`tests/test_schema.py::test_an_extension_entry_the_schema_cannot_hold_as_accepted_is_refused`
+only supplies tuples, strings and integers. Those invalid entries cannot establish that all
+valid factories are accepted; its docstring also repeats the false universal claim.
+Keep real callable execution covered through the live view when the correction lands.
 
-Root correction: record each advance in a probe-owned log and assert the exact log after the
-typed rejection. Keep the poison as a secondary diagnostic, not the only witness. The
-unbounded mutation above must fail that external assertion. This is an internal iterator
-mechanic, so package test placement is appropriate.
+## Closures verified in this pass
 
-## Verified corrections and limits
+Fresh HTTP probes made 34 requests across both package views:
 
-- Distinct equal schemas now kept bounds 1 and 999; collecting the first left the second at
-  999. The identity-key correction addresses the old equality collision.
-- Mutating a retained exact policy after schema construction left a subsequent bounded-row
-  query at one row. The intake copy addresses the explicit-object alias.
-- Assigning `schema.extensions = []` now raises `ConfigurationError`. The remaining finding
-  concerns mutation of an object inside the accepted tuple, not failure of that setter.
-- Normal small-width custom-container reads stopped after one excess member. The old eager
-  full-copy defect is corrected; the maximum-bound and poison-proof defects above are distinct.
-- The raw-variable scalar test now measures the stage it claims for supplied variables. The
-  literal/default siblings reveal the remaining overstatement.
-- The build record still certifies `207c7328` and explicitly excludes descendants. Default,
-  sharded, and the declared seventeen-path floor gate remain unverified for this delivery
-  tree. These probes do not establish coverage, full-suite success, or floor parity.
-- Post-edit formatting left all 445 Python files unchanged. Repository-wide lint reported
-  ten errors in the pre-existing untracked root `models.py` (undefined names, missing
-  docstrings/annotation, and commented-out code). No automatic fixes were available; that
-  unrelated file was left untouched. This review does not report a clean lint gate.
+- Replacing `_django_extensions` with an empty tuple or a wider-policy factory tuple
+  preserved the accepted class entries: later requests stayed at one row and unexpected
+  errors stayed masked.
+- Removing the sole strong hold on an anonymous, narrow-policy factory yielded
+  `SCHEMA_CONFIGURATION_UNAVAILABLE` on the next request. It did not fall back to wider
+  schema defaults.
+- Re-running the constructor of either an explicitly configured or an inheriting accepted
+  resource extension raised `ConfigurationError`; subsequent requests retained one row.
 
-Fix the shared enforcement ownership/lifetime design first, then the admission-stage and
-reader defects, with production changes and their tests together. Preserve the `Meta`-driven
-consumer API. Observable request behavior belongs in the live tier; lifetime and iterator
-instrumentation belong in package tests with their reachability rationale.
+The old mutable carrier no longer exists. The constructor guard now records the inheriting
+configuration as constructed. These close the two previous findings at their root.
+
+Separate weak-reference/GC probes executed a query and then collected both the schema and
+a request-context sentinel for automatic class entries, a resource-extension instance, and a
+schema-bound factory. The previous global-retention regression did not reproduce.
+
+The validation-cache fix was not re-certified in this pass. Its earlier successful evidence
+remains in the preceding review history; the new admission failure above requires a shared
+extension and is explained by a different mechanism.
+
+## Scope, repository alignment and completion
+
+The review used 106 fresh HTTP requests, additional standalone construction/GC probes, and
+a same-event-loop async overlap probe. Installed versions: Strawberry 0.324.0,
+graphql-core 3.2.8, Django 6.1. The concurrency HTTP probes used two Clients in separate
+threads; the async views therefore ran on separate event loops. The additional direct async
+probe reproduced resource bypass with two tasks in one loop.
+
+The [GOAL][goal] and local Graphene recipes cookbook continue to support the existing
+Meta-first public surface; neither finding calls for a decorator API, new settings or new
+list-argument semantics. Upstream source comparisons included Strawberry's extension
+resolution/context assignment, strawberry_django's optimizer ContextVar lifecycle, and
+graphene_django's request-local validation/execution flow. The package's own optimizer is
+the closest existing implementation precedent for the isolation correction.
+
+No production implementation was edited, no pytest or coverage run was requested/performed,
+and no floor environment or WebSocket transport was certified. The probes used temporary
+in-memory URL configurations and no model/database writes. Existing concurrent changes
+were preserved.
+
+The [build record][build-050] explicitly ties its historical green figures to older trees and
+still owes the full declared floor scope at delivery. After the two corrections, the final
+full, sharded and declared-floor gates must run against the delivery tree when authorized.
+The P1 is the release blocker; the P2 should be resolved before claiming the full callable
+extension surface.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../AGENTS.md
 [goal]: ../GOAL.md
-[start]: ../START.md
 
 <!-- docs/ -->
-[value-budget]: GLOSSARY.md#value-budget-walker
+[extension-isolation]: GLOSSARY.md#per-operation-extension-isolation
 
 <!-- docs/SPECS/ -->
 [spec-047]: SPECS/spec-047-resource_policy-0_0_14.md
@@ -237,15 +276,11 @@ instrumentation belong in package tests with their reachability rationale.
 [build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
-[resource-extension]: ../django_strawberry_framework/extensions/resource_policy.py
-[schema]: ../django_strawberry_framework/schema.py
 
 <!-- tests/ -->
-[package-resource-tests]: ../tests/test_resource_policy.py
 
 <!-- examples/ -->
 [live-readme]: ../examples/fakeshop/test_query/README.md
-[live-resource-tests]: ../examples/fakeshop/test_query/test_resource_policy_api.py
 
 <!-- scripts/ -->
 

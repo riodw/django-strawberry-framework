@@ -48,23 +48,25 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
 import strawberry
 from django.db import transaction
+from graphql import GraphQLError
 from graphql.execution.execute import ExecutionContext
+from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.utils.inspect import in_async_context
 
 from .error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, resolve_error_policy
 from .exceptions import ConfigurationError
 from .extensions.error_policy import DjangoErrorPolicyExtension
-from .extensions.resource_policy import DjangoResourcePolicyExtension
+from .extensions.resource_policy import DjangoResourcePolicyExtension, _AdmissionGuard
 from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import DEFAULT_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
 from .utils.policies import copy_policy
-from .utils.private_state import PrivateState
+from .utils.private_state import PrivateAuthority, PrivateMembership
 from .utils.querysets import run_in_one_sync_boundary
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
@@ -363,56 +365,89 @@ class DjangoMutationExecutionContext(ExecutionContext):
             return result
 
 
+#: The wire-visible ``extensions.code`` on an operation refused because the
+#: schema cannot enforce what it was configured with. Distinct from a resource
+#: rejection: nothing about the request is over budget, and no policy of the
+#: deployment's was applied to it.
+SCHEMA_CONFIGURATION_ERROR_CODE = "SCHEMA_CONFIGURATION_UNAVAILABLE"
+
+
 @dataclass(frozen=True)
 class _SchemaEnforcement:
-    """What one ``DjangoSchema`` construction settled, held where no attribute write reaches.
+    """What one ``DjangoSchema`` construction settled, held where no name on it reaches.
 
     The two resolved policies, the record of which enforcement extensions this
-    constructor had to install itself, and the extension configuration the
-    schema was accepted with. ``extensions`` is ``None`` until the base
-    constructor settles it, which is the one write
-    ``DjangoSchema.extensions`` admits.
+    constructor had to install itself, and whether the base constructor has
+    settled the extension configuration yet. Every field is a policy of
+    primitives or a flag, so the record points at nothing: it can be held for
+    the schema without keeping the schema alive.
     """
 
     resource_policy: ResourcePolicy
     error_policy: ErrorPolicy
     auto_resource_extension: bool
     auto_error_extension: bool
-    extensions: tuple[Any, ...] | None = None
+    extensions_settled: bool = False
 
 
-#: Every ``DjangoSchema``'s enforcement record, held by the schema it belongs to.
+#: Every ``DjangoSchema``'s enforcement record, held here and by nothing else.
 #:
-#: An instance attribute cannot hold this on its own. ``info.schema`` is handed
-#: to every resolver in every operation, so an ordinary ``self._resource_policy``
-#: entry is a name any resolver can assign - directly, or through
-#: ``schema.__dict__`` past a property that has no setter - and the schema is
-#: process-lived, so one such write widens or disarms every later request the
-#: process serves rather than the one that made it.
+#: An instance attribute cannot hold this. ``info.schema`` is handed to every
+#: resolver in every operation, so an ordinary ``self._resource_policy`` entry
+#: is a name any resolver can assign - directly, or through ``schema.__dict__``
+#: past a property that has no setter - and the schema is process-lived, so one
+#: such write widens or disarms every later request the process serves rather
+#: than the one that made it. Nor is holding the record behind an attribute and
+#: checking its identity enough: the record answered from an attribute is a
+#: record a resolver can reach, and reaching a frozen dataclass is enough to
+#: write it (``policy.__dict__[bound] = wider``).
 #:
-#: A module-global mapping cannot hold it either, and for a reason that has
-#: nothing to do with resolvers: an extension instance reaches its schema
-#: through the execution context, and a schema subclass may configure
-#: ``extensions=[self.make_extension]``, so a global holding the record STRONGLY
-#: is a root that keeps every such schema - and its last request's context and
-#: variables - alive for the life of the process. A weak key does not help when
-#: the chain back to the referent runs through the value.
+#: So no attribute answers with it at all. Holding it here is what the record's
+#: own shape permits: two policies and two flags point at nothing, so this
+#: mapping retains a schema's configuration without retaining the schema, and
+#: the weak reference filed beside each record drops the entry when its schema
+#: dies. The arbitrary extension graph, which does point back, is held the other
+#: way (:data:`_SCHEMA_EXTENSIONS`).
+_SCHEMA_ENFORCEMENT: PrivateAuthority[_SchemaEnforcement] = PrivateAuthority()
+
+#: Every ``DjangoSchema``'s accepted extension configuration, held by the schema
+#: it belongs to.
 #:
-#: ``utils/private_state.py::PrivateState`` is where those two demands are
-#: reconciled: the schema holds its own record, and this object holds the
-#: evidence of which record was accepted. Reaching it means importing this
-#: module's private name and holding the schema object, which is not a thing a
-#: resolver does by accident and not a seam ``info.schema`` opens.
-_SCHEMA_ENFORCEMENT: PrivateState[_SchemaEnforcement] = PrivateState("_django_enforcement")
+#: This one cannot live beside the enforcement record, and the reason has
+#: nothing to do with resolvers: the entries are consumer objects that reach the
+#: schema back - an extension instance through the execution context, and
+#: ``extensions=[self.make_extension]`` directly - so a module-global holding
+#: them strongly would keep every such schema, its last execution context and
+#: that request's variables alive for the life of the process.
+#:
+#: The schema therefore holds them, and
+#: ``utils/private_state.py::PrivateMembership`` holds one weak reference per
+#: accepted ENTRY - which is the granularity the question is asked at. What
+#: decides whether the next operation is bounded is not which object the
+#: attribute answers with but which extensions are inside it, so evidence about
+#: a carrier would certify nothing: writing new entries into one leaves its
+#: identity exactly as accepted. Each operation therefore resolves the entries
+#: the evidence points at, and an entry written over the attribute is one this
+#: schema never accepted and never runs.
+#:
+#: What the attribute still does is hold those entries alive, and that is the
+#: one thing a write to it can take away. An entry the deployment kept no other
+#: reference to is collected, its evidence stops resolving, and the accepted
+#: configuration cannot be reconstructed - a consumer entry carrying a narrow
+#: policy of its own is one the package has no other copy of, and a factory's
+#: policy it never saw at all. :meth:`DjangoSchema.get_extensions` refuses the
+#: operation there rather than resolving a list it cannot vouch for, because
+#: falling back to this schema's own policy would answer a lost entry with a
+#: wider budget.
+_SCHEMA_EXTENSIONS: PrivateMembership[Any] = PrivateMembership("_django_extensions")
 
 #: The record answered for a schema that never completed ``DjangoSchema.__init__``
-#: (a subclass that skipped ``super().__init__``, or an object whose construction
-#: raised), and for one whose accepted record was replaced behind the attribute
-#: holding it. Fail closed in the sense that enforcement still happens: the
-#: package defaults bound the request and the masking error policy applies, and
-#: both extensions count as automatic so a consumer entry still wins the
-#: deduplication. The defaults are not a claim to be narrower than a policy some
-#: deployment configured - they are what a schema that declared nothing gets.
+#: - a subclass that skipped ``super().__init__``, or an object whose
+#: construction raised. Such a schema declared nothing, so the package defaults
+#: bound its requests and the masking error policy applies, and both extensions
+#: count as automatic so a consumer entry still wins the deduplication. This is
+#: not a fallback for a configuration that was tampered with: a settled record
+#: cannot go missing while its schema is alive.
 _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
     resource_policy=DEFAULT_RESOURCE_POLICY,
     error_policy=DEFAULT_ERROR_POLICY,
@@ -422,9 +457,48 @@ _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
 
 
 def _enforcement(schema: Any) -> _SchemaEnforcement:
-    """The record ``schema`` was accepted with, or the fail-closed default."""
+    """The record ``schema`` was settled with, or the record of one that settled none."""
     record = _SCHEMA_ENFORCEMENT.recall(schema)
     return _FALLBACK_ENFORCEMENT if record is None else record
+
+
+class _RefusedConfiguration(SchemaExtension):
+    """Refuse every operation on a schema whose accepted extensions cannot be read back.
+
+    Installed in place of the extension chain when the configuration a schema
+    was constructed with was replaced or deleted behind the attribute holding
+    it. Running the operation anyway would mean enforcing something other than
+    what the deployment accepted, and the entries that are missing are the only
+    record of what they declared.
+
+    The refusal is PUBLISHED as this request's pre-execution error and restated
+    where execution would begin, which is the pair of seams every transport
+    renders - the same shape a resource rejection uses, for the same reason: an
+    exception out of a hook leaves a streaming operation with no frame at all.
+    """
+
+    def on_parse(self) -> Iterator[None]:
+        """Publish the refusal once the document exists, before anything validates it."""
+        yield
+        self.execution_context.validation_rules = ()
+        self.execution_context.pre_execution_errors = [self._refusal()]
+
+    def on_validate(self) -> Iterator[None]:
+        """Restate the refusal, before the check upstream makes inside this stage."""
+        self.execution_context.pre_execution_errors = [self._refusal()]
+        yield
+
+    def on_execute(self) -> None:
+        """Refuse to begin executing, for a path that reached execution regardless."""
+        raise self._refusal()
+
+    def _refusal(self) -> GraphQLError:
+        """The error this schema answers every operation with."""
+        return GraphQLError(
+            "The schema's accepted extension configuration could not be read back, "
+            "so the operation cannot be enforced as configured.",
+            extensions={"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+        )
 
 
 class DjangoSchema(strawberry.Schema):
@@ -480,10 +554,22 @@ class DjangoSchema(strawberry.Schema):
             for extension in extensions
         )
         kwargs["extensions"] = _with_error_policy_extension(extensions)
-        # Recorded BEFORE the base constructor runs: that constructor's one
+        if _SCHEMA_ENFORCEMENT.settled(self):
+            # A constructed schema is reachable from every resolver it serves,
+            # and so is its ``__init__``. Running it again would replace the
+            # ceiling the deployment accepted with one chosen after the fact,
+            # which is the widening an attribute write is refused for; the
+            # accepted record stays, and the base constructor never runs.
+            raise ConfigurationError(
+                "A schema is configured when it is constructed; re-running "
+                "DjangoSchema.__init__ on one that is already serving requests "
+                "would replace the policies it was accepted with. Construct a "
+                "new schema instead.",
+            )
+        # Settled BEFORE the base constructor runs: that constructor's one
         # write to ``self.extensions`` is what settles the accepted extension
         # configuration, and the setter that takes it reads this record.
-        _SCHEMA_ENFORCEMENT.remember(
+        _SCHEMA_ENFORCEMENT.settle(
             self,
             _SchemaEnforcement(
                 resource_policy=resolved_resource,
@@ -498,8 +584,8 @@ class DjangoSchema(strawberry.Schema):
     def extensions(self) -> tuple[Any, ...]:
         """The extension configuration this schema was accepted with.
 
-        Not an instance attribute, and for the reason the policies are not one
-        either. ``strawberry.Schema.get_extensions`` builds every operation's
+        Not read from an instance attribute, and for the reason the policies
+        are not read from one either. ``strawberry.Schema.get_extensions`` builds every operation's
         extension list out of this, and ``info.schema`` puts it in reach of
         every resolver: as an ordinary attribute it is the seam that decides
         what enforces the NEXT request. Assigning a list carrying a
@@ -510,10 +596,15 @@ class DjangoSchema(strawberry.Schema):
         Deduplication and presence checks cannot tell those lists apart from a
         configured one, because by then they are the configuration.
 
-        Reading is unchanged. A schema's extensions are settled once, by its
-        constructor, which is the moment the deployment chose them.
+        Reading is unchanged, and answers with the entries construction
+        accepted rather than with whatever the attribute holding them carries
+        now: writing entries into it does not make them this schema's
+        configuration. What such a write can do is drop the last hold on an
+        accepted entry, and a configuration with an entry missing reads as the
+        empty one, for :meth:`get_extensions` to refuse the operation on rather
+        than run it.
         """
-        accepted = _enforcement(self).extensions
+        accepted = _SCHEMA_EXTENSIONS.recall(self)
         return () if accepted is None else accepted
 
     @extensions.setter
@@ -528,14 +619,32 @@ class DjangoSchema(strawberry.Schema):
         deployment that fixes it and one that believes it took effect.
         """
         record = _enforcement(self)
-        if record.extensions is not None:
+        if record.extensions_settled:
             raise ConfigurationError(
                 "A schema's extensions are settled when the schema is constructed; "
                 "assigning schema.extensions afterwards would let what enforces an "
                 "operation be chosen after the schema was accepted. Pass every "
                 "extension to DjangoSchema(extensions=[...]).",
             )
-        _SCHEMA_ENFORCEMENT.remember(self, replace(record, extensions=tuple(value)))
+        # The flag goes where no attribute answers with it, so that deleting the
+        # accepted entries cannot make a schema look unconstructed and admit a
+        # replacement list as its first settlement.
+        _SCHEMA_ENFORCEMENT.settle(self, replace(record, extensions_settled=True))
+        try:
+            _SCHEMA_EXTENSIONS.accept(self, value)
+        except TypeError as exc:
+            # Each accepted entry is answered for by a weak reference to it, so
+            # an entry that takes none is one no later operation could resolve
+            # as the configuration rather than as whatever replaced it. Every
+            # extension Strawberry accepts - a class, an instance, a factory -
+            # takes one; refusing here names the entry that does not, at the
+            # construction that supplied it.
+            raise ConfigurationError(
+                "Every entry in DjangoSchema(extensions=[...]) has to be an object the "
+                "schema can hold as accepted - a SchemaExtension subclass, an instance "
+                f"of one, or a callable returning one. {value!r} contains an entry that "
+                "cannot be held.",
+            ) from exc
 
     @property
     def resource_policy(self) -> ResourcePolicy:
@@ -597,15 +706,31 @@ class DjangoSchema(strawberry.Schema):
         first of its kind, and the resource-policy entry is APPENDED, so it is
         the last.
 
-        What comes back always ENFORCES. The entries resolved here are the
-        ones :attr:`extensions` settled at construction, and where a settled
-        configuration cannot be answered for - a schema that never finished
-        constructing, or one whose accepted record was replaced behind the
-        attribute holding it - :func:`_with_enforcement_present` puts the
-        package's own entries back. Deduplication decides only which of two
-        policy extensions of a kind survives.
+        What comes back always ENFORCES, and nothing here has to put an
+        enforcement entry back to make that true: the entries resolved are the
+        ones :attr:`extensions` settled at construction, and the constructor put
+        both of the package's own into that configuration. Deduplication decides
+        only which of two policy extensions of a kind survives.
+
+        The list ends with a package-owned guard rather than with a consumer
+        entry. Upstream decides whether to execute from inside the validation
+        stage, so the operation's published rejection has to survive the last
+        validation hook to set up; appending answers for every consumer entry
+        without moving any of them, which is what keeps a supported validation
+        cache working wherever the consumer put it.
+
+        A schema that DID settle a configuration and can no longer answer with
+        it is the one case nothing is resolved for. An accepted entry is the
+        only record of what that extension declared - a factory's policy was
+        never seen by this package at all - so an entry that no longer exists
+        leaves nothing to resolve in its place: falling back to this schema's
+        own policy would answer a lost entry with a budget the deployment never
+        chose, and the entries that replaced it are ones no construction
+        accepted. The operation is refused instead.
         """
         enforcement = _enforcement(self)
+        if enforcement.extensions_settled and _SCHEMA_EXTENSIONS.recall(self) is None:
+            return [DjangoErrorPolicyExtension(), _RefusedConfiguration()]
         resolved = super().get_extensions(sync=sync)
         if enforcement.auto_error_extension:
             resolved = _without_automatic_policy(
@@ -619,42 +744,19 @@ class DjangoSchema(strawberry.Schema):
                 DjangoResourcePolicyExtension,
                 automatic=-1,
             )
-        return _with_enforcement_present(resolved)
+        return [*resolved, _AdmissionGuard()]
 
 
 def _is_extension(extension: Any, extension_type: type) -> bool:
     """Whether a RESOLVED entry is of ``extension_type``, by its type alone.
 
     ``isinstance`` consults ``__class__``, which a consumer object answers with
-    whatever it likes - and every use of this predicate decides whether an
-    operation already has an enforcing extension, so an object that claims to be
-    one is an object that disarms the request it appears in. ``type()`` cannot
-    be answered.
+    whatever it likes - and this predicate decides which of two entries of a
+    kind survives deduplication, so an object that merely claims to be one is an
+    object that can take the surviving place from the entry actually enforcing
+    the request. ``type()`` cannot be answered.
     """
     return issubclass(type(extension), extension_type)
-
-
-def _with_enforcement_present(resolved: list[Any]) -> list[Any]:
-    """Return ``resolved`` with the package's enforcement entries reinstated.
-
-    A ``DjangoSchema`` whose accepted configuration can be read back always
-    resolves both entries, because its constructor put them there; this runs for
-    the schema that cannot - one whose accepted record was replaced behind the
-    attribute holding it, or one that never completed ``__init__`` - where the
-    configuration answered is the empty one and nothing else would enforce the
-    operation at all.
-
-    What each reinstated entry enforces is the fail-closed record, not a policy
-    read off the list: an entry added here carries no explicit policy, so it
-    reads the schema's, and what a wider entry in a replacement list declares
-    for itself is not consulted by anything. The positions are the constructor's
-    - masking first so it tears down last, the budget last so it sets up last.
-    """
-    if not any(_is_extension(extension, DjangoErrorPolicyExtension) for extension in resolved):
-        resolved = [DjangoErrorPolicyExtension(), *resolved]
-    if not any(_is_extension(extension, DjangoResourcePolicyExtension) for extension in resolved):
-        resolved = [*resolved, DjangoResourcePolicyExtension()]
-    return resolved
 
 
 def _without_automatic_policy(

@@ -35,22 +35,35 @@ Three passes, in the order a request meets them:
 Where each pass reaches, stated as the boundary rather than as parity:
 
 - Passes 2 and 3 run on **every** operation, on every transport: Strawberry
-  enters the ``on_validate`` hook for HTTP execution and for a WebSocket
-  subscribe alike, and enters it whether or not that operation has validation
-  rules to run.
+  enters the ``on_parse`` hook for HTTP execution and for a WebSocket subscribe
+  alike, and enters it whether or not that operation has validation rules to
+  run.
 - Pass 1 likewise runs on every operation that carries a document, which is
   every operation the package's transports accept.
-- A rejection is rendered the same way on all of them, because pass 2 does not
-  raise it: it publishes the ``ResourceLimitExceeded`` as the operation's
+- Admission is AHEAD of the validation-extension chain, not a member of it.
+  Strawberry finishes every extension's parsing hook before it begins any
+  validation hook, so no consumer entry can be ordered in front of this stage,
+  and a document this stage refused is one no validation extension gets to walk.
+  That boundary is load-bearing rather than tidy: an installed validation
+  extension that runs its own pass - Strawberry's ``ValidationCache`` does -
+  parses every literal argument through the scalar it is typed as, which is the
+  conversion pass 3 exists to charge for BEFORE it happens.
+- A rejection is rendered the same way on every transport, because pass 2 does
+  not raise it: it publishes the ``ResourceLimitExceeded`` as the operation's
   pre-execution error. That is the shape every transport already renders into
   an ``errors`` entry carrying ``extensions.code``, the subscribe path
-  included, and it is also what makes graphql-core's validation stand down -
-  which is the point of the stage boundary, since validating a document parses
-  every literal argument through the scalar it is typed as. A published
-  rejection also says nothing runs, so the refusal is restated at the hook
-  execution begins from: a streaming path that yields the error frame and then
-  executes the operation anyway - which some releases in the supported range
-  do - meets it there instead.
+  included, and it is also what makes graphql-core's validation stand down. The
+  published error is not the record of the verdict, though - it is an ordinary
+  mutable field, and a validation extension assigning its own result over it
+  would erase the refusal - so the verdict is recorded where only this package
+  writes (``resource_policy.py::admission_rejection``). Upstream decides whether
+  to execute from INSIDE the validation stage, so restating it has to happen as
+  a validation hook sets up and the last one to do so has the last word:
+  ``schema.py::DjangoSchema`` appends :class:`_AdmissionGuard` behind every
+  consumer entry for exactly that position. It is read once more at the hook
+  execution begins from, so a streaming path that yields the error frame and
+  then executes the operation anyway - which some releases in the supported
+  range do - meets it there.
 - Pass 1 is the one that still raises, because its whole job is to refuse
   before the parser runs and a published error does not stop a parse. On a
   transport whose streaming path has no conversion for an exception out of that
@@ -62,6 +75,7 @@ Where each pass reaches, stated as the boundary rather than as parity:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from graphql import (
@@ -87,6 +101,7 @@ from graphql.language.token_kind import TokenKind
 from graphql.utilities import value_from_ast_untyped
 from strawberry.extensions.base_extension import SchemaExtension
 
+from ..exceptions import ConfigurationError
 from ..mutations.fields import MUTATION_CLASS_MARKER
 from ..resource_policy import (
     DEFAULT_RESOURCE_POLICY,
@@ -95,16 +110,18 @@ from ..resource_policy import (
     ResourceLimitExceeded,
     ResourcePolicy,
     _operation_policy,
+    admission_rejection,
     armed_resource_policy,
     begin_resource_budget,
     end_resource_budget,
+    record_admission_rejection,
 )
 from ..utils.context import (
     restored_context_keys,
 )
 from ..utils.inputs import RELATION_MULTI
 from ..utils.policies import copy_policy
-from ..utils.private_state import PrivateState
+from ..utils.private_state import PrivateAuthority
 from ..utils.typing import unwrap_non_null
 
 __all__ = ("DjangoResourcePolicyExtension",)
@@ -1104,14 +1121,45 @@ def charge_document(
             )
 
 
-#: The policy each explicitly configured extension was handed, held by the
-#: extension it configures. An instance entry is accepted as itself, so it stays
-#: reachable through ``info.schema.extensions`` for as long as the schema lives;
-#: what it holds is what bounds the next operation, and an attribute holding
-#: that is a name a resolver writes once to widen every later request. See
-#: ``utils/private_state.py::PrivateState`` for why the extension owns the
-#: policy and this holds only the evidence of which one was accepted.
-_EXPLICIT_POLICY: PrivateState[ResourcePolicy] = PrivateState("_explicit_policy")
+@dataclass(frozen=True)
+class _AcceptedPolicy:
+    """What one ``DjangoResourcePolicyExtension`` construction settled.
+
+    ``policy`` is the explicit override the extension was handed, or ``None``
+    for the supported configuration that has none and reads its schema's policy
+    per operation. Either way the record EXISTS, which is what separates an
+    extension that was constructed from one that never was; a policy of ints
+    and a float points at nothing, so holding this retains nothing but the
+    policy.
+    """
+
+    policy: ResourcePolicy | None
+
+
+#: What each constructed extension settled, held here and by nothing else.
+#:
+#: An instance entry is accepted as itself, so it stays reachable through
+#: ``info.schema.extensions`` for as long as the schema lives, and what it holds
+#: is what bounds the NEXT operation. An attribute holding that is a name a
+#: resolver writes once - or deletes once, which selects the schema's policy or
+#: the package defaults instead, and those may be wider than the policy this
+#: extension was configured with. A policy is ints and a float, so holding one
+#: here retains nothing but the policy; see
+#: ``utils/private_state.py::PrivateAuthority``.
+_EXPLICIT_POLICY: PrivateAuthority[_AcceptedPolicy] = PrivateAuthority()
+
+
+def restate_admission_verdict(execution_context: Any) -> None:
+    """Republish this operation's admission verdict over whatever replaced it.
+
+    One statement of what a rejected operation's pre-execution error is, applied
+    at the two positions in the validation stage that can be answered for: the
+    enforcing extension's own hook, and the package-appended guard behind every
+    consumer entry.
+    """
+    rejection = admission_rejection()
+    if rejection is not None:
+        execution_context.pre_execution_errors = [rejection]
 
 
 class DjangoResourcePolicyExtension(SchemaExtension):
@@ -1133,16 +1181,37 @@ class DjangoResourcePolicyExtension(SchemaExtension):
     """
 
     def __init__(self, *, policy: ResourcePolicy | None = None) -> None:
-        # Canonicalized HERE, where the configuration is accepted, rather than
-        # at each hook that reads it. An explicit policy arrives straight from a
-        # consumer and has been through none of the schema-construction
+        if _EXPLICIT_POLICY.settled(self):
+            # An accepted instance is reachable from every resolver the schema
+            # serves, and so is its ``__init__``. Re-running it would nominate a
+            # new budget for every later operation, which is the widening no
+            # attribute on this object admits either. The guard is asked before
+            # either branch and answers from the construction record rather than
+            # from the policy in it: an extension deliberately constructed
+            # WITHOUT an override is configured - it inherits its schema's
+            # policy - and reading that as an object nobody ever constructed
+            # would leave the one configuration open to being handed a wider
+            # ceiling after acceptance.
+            raise ConfigurationError(
+                "A resource-policy extension is configured when it is "
+                "constructed; re-running its __init__ on an instance a "
+                "schema is already enforcing with would replace the policy "
+                "it was accepted with.",
+            )
+        # An explicit policy is canonicalized HERE, where the configuration is
+        # accepted, rather than at each hook that reads it. It arrives straight
+        # from a consumer and has been through none of the schema-construction
         # normalization ``DjangoSchema(resource_policy=...)`` applies, so until
         # it is read out once into an exact ``ResourcePolicy`` every bound read
         # off it is consumer code that may answer differently each time it is
         # asked - which is the whole distance between "the extension holds a
-        # policy" and "the operation has a budget".
-        if policy is not None:
-            _EXPLICIT_POLICY.remember(self, _operation_policy(policy))
+        # policy" and "the operation has a budget". No override settles as none:
+        # the record says the extension inherits, not that it pinned whatever
+        # its schema resolved at the moment it was built.
+        _EXPLICIT_POLICY.settle(
+            self,
+            _AcceptedPolicy(None if policy is None else _operation_policy(policy)),
+        )
 
     @property
     def _policy(self) -> ResourcePolicy | None:
@@ -1152,13 +1221,18 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         entry itself, so it stays reachable through ``info.schema.extensions``
         for the life of the schema - and what it holds is the authority the NEXT
         operation is bounded by. An ordinary attribute is therefore a seam a
-        resolver widens every later request through, by rebinding it or by
-        writing a bound on the object it answers with. The configuration is held
-        as ``utils/private_state.py::PrivateState`` instead, which no name on
-        this object answers with, and each read hands out a duplicate.
+        resolver widens every later request through, by rebinding it, deleting
+        it, or writing a bound on the object it answers with. The configuration
+        is held as ``utils/private_state.py::PrivateAuthority`` instead, which
+        no name on this object answers with, and each read hands out a
+        duplicate. ``None`` here means this extension was given no policy to
+        hold - by the construction that settled none, or because nothing ever
+        constructed it - and never that one it was given has gone missing.
         """
         accepted = _EXPLICIT_POLICY.recall(self)
-        return None if accepted is None else copy_policy(accepted)
+        if accepted is None or accepted.policy is None:
+            return None
+        return copy_policy(accepted.policy)
 
     def _resolved_policy(self) -> ResourcePolicy:
         """The explicit policy, else the schema's, else the package defaults.
@@ -1209,8 +1283,26 @@ class DjangoResourcePolicyExtension(SchemaExtension):
             finally:
                 end_resource_budget(token)
 
-    def on_validate(self) -> Iterator[None]:
-        """Charge the document's shape and every argument value, before validation.
+    def on_parse(self) -> Iterator[None]:
+        """Charge the document's shape and every argument value, once it is parsed.
+
+        The admission stage, and it runs HERE because this is the first point at
+        which a parsed document exists and the last one before anything else in
+        the request can look at it. Validation is already work the request paid
+        for: graphql-core's ``ValuesOfCorrectTypeRule`` parses every literal
+        argument and every variable default through the scalar it is typed as,
+        which for an ordinary custom scalar is the consumer's own
+        ``parse_value``. Charging after that would leave three of the four
+        places a value enters a request - inline literal, variable default, and
+        a nested input object built from either - measured only once their
+        conversion had already run.
+
+        Charging at the validation hook instead would put admission INSIDE the
+        chain it has to precede. Every extension's parsing hook finishes before
+        any validation hook begins, so a validation extension - Strawberry's own
+        ``ValidationCache`` among them - cannot be ordered ahead of this one
+        whatever position the consumer gives it, and cannot run a validation
+        pass over a document this stage has already refused.
 
         Runs inside :meth:`on_operation`'s scope, so the budget it charges
         against is the one armed there. Re-resolving the configuration at this
@@ -1221,56 +1313,88 @@ class DjangoResourcePolicyExtension(SchemaExtension):
         operation scope around it has nothing armed, and falls back to the
         configuration exactly as the arming hook would have resolved it.
 
-        This is the stage boundary, and it is BEFORE validation rather than
-        before execution because validation is already work the request paid
-        for: graphql-core's ``ValuesOfCorrectTypeRule`` parses every literal
-        argument and every variable default through the scalar it is typed as,
-        which for an ordinary custom scalar is the consumer's own
-        ``parse_value``. Charging after that would leave three of the four
-        places a value enters a request - inline literal, variable default, and
-        a nested input object built from either - measured only once their
-        conversion had already run.
-
-        The rejection is PUBLISHED rather than raised. A pre-execution error is
-        what makes graphql-core's validation stand down (nothing else runs it,
-        so nothing else parses a literal), and it is the one failure shape every
-        transport renders into the response envelope - including the streaming
-        one, where an exception out of this hook would leave the operation with
-        no frame at all.
+        A rejection is RECORDED and PUBLISHED, and it empties the request's
+        validation rules. Publishing is what every transport renders into the
+        response envelope - including the streaming one, where an exception out
+        of a hook would leave the operation with no frame at all - and what
+        makes graphql-core's own validation stand down. Emptying the rules is
+        the same statement made to anything that validates the document itself
+        rather than leaving it to graphql-core: a rejected operation is not
+        validated, so no scalar of the consumer's is asked to parse a value
+        belonging to a request that will not run. Recording is what survives
+        both, :func:`resource_policy.admission_rejection` being the package's
+        own answer rather than a field the rest of the chain writes.
         """
+        yield
         execution_context = self.execution_context
         document = execution_context.graphql_document
-        if document is not None:
-            policy = armed_resource_policy()
-            try:
-                charge_document(
-                    policy if policy is not None else self._resolved_policy(),
-                    execution_context.schema._schema,
-                    document,
-                    execution_context.variables or {},
-                    execution_context.operation_name,
-                )
-            except ResourceLimitExceeded as rejection:
-                execution_context.pre_execution_errors = [rejection]
+        if document is None:
+            return
+        policy = armed_resource_policy()
+        try:
+            charge_document(
+                policy if policy is not None else self._resolved_policy(),
+                execution_context.schema._schema,
+                document,
+                execution_context.variables or {},
+                execution_context.operation_name,
+            )
+        except ResourceLimitExceeded as rejection:
+            record_admission_rejection(rejection)
+            execution_context.validation_rules = ()
+            execution_context.pre_execution_errors = [rejection]
+
+    def on_validate(self) -> Iterator[None]:
+        """Restate a rejection an earlier validation hook's own result replaced.
+
+        ``ExecutionContext.pre_execution_errors`` is where a rejected operation
+        is published, and it is an ordinary mutable field: Strawberry's
+        ``ValidationCache`` assigns its cached validation result over whatever
+        is there, and an operation whose rejection was overwritten is one the
+        pre-execution check waves through. That check is made INSIDE the
+        validation stage rather than after it, so the last word belongs to
+        whichever validation hook SET UP last - which is why this restates
+        before yielding rather than after, and why it can only answer for
+        entries ahead of this one. ``schema.py::DjangoSchema`` closes the rest
+        by appending :class:`_AdmissionGuard` after every consumer entry; a
+        plain ``strawberry.Schema`` whose consumer placed a validation cache
+        after this extension has :meth:`on_execute` as the backstop instead.
+        """
+        restate_admission_verdict(self.execution_context)
         yield
 
     def on_execute(self) -> Iterator[None]:
-        """Refuse to begin executing an operation the budget already rejected.
+        """Refuse to begin executing an operation the admission stage rejected.
 
-        A published rejection is a statement that nothing runs, and on every
-        seam that reads it nothing does. Where a release's streaming path
-        yields the pre-execution error and then goes on to execute the
-        operation anyway, execution BEGINNING is the contradiction, so the
-        refusal is restated at the hook execution starts from - which is the
-        seam that same path already converts into an error entry. Raising is
-        correct here and wrong at the charging hook: this one is entered only
-        when an operation is about to run.
+        A rejection is a statement that nothing runs, and on every seam that
+        reads it nothing does. Where a release's streaming path yields the
+        pre-execution error and then goes on to execute the operation anyway,
+        execution BEGINNING is the contradiction, so the refusal is restated at
+        the hook execution starts from - which is the seam that same path
+        already converts into an error entry. Raising is correct here and wrong
+        at the charging hook: this one is entered only when an operation is
+        about to run.
         """
-        rejected = [
-            error
-            for error in self.execution_context.pre_execution_errors or ()
-            if isinstance(error, ResourceLimitExceeded)
-        ]
-        if rejected:
-            raise rejected[0]
+        rejection = admission_rejection()
+        if rejection is not None:
+            raise rejection
+        yield
+
+
+class _AdmissionGuard(SchemaExtension):
+    """Restate the operation's admission verdict after every consumer validation hook.
+
+    Not a second enforcement stage: it charges nothing, arms nothing, and
+    changes nothing about what any consumer entry does. It exists because
+    upstream decides whether to execute from inside the validation stage, so the
+    published rejection has to survive the LAST validation hook to set up, and a
+    validation extension that runs the pass itself assigns its own result over
+    that field. ``schema.py::DjangoSchema.get_extensions`` appends this after
+    every consumer entry, which is the position that answers for all of them
+    without moving any of them.
+    """
+
+    def on_validate(self) -> Iterator[None]:
+        """Put the recorded verdict back, last, before the pre-execution check reads it."""
+        restate_admission_verdict(self.execution_context)
         yield

@@ -102,13 +102,14 @@ __all__ = (
 
 
 #: The single wire-visible ``extensions.code`` every resource rejection carries.
-#: Sync HTTP, async HTTP, and WebSocket queries / mutations all route through
-#: Strawberry's ``execute``, which renders the rejection as an ordinary GraphQL
-#: error entry, so one code is what makes them recognizable as the same failure
-#: rather than three. A rejected WebSocket SUBSCRIPTION is refused just as
-#: hard - nothing is executed - but Strawberry's ``subscribe`` path does not
-#: convert a pre-execution exception into an error entry, so that client sees
-#: the operation complete without data instead of this code.
+#: Sync HTTP, async HTTP, WebSocket queries / mutations and a rejected
+#: SUBSCRIPTION all render the rejection as an ordinary GraphQL error entry, so
+#: one code is what makes them recognizable as the same failure rather than
+#: four: the admission stage publishes its verdict as the operation's
+#: pre-execution error, and the streaming path yields that as its one frame.
+#: The exception is the pre-parse token and structural-depth scan, which has to
+#: refuse before a document exists and therefore raises; a streaming caller sees
+#: that as an exception out of the operation rather than as this code.
 RESOURCE_LIMIT_ERROR_CODE = "RESOURCE_LIMIT_EXCEEDED"
 
 #: Request-context keys, mirroring the optimizer's ``DST_OPTIMIZER_*`` seam.
@@ -467,17 +468,38 @@ def resolve_resource_policy(explicit: ResourcePolicy | Mapping[str, Any] | None)
     )
 
 
+class _AdmissionVerdict:
+    """Whether the admission stage rejected this operation, once it has decided.
+
+    The verdict has to be the package's own, because the shape a rejection
+    reaches the client in cannot also be the record of it: a rejection is
+    published as ``ExecutionContext.pre_execution_errors``, and that field is an
+    ordinary mutable slot every validation extension writes - Strawberry's own
+    ``ValidationCache`` assigns its cached result over whatever is there. An
+    operation whose rejection was overwritten is still a rejected operation, and
+    this is what says so.
+    """
+
+    __slots__ = ("rejection",)
+
+    def __init__(self) -> None:
+        self.rejection: ResourceLimitExceeded | None = None
+
+
 @dataclass(frozen=True)
 class _RequestBudget:
-    """One operation's authoritative budget: its policy and its absolute deadline.
+    """One operation's authoritative budget: its policy, its deadline, its verdict.
 
-    Both are established once, at ``on_operation`` entry, and travel together so
-    that no seam can read a deadline derived from a policy other than the one it
-    is about to enforce.
+    The policy and the absolute deadline are established once, at
+    ``on_operation`` entry, and travel together so that no seam can read a
+    deadline derived from a policy other than the one it is about to enforce.
+    The verdict is decided later, by the admission stage, and travels with them
+    so that every stage after it reads one answer for the operation.
     """
 
     policy: ResourcePolicy
     deadline: float | None
+    admission: _AdmissionVerdict
 
 
 #: The budget in force for the CURRENT operation, or ``None`` when nothing armed
@@ -581,7 +603,7 @@ def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:
     armed = _operation_policy(policy)
     deadline = _absolute_deadline(armed)
     _publish_budget_mirror(context, armed, deadline)
-    return _active_budget.set(_RequestBudget(armed, deadline))
+    return _active_budget.set(_RequestBudget(armed, deadline, _AdmissionVerdict()))
 
 
 def armed_resource_policy() -> ResourcePolicy | None:
@@ -605,6 +627,30 @@ def armed_resource_policy() -> ResourcePolicy | None:
     """
     budget = _active_budget.get()
     return None if budget is None else budget.policy
+
+
+def record_admission_rejection(rejection: ResourceLimitExceeded) -> None:
+    """Record ``rejection`` as this operation's admission verdict.
+
+    Does nothing when no budget is armed, which is the plain
+    ``strawberry.Schema`` case a caller reaches by invoking a hook outside an
+    operation scope: there is no operation for a verdict to belong to.
+    """
+    budget = _active_budget.get()
+    if budget is not None:
+        budget.admission.rejection = rejection
+
+
+def admission_rejection() -> ResourceLimitExceeded | None:
+    """This operation's admission rejection, or ``None`` if it was admitted.
+
+    The answer every stage after admission reads, in preference to the published
+    error it can be told apart from: publishing is how a rejection reaches the
+    client, and what is published is writable by anything else in the extension
+    chain.
+    """
+    budget = _active_budget.get()
+    return None if budget is None else budget.admission.rejection
 
 
 def end_resource_budget(token: Any) -> None:

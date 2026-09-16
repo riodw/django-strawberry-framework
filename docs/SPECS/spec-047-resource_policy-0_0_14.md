@@ -415,9 +415,9 @@ leaves a bounded schema running with no budget and no masking at all — so it i
 instance attribute: `schema.py::DjangoSchema.extensions` is settled by the constructor, which
 is the moment the deployment chose it, and a later assignment is refused rather than
 reconciled. Each operation's extensions are resolved from what was settled, so an accepted
-factory still runs once per request, and where no settled configuration can be answered for,
-`schema.py::_with_enforcement_present` puts the package's own entries back rather than
-letting the empty answer be the operation's configuration.
+factory still runs once per request, and a configuration that can no longer be answered for
+refuses the operation rather than letting the empty answer — or the list that replaced it —
+be what enforces it.
 
 An accepted extension INSTANCE carries the last piece of that authority, and it is the piece
 a container cannot protect. Strawberry hands such an entry back unchanged, so it stays
@@ -427,22 +427,48 @@ rebinds once to widen every later request. The explicitly configured policy is t
 as private state too (`extensions/resource_policy.py::_EXPLICIT_POLICY`), read back as a copy,
 and unreachable by assignment.
 
-How that state is HELD is a second question from who may read it, and the two answers pull
-opposite ways. A module-global mapping owning a schema's configuration is a root: an
-extension instance reaches its schema through the execution context it acquires when the
-operation runs, and a schema subclass may configure `extensions=[self.make_extension]`, so a
-global holding the configuration strongly keeps every such schema — and its last request's
-context and variables — alive for the life of the process, which no weak KEY can help with
-when the chain back to the referent runs through the value. So the owner holds its own
-record, which is the correct lifetime — the record being part of what the owner IS — and
-`utils/private_state.py::PrivateState` holds only a weak reference to the record that was
-accepted: reading verifies the stored object against that reference, so a record forged
-behind the attribute is not mistaken for the accepted one and the fail-closed default answers
-instead.
-The key is `id()`, not the owner itself — a mapping that found its entries by hash and
-equality would be finding them by methods a schema subclass may define, letting one schema's
-record answer for another that merely compares equal to it, and refusing a subclass that
-declares `__eq__` without a hash outright.
+How that state is HELD is a second question from who may read it, and the answer splits by
+what the state IS. The policies are primitives — ints, a float, bools and strings — so they
+point at nothing, and `utils/private_state.py::PrivateAuthority` holds the enforcement record
+for its schema without holding the schema: no attribute on the owner answers with it, so
+there is no name to rebind, delete, or reach the stored object through for an in-place write,
+and the weak reference filed beside the record drops the entry when its schema dies. Detecting
+a forged record and then continuing under a fallback would not have been enough — the fallback
+selects package defaults, which may be WIDER than the policy the deployment accepted, so
+losing the record has to be impossible rather than recoverable. The accepted extension
+INSTANCE's configuration (`extensions/resource_policy.py::_EXPLICIT_POLICY`) is held on the
+same terms and for the same reason, and it records the CONSTRUCTION rather than the policy:
+an extension built with no override of its own is configured — it enforces the policy its
+schema resolves, per operation — so reading the absence of a policy as an object that was
+never constructed would leave exactly that configuration open to a second constructor call
+handing it a wider ceiling after the deployment accepted it.
+
+The extension configuration cannot be held that way, and the reason has nothing to do with
+resolvers: those entries reach the schema back — an extension instance through the execution
+context it acquires when the operation runs, and `extensions=[self.make_extension]` directly —
+so a module-global holding them strongly keeps every such schema, and its last request's
+context and variables, alive for the life of the process, which no weak KEY can help with
+when the chain back to the referent runs through the value. The schema therefore holds them,
+and `utils/private_state.py::PrivateMembership` holds one weak reference per accepted ENTRY.
+
+The granularity is the point. What decides whether an operation is bounded and masked at all
+is not which object the schema's attribute answers with but which extensions are inside it, so
+evidence about a carrier certifies nothing: writing new entries into one leaves its identity
+exactly as accepted, and a schema that authenticated the holder would hand that membership to
+the next operation. Each operation therefore resolves the entries the evidence points at, and
+an entry written where the accepted ones are held is one no construction accepted and one no
+operation runs. What the attribute still does is keep those entries ALIVE, and that is the one
+thing a write to it can take away: an entry the deployment named nowhere else — an instance,
+or a factory — is collected, and the accepted configuration cannot be reconstructed, because
+those entries are the only record of what a consumer extension declared and a factory's policy
+was never seen by this package at all. `DjangoSchema.get_extensions` REFUSES the operation
+there, rather than resolving a list it cannot vouch for or falling back to a schema policy
+that may be wider.
+
+Both are filed under `id()`, not the owner itself — a mapping that found its entries by hash
+and equality would be finding them by methods a schema subclass may define, letting one
+schema's record answer for another that merely compares equal to it, and refusing a subclass
+that declares `__eq__` without a hash outright.
 
 The policy object a schema stores is also held to the EXACT class. `isinstance` admits a
 subclass, and a subclass's field reads are consumer code that `__post_init__` cannot speak
@@ -590,7 +616,8 @@ depth `ValidationRule`, a regex or `str.count` over the document).*
 ### Decision 4 — The document and value budgets are one iterative walk
 
 Expanded selections, aliases, collection cost, and every value bound are charged by a
-single iterative walk over the parsed AST in `on_validate`, before validation.
+single iterative walk over the parsed AST in `on_parse`, once the document exists and
+before anything validates it.
 
 - **Iterative, with an explicit stack.** The card requires it, and the reason is the same
   one that puts the text scan before the parse: a recursive walker whose job is to bound a
@@ -944,17 +971,28 @@ envelope renders it identically with no translation layer, which is what makes t
 a structural property rather than three code paths kept in step.
 
 **Where the parity ends, stated rather than assumed.** *Enforcement* is transport-independent:
-Strawberry enters the extension's `on_operation` and `on_validate` hooks for HTTP execution
+Strawberry enters the extension's `on_operation` and `on_parse` hooks for HTTP execution
 and for a WebSocket subscribe alike, so every pass runs on every operation. *Rendering* follows
 from HOW each pass refuses, and the two passes refuse differently because they must.
 
 The document and value walk (passes 2 and 3) PUBLISHES its rejection as the operation's
-pre-execution error rather than raising it, which is what makes validation stand down, and
-that is the shape every transport renders into an `errors` entry carrying `extensions.code` —
-the subscribe path included. Because a published rejection also says nothing runs, it is
-restated at the hook execution begins from, so a streaming path that yields the error frame
-and then executes the operation regardless — which releases inside the supported range do —
-is refused there instead. Nothing executes on any transport, on any release in the range.
+pre-execution error rather than raising it, which is what makes graphql-core's validation
+stand down, and that is the shape every transport renders into an `errors` entry carrying
+`extensions.code` — the subscribe path included.
+
+Publishing alone does not preserve the verdict, and the stage does not rely on it to.
+`ExecutionContext.pre_execution_errors` is an ordinary mutable field, and a validation
+extension that runs the pass itself assigns its own result over whatever is there — Strawberry's
+supported `ValidationCache` does exactly that, which would both erase the refusal and put every
+inline literal and variable default through its scalar's parser for a request that was already
+refused. So admission is not a member of the validation chain at all: it charges at `on_parse`,
+which upstream finishes for every extension before it enters any validation hook, and a refused
+operation carries no validation rules for anything to run. The verdict itself is recorded where
+only this package writes (`resource_policy.py::admission_rejection`), restated over whatever
+replaced the published error, and read again at the hook execution begins from — so a streaming
+path that yields the error frame and then executes the operation regardless, which releases
+inside the supported range do, is refused there instead. Nothing executes on any transport, on
+any release in the range, in either position a consumer can give a validation extension.
 
 The pre-parse text scan (pass 1) cannot: its whole job is to refuse before the parser runs,
 and a published error does not stop the parse. It raises, and upstream's streaming path has no

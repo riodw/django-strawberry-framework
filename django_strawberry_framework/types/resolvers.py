@@ -48,7 +48,7 @@ from ..optimizer._context import (
     active_strictness as _active_strictness,
 )
 from ..optimizer._context import (
-    get_context_value as _get_context_value,
+    optimizer_value as _optimizer_value,
 )
 from ..optimizer._context import (
     relation_is_optimizer_scoped as _relation_is_optimizer_scoped,
@@ -199,7 +199,7 @@ def _strictness_for(context: Any) -> str:
     live = _active_strictness()
     if live is not None:
         return live
-    return _get_context_value(context, DST_OPTIMIZER_STRICTNESS, "off")
+    return _optimizer_value(context, DST_OPTIMIZER_STRICTNESS, "off")
 
 
 def _relation_is_planned(key: str, planned: Any) -> bool:
@@ -299,7 +299,7 @@ def _check_n1(
     # once per row, not once per consumer. Other call sites omit
     # both and get the original read-and-compute behavior.
     if planned is _PLAN_UNREAD:
-        planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
+        planned = _optimizer_value(context, DST_OPTIMIZER_PLANNED)
     key = (
         precomputed_key
         if precomputed_key is not None
@@ -655,11 +655,11 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         # entirely. When at least one is active, walk once and share the key
         # across both checks.
         elisions = (
-            _get_context_value(context, DST_OPTIMIZER_FK_ID_ELISIONS, _EMPTY_ELISIONS)
+            _optimizer_value(context, DST_OPTIMIZER_FK_ID_ELISIONS, _EMPTY_ELISIONS)
             if field_meta.attname is not None
             else _EMPTY_ELISIONS
         )
-        planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
+        planned = _optimizer_value(context, DST_OPTIMIZER_PLANNED)
         # Cheap per-row gate: a ``ContextVar`` read, not a second stash dispatch.
         # ``None`` (no extension ran) plus an absent plan sentinel means nothing
         # armed the guard and there is no plan to compare against, so the

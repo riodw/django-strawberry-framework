@@ -45,10 +45,11 @@ from graphql.language.ast import (
 )
 from graphql.language.printer import print_ast
 from graphql.type.definition import GraphQLInterfaceType
-from strawberry.extensions import SchemaExtension
 
 from ..exceptions import _safe_arg_repr
+from ..extensions.operation_state import OperationState, _OperationBoundExtension
 from ..registry import registry
+from ..utils.private_state import PrivateAuthority
 from ..utils.querysets import (
     normalize_query_source,
     unwrap_async_queryset_adapter,
@@ -72,6 +73,9 @@ from ._context import (
     DST_OPTIMIZER_STRICTNESS,
 )
 from ._context import (
+    begin_operation_stashes as _begin_operation_stashes,
+)
+from ._context import (
     begin_scoped_relations as _begin_scoped_relations,
 )
 from ._context import (
@@ -81,16 +85,25 @@ from ._context import (
     clear_optimizer_context as _clear_optimizer_context,
 )
 from ._context import (
+    end_operation_stashes as _end_operation_stashes,
+)
+from ._context import (
     end_scoped_relations as _end_scoped_relations,
 )
 from ._context import (
     end_strictness as _end_strictness,
 )
 from ._context import (
-    get_context_value as _get_context_value,
+    optimizer_operation_is_active as _optimizer_operation_is_active,
+)
+from ._context import (
+    optimizer_value as _optimizer_value,
 )
 from ._context import (
     publish_scoped_relations as _publish_scoped_relations,
+)
+from ._context import (
+    stash_for_optimizer as _stash_for_optimizer,
 )
 from ._context import (
     stash_on_context as _stash_on_context,
@@ -884,7 +897,50 @@ def _resolve_model_from_return_type(info: Any) -> _OriginAndModel | None:
     return _OriginAndModel(origin=origin, model=model)
 
 
-class DjangoOptimizerExtension(SchemaExtension):
+class _OptimizerOperationState(OperationState):
+    """One operation's optimizer state, for the extension answering it.
+
+    ``stashes`` is this operation's own plan / elision / planned-relation /
+    lookup-path / strictness store. The request context object is shared - a
+    resolver may hand its own ``info.context`` to an inner execution - and the
+    inner operation's start-of-execution clear would otherwise erase values the
+    outer one is still resolving against.
+    """
+
+    __slots__ = ("stashes",)
+
+    def __init__(self, execution_context: Any) -> None:
+        super().__init__(execution_context)
+        self.stashes: dict[str, Any] = {}
+
+
+class _AcceptedOptimizerConfiguration(NamedTuple):
+    """What one ``DjangoOptimizerExtension`` construction settled.
+
+    Both values are primitives, so holding them retains nothing but themselves;
+    the plan cache, which is an object graph and is deliberately shared across
+    requests, stays an ordinary attribute.
+    """
+
+    strictness: str
+    nested_connection_strategy: Any
+
+
+#: Every constructed optimizer's settled configuration, held here and by nothing
+#: else.
+#:
+#: This extension's documented shape is a module-level singleton behind a
+#: factory, because its plan cache is meant to be shared - which also makes the
+#: instance reachable from every resolver of every request for the life of the
+#: process. An ordinary ``self.strictness`` is then a name one resolver writes
+#: to turn a deployment's N+1 guard off for every LATER request, and
+#: ``self.nested_connection_strategy`` one that replaces the strategy the
+#: instance's cached plans were keyed for. Neither is a per-request preference:
+#: both are read at the start of every execution and arm it.
+_OPTIMIZER_CONFIGURATION: PrivateAuthority[_AcceptedOptimizerConfiguration] = PrivateAuthority()
+
+
+class DjangoOptimizerExtension(_OperationBoundExtension):
     """Strawberry schema extension that optimizes Django querysets per request.
 
     Pass a module-level singleton wrapped in a factory - that preserves
@@ -920,6 +976,13 @@ class DjangoOptimizerExtension(SchemaExtension):
     consumer wrote ``Model.objects`` or ``Model.objects.all()``.
     """
 
+    _reconstruction_refusal = (
+        "An optimizer extension is configured when it is constructed; re-running "
+        "its __init__ on an instance a schema is already serving requests with "
+        "would replace the strictness and the nested-connection strategy its "
+        "cached plans were built under."
+    )
+
     def __init__(
         self,
         strictness: str = "off",
@@ -929,14 +992,12 @@ class DjangoOptimizerExtension(SchemaExtension):
     ) -> None:
         # Strawberry assigns ``extension.execution_context`` once per
         # operation. The documented singleton-factory form returns this SAME
-        # extension instance to concurrent operations, so a plain instance
-        # attribute lets one operation overwrite another's context before its
-        # hook starts. Keep that engine-owned value task-local while the plan
-        # cache below remains intentionally instance-shared.
-        self._execution_context_var: ContextVar[Any] = ContextVar(
-            "django_strawberry_framework_optimizer_execution_context",
-            default=None,
-        )
+        # extension instance to concurrent and to NESTED operations, so the
+        # engine's assignment is taken as a handoff and this operation's context
+        # is read from the state the package runner binds
+        # (``extensions/operation_state.py``); the plan cache below remains
+        # intentionally instance-shared.
+        super().__init__()
         # ``execution_context`` stays accepted for direct-construction
         # compatibility only: at the ``strawberry-graphql>=0.316.0`` floor the
         # engine invokes class/factory entries in ``extensions=[...]`` with
@@ -945,12 +1006,10 @@ class DjangoOptimizerExtension(SchemaExtension):
         # migration notes). Unknown consumer kwargs still raise ``TypeError``
         # at construction so typos (``strict=True``) surface at the call site
         # rather than being silently absorbed.
-        super().__init__(execution_context=execution_context)
         self.execution_context = execution_context
         if not _is_valid_strictness(strictness):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {_safe_arg_repr(strictness)}"
             raise ValueError(msg)
-        self.strictness = strictness
         # The nested-connection fetch strategy is fixed per extension INSTANCE
         # at construction (``None`` reads the ``NESTED_CONNECTION_STRATEGY``
         # setting, defaulting to windowed). The plan cache below is
@@ -960,7 +1019,13 @@ class DjangoOptimizerExtension(SchemaExtension):
         # selects by its fetch-time alias (``optimizer/nested_fetch.py``);
         # cached plans therefore remain valid across router decisions. Unknown
         # names raise ``ConfigurationError`` at construction, not at query time.
-        self.nested_connection_strategy = resolve_strategy(nested_connection_strategy)
+        _OPTIMIZER_CONFIGURATION.settle(
+            self,
+            _AcceptedOptimizerConfiguration(
+                strictness=strictness,
+                nested_connection_strategy=resolve_strategy(nested_connection_strategy),
+            ),
+        )
         self._plan_cache: OrderedDict[
             tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None],
             Any,
@@ -968,15 +1033,45 @@ class DjangoOptimizerExtension(SchemaExtension):
         self._cache_hits = 0
         self._cache_misses = 0
 
-    @property
-    def execution_context(self) -> Any:
-        """Return the current operation's Strawberry execution context."""
-        return self._execution_context_var.get()
+    def _new_operation_state(self, execution_context: Any) -> _OptimizerOperationState:
+        """Build this operation's optimizer state."""
+        return _OptimizerOperationState(execution_context)
 
-    @execution_context.setter
-    def execution_context(self, value: Any) -> None:
-        """Store Strawberry's assigned execution context in the current task."""
-        self._execution_context_var.set(value)
+    def _configuration(self) -> _AcceptedOptimizerConfiguration:
+        """The configuration this extension settled, or the safe default for none.
+
+        ``None`` means the constructor never ran - a subclass that skipped it -
+        and the answer for that is the shape a zero-argument construction
+        produces: the N+1 guard off, and the strategy the deployment's setting
+        resolves to.
+        """
+        accepted = _OPTIMIZER_CONFIGURATION.recall(self)
+        if accepted is None:
+            return _AcceptedOptimizerConfiguration(
+                strictness="off",
+                nested_connection_strategy=resolve_strategy(None),
+            )
+        return accepted
+
+    @property
+    def strictness(self) -> str:
+        """The N+1 strictness this extension was constructed with, as a read.
+
+        Read-only, because it is armed for the whole of every execution and one
+        write would disarm a deployment's guard for every later request rather
+        than for the one that made it.
+        """
+        return self._configuration().strictness
+
+    @property
+    def nested_connection_strategy(self) -> Any:
+        """The nested-connection fetch strategy this extension was built with.
+
+        Read-only for the reason the plan cache is instance-bound: one cache
+        must never mix plans from two strategies, and the strategy a cached plan
+        was keyed for is settled at construction.
+        """
+        return self._configuration().nested_connection_strategy
 
     def cache_info(self) -> CacheInfo:
         """Return plan-cache statistics (hits, misses, current size).
@@ -1003,15 +1098,27 @@ class DjangoOptimizerExtension(SchemaExtension):
         # accumulative *within* one execution (parent + nested connection);
         # without a start-of-execution clear, sequential ``execute_sync``
         # calls sharing one context object leak FK-id elisions (wrong stub
-        # data) and planned-resolver keys (masked N+1 under strictness).
+        # data) and planned-resolver keys (masked N+1 under strictness) to a
+        # consumer reading the published plan off their request.
         # ``execution_context.context`` is the same object resolvers see as
         # ``info.context`` (Strawberry wires both to ``context_value``).
         # ``getattr(self, "execution_context", None)`` covers direct/test
         # callers that invoke ``on_execute`` before Strawberry assigns the
         # execution context (the engine sets it after constructing the
-        # extension entry).
-        execution_context = getattr(self, "execution_context", None)
-        _clear_optimizer_context(getattr(execution_context, "context", None))
+        # extension entry). An execution that starts while another optimizer
+        # operation is already running here is nested inside it and shares that
+        # operation's context object, whose published values are current rather
+        # than stale - so the clear belongs to the outermost operation alone.
+        state = self._operation_state()
+        execution_context = self.execution_context
+        if not _optimizer_operation_is_active():
+            _clear_optimizer_context(getattr(execution_context, "context", None))
+        # This operation's own store for every optimizer stash. What the package
+        # reads back is here, so a nested execution sharing the request's
+        # context object can neither erase nor answer for the outer operation's
+        # plan; the outermost operation's publishes still reach that object as
+        # introspection.
+        stashes_token = _begin_operation_stashes({} if state is None else state.stashes)
         # Publish this instance so ``apply_connection_optimization`` can
         # discover it and share the instance-bound plan cache (spec-030 Decision 11).
         instance_token = _active_optimizer.set(self)
@@ -1034,6 +1141,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         try:
             yield
         finally:
+            _end_operation_stashes(stashes_token)
             _end_strictness(strictness_token)
             _end_scoped_relations(scoped_token)
             converted_selections_cache.reset(converted_token)
@@ -1331,7 +1439,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         # parent and nested-connection plans coexist without collision.
         # ``DST_OPTIMIZER_PLAN`` stays LAST-WINS introspection data (not a
         # correctness sentinel - do not union it).
-        _stash_on_context(info.context, DST_OPTIMIZER_PLAN, plan)
+        _stash_for_optimizer(info.context, DST_OPTIMIZER_PLAN, plan)
         fk_id_elisions = plan.finalized_fk_id_elisions
         if fk_id_elisions is None:
             fk_id_elisions = frozenset(plan.fk_id_elisions)
@@ -1350,7 +1458,7 @@ class DjangoOptimizerExtension(SchemaExtension):
                 plan_lookup_paths = frozenset(lookup_paths(plan))
             self._stash_union(info.context, DST_OPTIMIZER_PLANNED, planned_resolver_keys)
             self._stash_union(info.context, DST_OPTIMIZER_LOOKUP_PATHS, plan_lookup_paths)
-            _stash_on_context(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
+            _stash_for_optimizer(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
 
     @staticmethod
     def _stash_union(context: Any, key: str, new: frozenset) -> None:
@@ -1364,7 +1472,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         pipeline's publish coexist with the parent's planned set rather than
         overwriting it (spec-033 Decision 8).
         """
-        existing = _get_context_value(context, key)
+        existing = _optimizer_value(context, key)
         if isinstance(existing, (frozenset, set)):
             # Subset early-out: a nested fallback connection re-publishes the
             # SAME plan once per parent row, so after the first row ``new`` is
@@ -1376,7 +1484,7 @@ class DjangoOptimizerExtension(SchemaExtension):
             merged = existing | new
         else:
             merged = new
-        _stash_on_context(context, key, merged)
+        _stash_for_optimizer(context, key, merged)
 
     @staticmethod
     def check_schema(schema: Any) -> list[str]:

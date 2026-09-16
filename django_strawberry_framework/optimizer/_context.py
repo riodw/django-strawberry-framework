@@ -11,7 +11,7 @@ its tests have always reached for them at this path.
 from __future__ import annotations
 
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..utils.context import clear_context_key, get_context_value, stash_on_context
 
@@ -23,14 +23,19 @@ __all__ = (
     "DST_OPTIMIZER_PLANNED",
     "DST_OPTIMIZER_STRICTNESS",
     "active_strictness",
+    "begin_operation_stashes",
     "begin_scoped_relations",
     "begin_strictness",
     "clear_optimizer_context",
+    "end_operation_stashes",
     "end_scoped_relations",
     "end_strictness",
     "get_context_value",
+    "optimizer_operation_is_active",
+    "optimizer_value",
     "publish_scoped_relations",
     "relation_is_optimizer_scoped",
+    "stash_for_optimizer",
     "stash_on_context",
 )
 
@@ -125,6 +130,100 @@ def end_scoped_relations(token: Any) -> None:
     _scoped_relations.reset(token)
 
 
+#: The stash store owned by the optimizer operation running in this task.
+#:
+#: The keys below live on ``info.context``, and that object belongs to the
+#: REQUEST rather than to one operation: a resolver that runs an inner
+#: ``info.schema.execute_sync(..., context_value=info.context)`` hands the inner
+#: optimizer the outer operation's store, where its start-of-execution clear
+#: erases the outer plan, the FK-id elisions a stub read depends on, and the
+#: planned-relation keys an N+1 guard reads - and its own publishes then answer
+#: the outer resolvers that are still running.
+#:
+#: So the authoritative store for a managed execution is this one, which
+#: ``extension.py::DjangoOptimizerExtension.on_execute`` opens from its own
+#: operation state and closes by token. ``None`` means no optimizer operation is
+#: running here, and the context object answers reads and takes writes exactly
+#: as it does for a direct call into a generated resolver.
+#:
+#: ``publishes_to_context`` says whether the operation holding the store is the
+#: one the request context describes. A task's outermost managed operation is,
+#: and publishes every stash there as well, because a published plan is
+#: introspection a consumer may read off their own request. An operation nested
+#: inside that one keeps its publishes to its own mapping, which is what leaves
+#: the outer operation's values readable to the outer resolvers that have not
+#: run yet.
+
+
+class _OperationStore(NamedTuple):
+    """One managed execution's optimizer stashes, and whether they are the request's."""
+
+    stashes: dict[str, Any]
+    publishes_to_context: bool
+
+
+_operation_stashes: ContextVar[_OperationStore | None] = ContextVar(
+    "django_strawberry_framework_optimizer_operation_stashes",
+    default=None,
+)
+
+
+def optimizer_operation_is_active() -> bool:
+    """Return whether a managed optimizer execution owns the stashes read here."""
+    return _operation_stashes.get() is not None
+
+
+def begin_operation_stashes(stashes: dict[str, Any]) -> Any:
+    """Make ``stashes`` this execution's optimizer store; returns the reset token.
+
+    An execution that opens a store while another already holds one runs nested
+    inside it, so the request context object stays the outer operation's medium.
+    """
+    return _operation_stashes.set(
+        _OperationStore(stashes, publishes_to_context=not optimizer_operation_is_active()),
+    )
+
+
+def end_operation_stashes(token: Any) -> None:
+    """Close the store opened by :func:`begin_operation_stashes`."""
+    _operation_stashes.reset(token)
+
+
+def optimizer_value(context: Any, key: str, default: Any = None) -> Any:
+    """Read one optimizer stash for the operation running here.
+
+    The running operation's own mapping answers, without falling through to the
+    context object: a value another operation published there is not this
+    operation's, and a value this operation published is not on the object at
+    all when the context is read-only. Outside a managed execution the context
+    object answers, which is the only store an unmanaged caller has.
+    """
+    store = _operation_stashes.get()
+    if store is None:
+        return get_context_value(context, key, default)
+    return store.stashes.get(key, default)
+
+
+def stash_for_optimizer(context: Any, key: str, value: Any) -> None:
+    """Publish one optimizer stash for this operation, and on the request context.
+
+    Two destinations with two different jobs: the operation's mapping is what
+    the package reads back, and the context object keeps the published values
+    visible to a consumer inspecting their own request. Only the operation that
+    object describes writes there, so an inner execution sharing it replaces
+    nothing the outer one published. A frozen or absent context silently takes
+    nothing, exactly as ``stash_on_context`` documents, and the operation still
+    has its own copy.
+    """
+    store = _operation_stashes.get()
+    if store is None:
+        stash_on_context(context, key, value)
+        return
+    store.stashes[key] = value
+    if store.publishes_to_context:
+        stash_on_context(context, key, value)
+
+
 # Every key ``stash_on_context`` / ``_publish_plan_to_context`` may leave on a
 # request context. ``clear_optimizer_context`` removes exactly this set at the
 # start of each ``on_execute`` so a reused ``context_value`` cannot carry
@@ -142,8 +241,11 @@ def clear_optimizer_context(context: Any) -> None:
     """Remove every optimizer stash key from ``context`` (start-of-execution reset).
 
     ``DjangoOptimizerExtension.on_execute`` calls this before the operation
-    runs so sequential ``execute`` / ``execute_sync`` calls that reuse the
-    same ``context_value`` object cannot leak correctness sentinels:
+    runs, and only for the operation the context object describes, so
+    sequential ``execute`` / ``execute_sync`` calls that reuse the same
+    ``context_value`` object cannot leak correctness sentinels to a consumer
+    reading them - while an operation nested inside another one erases nothing
+    the outer operation published there:
 
     - ``DST_OPTIMIZER_FK_ID_ELISIONS`` retained across executions makes a later
       full-object selection (``category { id name }``) hit the FK-id stub path

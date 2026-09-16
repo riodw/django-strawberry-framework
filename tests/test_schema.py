@@ -979,22 +979,161 @@ def test_replacing_the_accepted_extensions_does_not_make_a_schema_unconstructed(
     assert _SCHEMA_EXTENSIONS.recall(schema) is None
 
 
+class _SlottedFactory:
+    """A valid extension factory whose layout admits no weak reference.
+
+    ``__slots__`` without ``__weakref__`` is an ordinary, supported way to write
+    a callable, and Strawberry runs one exactly as it runs any other factory.
+    Refusing it would be refusing a memory layout rather than a configuration.
+    """
+
+    __slots__ = ()
+
+    def __call__(self):
+        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+
+
+class _WeakReferenceableFactory:
+    """The control: the same factory, with the layout a weak reference can be taken of."""
+
+    def __call__(self):
+        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [_SlottedFactory, _WeakReferenceableFactory],
+    ids=["slotted-callable", "weak-referenceable-control"],
+)
+def test_a_slotted_callable_factory_is_accepted_and_enforces(factory):
+    """A callable factory works whatever its object layout is.
+
+    Strawberry accepts either one, so a schema that refused the slotted form
+    would be refusing a configuration for a reason that has nothing to do with
+    what runs the operation. Both build the extension per operation and both
+    enforce the bound they carry.
+    """
+    schema = DjangoSchema(
+        query=_RowQuery,
+        resource_policy=ResourcePolicy(max_list_rows=3),
+        extensions=[factory()],
+    )
+
+    # The schema's own policy would pass all three rows; the entry's narrower
+    # one is what the operation is actually bounded by.
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+
+def test_a_slotted_entry_does_not_root_the_schema_that_holds_it():
+    """The entry a global table could most easily have ended up holding strongly.
+
+    A slotted entry is the one whose evidence is not a weak reference to itself,
+    so the sealed holder is where the temptation to hold it globally lives. The
+    holder belongs to the SCHEMA, and the record here keeps one weak reference to
+    it - so the schema, its enforcement record and the last request's context all
+    stay collectable, exactly as they do for every other spelling
+    (``test_a_schema_stays_collectable_whatever_configured_it``).
+    """
+    alive = _reachability_after_dropping(
+        lambda: DjangoSchema(query=DummyQuery, extensions=[_SlottedFactory()]),
+        execute=True,
+    )
+    assert alive == (None, None, None)
+
+
+def test_a_mixed_entry_list_answers_each_entry_from_its_own_evidence():
+    """A rewritten attribute runs nothing it nominated, whichever form an entry takes.
+
+    The weak-referenceable entry here is a module-level class, which the module
+    still names after the write, so its evidence still resolves and the accepted
+    original is what the next operation runs. The slotted entry is answered from
+    the schema's sealed holder, which that same write replaced - and the only
+    record of what it declared is gone, so the operation is refused rather than
+    resolved against whatever was put there.
+    """
+    schema = DjangoSchema(
+        query=_RowQuery,
+        resource_policy=ResourcePolicy(max_list_rows=1),
+        extensions=[DjangoResourcePolicyExtension, _SlottedFactory()],
+    )
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    schema.__dict__.update(_django_extensions=(_widening_factory,))
+    gc.collect()
+
+    assert schema.extensions == ()
+    refused = schema.execute_sync("{ rows }")
+    assert refused.data is None
+    assert refused.errors[0].extensions == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
+
+
+def test_a_weak_only_entry_list_survives_the_same_write():
+    """The control that keeps the mixed row honest: nothing here needs the holder.
+
+    Every entry is a class the module still names, so every piece of evidence
+    still resolves and the write nominates nothing. The difference between this
+    row and the mixed one is the slotted entry alone.
+    """
+    schema = DjangoSchema(
+        query=_RowQuery,
+        resource_policy=ResourcePolicy(max_list_rows=1),
+        extensions=[DjangoResourcePolicyExtension],
+    )
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    schema.__dict__.update(_django_extensions=(_widening_factory,))
+    gc.collect()
+
+    assert schema.extensions == (DjangoErrorPolicyExtension, DjangoResourcePolicyExtension)
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        lambda holder: setattr(holder, "_members", ()),
+        lambda holder: setattr(holder, "anything", 1),
+        lambda holder: delattr(holder, "_members"),
+    ],
+    ids=["rewrite-the-members", "add-an-attribute", "delete-the-members"],
+)
+def test_the_holder_a_schema_keeps_its_entries_in_is_sealed(tamper):
+    """Evidence about a carrier certifies nothing if the carrier can be rewritten.
+
+    The holder exists because a slotted entry has no evidence of its own; that
+    only means anything while what the holder answers with is what it was built
+    with.
+    """
+    schema = DjangoSchema(
+        query=_RowQuery,
+        resource_policy=ResourcePolicy(max_list_rows=3),
+        extensions=[_SlottedFactory()],
+    )
+    holder = schema.__dict__["_django_extensions"]
+
+    with pytest.raises(AttributeError, match="sealed at construction"):
+        tamper(holder)
+
+    assert schema.execute_sync("{ rows }").errors is None
+
+
 @pytest.mark.parametrize(
     "entry",
     [(), "DjangoResourcePolicyExtension", 7],
     ids=["a-tuple", "a-name", "a-number"],
 )
-def test_an_extension_entry_the_schema_cannot_hold_as_accepted_is_refused(entry):
-    """Acceptance is per entry, so an entry that cannot be held is not configuration.
+def test_an_extension_entry_strawberry_could_not_resolve_is_refused(entry):
+    """Acceptance is per entry, and the one reason to refuse one is resolution.
 
-    Every extension Strawberry resolves - a class, an instance, a factory - is an
-    object a weak reference can be taken of. A builtin value is not, and could
-    never be answered for as the entry construction accepted; installing it
-    would leave the schema resolving whatever the attribute happened to carry.
-    The refusal names it where it was supplied rather than at the first
-    operation that tried to resolve it.
+    Strawberry resolves an entry as itself when it is an extension instance and
+    by CALLING it otherwise, so a class, an instance and a factory are the three
+    shapes that work. A builtin value is none of them and fails at the first
+    operation, deep inside the engine, on a schema the deployment already
+    started; the refusal names it where it was supplied instead. What is NOT a
+    reason is a memory layout - see
+    ``test_a_slotted_callable_factory_is_accepted_and_enforces``.
     """
-    with pytest.raises(ConfigurationError, match="cannot be held"):
+    with pytest.raises(ConfigurationError, match="is none of those"):
         DjangoSchema(query=DummyQuery, extensions=[entry])
 
 

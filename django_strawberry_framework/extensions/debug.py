@@ -95,16 +95,17 @@ import traceback
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
 from django.conf import settings
 from django.db import connections
 from graphql import ExecutionResult as GraphQLExecutionResult
 from graphql import GraphQLError
-from strawberry.extensions import SchemaExtension
 
 from .. import logger
 from ..exceptions import ConfigurationError, describe_value
+from ..utils.private_state import PrivateAuthority
+from .operation_state import OperationState, _OperationBoundExtension
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.backends.base.base import BaseDatabaseWrapper
@@ -541,7 +542,49 @@ def _build_payload(snapshots: "list[_ConnectionSnapshot]", execution_result: Any
     return _apply_payload_caps(sql_rows, exception_rows)
 
 
-class DjangoDebugExtension(SchemaExtension):
+class _DebugOperationState(OperationState):
+    """One operation's capture, for the extension answering it.
+
+    ``snapshots`` is the bracket this operation took, and ``None`` is what says
+    it never bracketed at all - the inert fail-closed path, and every direct
+    caller that entered a hook outside an operation. ``payload`` is what the
+    teardowns build and ``get_results`` publishes.
+
+    Both belong to ONE operation and to nothing else, which is why they are
+    here rather than on the extension. A shared instance holding the last
+    payload publishes it again on the next operation - a parse failure that ran
+    no SQL and raised no exception answers with the previous request's SQL and
+    the previous request's exception messages, to whoever sent the malformed
+    document.
+    """
+
+    __slots__ = ("payload", "snapshots")
+
+    def __init__(self, execution_context: Any) -> None:
+        super().__init__(execution_context)
+        self.payload: _DebugPayload | None = None
+        self.snapshots: list[_ConnectionSnapshot] | None = None
+
+
+class _AcceptedDisclosure(NamedTuple):
+    """The production-disclosure acknowledgement one construction settled."""
+
+    allow_unsafe_production: bool
+
+
+#: Every constructed extension's acknowledgement, held here and by nothing else.
+#:
+#: This is the gate that decides whether a production response carries unmasked
+#: tracebacks and interpolated SQL parameter values. An ordinary attribute
+#: holding it is a name every resolver the schema serves can write - the
+#: extension is reachable through ``info.schema.extensions``, and an accepted
+#: instance is process-lived - so one assignment inside one resolver arms the
+#: disclosure for every LATER request the process answers. A bool points at
+#: nothing, so holding one here retains nothing but the bool.
+_ACKNOWLEDGEMENT: PrivateAuthority[_AcceptedDisclosure] = PrivateAuthority()
+
+
+class DjangoDebugExtension(_OperationBoundExtension):
     """Attach Django query-log SQL and execution exceptions to ``extensions["debug"]``.
 
     Development tool - NEVER enable on an internet-facing schema: the payload
@@ -559,19 +602,27 @@ class DjangoDebugExtension(SchemaExtension):
     that refuses to disclose must not also refuse the request.
 
     Opt-in is the **class** in ``extensions=[..., DjangoDebugExtension]``:
-    Strawberry (>=0.316.0) constructs class entries per operation with zero
-    arguments and assigns ``execution_context`` afterward, so per-operation
-    capture state lives in plain instance attributes. This deliberately
-    differs from the optimizer's singleton-in-a-factory shape - the optimizer
-    preserves a cross-request plan cache; this extension has no cross-request
-    state. The ``__init__`` takes exactly one keyword-only argument,
-    ``allow_unsafe_production``, whose ``False`` default is what a zero-argument
-    class entry gets; acknowledging the disclosure is spelled as a factory
-    entry, ``lambda: DjangoDebugExtension(allow_unsafe_production=True)``,
-    which preserves the fresh-per-operation instance. Never pass a pre-built
-    instance (the deprecated form the engine warns about at schema
-    construction): a shared instance republishes a stale payload on later
-    operations and races the engine-assigned ``execution_context``.
+    Strawberry constructs class entries per operation with zero arguments and
+    assigns ``execution_context`` afterward. The ``__init__`` takes exactly one
+    keyword-only argument, ``allow_unsafe_production``, whose ``False`` default
+    is what a zero-argument class entry gets; acknowledging the disclosure is
+    spelled as a factory entry,
+    ``lambda: DjangoDebugExtension(allow_unsafe_production=True)``, which keeps
+    the fresh-per-operation instance. This deliberately differs from the
+    optimizer's singleton-in-a-factory shape - the optimizer preserves a
+    cross-request plan cache; this extension has no cross-request state at all.
+
+    **The capture belongs to the operation, not to this object.** The
+    snapshots and the payload live on the state
+    ``extensions/operation_state.py`` binds for the operation being answered,
+    which is what lets even a shared entry under a ``DjangoSchema`` answer each
+    operation with its own - and what makes a parse failure publish no payload
+    rather than the last successful operation's SQL and exception text. On a
+    plain ``strawberry.Schema`` there is no package runner to bind anything, so
+    the state is the fresh instance's own: a class entry and a factory that
+    builds one are operation-local there, and a pre-built instance (the
+    deprecated form the engine warns about at schema construction) is outside
+    the guarantee.
 
     List this class **after** any masking extension (``MaskErrors``):
     teardowns unwind LIFO, and masking strips ``original_error`` in its own
@@ -612,19 +663,11 @@ class DjangoDebugExtension(SchemaExtension):
     the diagnostic keeping originals is its documented purpose).
     """
 
-    # The absent-payload sentinel: one immutable class-level default, read
-    # directly by ``get_results`` and shadowed on the INSTANCE only when
-    # teardown assigns the completed dict. ``None`` is unambiguous because a
-    # completed payload is always a dict, even when both lists are empty.
-    _payload: "_DebugPayload | None" = None
-
-    # The bracketed snapshots, assigned pre-yield by ``on_operation`` and
-    # never set on the inert/refused path. ``None`` is what both the
-    # executing hook and ``on_operation``'s teardown read to decide whether
-    # this instance ever bracketed: the engine enters ``on_execute`` for every
-    # executed operation, including the inert ones, so the sentinel - not a
-    # second gate read - is what keeps the refused path from building anything.
-    _snapshots: "list[_ConnectionSnapshot] | None" = None
+    _reconstruction_refusal = (
+        "A debug extension is configured when it is constructed; re-running its "
+        "__init__ on an instance a schema is already serving requests with would "
+        "replace the production-disclosure acknowledgement it was accepted with."
+    )
 
     def __init__(self, *, allow_unsafe_production: bool = False) -> None:
         """Record the deployment's acknowledgement, defaulting to the safe answer.
@@ -646,13 +689,37 @@ class DjangoDebugExtension(SchemaExtension):
         ``error_policy.py::ErrorPolicy.__post_init__`` applies to its own
         ``enabled`` flag.
         """
+        super().__init__()
         if not isinstance(allow_unsafe_production, bool):
             raise ConfigurationError(
                 "DjangoDebugExtension(allow_unsafe_production=...) must be a bool; got "
                 f"{describe_value(allow_unsafe_production)}. A truthy non-bool would arm "
                 "the production disclosure, so it is refused rather than interpreted.",
             )
-        self.allow_unsafe_production = allow_unsafe_production
+        _ACKNOWLEDGEMENT.settle(self, _AcceptedDisclosure(allow_unsafe_production))
+
+    def _new_operation_state(self, execution_context: Any) -> _DebugOperationState:
+        """Build this operation's capture state."""
+        return _DebugOperationState(execution_context)
+
+    @property
+    def allow_unsafe_production(self) -> bool:
+        """The acknowledgement this extension was constructed with, as a read.
+
+        A read-only view of the settled bool, kept because it is the name a
+        deployment checks its own configuration with. It is not where the gate
+        reads from and it cannot be written: this decides what a production
+        response discloses, so it is a configuration statement made at
+        construction rather than a preference a request can revise. A value
+        injected straight into ``__dict__`` is answered past by this descriptor
+        for the same reason.
+        """
+        return self._acknowledged()
+
+    def _acknowledged(self) -> bool:
+        """The settled acknowledgement, ``False`` for an extension that settled none."""
+        accepted = _ACKNOWLEDGEMENT.recall(self)
+        return accepted is not None and accepted.allow_unsafe_production
 
     def _disclosure_permitted(self) -> bool:
         """Whether this operation may publish the debug payload (spec-048 Decision 5).
@@ -669,7 +736,7 @@ class DjangoDebugExtension(SchemaExtension):
         # gate with an ``AttributeError``. Only the exact boolean ``True``
         # opens the disclosure path; anything absent or malformed fails
         # closed without touching the operation.
-        return self.allow_unsafe_production or getattr(settings, "DEBUG", None) is True
+        return self._acknowledged() or getattr(settings, "DEBUG", None) is True
 
     def on_operation(self) -> Any:  # type: ignore[override]
         """Bracket the operation with the debug cursor; assemble the payload at teardown.
@@ -688,18 +755,24 @@ class DjangoDebugExtension(SchemaExtension):
         releases every token, the last overlapping release restoring each
         database connection's saved ``force_debug_cursor`` value.
         """
-        if not self._disclosure_permitted():
+        state = self._operation_state()
+        if state is None or not self._disclosure_permitted():
             # Fail closed: no bracket is acquired, no query log is snapshotted,
             # no payload is built, and ``get_results`` keeps returning ``{}``.
             # The operation itself is untouched - a diagnostic that refuses to
-            # disclose must not also refuse the request.
-            logger.warning(
-                "DjangoDebugExtension is installed on a schema running with settings.DEBUG "
-                "false and no allow_unsafe_production acknowledgement; the debug payload is "
-                "withheld. Remove the extension from this schema's extensions list, or pass "
-                "lambda: DjangoDebugExtension(allow_unsafe_production=True) if the disclosure "
-                "is deliberate.",
-            )
+            # disclose must not also refuse the request. A hook entered with no
+            # operation state bound is the same answer for the same reason:
+            # there is no operation to capture for, and capturing onto the
+            # extension instead is exactly the shared stash this state replaced.
+            if state is not None:
+                logger.warning(
+                    "DjangoDebugExtension is installed on a schema running with "
+                    "settings.DEBUG false and no allow_unsafe_production acknowledgement; "
+                    "the debug payload is withheld. Remove the extension from this schema's "
+                    "extensions list, or pass "
+                    "lambda: DjangoDebugExtension(allow_unsafe_production=True) if the "
+                    "disclosure is deliberate.",
+                )
             yield
             return
         snapshots: list[_ConnectionSnapshot] = []
@@ -713,7 +786,7 @@ class DjangoDebugExtension(SchemaExtension):
                         query_log_start=len(database_connection.queries_log),
                     ),
                 )
-            self._snapshots = snapshots
+            state.snapshots = snapshots
             try:
                 yield
             finally:
@@ -729,7 +802,7 @@ class DjangoDebugExtension(SchemaExtension):
                 # path's second ``get_results`` call publish ``debug`` for an
                 # operation that never executed (the no-``debug``-key
                 # contract).
-                self._stash_payload_if_executed()
+                self._stash_payload_if_executed(state)
 
     def on_execute(self) -> Any:  # type: ignore[override]
         """Stash the payload the moment graphql-core returns, before any operation teardown.
@@ -747,15 +820,16 @@ class DjangoDebugExtension(SchemaExtension):
         instances never bracketed: ``_snapshots`` is ``None`` and the hook
         contributes nothing.
         """
-        if self._snapshots is None:
+        state = self._operation_state()
+        if state is None or state.snapshots is None:
             yield
             return
         try:
             yield
         finally:
-            self._stash_payload_if_executed()
+            self._stash_payload_if_executed(state)
 
-    def _stash_payload_if_executed(self) -> None:
+    def _stash_payload_if_executed(self, state: _DebugOperationState) -> None:
         """Build and stash the payload when GraphQL execution assigned a result.
 
         The one stash writer, shared by the two teardowns. Publish only when
@@ -768,9 +842,9 @@ class DjangoDebugExtension(SchemaExtension):
         no-``debug``-key contract). The diagnostic's own failures degrade
         inside ``_build_payload`` and never raise from here.
         """
-        result = self.execution_context.result
+        result = state.execution_context.result
         if isinstance(result, GraphQLExecutionResult):
-            self._payload = _build_payload(self._snapshots or [], result)
+            state.payload = _build_payload(state.snapshots or [], result)
 
     def get_results(self) -> dict[str, Any]:
         """Return ``{"debug": <payload>}`` once the stash exists, else ``{}``.
@@ -781,7 +855,8 @@ class DjangoDebugExtension(SchemaExtension):
         hook's teardown) contributes ``{}`` so no ``debug`` key is published
         for an operation that never executed.
         """
-        payload = self._payload
+        state = self._operation_state()
+        payload = None if state is None else state.payload
         if payload is None:
             return {}
         return {"debug": payload}

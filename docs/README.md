@@ -50,6 +50,8 @@ schema = strawberry.Schema(
 
 The optimizer is a module-level singleton wrapped in a factory. That preserves the instance-bound [plan cache][glossary-plan-cache] (Strawberry runs the callable once per request and gets the same instance back) and emits no deprecation warning, because the entry is a callable rather than an instance.
 
+Because one object answers every operation, what keeps each operation's engine context and optimizer state its own is the schema: `DjangoSchema` binds per-operation state around every framework extension it resolves, and a plain `strawberry.Schema` does not. Build the schema with `DjangoSchema` wherever a shared entry — this singleton included — is in the list, and reserve instance and singleton-factory entries for it; on a plain `strawberry.Schema` the supported spellings are the class and a factory that builds a fresh extension per call. See [per-operation extension isolation][glossary-per-operation-extension-isolation].
+
 Relation fields may point at target types declared earlier or later; `finalize_django_types()` resolves them all once every `DjangoType` module has been imported.
 
 ### Relay Node
@@ -853,6 +855,7 @@ django-strawberry-framework = { path = "../django-strawberry-framework", editabl
 [glossary-metanullable_overrides]: GLOSSARY.md#metanullable_overrides
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-orderset]: GLOSSARY.md#orderset
+[glossary-per-operation-extension-isolation]: GLOSSARY.md#per-operation-extension-isolation
 [glossary-plan-cache]: GLOSSARY.md#plan-cache
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-sealed-execution-queryset]: GLOSSARY.md#sealed-execution-queryset

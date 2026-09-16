@@ -55,6 +55,7 @@ from strawberry import relay
 from django_strawberry_framework import (
     DjangoListField,
     DjangoOptimizerExtension,
+    DjangoSchema,
     DjangoType,
     finalize_django_types,
     strawberry_config,
@@ -4037,14 +4038,19 @@ def test_optimizer_context_all_exports():
         "DST_OPTIMIZER_PLANNED",
         "DST_OPTIMIZER_STRICTNESS",
         "active_strictness",
+        "begin_operation_stashes",
         "begin_scoped_relations",
         "begin_strictness",
         "clear_optimizer_context",
+        "end_operation_stashes",
         "end_scoped_relations",
         "end_strictness",
         "get_context_value",
+        "optimizer_operation_is_active",
+        "optimizer_value",
         "publish_scoped_relations",
         "relation_is_optimizer_scoped",
+        "stash_for_optimizer",
         "stash_on_context",
     }
     assert set(ctx_mod.__all__) == expected
@@ -4151,42 +4157,199 @@ def test_strictness_and_scoped_relations_reentrant_isolation():
 
 
 @pytest.mark.asyncio
-async def test_shared_singleton_keeps_execution_context_operation_local():
-    """Concurrent operations clear their own reused context on a shared extension.
+async def test_shared_singleton_answers_each_operation_with_its_own_context():
+    """Two overlapping operations on one shared instance each see their own context.
 
-    Strawberry assigns ``execution_context`` before entering ``on_execute``.
-    The documented ``extensions=[lambda: ext]`` form returns one shared
-    instance, so two tasks can assign before either hook starts. Both contexts
-    must still be cleared; a plain instance attribute leaves only the last
-    assignment visible and clears that context twice.
+    The documented ``extensions=[lambda: ext]`` form returns ONE instance to
+    every operation, and Strawberry assigns ``execution_context`` on it before
+    either operation's hooks start. Read from an attribute, both operations
+    would answer with whichever assigned last - so the plan, the elisions and
+    the clear would all land on one request's context object twice while the
+    other's went untouched. Under ``DjangoSchema`` the assignment is a handoff
+    and the answer comes from the state its runner bound for each operation.
+
+    Both requests are held inside their own resolver until the other has
+    started, so the overlap is a fact of the test rather than a scheduling
+    hope.
+    """
+    extension = DjangoOptimizerExtension()
+    started = 0
+    overlapping = asyncio.Event()
+    seen: dict[str, object] = {}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        async def probe(self, info: strawberry.Info) -> str:
+            nonlocal started
+            started += 1
+            if started == 2:
+                overlapping.set()
+            await asyncio.wait_for(overlapping.wait(), timeout=5)
+            name = info.context["name"]
+            seen[name] = extension.execution_context.context
+            return name
+
+    schema = DjangoSchema(query=Query, extensions=[lambda: extension])
+    contexts = [{"name": "first"}, {"name": "second"}]
+    results = await asyncio.gather(
+        *(schema.execute("{ probe }", context_value=context) for context in contexts),
+    )
+
+    assert [result.errors for result in results] == [None, None]
+    assert seen == {"first": contexts[0], "second": contexts[1]}
+    assert seen["first"] is contexts[0]
+    assert seen["second"] is contexts[1]
+
+
+class _UnsettledOptimizer(DjangoOptimizerExtension):
+    """A subclass whose ``__init__`` never reaches the one that settles the record."""
+
+    def __init__(self) -> None:
+        pass
+
+
+def test_a_resolver_cannot_rewrite_the_optimizer_configuration_for_a_later_request():
+    """Strictness and the fetch strategy are settled at construction, not per request.
+
+    The documented shape is a module-level singleton behind a factory, so this
+    object is reachable from every resolver of every request for the life of the
+    process. Written as attributes, one assignment inside one resolver would
+    disarm a deployment's N+1 guard for all of them, and another would replace
+    the strategy the instance's cached plans were keyed for.
+    """
+    extension = DjangoOptimizerExtension(strictness="raise")
+    settled_strategy = extension.nested_connection_strategy
+
+    for attempt in (
+        lambda: setattr(extension, "strictness", "off"),
+        lambda: extension.__dict__.update(strictness="off"),
+        lambda: setattr(extension, "nested_connection_strategy", "windowed"),
+        lambda: extension.__dict__.update(nested_connection_strategy="windowed"),
+    ):
+        with contextlib.suppress(AttributeError):
+            attempt()
+
+    assert extension.strictness == "raise"
+    assert extension.nested_connection_strategy is settled_strategy
+
+
+def test_an_optimizer_that_settled_no_configuration_reads_the_zero_argument_shape():
+    """A record that was never settled answers as the construction that settles none.
+
+    The strictness and the nested-connection strategy are read at the start of
+    every execution, so the read cannot be the place a missing record surfaces;
+    it answers with what ``DjangoOptimizerExtension()`` would have produced. Such
+    an extension has no binding carrier either, so the operation it was installed
+    for is refused before either value is spent
+    (``tests/extensions/test_operation_state.py``).
+    """
+    extension = _UnsettledOptimizer()
+
+    assert extension.strictness == "off"
+    assert (
+        extension.nested_connection_strategy
+        == DjangoOptimizerExtension().nested_connection_strategy
+    )
+
+
+@pytest.mark.django_db
+def _published_optimizer_keys(context):
+    """Every optimizer stash currently readable off a request context object."""
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_KEYS,
+        get_context_value,
+    )
+
+    return {key: get_context_value(context, key) for key in DST_OPTIMIZER_KEYS}
+
+
+def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state():
+    """An inner execution through the documented singleton leaves the outer one intact.
+
+    The optimizer publishes its plan, its FK-id elisions, its planned-relation
+    keys and its strictness for the operation it is running. The request context
+    object is the REQUEST's, not the operation's, and a resolver may hand its own
+    ``info.context`` to an inner execution - whose start-of-execution clear then
+    erases what the outer operation published and whose own publishes answer the
+    outer resolvers that have not run yet.
+
+    The inner document selects the FK by id alone, which is exactly the shape
+    that publishes an elision key; the outer document then selects the whole
+    related object through the same resolver key. Reading the shared object, the
+    outer forward resolver would take the id-stub path and ``category.name``
+    would come back empty.
     """
     from django_strawberry_framework.optimizer._context import (
         DST_OPTIMIZER_PLAN,
         get_context_value,
-        stash_on_context,
     )
 
-    ext = DjangoOptimizerExtension()
-    contexts = [SimpleNamespace(), SimpleNamespace()]
-    for context in contexts:
-        stash_on_context(context, DST_OPTIMIZER_PLAN, object())
-    ready = 0
-    release = asyncio.Event()
+    services.seed_data(1)
 
-    async def _enter(context):
-        nonlocal ready
-        ext.execution_context = SimpleNamespace(context=context)
-        ready += 1
-        if ready == 2:
-            release.set()
-        await release.wait()
-        hook = ext.on_execute()
-        next(hook)
-        hook.close()
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
-    await asyncio.gather(*(_enter(context) for context in contexts))
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
 
-    assert all(get_context_value(context, DST_OPTIMIZER_PLAN) is None for context in contexts)
+    seen = {}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+        @strawberry.field
+        def nest(self, info: strawberry.Info) -> str:
+            """Run a whole inner operation on this request's own context object."""
+            before = extension.execution_context
+            published_before = _published_optimizer_keys(info.context)
+            inner = info.schema.execute_sync(
+                "{ allItems { name category { id } } }",
+                context_value=info.context,
+            )
+            assert inner.errors is None, inner.errors
+            seen["context"] = (before, extension.execution_context)
+            seen["published"] = (published_before, _published_optimizer_keys(info.context))
+            return "nested"
+
+    finalize_django_types()
+    extension = DjangoOptimizerExtension(strictness="raise")
+    schema = DjangoSchema(query=Query, extensions=[lambda: extension])
+    shared = SimpleNamespace()
+
+    outer = schema.execute_sync(
+        "{ nest allItems { name category { name } } }",
+        context_value=shared,
+    )
+
+    assert outer.errors is None, outer.errors
+    before, after = seen["context"]
+    assert before is after
+    assert after.query.startswith("{ nest")
+    assert all(item["category"]["name"] for item in outer.data["allItems"])
+
+    # The request context object is the OUTER operation's introspection medium:
+    # the inner execution neither erased what was on it nor published its own
+    # plan and FK-id elisions there, and the outer operation's plan is what the
+    # consumer can read off their request once it completes.
+    published_before, published_after = seen["published"]
+    assert published_after == published_before
+    assert get_context_value(shared, DST_OPTIMIZER_PLAN) is not None
+
+    # And the next independent request inherits nothing from either operation.
+    fresh = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=SimpleNamespace(),
+    )
+    assert fresh.errors is None
+    assert all(item["category"]["name"] for item in fresh.data["allItems"])
 
 
 @pytest.mark.django_db

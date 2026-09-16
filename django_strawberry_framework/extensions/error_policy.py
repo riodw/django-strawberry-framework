@@ -59,11 +59,11 @@ from typing import Any
 from django.conf import settings
 from graphql import GraphQLError
 from graphql.execution import ExecutionResult as GraphQLExecutionResult
-from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 
 from .. import logger
 from ..error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, new_correlation_id
+from .operation_state import _OperationBoundExtension
 
 __all__ = [
     "DjangoErrorPolicyExtension",
@@ -326,13 +326,24 @@ def _replacement_for(error: Any, policy: ErrorPolicy) -> Any:
         return _degraded(policy)
 
 
-class DjangoErrorPolicyExtension(SchemaExtension):
+class DjangoErrorPolicyExtension(_OperationBoundExtension):
     """Replace unexpected exception messages with a stable message plus a correlation id.
 
     Installed on every ``DjangoSchema`` unless the consumer supplied their own
     entry. The policy object is resolved once at schema construction and read
     from ``schema.error_policy``; this extension holds no configuration of its
     own, so a bare class entry and a factory entry behave identically.
+
+    **Which result is masked is per-operation state, not an attribute.** The
+    teardown reads the completed result off the operation's engine context, and
+    that context is bound by the package runner for the operation being answered
+    (``extensions/operation_state.py``). Read from an ordinary attribute on a
+    shared instance it would be whichever operation assigned last - a nested
+    ``info.schema.execute_sync(...)`` is enough - and the teardown would then
+    mask the inner operation's result while the outer one's unexpected exception
+    reached the client with its own message on it. On a plain
+    ``strawberry.Schema`` the supported entry is therefore the class or a fresh
+    factory, never a shared instance.
 
     Active only when the policy is enabled AND the schema is not in debug
     execution. Under ``settings.DEBUG`` the extension is a pass-through: the

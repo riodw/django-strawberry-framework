@@ -101,7 +101,6 @@ from graphql.language.token_kind import TokenKind
 from graphql.utilities import value_from_ast_untyped
 from strawberry.extensions.base_extension import SchemaExtension
 
-from ..exceptions import ConfigurationError
 from ..mutations.fields import MUTATION_CLASS_MARKER
 from ..resource_policy import (
     DEFAULT_RESOURCE_POLICY,
@@ -123,6 +122,7 @@ from ..utils.inputs import RELATION_MULTI
 from ..utils.policies import copy_policy
 from ..utils.private_state import PrivateAuthority
 from ..utils.typing import unwrap_non_null
+from .operation_state import _OperationBoundExtension
 
 __all__ = ("DjangoResourcePolicyExtension",)
 
@@ -1162,7 +1162,7 @@ def restate_admission_verdict(execution_context: Any) -> None:
         execution_context.pre_execution_errors = [rejection]
 
 
-class DjangoResourcePolicyExtension(SchemaExtension):
+class DjangoResourcePolicyExtension(_OperationBoundExtension):
     """Enforce the schema's ``ResourcePolicy`` on every operation.
 
     Installed automatically by ``schema.py::DjangoSchema``; a consumer building a
@@ -1171,8 +1171,16 @@ class DjangoResourcePolicyExtension(SchemaExtension):
 
         schema = strawberry.Schema(
             Query,
-            extensions=[DjangoResourcePolicyExtension(policy=ResourcePolicy(max_depth=8))],
+            extensions=[lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_depth=8))],
         )
+
+    **The entry is a factory rather than an instance, and that is the supported
+    spelling for a plain ``strawberry.Schema``.** Strawberry passes an instance
+    entry through unchanged, so one object answers every operation, and only a
+    ``DjangoSchema`` builds the runner that gives such an object per-operation
+    state (``extensions/operation_state.py``). A factory that returns a new
+    extension per call - or the bare class, when no override is needed - is
+    operation-local on any schema, because the instance itself is.
 
     Without an explicit policy the extension reads the one the schema resolved at
     construction, falling back to the package defaults for a schema that carries
@@ -1180,24 +1188,24 @@ class DjangoResourcePolicyExtension(SchemaExtension):
     enforces nothing.
     """
 
+    _reconstruction_refusal = (
+        "A resource-policy extension is configured when it is constructed; "
+        "re-running its __init__ on an instance a schema is already enforcing "
+        "with would replace the policy it was accepted with."
+    )
+
     def __init__(self, *, policy: ResourcePolicy | None = None) -> None:
-        if _EXPLICIT_POLICY.settled(self):
-            # An accepted instance is reachable from every resolver the schema
-            # serves, and so is its ``__init__``. Re-running it would nominate a
-            # new budget for every later operation, which is the widening no
-            # attribute on this object admits either. The guard is asked before
-            # either branch and answers from the construction record rather than
-            # from the policy in it: an extension deliberately constructed
-            # WITHOUT an override is configured - it inherits its schema's
-            # policy - and reading that as an object nobody ever constructed
-            # would leave the one configuration open to being handed a wider
-            # ceiling after acceptance.
-            raise ConfigurationError(
-                "A resource-policy extension is configured when it is "
-                "constructed; re-running its __init__ on an instance a "
-                "schema is already enforcing with would replace the policy "
-                "it was accepted with.",
-            )
+        # An accepted instance is reachable from every resolver the schema
+        # serves, and so is its ``__init__``. Re-running it would nominate a new
+        # budget for every later operation, which is the widening no attribute
+        # on this object admits either. The base constructor refuses that before
+        # either branch here, and answers from the construction record rather
+        # than from the policy in it: an extension deliberately constructed
+        # WITHOUT an override is configured - it inherits its schema's policy -
+        # and reading that as an object nobody ever constructed would leave the
+        # one configuration open to being handed a wider ceiling after
+        # acceptance.
+        super().__init__()
         # An explicit policy is canonicalized HERE, where the configuration is
         # accepted, rather than at each hook that reads it. It arrives straight
         # from a consumer and has been through none of the schema-construction

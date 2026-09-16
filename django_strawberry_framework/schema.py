@@ -60,8 +60,9 @@ from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.utils.inspect import in_async_context
 
 from .error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, resolve_error_policy
-from .exceptions import ConfigurationError
+from .exceptions import ConfigurationError, describe_value
 from .extensions.error_policy import DjangoErrorPolicyExtension
+from .extensions.operation_state import DjangoExtensionsRunner
 from .extensions.resource_policy import DjangoResourcePolicyExtension, _AdmissionGuard
 from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import DEFAULT_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
@@ -420,9 +421,9 @@ _SCHEMA_ENFORCEMENT: PrivateAuthority[_SchemaEnforcement] = PrivateAuthority()
 #: them strongly would keep every such schema, its last execution context and
 #: that request's variables alive for the life of the process.
 #:
-#: The schema therefore holds them, and
-#: ``utils/private_state.py::PrivateMembership`` holds one weak reference per
-#: accepted ENTRY - which is the granularity the question is asked at. What
+#: The schema therefore holds them, in one sealed holder, and
+#: ``utils/private_state.py::PrivateMembership`` holds one piece of weak evidence
+#: per accepted ENTRY - which is the granularity the question is asked at. What
 #: decides whether the next operation is bounded is not which object the
 #: attribute answers with but which extensions are inside it, so evidence about
 #: a carrier would certify nothing: writing new entries into one leaves its
@@ -626,25 +627,33 @@ class DjangoSchema(strawberry.Schema):
                 "operation be chosen after the schema was accepted. Pass every "
                 "extension to DjangoSchema(extensions=[...]).",
             )
+        # Refused per ENTRY, before anything is settled, and refused for exactly
+        # one reason: Strawberry could not resolve it into an extension for an
+        # operation. Its own resolution is ``ext if isinstance(ext,
+        # SchemaExtension) else ext()``, so a class, an instance and a callable
+        # are the three shapes; anything else fails at the first operation, deep
+        # inside the engine, on a schema the deployment already started. Naming
+        # it at the construction that supplied it is the same failure one
+        # startup earlier.
+        #
+        # A memory layout is NOT one of the reasons. A callable factory with
+        # ``__slots__ = ()`` takes no weak reference and runs perfectly well,
+        # and how such an entry is answered for is this package's problem to
+        # solve (``utils/private_state.py::PrivateMembership``) rather than a
+        # configuration the consumer has to respell.
+        for entry in value:
+            if not _is_resolvable_extension_entry(entry):
+                raise ConfigurationError(
+                    "Every entry in DjangoSchema(extensions=[...]) has to be something "
+                    "Strawberry can resolve into an extension for an operation - a "
+                    "SchemaExtension subclass, an instance of one, or a callable that "
+                    f"returns one. {describe_value(entry)} is none of those.",
+                )
         # The flag goes where no attribute answers with it, so that deleting the
         # accepted entries cannot make a schema look unconstructed and admit a
         # replacement list as its first settlement.
         _SCHEMA_ENFORCEMENT.settle(self, replace(record, extensions_settled=True))
-        try:
-            _SCHEMA_EXTENSIONS.accept(self, value)
-        except TypeError as exc:
-            # Each accepted entry is answered for by a weak reference to it, so
-            # an entry that takes none is one no later operation could resolve
-            # as the configuration rather than as whatever replaced it. Every
-            # extension Strawberry accepts - a class, an instance, a factory -
-            # takes one; refusing here names the entry that does not, at the
-            # construction that supplied it.
-            raise ConfigurationError(
-                "Every entry in DjangoSchema(extensions=[...]) has to be an object the "
-                "schema can hold as accepted - a SchemaExtension subclass, an instance "
-                f"of one, or a callable returning one. {value!r} contains an entry that "
-                "cannot be held.",
-            ) from exc
+        _SCHEMA_EXTENSIONS.accept(self, value)
 
     @property
     def resource_policy(self) -> ResourcePolicy:
@@ -745,6 +754,44 @@ class DjangoSchema(strawberry.Schema):
                 automatic=-1,
             )
         return [*resolved, _AdmissionGuard()]
+
+    def create_extensions_runner(
+        self,
+        execution_context: Any,
+        extensions: list[Any],
+    ) -> DjangoExtensionsRunner:
+        """Build the runner that owns every framework extension's operation state.
+
+        The one point that sees the resolved extension list and this operation's
+        engine context together, after upstream's assignment loop and without
+        calling a factory a second time - which is why the boundary is here and
+        not in each extension's hooks. A class entry, an accepted instance and a
+        factory returning a shared singleton all arrive as resolved members, and
+        all three get one state per operation out of this.
+
+        Claiming the engine's assignments happens as the runner is built, before
+        this returns. Upstream constructs the middleware manager and the rest of
+        the execution machinery between this call and ``operation()``, and a
+        failure in that gap runs no operation teardown: an assignment left
+        standing there would outlive the request that made it.
+        """
+        return DjangoExtensionsRunner(
+            execution_context=execution_context,
+            extensions=extensions,
+        )
+
+
+def _is_resolvable_extension_entry(entry: Any) -> bool:
+    """Whether Strawberry can turn ``entry`` into an extension for an operation.
+
+    Its resolution is ``entry if isinstance(entry, SchemaExtension) else
+    entry()``, so an instance answers for itself and everything else has to be
+    callable - which a class and a factory both are. ``type()`` rather than
+    ``isinstance`` for the reason :func:`_is_extension` uses it: a consumer
+    object answers ``__class__`` with whatever it likes, and an object that only
+    CLAIMS to be an extension is one upstream would call anyway.
+    """
+    return issubclass(type(entry), SchemaExtension) or callable(entry)
 
 
 def _is_extension(extension: Any, extension_type: type) -> bool:

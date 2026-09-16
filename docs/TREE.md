@@ -224,6 +224,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
 │   ├── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
 │   ├── error_policy.py           # ``DjangoErrorPolicyExtension`` - the response-side enforcement of ``ErrorPolicy``.
+│   ├── operation_state.py        # One operation's state, for extensions the engine hands the same object to twice.
 │   └── resource_policy.py        # ``DjangoResourcePolicyExtension`` - the request-side enforcement of ``ResourcePolicy``.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
@@ -352,6 +353,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
 │   ├── error_policy.py           # ``DjangoErrorPolicyExtension`` - the response-side enforcement of ``ErrorPolicy``.
 │   ├── graph.py                  # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
+│   ├── operation_state.py        # One operation's state, for extensions the engine hands the same object to twice.
 │   └── resource_policy.py        # ``DjangoResourcePolicyExtension`` - the request-side enforcement of ``ResourcePolicy``.
 ├── fieldset/    # planned by TODO-BETA-059-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
@@ -503,7 +505,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
 ├── extensions/    # Tests for package Strawberry schema extensions.
-│   └── test_debug.py             # DjangoDebugExtension tests for payload serialization, SQL capture, errors, and execution isolation.
+│   ├── test_debug.py             # DjangoDebugExtension tests for payload serialization, SQL capture, errors, and execution isolation.
+│   └── test_operation_state.py   # The operation-state boundary: what one operation reads, writes, and leaves behind.
 ├── filters/    # Package tests for the FilterSet subsystem.
 │   ├── test_base.py              # Filter primitive tests for typed, list, range, global-ID, and related filters.
 │   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
@@ -741,7 +744,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
 ├── extensions/    # Tests for package Strawberry schema extensions.
-│   └── test_debug.py             # DjangoDebugExtension tests for payload serialization, SQL capture, errors, and execution isolation.
+│   ├── test_debug.py             # DjangoDebugExtension tests for payload serialization, SQL capture, errors, and execution isolation.
+│   └── test_operation_state.py   # The operation-state boundary: what one operation reads, writes, and leaves behind.
 ├── fieldset/    # planned by TODO-BETA-059-0.1.1 - Mirrored package tests for the fieldset subsystem.
 ├── filters/    # Package tests for the FilterSet subsystem.
 │   ├── test_base.py              # Filter primitive tests for typed, list, range, global-ID, and related filters.

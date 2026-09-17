@@ -1,15 +1,32 @@
 """Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
 
-The lateral backend's correctness bar (``optimizer/lateral_fetch.py``): for
-every pagination shape, the SAME GraphQL document executed under
-``nested_connection_strategy="lateral"`` and ``"windowed"`` must produce
-byte-identical response data at the identical fixed query cost - and the
-lateral run must actually have executed ``CROSS JOIN LATERAL`` SQL, not the
-in-object windowed fallback. SQLite covers the pure builder, the plan-time
-downgrades, the fetch-time extraction, and the scripted-cursor execution
-(``tests/optimizer/test_lateral_fetch.py``); only a real Postgres server can
-prove the SQL itself, so everything here is ``@pytest.mark.pg``
-(auto-skipped off Postgres by the root ``conftest.py``).
+Dual-strategy byte identity cannot run against fakeshop's composed schema: that
+schema hosts one ``DjangoOptimizerExtension`` instance. Nested-connection pages,
+count-free probes, aliases, ``last: 0``, keyset seeks, and the single-parent
+fast path live in ``examples/fakeshop/test_query/test_library_api.py``,
+``test_keyset_api.py``, and ``test_single_parent_fastpath_api.py``. Per-field
+``OptimizerHint.strategy`` overrides ride HTTP in ``test_optimizer_auto_api.py``
+(Postgres-marked). This module keeps what a single live request cannot uniquely
+show:
+
+- byte-identical data, identical query cost, and real ``CROSS JOIN LATERAL``
+  versus the windowed body (reverse-FK pagination shapes, count-free
+  ``hasNextPage``, reverse-M2M through-once, depth-two, divergent aliases,
+  ``last: 0`` shared fallback, visibility-scoped lateral, request-varying
+  visibility on one extension instance, keyset seek/count/cursor parity);
+- LATERAL SQL-shape pins a generic live capture does not uniquely show
+  (through-table join once, visibility predicate once, in-branch keyset seek,
+  row-value comparison, JSONB field adapter);
+- plan-time downgrades (multi-table visibility scope; counted keyset seek);
+- session-close tracking of stray executor-thread connections (no wire shape);
+- custom through FK targeting a unique non-PK column (unmanaged DDL; no
+  shipped fakeshop model);
+- EXPLAIN index-seek of a count-free lateral branch (not the predicate
+  ``EXISTS`` pin in ``tests/test_predicate_pg_explain.py``).
+
+SQLite covers the pure builder, plan-time downgrades, fetch-time extraction,
+and scripted-cursor execution (``tests/optimizer/test_lateral_fetch.py``).
+Everything here is ``@pytest.mark.pg``.
 """
 
 import pytest
@@ -20,11 +37,7 @@ from django.test.utils import CaptureQueriesContext
 from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.relay.utils import to_base64
 
-from django_strawberry_framework import (
-    DjangoListField,
-    OptimizerHint,
-    finalize_django_types,
-)
+from django_strawberry_framework import DjangoListField, finalize_django_types
 
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
 
@@ -656,7 +669,7 @@ def _request_varying_visibility_schema():
 
 
 def test_request_varying_visibility_is_not_cached_across_callers():
-    """P2-4: two callers of ONE extension get their OWN visibility WHERE, never a replay.
+    """Two callers of ONE extension get their OWN visibility WHERE, never a replay.
 
     The security-critical composition the earlier unconditional tests could not
     pin: a custom ``get_queryset`` marks the plan non-cacheable, so the anonymous
@@ -1129,77 +1142,6 @@ def test_keyset_lateral_seek_is_an_index_seek():
             cursor.execute("DROP INDEX keyset_seek_pin_idx")
     assert "keyset_seek_pin_idx" in explain_plan
     assert "Index" in explain_plan
-
-
-def _hinted_shelf_schema(default_strategy, books_hint):
-    """One schema whose ``ShelfType.books`` connection carries a strategy hint.
-
-    The extension default is ``default_strategy``; ``books_hint`` overrides the
-    fetch strategy for the ``booksConnection`` field alone
-    (``OptimizerHint.strategy(...)`` keyed on the ``"books"`` relation name).
-    """
-    _make_type("BookType", Book, ("id", "title"))
-    shelf_type = make_django_type(
-        "ShelfType",
-        Shelf,
-        ("id", "code", "books"),
-        meta_extra={"optimizer_hints": {"books": books_hint}},
-    )
-    finalize_django_types()
-    query_cls = strawberry.type(
-        type(
-            "Query",
-            (),
-            {
-                "__annotations__": {"shelves": list[shelf_type]},
-                "shelves": DjangoListField(shelf_type),
-            },
-        ),
-    )
-    return build_strategy_schema(query_cls, default_strategy)
-
-
-_HINT_QUERY = "{ shelves { id code booksConnection(first: 2) { edges { node { title } } } } }"
-
-
-def _shelf_a_titles(data):
-    """The ``booksConnection`` node titles for shelf ``A`` (the five-book parent)."""
-    by_code = {shelf["code"]: shelf["booksConnection"] for shelf in data["shelves"]}
-    return [edge["node"]["title"] for edge in by_code["A"]["edges"]]
-
-
-def test_per_field_hint_windowed_under_lateral_default_takes_windowed_path():
-    """``OptimizerHint.strategy("windowed")`` overrides a lateral-default extension.
-
-    The hinted ``booksConnection`` must fetch through the windowed body, so the
-    executed SQL carries NO ``CROSS JOIN LATERAL`` even though the extension
-    default is ``"lateral"`` - and the page is still correct.
-    """
-    _seed_library()
-    schema = _hinted_shelf_schema("lateral", OptimizerHint.strategy("windowed"))
-    with CaptureQueriesContext(db_connection) as captured:
-        result = schema.execute_sync(_HINT_QUERY)
-    assert result.errors is None, result.errors
-    executed_sql = " ".join(entry["sql"] for entry in captured)
-    assert "CROSS JOIN LATERAL" not in executed_sql
-    assert _shelf_a_titles(result.data) == ["a0", "a1"]
-
-
-def test_per_field_hint_lateral_under_windowed_default_takes_lateral_path():
-    """``OptimizerHint.strategy("lateral")`` overrides a windowed-default extension.
-
-    The hinted ``booksConnection`` must fetch through the lateral join, so the
-    executed SQL carries ``CROSS JOIN LATERAL`` even though the extension default
-    is ``"windowed"`` - and the page is still correct.
-    """
-    _seed_library()
-    schema = _hinted_shelf_schema("windowed", OptimizerHint.strategy("lateral"))
-    with CaptureQueriesContext(db_connection) as captured:
-        result = schema.execute_sync(_HINT_QUERY)
-    assert result.errors is None, result.errors
-    executed_sql = " ".join(entry["sql"] for entry in captured)
-    assert "CROSS JOIN LATERAL" in executed_sql
-    assert _shelf_a_titles(result.data) == ["a0", "a1"]
 
 
 # =============================================================================

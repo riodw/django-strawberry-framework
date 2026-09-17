@@ -1,19 +1,30 @@
-"""Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
+"""Package-only cascade-permission pins that no live GraphQL request can express.
 
-Mirrors the flat ``django_strawberry_framework/permissions.py`` module per the
-one-to-one test rule (Decision 3). Pins the hardened cascade contract:
-fail-closed recursive graphs (mutual / self-referential / diamond / longer
-cycles raise a path-rich ``ConfigurationError``; acyclic diamonds compose),
-single-column concrete forward scope with MTI parent links INCLUDED and
-``GenericForeignKey`` / composite forward relations preflighted closed,
-identity-hook targets composed from their ``_default_manager`` (registered
-proxy visibility), hook-return validation (queryset shape, concrete table,
-slice / field-distinct / alias rejections) with target-column normalization
-(``to_field`` / ``.values()`` / ``.values_list()``), root-alias pinning across
-nested applications, nullable-only ``__isnull`` disjuncts, hidden-target
-exclusion, transitive cascade, registry / secondary semantics, ``fields=``
-scoping and validation, the sync-misuse contract, the async variant, and
-thread / task traversal-state isolation.
+Live HTTP coverage of hidden-target exclusion, the two-deep
+``Entry -> Item -> Category`` walk (including mixed-edge hops), and
+zero-added-round-trip subquery composition lives in
+``examples/fakeshop/test_query/test_products_api.py``
+(``test_cascade_anonymous_sees_no_entries_under_private_categories``,
+``test_cascade_view_item_user_respects_category_visibility``,
+``test_cascade_view_entry_user_nested_selection_drops_hidden_targets``,
+``test_cascade_query_count_fixed``) and
+``examples/fakeshop/test_query/test_products_visibility_api.py``
+(the cascading target hook's effect on the optimizer's relation plan).
+Filter/order gate composition on the wire is
+``test_cascade_composes_with_filter_and_order_live``.
+
+This file keeps apply-time ``ConfigurationError`` (cycles, GFK preflight,
+``fields=`` validation, hook-return / root-seal / alias defects) that a
+shipped schema never declares; MTI parent-link and other unmanaged
+synthetic graphs fakeshop does not carry; ``fields=`` scoping (shipped
+hooks pass ``fields=None``); SQL-shape of sealed cascade internals a live
+capture cannot uniquely show; thread / task ``ContextVar`` isolation; the
+async ``aapply`` off-loop contract; identity-hook default-manager
+composition (every products type declares a custom ``get_queryset``);
+mixed-actor cascade-then-gate composition (anonymous-narrowed queryset +
+staff ``apply_sync``) that one HTTP request cannot split; and
+``strictness="raise"`` silence on a throwaway schema (fakeshop arms
+``strictness="off"``).
 
 Fixture mechanics
 =================
@@ -25,22 +36,9 @@ app label and given real tables via ``connection.schema_editor()`` (the
 pattern); the app label must be an INSTALLED app so Django wires reverse relations
 into ``_meta.get_fields()``. Tests that only inspect the COMPOSED query (scope,
 MTI, identity-hook, multi-DB) need no table and assert on ``str(qs.query)`` /
-``qs.db`` directly. The transitive 2-deep pin reuses the real products
-``Entry -> Item -> Category`` chain with synthetic cascading ``DjangoType`` hooks.
-The multi-DB pin is ``FAKESHOP_SHARDED``-gated (the ``shard_b`` alias only exists
-under that env var) and does not run under a bare ``uv run pytest``.
-
-Coverage homes for the cascade contract (spec-034):
-  * the cascade foundation + its four upstream-invariant pins - THIS file.
-  * N+1 / cacheability pins - here, with optimizer-plan pins in
-    ``tests/optimizer/test_extension.py``.
-  * gate-composition pins - here, with connection / node / list pins in
-    ``tests/test_connection.py`` / ``test_relay_node_field.py`` /
-    ``test_list_field.py``.
-  * live HTTP coverage - ``examples/fakeshop/test_query/test_products_api.py``
-    (nested traversal narrowing) and
-    ``examples/fakeshop/test_query/test_products_visibility_api.py`` (the
-    cascading target hook's effect on the optimizer's relation plan).
+``qs.db`` directly. The multi-DB pin is ``FAKESHOP_SHARDED``-gated (the
+``shard_b`` alias only exists under that env var) and does not run under a
+bare ``uv run pytest``.
 
 The mutation update/delete lookup-scoping pin (spec-036) is NOT homed here; a
 hidden row must read as not-found with no existence leak, and that is pinned at
@@ -53,6 +51,7 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
+from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
@@ -459,7 +458,7 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
     edges are outside parent-row cascade semantics (skippable), and the virtual
     ``GenericForeignKey`` itself is classified UNSUPPORTED - it can neither be
     composed as a one-column subquery nor safely skipped, so the walk
-    preflights it closed (pinned by the two ``test_gfk_*`` tests below).
+    preflights it closed (pinned by the ``test_gfk_*`` tests below).
     """
 
     class ScopeTarget(models.Model):
@@ -602,20 +601,19 @@ def test_gfk_default_walk_preflights_closed():
     assert hook_calls == []
 
 
-def test_gfk_explicit_selection_rejected_backing_fk_supported():
-    """``fields=["content_object"]`` raises; ``fields=["content_type"]`` composes.
-
-    The virtual GFK has no single-column cascade semantics even when selected
-    explicitly. Its *backing* ``content_type`` FK is an ordinary edge: with a
-    registered ``ContentType`` type it composes a real subquery, and
-    ``object_id`` stays a scalar (never an edge).
-    """
+def _gfk_host_with_content_type_hook():
+    """Register a ContentType hook + GFK host; return the host type."""
     _make_type(
         "GfkContentTypeType",
         ContentType,
         get_queryset=lambda cls, qs, info: qs.exclude(model="hiddenmodel"),
     )
-    host_type = _make_type("GfkHostSelType", _GfkHost, primary=False)
+    return _make_type("GfkHostSelType", _GfkHost, primary=False)
+
+
+def test_gfk_explicit_selection_rejected():
+    """``fields=["content_object"]`` raises: the virtual GFK has no single-column cascade."""
+    host_type = _gfk_host_with_content_type_hook()
     finalize_django_types()
 
     with pytest.raises(ConfigurationError) as excinfo:
@@ -628,8 +626,12 @@ def test_gfk_explicit_selection_rejected_backing_fk_supported():
     assert "content_object" in str(excinfo.value)
     assert "no single-column cascade semantics" in str(excinfo.value)
 
-    # The backing FK composes: an explicit supported subset bypasses the
-    # preflight and narrows through the registered ContentType type's hook.
+
+def test_gfk_backing_content_type_fk_composes():
+    """``fields=["content_type"]`` composes a subquery through the backing FK."""
+    host_type = _gfk_host_with_content_type_hook()
+    finalize_django_types()
+
     result = apply_cascade_permissions(
         host_type,
         _GfkHost.objects.all(),
@@ -637,8 +639,13 @@ def test_gfk_explicit_selection_rejected_backing_fk_supported():
         fields=["content_type"],
     )
     assert "IN (SELECT" in str(result.query)
-    # ``object_id`` is a scalar, not an edge - selecting it is the ordinary
-    # unknown-name error, not the unsupported-relation error.
+
+
+def test_gfk_object_id_is_not_cascadable():
+    """``object_id`` is a scalar, so ``fields=["object_id"]`` is the ordinary unknown-name error."""
+    host_type = _gfk_host_with_content_type_hook()
+    finalize_django_types()
+
     with pytest.raises(ConfigurationError, match="not cascadable"):
         apply_cascade_permissions(
             host_type,
@@ -934,128 +941,6 @@ def test_nullable_fk_rows_preserved():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_cascade_excludes_rows_with_hidden_targets():
-    """A parent row whose FK targets a hook-hidden row is excluded (spec-034 Decision 6)."""
-
-    class HideTarget(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class HideParent(models.Model):
-        name = models.TextField()
-        target = models.ForeignKey(HideTarget, on_delete=models.CASCADE, related_name="parents")
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(HideTarget, HideParent):
-        _make_type(
-            "HideTargetType",
-            HideTarget,
-            get_queryset=lambda cls, qs, info: qs.exclude(name="secret"),
-        )
-        parent_type = _make_type("HideParentType", HideParent, primary=False)
-        finalize_django_types()
-
-        visible = HideTarget.objects.create(name="public")
-        secret = HideTarget.objects.create(name="secret")
-        HideParent.objects.create(name="keeps", target=visible)
-        HideParent.objects.create(name="drops", target=secret)
-
-        result = apply_cascade_permissions(parent_type, HideParent.objects.all(), _INFO)
-        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
-
-
-@pytest.mark.django_db(transaction=True)
-def test_hidden_and_missing_targets_indistinguishable():
-    """A hidden-target row and a missing-target row are equally absent (spec-034 Decision 6)."""
-
-    class IndistTarget(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class IndistParent(models.Model):
-        name = models.TextField()
-        # ``SET_NULL`` lets us produce a "missing target" row (deleted target -> NULL),
-        # but we model "missing" as a never-set NULL FK to keep the two row classes
-        # apart: a hidden-target row and a no-target row both fail to surface.
-        target = models.ForeignKey(
-            IndistTarget,
-            null=True,
-            on_delete=models.SET_NULL,
-            related_name="parents",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(IndistTarget, IndistParent):
-        _make_type(
-            "IndistTargetType",
-            IndistTarget,
-            get_queryset=lambda cls, qs, info: qs.exclude(name="hidden"),
-        )
-        parent_type = _make_type("IndistParentType", IndistParent, primary=False)
-        finalize_django_types()
-
-        hidden = IndistTarget.objects.create(name="hidden")
-        hidden_row = IndistParent.objects.create(name="points_at_hidden", target=hidden)
-
-        result = apply_cascade_permissions(parent_type, IndistParent.objects.all(), _INFO)
-        # The hidden-target row is absent. Now delete the target outright (the FK
-        # was the only thing distinguishing it): the row that pointed at a hidden
-        # target and a row that points at no target are equally just *gone* from
-        # the result - no error, no field that says "you may not see this".
-        assert hidden_row not in result
-        assert result.filter(name="points_at_hidden").count() == 0
-
-
-@pytest.mark.django_db
-def test_transitive_cascade_two_deep():
-    """``Entry -> Item -> Category`` narrows transitively when each hook cascades.
-
-    Uses the real products ``Entry -> Item/Property -> Category`` chain with
-    synthetic ``DjangoType`` hooks (the products schema hooks are not uncommented
-    not uncommented). Hiding a ``Category`` must drop the ``Entry`` rows under its
-    ``Item`` (and ``Property``) two edges away - the transitive depth emerging from
-    each target hook itself calling the helper.
-    """
-
-    def _exclude_private(cls, qs, info):
-        return apply_cascade_permissions(cls, qs.filter(is_private=False), info)
-
-    _make_type("TxCategoryType", Category, get_queryset=_exclude_private)
-    _make_type("TxItemType", Item, get_queryset=_exclude_private)
-    _make_type("TxPropertyType", Property, get_queryset=_exclude_private)
-    entry_type = _make_type("TxEntryType", Entry, get_queryset=_exclude_private)
-    finalize_django_types()
-
-    public_cat = Category.objects.create(name="public_cat", is_private=False)
-    private_cat = Category.objects.create(name="private_cat", is_private=True)
-    public_item = Item.objects.create(name="pub_item", category=public_cat)
-    hidden_item = Item.objects.create(name="hidden_item", category=private_cat)
-    public_prop = Property.objects.create(name="pub_prop", category=public_cat)
-    other_prop = Property.objects.create(name="other_prop", category=public_cat)
-
-    keeps = Entry.objects.create(value="keeps", item=public_item, property=public_prop)
-    # This entry's ITEM is under a private category two edges away -> drops.
-    Entry.objects.create(value="drops_via_item", item=hidden_item, property=other_prop)
-
-    result = apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO)
-    names = sorted(result.values_list("value", flat=True))
-    assert names == ["keeps"]
-    assert keeps in result
-
-
-@pytest.mark.django_db(transaction=True)
 def test_identity_hook_targets_compose_default_manager(django_assert_num_queries):
     """A registered identity-hook target STILL composes its ``_default_manager``.
 
@@ -1063,7 +948,10 @@ def test_identity_hook_targets_compose_default_manager(django_assert_num_queries
     registered type whose filtered ``_default_manager`` IS its visibility policy
     (the proxy shape pinned below). Every registered target now contributes a
     subquery - and the subqueries still compile into the caller's single
-    ``SELECT``, so identity composition adds zero query round-trips.
+    ``SELECT``, so identity composition adds zero query round-trips. Every
+    shipped products type declares a custom ``get_queryset``, so a live request
+    cannot observe an identity-hook target; the custom-hook HTTP twin is
+    ``test_cascade_query_count_fixed``.
     """
     _make_type("IdentItemType", Item)  # identity default - no get_queryset override
     _make_type("IdentPropertyType", Property)
@@ -1072,10 +960,7 @@ def test_identity_hook_targets_compose_default_manager(django_assert_num_queries
 
     assert registry.get(Item).has_custom_get_queryset() is False
 
-    category = Category.objects.create(name="c")
-    item = Item.objects.create(name="i", category=category)
-    prop = Property.objects.create(name="p", category=category)
-    entry = Entry.objects.create(value="v", item=item, property=prop)
+    entry = services.seed_cascade_identity_chain()["entry"]
 
     result = apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO)
     # Both registered targets compose (Item and Property; Category's type is
@@ -1231,8 +1116,7 @@ def test_secondary_type_never_cascade_target():
 
     assert registry.get(Category).has_custom_get_queryset() is False  # the primary
 
-    public_cat = Category.objects.create(name="c", is_private=False)
-    Item.objects.create(name="i", category=public_cat)
+    services.seed_public_category_with_item()
 
     result = apply_cascade_permissions(item_type, Item.objects.all(), _INFO)
     # Resolved through the permissive primary (identity default manager): the
@@ -1344,8 +1228,23 @@ def _register_ct_pair(hook):
     return parent_type
 
 
+def _values_projection(cls, qs, info):
+    return qs.exclude(name="hidden").values("id", "name")
+
+
+def _values_list_projection(cls, qs, info):
+    return qs.exclude(name="hidden").values_list("name")
+
+
 @pytest.mark.django_db(transaction=True)
-def test_hook_values_and_values_list_projections_are_normalized():
+@pytest.mark.parametrize(
+    "hook",
+    [
+        pytest.param(_values_projection, id="values"),
+        pytest.param(_values_list_projection, id="values-list"),
+    ],
+)
+def test_hook_values_and_values_list_projections_are_normalized(hook):
     """A hook's ``.values(...)`` / ``.values_list(...)`` return is re-projected safely.
 
     The subquery is normalized to ``field.target_field.attname``, so a consumer
@@ -1355,9 +1254,7 @@ def test_hook_values_and_values_list_projections_are_normalized():
     evaluation. Both shapes narrow by the hook's FILTER, not its projection.
     """
     with _tables(_CtTarget, _CtParent):
-        parent_type = _register_ct_pair(
-            lambda cls, qs, info: qs.exclude(name="hidden").values("id", "name"),
-        )
+        parent_type = _register_ct_pair(hook)
 
         visible = _CtTarget.objects.create(name="t")
         hidden = _CtTarget.objects.create(name="hidden")
@@ -1367,15 +1264,6 @@ def test_hook_values_and_values_list_projections_are_normalized():
         result = apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
         assert sorted(result.values_list("name", flat=True)) == ["keeps"]
         assert keeps in result
-
-        # The ``.values_list("name")`` twin - the wrong-column shape - narrows
-        # identically after normalization.
-        registry.clear()
-        parent_type = _register_ct_pair(
-            lambda cls, qs, info: qs.exclude(name="hidden").values_list("name"),
-        )
-        result = apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
-        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1429,7 +1317,72 @@ def test_to_field_edge_compares_target_column():
         assert keeps in result
 
 
-def test_hook_return_rejections_fail_closed():
+def _hook_returns_list(cls, qs, info):
+    return []
+
+
+def _hook_unrelated_model(cls, qs, info):
+    return _CtOther.objects.using(qs.db).all()
+
+
+def _hook_mti_child(cls, qs, info):
+    return _CtTargetChild.objects.using(qs.db).all()
+
+
+def _hook_sliced(cls, qs, info):
+    return qs[:5]
+
+
+def _hook_distinct(cls, qs, info):
+    return qs.distinct("name")
+
+
+def _hook_union(cls, qs, info):
+    return qs.union(qs)
+
+
+def _hook_intersection(cls, qs, info):
+    return qs.intersection(qs)
+
+
+def _hook_grouped_count(cls, qs, info):
+    return qs.annotate(n=models.Count("id"))
+
+
+def _hook_grouped_values(cls, qs, info):
+    return qs.values("name").annotate(n=models.Count("id"))
+
+
+def _hook_extra_shadow(cls, qs, info):
+    return qs.extra(select={"id": "name"})
+
+
+def _hook_annotate_shadow(cls, qs, info):
+    return qs.values("name").annotate(id=models.Value(1))
+
+
+def _hook_off_alias(cls, qs, info):
+    return qs.using("bogus_alias")
+
+
+@pytest.mark.parametrize(
+    ("hook", "match"),
+    [
+        pytest.param(_hook_returns_list, "must return a QuerySet", id="list"),
+        pytest.param(_hook_unrelated_model, "concrete table", id="wrong-table"),
+        pytest.param(_hook_mti_child, "concrete table", id="mti-child-table"),
+        pytest.param(_hook_sliced, "sliced", id="sliced"),
+        pytest.param(_hook_distinct, "distinct", id="distinct"),
+        pytest.param(_hook_union, "combined", id="union"),
+        pytest.param(_hook_intersection, "combined", id="intersection"),
+        pytest.param(_hook_grouped_count, "grouped", id="grouped-count"),
+        pytest.param(_hook_grouped_values, "grouped", id="grouped-values"),
+        pytest.param(_hook_extra_shadow, "shadows", id="extra-shadow"),
+        pytest.param(_hook_annotate_shadow, "shadows", id="annotate-shadow"),
+        pytest.param(_hook_off_alias, "alias", id="off-alias"),
+    ],
+)
+def test_hook_return_rejections_fail_closed(hook, match):
     """Non-queryset / wrong-table / sliced / distinct / combined / grouped / shadowed / re-aliased returns raise.
 
     Every shape that would compose a wrong or wrong-database membership predicate
@@ -1448,44 +1401,13 @@ def test_hook_return_rejections_fail_closed():
     column), on a grouped queryset it changes the GROUP BY (widening the visible
     set), and under a shadowing ``extra(select=...)`` alias it selects the
     raw-SQL expression instead of the model column.
+    ``test_annotation_alias_shadow_cannot_bypass_visibility`` proves the
+    real-row leak the annotate-shadow rejection closes.
     """
-    rejects = [
-        # A materialized list (built without evaluating - the raise must fire at
-        # composition, not depend on table state).
-        (lambda cls, qs, info: [], "must return a QuerySet"),
-        (lambda cls, qs, info: _CtOther.objects.using(qs.db).all(), "concrete table"),
-        # An MTI child queryset lives on ITS OWN concrete table - incompatible.
-        (lambda cls, qs, info: _CtTargetChild.objects.using(qs.db).all(), "concrete table"),
-        (lambda cls, qs, info: qs[:5], "sliced"),
-        (lambda cls, qs, info: qs.distinct("name"), "distinct"),
-        # Combined querysets: composition-time rejection, so union/intersection/
-        # difference all fail identically via ``query.combinator``.
-        (lambda cls, qs, info: qs.union(qs), "combined"),
-        (lambda cls, qs, info: qs.intersection(qs), "combined"),
-        # A whole-table aggregate annotate sets ``group_by=True``...
-        (lambda cls, qs, info: qs.annotate(n=models.Count("id")), "grouped"),
-        # ...and a ``values().annotate()`` grouping sets it to a column tuple.
-        (lambda cls, qs, info: qs.values("name").annotate(n=models.Count("id")), "grouped"),
-        # An ``extra(select=...)`` alias shadowing the edge's target column would
-        # make the re-projection select raw SQL, not the model column.
-        (lambda cls, qs, info: qs.extra(select={"id": "name"}), "shadows"),
-        # An ``annotate(...)`` alias shadowing the target column is the
-        # security-critical twin: Django blocks a bare ``annotate(id=Value(pk))``
-        # but permits ``values("name").annotate(id=Value(pk))``, which stays
-        # ungrouped (``Value`` is no aggregate) and re-projects to the injected
-        # constant. ``test_annotation_alias_shadow_cannot_bypass_visibility``
-        # proves the real-row leak this rejection closes.
-        (lambda cls, qs, info: qs.values("name").annotate(id=models.Value(1)), "shadows"),
-        # ``.using(...)`` off the pinned alias - resolved lazily, so the string
-        # comparison rejects it before any connection is attempted.
-        (lambda cls, qs, info: qs.using("bogus_alias"), "alias"),
-    ]
-    for hook, match in rejects:
-        registry.clear()
-        parent_type = _register_ct_pair(hook)
-        with pytest.raises(ConfigurationError, match=match):
-            apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
-        assert _cascade_state.get() is None
+    parent_type = _register_ct_pair(hook)
+    with pytest.raises(ConfigurationError, match=match):
+        apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+    assert _cascade_state.get() is None
 
 
 def test_hook_manager_return_is_coerced():
@@ -1730,7 +1652,49 @@ def test_nested_application_off_root_alias_fails_closed():
     assert _cascade_state.get() is None
 
 
-def test_root_queryset_shape_rejections():
+def _root_manager():
+    return _CtParent.objects
+
+
+def _root_list():
+    return []
+
+
+def _root_wrong_table():
+    return _CtOther.objects.all()
+
+
+def _root_sliced():
+    return _CtParent.objects.all()[:5]
+
+
+def _root_combined():
+    return _CtParent.objects.all().union(_CtParent.objects.all())
+
+
+@pytest.mark.parametrize(
+    ("root_factory", "match"),
+    [
+        pytest.param(
+            _root_manager,
+            "apply_cascade_permissions.*got Manager",
+            id="manager",
+        ),
+        pytest.param(_root_list, "apply_cascade_permissions.*got list", id="list"),
+        pytest.param(
+            _root_wrong_table,
+            "apply_cascade_permissions.*concrete table",
+            id="wrong-table",
+        ),
+        pytest.param(_root_sliced, "apply_cascade_permissions.*sliced", id="sliced"),
+        pytest.param(
+            _root_combined,
+            "apply_cascade_permissions.*combined",
+            id="combined",
+        ),
+    ],
+)
+def test_root_queryset_shape_rejections(root_factory, match):
     """The root call rejects non-querysets, wrong-model, sliced, and combined roots loudly.
 
     Sliced and combined roots cannot be ``.filter(...)``-narrowed; without the
@@ -1745,21 +1709,8 @@ def test_root_queryset_shape_rejections():
     function they never called.
     """
     parent_type = _register_ct_pair(None)
-
-    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*got Manager"):
-        apply_cascade_permissions(parent_type, _CtParent.objects, _INFO)
-    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*got list"):
-        apply_cascade_permissions(parent_type, [], _INFO)
-    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*concrete table"):
-        apply_cascade_permissions(parent_type, _CtOther.objects.all(), _INFO)
-    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*sliced"):
-        apply_cascade_permissions(parent_type, _CtParent.objects.all()[:5], _INFO)
-    with pytest.raises(ConfigurationError, match="apply_cascade_permissions.*combined"):
-        apply_cascade_permissions(
-            parent_type,
-            _CtParent.objects.all().union(_CtParent.objects.all()),
-            _INFO,
-        )
+    with pytest.raises(ConfigurationError, match=match):
+        apply_cascade_permissions(parent_type, root_factory(), _INFO)
     assert _cascade_state.get() is None
 
 
@@ -1817,7 +1768,11 @@ def test_values_root_is_supported_input():
 
 @pytest.mark.django_db
 def test_fields_scopes_walk():
-    """``fields=["item"]`` cascades only ``item`` and leaves ``property`` alone."""
+    """``fields=["item"]`` cascades only ``item`` and leaves ``property`` alone.
+
+    Shipped products hooks pass ``fields=None``; a live request cannot select a
+    subset of cascade edges.
+    """
 
     def _exclude_private(cls, qs, info):
         return qs.filter(is_private=False)
@@ -1827,25 +1782,16 @@ def test_fields_scopes_walk():
     entry_type = _make_type("FsEntryType", Entry, primary=False)
     finalize_django_types()
 
-    public_cat = Category.objects.create(name="c")
-    public_item = Item.objects.create(name="pub_item", category=public_cat)
-    hidden_item = Item.objects.create(name="hidden_item", category=public_cat, is_private=True)
-    public_prop = Property.objects.create(name="pub_prop", category=public_cat)
-    hidden_prop = Property.objects.create(name="hidden_prop", category=public_cat, is_private=True)
-
-    keeps = Entry.objects.create(value="keeps", item=public_item, property=public_prop)
-    drops_item = Entry.objects.create(value="drops_item", item=hidden_item, property=public_prop)
-    # This entry's property is hidden but its item is public; with ``fields=["item"]``
-    # the property edge is NOT cascaded, so the row survives.
-    survives_prop = Entry.objects.create(
-        value="survives_prop",
-        item=public_item,
-        property=hidden_prop,
-    )
+    # ``survives_prop``'s property is hidden but its item is public; with
+    # ``fields=["item"]`` the property edge is NOT cascaded, so the row survives.
+    rows = services.seed_field_scope_split()
+    keeps = rows["keeps"]
+    drops_item = rows["drops_item"]
+    survives_prop = rows["survives_prop"]
 
     result = apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=["item"])
     names = set(result.values_list("value", flat=True))
-    assert names == {"keeps", "survives_prop"}
+    assert names == {keeps.value, survives_prop.value}
     assert keeps in result
     assert survives_prop in result
     assert drops_item not in result
@@ -2341,76 +2287,10 @@ async def test_aapply_gather_restores_task_contexts():
 
 # =============================================================================
 # N+1 audit (permissions-owned pins; optimizer-plan pins live in
-# tests/optimizer/test_extension.py). Per spec-034 Decision 7.
+# tests/optimizer/test_extension.py). Per spec-034 Decision 7. HTTP
+# zero-round-trip + Prefetch count is
+# ``test_products_api.py::test_cascade_query_count_fixed``.
 # =============================================================================
-
-
-@pytest.mark.django_db(transaction=True)
-def test_cascaded_traversal_adds_zero_queries(django_assert_num_queries):
-    """A cascaded 2-deep shape executes in the same query count as its uncascaded twin.
-
-    The ``__in`` subqueries compile into the caller's single ``SELECT`` (spec-034 Decision 7),
-    so a cascaded ``Entry -> Item/Property -> Category`` list evaluation costs the
-    SAME one query as its identity-hook twin - the cascade adds zero round-trips.
-
-    The pin is the LOAD-BEARING property: an
-    ABSOLUTE count derived from a real run (both shapes == 1 query), not a bare
-    ``cascaded == uncascaded`` equality (which a fallback that scaled both shapes
-    identically would also satisfy). The ``"IN (SELECT"`` presence guard on the
-    cascaded query is the right-path assertion: a silently-empty walk would also
-    report one query, so the count is only meaningful with the subqueries proven
-    present.
-    """
-
-    def _exclude_private(cls, qs, info):
-        return apply_cascade_permissions(cls, qs.filter(is_private=False), info)
-
-    # Cascaded shape: every target carries the cascading hook (reuse the
-    # ``test_transitive_cascade_two_deep`` definitions).
-    _make_type("ZqCategoryType", Category, get_queryset=_exclude_private)
-    _make_type("ZqItemType", Item, get_queryset=_exclude_private)
-    _make_type("ZqPropertyType", Property, get_queryset=_exclude_private)
-    entry_type = _make_type("ZqEntryType", Entry, get_queryset=_exclude_private)
-    finalize_django_types()
-
-    public_cat = Category.objects.create(name="public_cat", is_private=False)
-    private_cat = Category.objects.create(name="private_cat", is_private=True)
-    public_item = Item.objects.create(name="pub_item", category=public_cat)
-    hidden_item = Item.objects.create(name="hidden_item", category=private_cat)
-    public_prop = Property.objects.create(name="pub_prop", category=public_cat)
-    other_prop = Property.objects.create(name="other_prop", category=public_cat)
-    keeps = Entry.objects.create(value="keeps", item=public_item, property=public_prop)
-    # This entry's item is under a private category two edges away -> drops.
-    Entry.objects.create(value="drops_via_item", item=hidden_item, property=other_prop)
-
-    cascaded_qs = apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO)
-    # Right-path guard: the cascade actually composed the nested subqueries (a
-    # silently-empty walk would also evaluate in one query but carry no subquery).
-    assert "IN (SELECT" in str(cascaded_qs.query)
-
-    # Absolute count: the cascaded list evaluation executes in ONE query - the
-    # ``__in`` subqueries are nested SELECTs inside the single outer SELECT.
-    with django_assert_num_queries(1):
-        cascaded_rows = list(cascaded_qs)
-    # And the narrowing is real: the private-category entry dropped, the public one stayed.
-    assert cascaded_rows == [keeps]
-
-    # Uncascaded twin: the identical chain with identity-hook targets (no
-    # ``get_queryset``), evaluated over the SAME seeded rows.
-    registry.clear()
-    _make_type("UqCategoryType", Category)
-    _make_type("UqItemType", Item)
-    _make_type("UqPropertyType", Property)
-    _make_type("UqEntryType", Entry)
-    finalize_django_types()
-
-    with django_assert_num_queries(1):
-        uncascaded_rows = list(Entry.objects.all())
-    assert len(uncascaded_rows) == 2  # both entries are visible without the cascade
-
-    # The cascaded shape costs the same one query as its uncascaded twin: zero
-    # added round-trips (spec-034 Decision 7), distinguishing subquery composition from a
-    # would-be per-FK extra query.
 
 
 @pytest.mark.django_db
@@ -2420,9 +2300,11 @@ def test_strictness_raise_silent_across_cascaded_shape():
     A cascaded 2-deep ``Entry -> Item -> Category`` traversal under
     ``DjangoOptimizerExtension(strictness="raise")`` plans fully (each cascading
     target downgrades to a ``Prefetch`` baked with the request ``info``) and never
-    lazy-loads, so the N+1 sentinel never trips: ``result.errors is None`` (Edge
-    case "Strictness interaction"). The query is kept minimal so it can only take
-    the planned downgraded-Prefetch path it claims to test.
+    lazy-loads, so the N+1 sentinel never trips: ``result.errors is None``.
+    Fakeshop's composed schema arms the optimizer at default ``strictness="off"``,
+    so no shipped request can trip this sentinel; the planned Prefetch HTTP twin
+    is ``test_cascade_query_count_fixed``. The query is kept minimal so it can
+    only take the planned downgraded-Prefetch path it claims to test.
     """
 
     def _exclude_private(cls, qs, info):
@@ -2445,8 +2327,7 @@ def test_strictness_raise_silent_across_cascaded_shape():
 
     finalize_django_types()
 
-    public_cat = Category.objects.create(name="public_cat", is_private=False)
-    Item.objects.create(name="pub_item", category=public_cat)
+    services.seed_public_category_with_item()
 
     ext = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -2545,53 +2426,52 @@ class _StaffOnlyItemFilter(FilterSet):
             raise GraphQLError("You must be a staff user to filter by Item name.")
 
 
-@pytest.mark.django_db
-def test_cascade_then_filter_gate_composition():
-    """Cascade narrows rows first, ``FilterSet.check_<field>_permission`` judges input second.
-
-    Pin BOTH shapes (card DoD): a gated-field input is denied regardless of cascade
-    state; passing input operates only on cascade-narrowed rows. (spec-034 Decision 11.)
-
-    Composition is observed at its consequence (the plan's accepted lighter shape):
-    the cascade lives in ``get_queryset`` (here ``_exclude_private``) and runs at the
-    visibility step; the gate fires from ``FilterSet.apply_sync`` over the
-    already-narrowed queryset. So a denial is independent of which rows the cascade
-    left, and a passing filter can only ever match cascade-visible rows.
-    """
-    category_type = _make_type("FgCategoryType", Category, get_queryset=_exclude_private)
+def _anonymous_narrowed_categories(type_name):
+    """Return ``(type, narrowed qs)`` after the type's own anonymous ``get_queryset``."""
+    category_type = _make_type(type_name, Category, get_queryset=_exclude_private)
     finalize_django_types()
+    return category_type, category_type.get_queryset(Category.objects.all(), _INFO)
 
-    public = Category.objects.create(name="public", is_private=False)
-    Category.objects.create(name="hidden", is_private=True)
 
-    # The cascade narrows first: the type's ``get_queryset`` hook runs at the
-    # visibility step, so ``_exclude_private``'s ``is_private=False`` row-narrow
-    # drops the private row before the gate judges input. (Calling
-    # ``apply_cascade_permissions`` directly here would be a no-op - ``Category`` is
-    # the chain top with no cascadable forward FK, and the cascade does not invoke
-    # the type's own hook; the narrowing genuinely lives in ``get_queryset``.)
-    narrowed = category_type.get_queryset(Category.objects.all(), _INFO)
+@pytest.mark.django_db
+def test_cascade_then_filter_gate_denies_gated_input():
+    """A gated-field filter is denied on input shape alone, after cascade narrowing.
 
-    # Shape (a): a gated-field (``name``) input is DENIED on input shape alone -
-    # regardless of cascade state. The gate raises before any row math.
+    One HTTP request cannot split anonymous cascade narrowing from a staff gate
+    walk; the consumer-visible denial is
+    ``test_cascade_composes_with_filter_and_order_live``.
+    """
+    rows = services.seed_gate_name_split()
+    _type, narrowed = _anonymous_narrowed_categories("FgDenyCategoryType")
+
     with pytest.raises(GraphQLError, match="staff user to filter by Category name"):
         _StaffOnlyCategoryFilter.apply_sync(
-            {"name": "public"},
+            {"name": rows["public"].name},
             narrowed,
             _gate_info(is_staff=False),
         )
 
-    # Shape (b): with passing input (staff user), the filter operates only on the
-    # cascade-narrowed rows - the hidden private row is unreachable through the
-    # filter even though its name matches the lookup space.
+
+@pytest.mark.django_db
+def test_cascade_then_filter_operates_only_on_cascade_narrowed_rows():
+    """Passing filter input cannot recover a row the anonymous cascade already dropped.
+
+    Staff ``apply_sync`` over an anonymous-narrowed queryset is not one HTTP
+    actor; the consumer-visible filter+order half is
+    ``test_cascade_composes_with_filter_and_order_live``.
+    """
+    rows = services.seed_gate_name_split()
+    public, hidden = rows["public"], rows["hidden"]
+    _type, narrowed = _anonymous_narrowed_categories("FgKeepCategoryType")
+
     passed = _StaffOnlyCategoryFilter.apply_sync(
-        {"name": "hidden"},
+        {"name": hidden.name},
         narrowed,
         _gate_info(is_staff=True),
     )
-    assert list(passed) == []  # the hidden row was already cascade-dropped
+    assert list(passed) == []
     kept = _StaffOnlyCategoryFilter.apply_sync(
-        {"name": "public"},
+        {"name": public.name},
         narrowed,
         _gate_info(is_staff=True),
     )
@@ -2599,20 +2479,11 @@ def test_cascade_then_filter_gate_composition():
 
 
 @pytest.mark.django_db
-def test_cascade_then_order_gate_composition():
-    """Same composition matrix for ``OrderSet`` ``check_<field>_permission`` gates (spec-034 Decision 11)."""
-    category_type = _make_type("OgCategoryType", Category, get_queryset=_exclude_private)
-    finalize_django_types()
+def test_cascade_then_order_gate_denies_gated_input():
+    """A gated-field order is denied on input shape alone, after cascade narrowing."""
+    services.seed_gate_order_split()
+    _type, narrowed = _anonymous_narrowed_categories("OgDenyCategoryType")
 
-    beta = Category.objects.create(name="beta", is_private=False)
-    alpha = Category.objects.create(name="alpha", is_private=False)
-    Category.objects.create(name="hidden", is_private=True)
-
-    # Cascade narrows first via the type's ``get_queryset`` hook (drops the private
-    # row); the gate then arranges only those cascade-visible rows.
-    narrowed = category_type.get_queryset(Category.objects.all(), _INFO)
-
-    # Shape (a): ``orderBy`` naming the gated field is DENIED on input shape alone.
     with pytest.raises(GraphQLError, match="staff user to order by Category name"):
         _StaffOnlyCategoryOrder.apply_sync(
             {"name": Ordering.ASC},
@@ -2620,8 +2491,14 @@ def test_cascade_then_order_gate_composition():
             _gate_info(is_staff=False),
         )
 
-    # Shape (b): with passing input (staff user), the order arranges only the
-    # cascade-narrowed rows - the hidden private row never appears in the result.
+
+@pytest.mark.django_db
+def test_cascade_then_order_arranges_only_cascade_narrowed_rows():
+    """Passing order input arranges only rows the anonymous cascade left visible."""
+    rows = services.seed_gate_order_split()
+    alpha, beta = rows["alpha"], rows["beta"]
+    _type, narrowed = _anonymous_narrowed_categories("OgKeepCategoryType")
+
     ordered = _StaffOnlyCategoryOrder.apply_sync(
         {"name": Ordering.ASC},
         narrowed,
@@ -2637,32 +2514,32 @@ def test_gate_denial_no_existence_leak():
     The no-existence-leak property (spec-034 Decision 11): a field denial and the
     cascade-hidden-row result are produced by independent layers, so the denial
     cannot reveal whether a hidden row exists. Two fixtures differing only in
-    whether a hidden-target row exists must yield a byte-identical ``GraphQLError``.
+    whether a hidden-target row exists must yield a byte-identical ``GraphQLError``
+    (message and extensions). A live request mints a distinct correlation id per
+    envelope, so that identity is not a wire shape; the consumer-visible denial
+    is ``test_cascade_composes_with_filter_and_order_live``.
 
     The queryset under test is one the cascade GENUINELY narrows: ``ItemType``
     cascades through its non-null ``category`` edge to a ``CategoryType`` that hides
     private categories, so an ``Item`` under a private category is dropped by the
-    cascade itself. (The earlier shape cascaded over ``Category`` - the chain top,
-    whose direct cascade is a no-op - so the denial assertion passed without any
-    narrowing ever happening.)
+    cascade itself.
     """
     _make_type("LeakCategoryType", Category, get_queryset=_exclude_private)
     item_type = _make_type("LeakItemType", Item)
     finalize_django_types()
 
-    public_cat = Category.objects.create(name="public_cat", is_private=False)
-    private_cat = Category.objects.create(name="private_cat", is_private=True)
-
     # Fixture 1: an Item under the PRIVATE category exists -> the cascade drops it.
-    Item.objects.create(name="pub", category=public_cat, is_private=False)
-    Item.objects.create(name="under_hidden", category=private_cat, is_private=False)
+    rows = services.seed_gate_existence_split()
+    private_cat = rows["private_cat"]
+    visible = rows["visible_item"]
+
     with_hidden = apply_cascade_permissions(item_type, Item.objects.all(), _INFO)
     # Sanity: the cascade actually narrowed (the under-hidden Item is gone), so this
     # fixture genuinely differs from fixture 2 in row content - not just in name.
-    assert sorted(with_hidden.values_list("name", flat=True)) == ["pub"]
+    assert sorted(with_hidden.values_list("name", flat=True)) == [visible.name]
     with pytest.raises(GraphQLError) as with_hidden_exc:
         _StaffOnlyItemFilter.apply_sync(
-            {"name": "pub"},
+            {"name": visible.name},
             with_hidden,
             _gate_info(is_staff=False),
         )
@@ -2671,10 +2548,10 @@ def test_gate_denial_no_existence_leak():
     Item.objects.filter(category=private_cat).delete()
     private_cat.delete()
     without_hidden = apply_cascade_permissions(item_type, Item.objects.all(), _INFO)
-    assert sorted(without_hidden.values_list("name", flat=True)) == ["pub"]
+    assert sorted(without_hidden.values_list("name", flat=True)) == [visible.name]
     with pytest.raises(GraphQLError) as without_hidden_exc:
         _StaffOnlyItemFilter.apply_sync(
-            {"name": "pub"},
+            {"name": visible.name},
             without_hidden,
             _gate_info(is_staff=False),
         )

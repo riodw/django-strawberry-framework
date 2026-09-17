@@ -1,4 +1,15 @@
-"""Tests for management-command import error translation and path validation."""
+"""Package tests for management-command import helpers' CommandError wrapping.
+
+``import_or_command_error``, ``import_module_symbol_or_command_error``, and
+``import_string_or_command_error`` translate ``ImportError`` / ``AttributeError``
+to ``CommandError`` with ``__cause__`` preserved, reject empty/relative selectors
+before ``importlib`` raises an unrelated type, and must not swallow a consumer
+module's ``ValueError``. Command-level twins live in
+``examples/fakeshop/tests/test_export_schema.py`` (malformed / unimportable
+selectors) and ``examples/fakeshop/tests/test_inspect_django_type.py`` (dotted
+path and ``--schema`` selector failures). Those rows cannot observe ``__cause__``
+or the ValueError-passthrough.
+"""
 
 import sys
 import types
@@ -61,7 +72,7 @@ def _make_module(monkeypatch, name="imports_probe_module"):
     return module
 
 
-@pytest.mark.parametrize("selector", ["", ":schema"])
+@pytest.mark.parametrize("selector", ["", ":schema"], ids=["empty", "colon-only"])
 def test_import_module_symbol_or_command_error_rejects_empty_module_path(selector):
     # ``import_module_symbol`` reports an empty module path as ``ValueError``
     # ("Empty module name"), which the (ImportError, AttributeError) catch would
@@ -70,7 +81,11 @@ def test_import_module_symbol_or_command_error_rejects_empty_module_path(selecto
         import_module_symbol_or_command_error(selector, default_symbol_name="schema")
 
 
-@pytest.mark.parametrize("selector", [".relative", ".relative:schema", ".a.b"])
+@pytest.mark.parametrize(
+    "selector",
+    [".relative", ".relative:schema", ".a.b"],
+    ids=["bare-relative", "relative-with-symbol", "dotted-relative"],
+)
 def test_import_module_symbol_or_command_error_rejects_relative_module_path(selector):
     # ``import_module_symbol`` reports a relative module path as ``TypeError``
     # (relative import without a package), also missed by the narrow catch.
@@ -136,7 +151,11 @@ def test_import_string_or_command_error_requires_module_path():
         import_string_or_command_error("schema")
 
 
-@pytest.mark.parametrize("dotted_path", [".schema", ".relative.schema"])
+@pytest.mark.parametrize(
+    "dotted_path",
+    [".schema", ".relative.schema"],
+    ids=["dot-attr", "relative-module"],
+)
 def test_import_string_or_command_error_rejects_malformed_module_path(dotted_path):
     with pytest.raises(CommandError, match="module path is empty|relative module paths"):
         import_string_or_command_error(dotted_path)

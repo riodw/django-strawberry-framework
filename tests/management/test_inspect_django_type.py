@@ -1,36 +1,16 @@
-"""Management command tests for inspect_django_type field-resolution tables.
+"""Package tests for inspect_django_type helpers and throwaway-type branches.
 
-Failure-mode coverage for the ``CommandError`` paths not reachable from a live
-registered type, mirroring ``tests/management/test_export_schema.py``'s
-``_make_test_module`` + ``monkeypatch.setitem(sys.modules, ...)`` pattern. The
-happy-path command behavior is earned against the real fakeshop schema in
-``examples/fakeshop/tests/test_inspect_django_type.py`` (a management command is
-not reachable over ``/graphql/``, so the in-process example tier is its home).
-
-Also holds direct unit tests for the module's internal helpers
-(``_matched_scalar_key``, ``_render_annotation``) whose distinguishing branches
--- a consumer field subclass resolving to a supported MRO ancestor, and a
-multi-member union annotation -- are unreachable from the fakeshop schema's live
-surface and so are earned here in the package tier.
-
-Finally, holds the one consumer-authored-field command test that is genuinely
-unreachable from the live example surface: an annotation-only relation whose
-forward reference cannot resolve from the type's module namespace, so Strawberry
-leaves ``field.type`` as its ``UNRESOLVED`` sentinel after ``finalize_django_types()``
-alone. It needs a type defined in a non-importable (function-local) scope, so it is
-earned here. Every *resolvable* consumer-override corner -- assigned scalar,
-annotation-only scalar (incl. the forced-optional and unsupported-field cases),
-the ``annotation + strawberry.field`` overlap, and the assigned relation -- is
-demonstrated live and inspected from the example tier against
-``OverriddenScalarSpecimenType`` / ``BranchType`` in
-``examples/fakeshop/tests/test_inspect_django_type.py`` (the scalars app's
-``Base36Field`` supplies the unsupported column).
-
-Also holds the ``relation_shapes = {<rel>: "connection"}`` regression: no example
-type declares a connection-only relation shape, and adding one to an existing
-example type would drop its list field from the SDL and break the live API /
-relation-row coverage that asserts the list form. So the connection-only shape is
-pinned here against real fakeshop models, finalized in registry isolation.
+Happy-path tables, connection-only ``PeriodicalType.issues``, file/image converter
+columns, dotted-path / ``--schema`` / unregistered-name / non-DjangoType failures,
+and ``Meta.name`` bare lookup (including the Python class-name back-compat) live
+in ``examples/fakeshop/tests/test_inspect_django_type.py``. What stays here has no
+fakeshop shape: argparse ``--schema`` help; a custom ``NameConverter`` (prefixing
+every SDL name would break the live GraphQL suite); empty-registry unfinalized /
+no-Meta bases; function-local UNRESOLVED forward refs; direct ``relay.Node``
+inheritance; OneToOne / MTI relation pks; a ``Meta.name`` / ``__name__`` collision;
+helper rendering (``_matched_scalar_key``, ``_sdl_type_name``, ``_render_annotation``,
+``_scalar_name``). Adding those models or a process-wide name converter to fakeshop
+would change the shipped SDL.
 """
 
 import sys
@@ -57,7 +37,6 @@ from django_strawberry_framework.management.commands.inspect_django_type import 
     _sdl_type_name,
 )
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.converters import DjangoFileType, DjangoImageType
 
 
 class InspRelPkTarget(models.Model):
@@ -120,18 +99,6 @@ def _make_test_module(monkeypatch, **attrs):
         setattr(module, key, value)
     monkeypatch.setitem(sys.modules, "test_module", module)
     return module
-
-
-def test_bad_dotted_path_raises_command_error():
-    # The original import error surfaces - it is NOT swallowed and retried as a
-    # registry miss.
-    with pytest.raises(CommandError, match="No module named"):
-        call_command("inspect_django_type", "does.not.exist.Type")
-
-
-def test_malformed_dotted_path_raises_command_error():
-    with pytest.raises(CommandError, match="module path is empty"):
-        call_command("inspect_django_type", ".BookType")
 
 
 def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch):
@@ -286,39 +253,6 @@ def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(monkeypatch
     assert title.startswith("ApiItemRefType  (model:")
 
 
-def test_bad_schema_selector_raises_command_error():
-    # A --schema selector that cannot be imported surfaces as CommandError
-    # (the import failure is caught before any type resolution runs).
-    with pytest.raises(CommandError, match="No module named"):
-        call_command("inspect_django_type", "BookType", "--schema", "nonexistent_xyz_module")
-
-
-@pytest.mark.parametrize(
-    ("selector", "message"),
-    [
-        ("", "module path is empty"),
-        (":schema", "module path is empty"),
-        (".config.schema", "relative module paths"),
-    ],
-)
-def test_malformed_schema_selector_raises_command_error(selector, message):
-    with pytest.raises(CommandError, match=message):
-        call_command("inspect_django_type", "BookType", "--schema", selector)
-
-
-def test_unregistered_bare_name_raises_command_error():
-    # A bare name with no registry match (registry cleared by the autouse
-    # fixture) raises the "import the project schema first" CommandError.
-    with pytest.raises(CommandError, match="Import the project schema first"):
-        call_command("inspect_django_type", "TotallyUnregisteredType")
-
-
-def test_non_djangotype_symbol_raises_command_error(monkeypatch):
-    _make_test_module(monkeypatch, not_a_type=object())
-    with pytest.raises(CommandError, match="is not a DjangoType subclass"):
-        call_command("inspect_django_type", "test_module.not_a_type")
-
-
 def test_abstract_base_without_definition_raises_command_error(monkeypatch):
     # A DjangoType subclass with no Meta never registers a definition.
     class AbstractBase(DjangoType):
@@ -369,46 +303,6 @@ def test_sdl_type_name_ignores_inherited_strawberry_definition():
 
     assert "__strawberry_definition__" not in PendingChild.__dict__
     assert _sdl_type_name(PendingChild, definition, NameConverter()) == "PendingAlias"
-
-
-class _FakeOrigin:
-    def __init__(self, annotations):
-        self.__annotations__ = annotations
-
-
-class _FakeDefinition:
-    def __init__(self, annotations):
-        self.origin = _FakeOrigin(annotations)
-
-
-@pytest.mark.parametrize(
-    ("field_cls", "output_type"),
-    [(models.FileField, DjangoFileType), (models.ImageField, DjangoImageType)],
-)
-def test_scalar_row_names_file_output_converter_not_scalar_map(field_cls, output_type):
-    """A FileField / ImageField column's converter column names the output-map converter.
-
-    The read-side annotation for a file/image column is the structured
-    ``DjangoFileType`` / ``DjangoImageType`` output object, produced by
-    ``convert_field_output`` via ``FIELD_OUTPUT_TYPE_MAP`` -- NOT by
-    ``SCALAR_MAP`` (whose ``FileField`` / ``ImageField`` rows deliberately stay
-    ``str`` for the filter-input path). The converter column previously read
-    ``SCALAR_MAP[FileField]`` here, mis-attributing the converter to the row that
-    fired only on the filter path while the displayed type came from elsewhere.
-    The label must name the converter that actually produced the shown type, and
-    an ``ImageField`` (a ``FileField`` subclass) must resolve to ``DjangoImageType``
-    via the shared MRO walk, never silently falling through to ``DjangoFileType``.
-    """
-    field = field_cls()
-    field.name = "attachment"
-    definition = _FakeDefinition({"attachment": output_type | None})
-
-    graphql_type, nullable, converter = Command._scalar_row(definition, field)
-
-    assert graphql_type == f"{output_type.__name__}"
-    assert nullable == "yes"
-    assert converter == f"convert_field_output -> {output_type.__name__}"
-    assert "SCALAR_MAP" not in converter
 
 
 def test_render_annotation_renders_multi_member_union():
@@ -560,51 +454,6 @@ def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
     assert "relay.Node id" not in ptr_row
 
 
-def test_inspect_connection_only_relation_shape_renders_row():
-    """A ``relation_shapes = {<rel>: "connection"}`` relation renders, never KeyErrors.
-
-    The Phase-2.5 synthesizer pops the relation's generated ``list[T]``
-    annotation for the ``"connection"`` shape
-    (``types/finalizer.py::_suppress_relation_list_form``) while leaving the
-    Django field in ``selected_fields``, so ``_relation_row`` used to index
-    ``origin.__annotations__[field.name]`` for a key that no longer exists and
-    crash with an unhandled ``KeyError`` (a raw traceback, not a clean
-    ``CommandError``) on a legitimately finalized, schema-buildable type.
-
-    The row must instead render from the synthesized ``<rel>_connection``
-    sibling's authoritative Strawberry field metadata: the resolved connection
-    type (``ItemNodeConnection!``) and a converter column naming the
-    connection-only shape. Both types are Relay-Node-shaped so the many-side
-    relation is eligible for connection synthesis.
-    """
-
-    class ItemNode(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    class CategoryNode(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-            interfaces = (relay.Node,)
-            relation_shapes = {"items": "connection"}
-
-    finalize_django_types()
-    out = StringIO()
-    call_command("inspect_django_type", "CategoryNode", stdout=out)
-    text = out.getvalue()
-
-    items_row = _connection_row(text, "items")
-    # Resolved connection type from the synthesized sibling, not a KeyError and
-    # not the suppressed ``[ItemNode!]!`` list form.
-    assert "ItemNodeConnection!" in items_row
-    assert "[ItemNode!]!" not in items_row
-    # The converter names the relation cardinality AND the connection-only shape.
-    assert "relation: reverse FK (connection-only)" in items_row
-
-
 def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
     """Renamed auto-relation and finalized consumer-enum metadata report SDL names."""
 
@@ -636,30 +485,6 @@ def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
     assert "relation: forward FK" in category_row
     assert "RenamedCategoryType" not in text
     assert "PublishedState!" in _connection_row(text, "name")
-
-
-def test_bare_name_resolves_meta_name_and_title_uses_graphql_name():
-    """Bare lookup + title prefer ``Meta.name`` / ``graphql_type_name`` over ``__name__``."""
-
-    class RenamedCategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            name = "Category"
-
-    finalize_django_types()
-    out = StringIO()
-    # Operator pastes the SDL name from the schema, not the Python class name.
-    call_command("inspect_django_type", "Category", stdout=out)
-    text = out.getvalue()
-    assert text.splitlines()[0].startswith(
-        "Category  (model: apps.products.models.Category)",
-    )
-    assert "RenamedCategoryType" not in text
-    # Python class name still resolves (back-compat for call sites / muscle memory).
-    out_cls = StringIO()
-    call_command("inspect_django_type", "RenamedCategoryType", stdout=out_cls)
-    assert out_cls.getvalue().splitlines()[0].startswith("Category  (model:")
 
 
 def test_bare_name_meta_name_collision_with_python_name_is_ambiguous():

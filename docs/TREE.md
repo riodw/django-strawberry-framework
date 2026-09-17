@@ -525,9 +525,9 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_resolvers.py         # Form-mutation resolver-pipeline tests (spec-038).
 │   └── test_sets.py              # ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038).
 ├── management/    # Package tests for django-strawberry-framework management commands.
-│   ├── test_export_schema.py     # Management command tests for export_schema selector errors, schema validation, and CLI contracts.
-│   ├── test_imports.py           # Tests for management-command import error translation and path validation.
-│   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
+│   ├── test_export_schema.py     # Package tests for export_schema argparse contracts and newline-preserving file writes.
+│   ├── test_imports.py           # Package tests for management-command import helpers' CommandError wrapping.
+│   └── test_inspect_django_type.py  # Package tests for inspect_django_type helpers and throwaway-type branches.
 ├── middleware/    # Tests for package Django middleware integrations.
 │   └── test_debug_toolbar.py     # DebugToolbarMiddleware tests for import guards, payload injection, response rewriting, and templates.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
@@ -770,9 +770,9 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_sets.py              # ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038).
 ├── graph/    # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
 ├── management/    # Package tests for django-strawberry-framework management commands.
-│   ├── test_export_schema.py     # Management command tests for export_schema selector errors, schema validation, and CLI contracts.
-│   ├── test_imports.py           # Tests for management-command import error translation and path validation.
-│   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
+│   ├── test_export_schema.py     # Package tests for export_schema argparse contracts and newline-preserving file writes.
+│   ├── test_imports.py           # Package tests for management-command import helpers' CommandError wrapping.
+│   └── test_inspect_django_type.py  # Package tests for inspect_django_type helpers and throwaway-type branches.
 ├── middleware/    # Tests for package Django middleware integrations.
 │   └── test_debug_toolbar.py     # DebugToolbarMiddleware tests for import guards, payload injection, response rewriting, and templates.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).

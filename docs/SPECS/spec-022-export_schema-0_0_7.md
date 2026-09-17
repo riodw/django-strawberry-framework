@@ -527,7 +527,7 @@ Package tier; system-under-test is `django_strawberry_framework.management.comma
 
 **Fixture-module cleanup contract.** Every test that synthesizes a `test_module` does so via `monkeypatch.setitem(sys.modules, "test_module", module)` where `module = types.ModuleType("test_module")`, with whatever attributes that test needs assigned to it. Pytest's `monkeypatch` teardown removes the entry from `sys.modules` at end of test, so a test that sets `test_module.schema = <Schema>` does not pollute the next test that needs `test_module.not_a_schema = 1` or a `test_module` with no `schema` attribute. Without this the suite is order-dependent: a bare `sys.modules["test_module"] = module` assignment leaves the module cached, the test that runs first wins, and any reordering surfaces flake. Tests that synthesize no fixture module (the unimportable-selector and missing-positional cases) do not need `monkeypatch`.
 
-**One deliberate `pytest.mark.parametrize`.** `::test_export_schema_raises_command_error_for_malformed_selector` fans out over three selector shapes (`""`, `":schema"`, `".config.schema"`) that share one assertion. Parametrizing a set of inputs against one boundary is the right shape; a per-input copy would be three near-identical functions. Elsewhere, one pytest item per test.
+**One deliberate `pytest.mark.parametrize`.** `examples/fakeshop/tests/test_export_schema.py::test_export_schema_raises_command_error_for_malformed_selector` fans out over three selector shapes (`""`, `":schema"`, `".config.schema"`) that share one assertion. Parametrizing a set of inputs against one boundary is the right shape; a per-input copy would be three near-identical functions. Elsewhere, one pytest item per test.
 
 Required coverage:
 

@@ -12,7 +12,7 @@ import sys
 from io import StringIO
 
 import pytest
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 
 from django_strawberry_framework.registry import registry
 
@@ -69,7 +69,8 @@ def test_inspect_by_meta_name(reload_inspect_schema):
 
     ``PublicPatronType`` declares ``name = "PublicPatron"`` - the SDL surface an
     operator sees in introspection. Pasting that GraphQL name into the CLI must
-    resolve the type and title the table with the same authoritative name.
+    resolve the type and title the table with the same authoritative name. The
+    Python class name still resolves as back-compat and titles the same SDL name.
     """
     out = StringIO()
     call_command("inspect_django_type", "PublicPatron", stdout=out)
@@ -80,6 +81,10 @@ def test_inspect_by_meta_name(reload_inspect_schema):
     assert "PublicPatronType" not in text.splitlines()[0]
     # A kept scalar column still renders (exclude drops email / fines only).
     assert "name" in text
+    # Python class name still resolves (back-compat for call sites / muscle memory).
+    out_cls = StringIO()
+    call_command("inspect_django_type", "PublicPatronType", stdout=out_cls)
+    assert out_cls.getvalue().splitlines()[0].startswith("PublicPatron  (model:")
 
 
 def test_inspect_by_registered_name(reload_inspect_schema):
@@ -318,3 +323,103 @@ def test_inspect_reads_resolved_annotation_not_field_null(reload_inspect_schema)
     subtitle_row = _field_row(text, "subtitle")
     assert "String!" in subtitle_row
     assert " no " in subtitle_row
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["PeriodicalType", "apps.library.schema.PeriodicalType"],
+    ids=["bare", "dotted"],
+)
+def test_inspect_connection_only_relation_shape_renders_row(reload_inspect_schema, selector):
+    """``PeriodicalType.issues`` is connection-only: the list form is absent from the table.
+
+    ``relation_shapes = {"issues": "connection"}`` pops the generated list
+    annotation while leaving the Django field in ``selected_fields``. The row
+    must render from the synthesized ``issues_connection`` sibling
+    (``IssueTypeConnection!``) and name the connection-only shape, never
+    ``KeyError`` or the suppressed ``[IssueType!]!`` list form.
+    """
+    out = StringIO()
+    call_command("inspect_django_type", selector, stdout=out)
+    text = out.getvalue()
+    issues_row = _field_row(text, "issues")
+    assert "IssueTypeConnection!" in issues_row
+    assert "[IssueType!]!" not in issues_row
+    assert "relation: reverse FK (connection-only)" in issues_row
+
+
+@pytest.mark.parametrize(
+    ("type_name", "attachment_type"),
+    [("MediaSpecimenType", "DjangoFileType"), ("MediaSpecimenWithPathType", "DjangoFilePathType")],
+    ids=["default-file", "path-opt-in"],
+)
+def test_inspect_file_and_image_rows_name_output_converters(
+    reload_inspect_schema,
+    type_name,
+    attachment_type,
+):
+    """File/image columns name ``convert_field_output``, not ``SCALAR_MAP``.
+
+    Read-side ``FileField`` / ``ImageField`` annotations are the structured
+    output objects from ``FIELD_OUTPUT_TYPE_MAP``. ``SCALAR_MAP`` keeps those
+    rows as ``str`` for the filter-input path; attributing the displayed type to
+    that map would mis-name the converter that actually fired. ``ImageField``
+    must resolve to ``DjangoImageType`` via the shared MRO walk, never silently
+    fall through to ``DjangoFileType``. The path-opt-in sibling swaps the
+    displayed attachment type to ``DjangoFilePathType`` while the converter
+    column still names the ``FileField`` output-map row that fired.
+    """
+    out = StringIO()
+    call_command("inspect_django_type", type_name, stdout=out)
+    text = out.getvalue()
+
+    attachment_row = _field_row(text, "attachment")
+    assert attachment_type in attachment_row
+    assert "convert_field_output -> DjangoFileType" in attachment_row
+    assert "SCALAR_MAP" not in attachment_row
+
+    image_row = _field_row(text, "image")
+    assert "DjangoImageType" in image_row
+    assert "convert_field_output -> DjangoImageType" in image_row
+    assert "SCALAR_MAP" not in image_row
+    assert "DjangoFileType" not in image_row
+
+
+def test_bad_dotted_path_raises_command_error(reload_inspect_schema):
+    with pytest.raises(CommandError, match="No module named"):
+        call_command("inspect_django_type", "does.not.exist.Type")
+
+
+def test_malformed_dotted_path_raises_command_error(reload_inspect_schema):
+    with pytest.raises(CommandError, match="module path is empty"):
+        call_command("inspect_django_type", ".BookType")
+
+
+def test_bad_schema_selector_raises_command_error():
+    with pytest.raises(CommandError, match="No module named"):
+        call_command("inspect_django_type", "BookType", "--schema", "nonexistent_xyz_module")
+
+
+@pytest.mark.parametrize(
+    ("selector", "message"),
+    [
+        ("", "module path is empty"),
+        (":schema", "module path is empty"),
+        (".config.schema", "relative module paths"),
+    ],
+    ids=["empty", "colon-only", "relative"],
+)
+def test_malformed_schema_selector_raises_command_error(selector, message):
+    with pytest.raises(CommandError, match=message):
+        call_command("inspect_django_type", "BookType", "--schema", selector)
+
+
+def test_unregistered_bare_name_raises_command_error(reload_inspect_schema):
+    """A bare name with no registry match is refused even when the project schema is loaded."""
+    with pytest.raises(CommandError, match="Import the project schema first"):
+        call_command("inspect_django_type", "TotallyUnregisteredType")
+
+
+def test_non_djangotype_symbol_raises_command_error(reload_inspect_schema):
+    with pytest.raises(CommandError, match="is not a DjangoType subclass"):
+        call_command("inspect_django_type", "apps.library.models.Book")

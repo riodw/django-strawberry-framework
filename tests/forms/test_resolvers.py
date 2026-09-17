@@ -1,31 +1,24 @@
 """Form-mutation resolver-pipeline tests (spec-038).
 
-System-under-test is ``forms/resolvers.py`` - the sync + async form pipeline
-(decode -> locate -> authorize -> construct + validate -> write -> re-fetch ->
-payload) driven through a finalized package-test ``@strawberry.type Mutation``
-(the live ``/graphql/`` surface is covered in the fakeshop suite). Fixtures:
+Package-only: construction hooks, decode helpers, reconstruction internals,
+throwaway-schema branches a shipped mutation cannot express, and fail-closed
+``ConfigurationError`` / ``SyncMisuseError`` / deadline-before-write.
 
-- the products ``Item`` / ``Category`` (FK + ``unique_item_per_category``) cover
-  the FK relation decode, the partial-update reconstruction, the narrowed-input
-  required-field guards, and the re-fetch G2 plan;
-- the library ``Book`` / ``Genre`` / ``Shelf`` (a real M2M + a ``choices`` field)
-  cover the M2M relation decode + the choice-enum unwrap;
-- the scalars ``MediaSpecimen`` (``FileField`` / ``ImageField``) covers the
-  ``files=`` decode split;
-- package-local plain ``forms.Form`` fixtures cover ``perform_mutate``'s
-  success-only / write-phase contracts and the ``to_field_name`` relation contract.
+Live HTTP owns the consumer-visible form writes in
+``examples/fakeshop/test_query/test_products_api.py`` (``createItemViaForm`` /
+``updateItemViaForm`` / file create+omit / ``get_form_kwargs`` inject /
+write-time IntegrityError / ``submitContact`` / ``submitPing`` /
+``/graphql-async/``), ``test_library_api.py`` (raw-pk hidden FK+M2M,
+``to_field_name`` write, omitted M2M preserve, explicit-null required M2M,
+``perform_mutate`` write + IntegrityError rollback), and
+``test_uploads_api.py`` (ImageField form multipart).
 
-The consumer-visible halves - the created / updated node, the ``clean_<field>``
-and ``"__all__"`` envelopes, untouched stale-value revalidation, the explicit-null
-FK required error, the omitted-required coercion error, the visibility-scoped
-locate, the authorize-before-decode ordering, the plain-form ``{ ok errors }``
-shapes and its deny-by-default posture, and the ``get_form_kwargs`` constructor
-injection - are earned over real HTTP in
-``examples/fakeshop/test_query/test_products_api.py``.
-
-The relation-visibility tests drive BOTH a Relay-``GlobalID`` primary AND a
-non-Relay raw-pk primary, single AND multi, to pin the visibility-on-every-branch
-contract that closes the raw-pk gap ``036``'s ``_decode_relation_id_set`` leaves.
+Kept here because no shipped mutation carries them: Relay-GlobalID M2M
+visibility (``GenreType`` has no hide hook), ``Meta.fields``-narrowed update,
+``get_form``-only construction, request-scoped ``ModelChoiceField`` queryset vs
+generated-input identity, NullBoolean UNSET omit, required extra field on a
+partial input, ``to_field_name`` reconstruction, ImageField reconstruction
+key absence, decode-helper envelopes, optimizer ``dst_optimizer_plan`` G2.
 """
 
 from __future__ import annotations
@@ -40,9 +33,7 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from django import forms
-from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError, connection
-from django.test import override_settings
+from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 
@@ -90,20 +81,6 @@ class _AllowAll:
         instance=None,
     ):
         return True
-
-
-class _DenyAll:
-    """A permission class that denies every write (drives the write-auth denial)."""
-
-    def has_permission(
-        self,
-        info,
-        mutation,
-        operation,
-        data,
-        instance=None,
-    ):
-        return False
 
 
 @strawberry.type
@@ -214,48 +191,9 @@ _CREATE = (
     "mutation($d: ItemModelFormInput!){ createItem(data:$d){ "
     "node{ id name category{ name } } errors{ field messages } } }"
 )
-_UPDATE = (
-    "mutation($id: ID!, $d: ItemModelFormPartialInput!){ updateItem(id:$id, data:$d){ "
-    "node{ name category{ name } } errors{ field messages } } }"
-)
-
 
 # ---------------------------------------------------------------------------
-# create / update happy paths
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_modelform_update_locates_writes_and_returns():
-    """A ModelForm update locates the row, writes the change, returns it."""
-    (
-        schema,
-        (
-            _CategoryT,
-            ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    item = product_models.Item.objects.create(name="Before", category=cat)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"name": "After"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["updateItem"]["node"]["name"] == "After"
-    item.refresh_from_db()
-    assert item.name == "After"
-
-
-# ---------------------------------------------------------------------------
-# form.errors -> envelope (incl. NON_FIELD_ERRORS -> "__all__")
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# decode split: data= / files= / to_field_name (unit tier)
+# decode split: form-key / choice-enum unwrap (unit tier)
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +212,12 @@ def _relay_global_id(type_cls: type, pk: object) -> relay.GlobalID:
 
 @pytest.mark.django_db
 def test_decode_split_relation_lands_under_form_key_not_id_attr():
-    """``categoryId`` decodes to ``{"category": pk}`` in ``provided_data`` (the form-key contract)."""
+    """``categoryId`` decodes to ``{"category": pk}`` in ``provided_data``.
+
+    Wire write-through is
+    ``test_products_api.py::test_create_item_via_form_category_id_writes_through_form_category_field``;
+    this pins the internal form-key (not ``category_id``).
+    """
     (
         _schema,
         (
@@ -293,49 +236,6 @@ def test_decode_split_relation_lands_under_form_key_not_id_attr():
     assert provided_data["category"] == cat.pk
     assert "category_id" not in provided_data
     assert provided_files == {}
-
-
-@pytest.mark.django_db
-def test_decode_split_upload_lands_in_files_never_data():
-    """An ``Upload`` field lands in ``provided_files``, never ``provided_data``."""
-
-    class MediaForm(forms.ModelForm):
-        class Meta:
-            model = scalars_models.MediaSpecimen
-            fields = ("label", "attachment", "image")
-
-    class MediaT(DjangoType):
-        class Meta:
-            model = scalars_models.MediaSpecimen
-            fields = ("id", "label")
-            primary = True
-
-    class CreateMedia(DjangoModelFormMutation):
-        class Meta:
-            form_class = MediaForm
-            operation = "create"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        create_media = DjangoMutationField(CreateMedia)
-
-    finalize_django_types()
-    _schema(Mutation)
-    upload = SimpleUploadedFile("a.txt", b"hello")
-    image = SimpleUploadedFile("a.png", b"\x89PNG\r\n")
-    data = CreateMedia._input_class(label="L", attachment=upload, image=image)
-    info = SimpleNamespace(context=SimpleNamespace())
-    provided_data, provided_files, error = form_resolvers._decode_form_data(
-        CreateMedia,
-        data,
-        info,
-    )
-    assert error is None
-    assert set(provided_files) == {"attachment", "image"}
-    assert "attachment" not in provided_data
-    assert "image" not in provided_data
-    assert provided_data == {"label": "L"}
 
 
 @pytest.mark.django_db
@@ -397,101 +297,6 @@ def test_decode_unwraps_choice_enum_to_raw_value():
 # ---------------------------------------------------------------------------
 
 
-def _build_relay_category_create_schema(category_get_queryset):
-    """A ModelForm create over Item with a Relay-Node Category primary + a visibility hook."""
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema(
-        category_get_queryset=category_get_queryset,
-    )
-    return schema, CategoryT
-
-
-@pytest.mark.django_db
-def test_relation_visibility_relay_single_hidden_rejected():
-    """A hidden Relay-``GlobalID`` FK target -> field-keyed error BEFORE the form."""
-
-    @classmethod
-    def hide_all(cls, qs, info):
-        return qs.none()
-
-    schema, CategoryT = _build_relay_category_create_schema(hide_all)
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "X", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["categoryId"]
-
-
-@pytest.mark.django_db
-def test_relation_visibility_raw_pk_single_hidden_rejected():
-    """A hidden NON-RELAY raw-pk FK target -> field-keyed error (the raw-pk gap).
-
-    The related primary is NOT Relay-Node-shaped, so the relation id is a raw pk;
-    the form decoder must STILL visibility-check it (the gap ``036``'s
-    ``_decode_relation_id_set`` leaves on the raw-pk branch).
-    """
-
-    @classmethod
-    def hide_all(cls, qs, info):
-        return qs.none()
-
-    # Category primary is plain (no relay.Node) -> raw-pk relation id.
-    CategoryT = type(
-        "CategoryT",
-        (DjangoType,),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
-            ),
-            "get_queryset": hide_all,
-        },
-    )
-
-    class ItemT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Item
-            fields = ("id", "name")
-            primary = True
-
-    form_cls = _item_model_form()
-
-    class CreateItem(DjangoModelFormMutation):
-        class Meta:
-            form_class = form_cls
-            operation = "create"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        create_item = DjangoMutationField(CreateItem)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    del CategoryT  # the raw pk is the wire value for a non-relay primary
-    res = schema.execute_sync(
-        "mutation($d: ItemModelFormInput!){ createItem(data:$d){ node{ name } errors{ field } } }",
-        variable_values={"d": {"name": "X", "categoryId": cat.pk}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["categoryId"]
-
-
 def _build_book_m2m_schema(*, genre_relay: bool, genre_get_queryset=None):
     """A ModelForm create over Book with a genres M2M; the Genre primary is Relay or plain."""
 
@@ -540,7 +345,11 @@ def _build_book_m2m_schema(*, genre_relay: bool, genre_get_queryset=None):
 
 @pytest.mark.django_db
 def test_relation_visibility_relay_multi_hidden_rejected():
-    """A hidden Relay-``GlobalID`` M2M member -> field-keyed error (multi branch)."""
+    """A hidden Relay-``GlobalID`` M2M member -> field-keyed error (multi branch).
+
+    ``GenreType`` has no hide hook, so no shipped form mutation can feed a hidden
+    Relay M2M member. Raw-pk multi hide is live on ``createShelfViaForm``.
+    """
 
     @classmethod
     def hide_all(cls, qs, info):
@@ -567,176 +376,6 @@ def test_relation_visibility_relay_multi_hidden_rejected():
     payload = res.data["createBook"]
     assert payload["node"] is None
     assert [e["field"] for e in payload["errors"]] == ["genres"]
-
-
-@pytest.mark.django_db
-def test_relation_visibility_raw_pk_multi_hidden_rejected():
-    """A hidden NON-RELAY raw-pk M2M member -> field-keyed error (multi raw-pk gap)."""
-
-    @classmethod
-    def hide_all(cls, qs, info):
-        return qs.none()
-
-    schema, (_GenreT, ShelfT, _BookT) = _build_book_m2m_schema(
-        genre_relay=False,
-        genre_get_queryset=hide_all,
-    )
-    branch = library_models.Branch.objects.create(name=_uniq("Br"))
-    shelf = library_models.Shelf.objects.create(code=_uniq("Sh"), branch=branch)
-    genre = library_models.Genre.objects.create(name=_uniq("G"))
-    res = schema.execute_sync(
-        "mutation($d: BookFormInput!){ createBook(data:$d){ node{ title } errors{ field } } }",
-        variable_values={
-            "d": {"title": "B", "shelfId": global_id_for(ShelfT, shelf.pk), "genres": [genre.pk]},
-        },
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createBook"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["genres"]
-
-
-@pytest.mark.django_db
-def test_wrong_model_relation_id_yields_field_error():
-    """A well-formed ``GlobalID`` for the WRONG model -> field-keyed error."""
-    (
-        schema,
-        (
-            _CategoryT,
-            ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    item = product_models.Item.objects.create(name="X", category=cat)
-    wrong = global_id_for(ItemT, item.pk)  # an Item id passed to categoryId
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "New", "categoryId": wrong}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["categoryId"]
-
-
-# ---------------------------------------------------------------------------
-# to_field_name
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_to_field_name_relation_validates_by_target_field():
-    """A ``ModelChoiceField`` with ``to_field_name`` validates the decoded value by that field.
-
-    A valid Relay-``GlobalID`` is decoded to ``obj.serializable_value(to_field_name)``
-    (here ``Genre.name``), so the bound form's ``to_python`` resolves it and the
-    create succeeds.
-    """
-
-    class GenreT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Genre
-            fields = ("id", "name")
-            primary = True
-
-    class GenrePickForm(forms.Form):
-        genre = forms.ModelChoiceField(
-            queryset=library_models.Genre.objects.all(),
-            to_field_name="name",
-        )
-
-    captured = {}
-
-    class PickGenre(DjangoFormMutation):
-        class Meta:
-            form_class = GenrePickForm
-            permission_classes = []
-
-        def perform_mutate(self, form, info):
-            captured["genre"] = form.cleaned_data["genre"]
-
-    @strawberry.type
-    class Mutation:
-        pick = DjangoMutationField(PickGenre)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    genre = library_models.Genre.objects.create(name=_uniq("Genre"))
-    res = schema.execute_sync(
-        "mutation($d: GenrePickFormInput!){ pick(data:$d){ ok errors{ field messages } } }",
-        variable_values={"d": {"genreId": global_id_for(GenreT, genre.pk)}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["pick"]["ok"] is True
-    assert captured["genre"] == genre
-
-
-# ---------------------------------------------------------------------------
-# write-time IntegrityError
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_modelform_save_integrity_error_maps_to_envelope():
-    """A ``form.save()`` ``IntegrityError`` race maps to the envelope, not a top-level error."""
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    with mock.patch.object(
-        forms.ModelForm,
-        "save",
-        side_effect=IntegrityError("race"),
-    ):
-        res = schema.execute_sync(
-            _CREATE,
-            variable_values={
-                "d": {"name": "Racer", "categoryId": global_id_for(CategoryT, cat.pk)},
-            },
-        )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert payload["errors"][0]["field"] == NON_FIELD_ERROR_KEY
-
-
-@pytest.mark.django_db
-def test_plain_form_perform_mutate_integrity_error_maps_to_envelope():
-    """A plain-form ``perform_mutate`` ``IntegrityError`` maps to ``{ ok: false }``."""
-
-    class ContactForm(forms.Form):
-        message = forms.CharField()
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = ContactForm
-            permission_classes = []
-
-        def perform_mutate(self, form, info):
-            raise IntegrityError("race")
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = schema.execute_sync(
-        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
-        variable_values={"d": {"message": "hi"}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["submit"]
-    assert payload["ok"] is False
-    assert payload["errors"][0]["field"] == NON_FIELD_ERROR_KEY
 
 
 @pytest.mark.django_db
@@ -991,93 +630,6 @@ def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_uncha
 
 
 @pytest.mark.django_db
-def test_partial_update_preserves_unprovided_fk_and_validates_constraint():
-    """A one-field name change keeps the unprovided FK + validates ``unique_item_per_category``.
-
-    The unchanged ``category`` comes from ``model_to_dict`` (the reconstruction), so
-    ``unique_item_per_category`` is evaluated against the stored category - a rename
-    to an existing ``(category, name)`` pair is rejected on the ``"__all__"`` key.
-    """
-    (
-        schema,
-        (
-            _CategoryT,
-            ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    product_models.Item.objects.create(name="Taken", category=cat)
-    item = product_models.Item.objects.create(name="Mine", category=cat)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"name": "Taken"}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert NON_FIELD_ERROR_KEY in [e["field"] for e in payload["errors"]]
-    item.refresh_from_db()
-    assert item.name == "Mine"  # not written
-
-
-@pytest.mark.django_db
-def test_partial_update_preserves_unprovided_m2m():
-    """An omitted M2M is preserved from the located instance (reconstruction via ``model_to_dict``)."""
-
-    class BookForm(forms.ModelForm):
-        class Meta:
-            model = library_models.Book
-            fields = ("title", "shelf", "genres")
-
-    class GenreT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Genre
-            fields = ("id", "name")
-            primary = True
-
-    class ShelfT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Shelf
-            fields = ("id", "code")
-            primary = True
-
-    class BookT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Book
-            fields = ("id", "title")
-            primary = True
-
-    class UpdateBook(DjangoModelFormMutation):
-        class Meta:
-            form_class = BookForm
-            operation = "update"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        update_book = DjangoMutationField(UpdateBook)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    branch = library_models.Branch.objects.create(name=_uniq("Br"))
-    shelf = library_models.Shelf.objects.create(code=_uniq("Sh"), branch=branch)
-    genre = library_models.Genre.objects.create(name=_uniq("G"))
-    book = library_models.Book.objects.create(title="Orig", shelf=shelf)
-    book.genres.add(genre)
-    res = schema.execute_sync(
-        "mutation($id: ID!, $d: BookFormPartialInput!){ updateBook(id:$id, data:$d){ "
-        "node{ title } errors{ field messages } } }",
-        variable_values={"id": global_id_for(BookT, book.pk), "d": {"title": "Renamed"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["updateBook"]["node"]["title"] == "Renamed"
-    book.refresh_from_db()
-    assert list(book.genres.values_list("pk", flat=True)) == [genre.pk]  # preserved
-
-
-@pytest.mark.django_db
 def test_partial_update_preserves_unprovided_m2m_with_to_field_name():
     """An omitted M2M whose form field sets ``to_field_name`` survives a partial update (Finding 3).
 
@@ -1215,71 +767,6 @@ def test_partial_update_preserves_unprovided_fk_with_to_field_name():
     book.refresh_from_db()
     assert book.title == "Renamed"
     assert book.shelf_id == shelf.pk  # the unchanged FK preserved
-
-
-@pytest.mark.django_db(transaction=True)
-def test_partial_update_omitting_file_field_keeps_it_out_of_the_reconstructed_data(tmp_path):
-    """An omitted file field is never reconstructed into the bound ``data=``, and survives.
-
-    The file exclusion is implemented by omission - the reconstruction skips a
-    ``forms.FileField`` - so the load-bearing property is the ABSENCE of the file
-    key from the reconstructed bound payload, not merely that the stored file
-    happens to survive: ``model_to_dict`` yields the stored relative PATH, a value
-    a field fed from ``files=`` cannot re-bind, and Django can still leave the
-    column alone in some of those shapes. The reconstruction is therefore asserted
-    directly (as this file's decode rows assert ``_decode_form_data`` directly),
-    alongside the end-to-end proof that a scalar-only update leaves the stored
-    ``FieldFile`` name and bytes untouched while the unprovided required FK IS
-    reconstructed from the row.
-    """
-
-    class ItemFileForm(forms.ModelForm):
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "category", "attachment")
-
-    with override_settings(MEDIA_ROOT=str(tmp_path)):
-        (
-            schema,
-            (
-                _CategoryT,
-                ItemT,
-                _C,
-                UpdateItem,
-            ),
-        ) = _build_item_form_schema(form_class=ItemFileForm)
-        cat = product_models.Category.objects.create(name=_uniq("Cat"))
-        item = product_models.Item(name="Before", category=cat)
-        item.attachment.save("orig.txt", SimpleUploadedFile("orig.txt", b"original"), save=False)
-        item.save()
-        original_name = item.attachment.name
-
-        # The distinguishing assertion: no ``attachment`` key at all, while the
-        # unprovided required FK and the provided scalar are both present.
-        reconstructed = form_resolvers._reconstruct_partial_data(
-            UpdateItem,
-            item,
-            {"name": "After"},
-        )
-        assert "attachment" not in reconstructed
-        assert reconstructed["category"] == cat.pk
-        assert reconstructed["name"] == "After"
-
-        res = schema.execute_sync(
-            "mutation($id: ID!, $d: ItemFileFormPartialInput!){ updateItem(id:$id, data:$d){ "
-            "node{ name } errors{ field messages } } }",
-            variable_values={"id": global_id_for(ItemT, item.pk), "d": {"name": "After"}},
-        )
-        assert res.errors is None, res.errors
-        payload = res.data["updateItem"]
-        assert payload["errors"] == [], payload["errors"]
-        assert payload["node"]["name"] == "After"
-
-        item.refresh_from_db()
-        assert item.name == "After"
-        assert item.attachment.name == original_name
-        with item.attachment.open("rb") as handle:
-            assert handle.read() == b"original"
 
 
 @pytest.mark.django_db
@@ -1431,7 +918,12 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch):
 
 @pytest.mark.django_db
 def test_perform_mutate_override_runs_only_on_success():
-    """The ``perform_mutate`` override runs on a valid submit, NOT on a failing one."""
+    """The ``perform_mutate`` override runs on a valid submit, NOT on a failing one.
+
+    Live siblings: ``submitContact`` success/fail envelopes and
+    ``createBranchWithShelf`` (the write). This throwaway pins the override
+    call list, which no shipped form exposes.
+    """
     calls = []
 
     class ContactForm(forms.Form):
@@ -1506,41 +998,6 @@ def test_plain_form_rejects_write_sql_outside_the_write_phase():
     assert not product_models.Category.objects.filter(name__startswith="PhaseLeak").exists()
 
 
-@pytest.mark.django_db
-def test_plain_form_perform_mutate_may_write_inside_the_write_phase():
-    """``perform_mutate`` is the open write window: an ORM create there succeeds."""
-
-    created: list[str] = []
-
-    class ContactForm(forms.Form):
-        message = forms.CharField()
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = ContactForm
-            permission_classes = []
-
-        def perform_mutate(self, form, info):
-            name = _uniq("PhaseWrite")
-            product_models.Category.objects.create(name=name)
-            created.append(name)
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = schema.execute_sync(
-        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
-        variable_values={"d": {"message": "hi"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["submit"]["ok"] is True
-    assert len(created) == 1
-    assert product_models.Category.objects.filter(name=created[0]).exists()
-
-
 @pytest.mark.django_db(transaction=True)
 def test_plain_form_expired_deadline_rejects_before_perform_mutate_write():
     """An expired policy stops the model-less write before ``perform_mutate`` or SQL."""
@@ -1597,115 +1054,6 @@ def test_plain_form_expired_deadline_rejects_before_perform_mutate_write():
         )
         for query in captured.captured_queries
     )
-
-
-# ---------------------------------------------------------------------------
-# visibility-scoped update locate
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_update_malformed_id_is_field_error_before_lookup():
-    """A malformed / wrong-model ``id:`` -> ``id``-keyed ``FieldError`` before any lookup."""
-    (
-        schema,
-        (
-            _CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": "not-a-global-id", "d": {"name": "Y"}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["id"]
-
-
-# ---------------------------------------------------------------------------
-# write-auth denial vs success
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_plain_form_write_auth_denial_names_mutation_class():
-    """A plain-form deny raises naming the mutation class (the ``_primary_type is None`` fallback)."""
-
-    class ContactForm(forms.Form):
-        message = forms.CharField()
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = ContactForm
-            permission_classes = [_DenyAll]
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = schema.execute_sync(
-        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
-        variable_values={"d": {"message": "hi"}},
-    )
-    assert res.errors is not None
-    assert "Submit" in str(res.errors[0].message)
-
-
-@pytest.mark.django_db
-def test_write_auth_success_returns_payload():
-    """An allow permission returns the success payload."""
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema(permission_classes=[_AllowAll])
-    cat = product_models.Category.objects.create(name=_uniq("Cat"))
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "OK", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createItem"]["node"]["name"] == "OK"
-
-
-# ---------------------------------------------------------------------------
-# sync + async + SyncMisuseError
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_async_form_create_runs_under_one_sync_to_async():
-    """The async surface resolves the same create (the sync body in one ``sync_to_async``).
-
-    ``transaction=True`` is load-bearing (the async create commits on asgiref's
-    executor-thread connection, which plain ``django_db`` rollback cannot reach).
-    """
-    (
-        schema,
-        (
-            CategoryT,
-            _ItemT,
-            _C,
-            _U,
-        ),
-    ) = _build_item_form_schema()
-    cat = await product_models.Category.objects.acreate(name=_uniq("Cat"))
-    res = await schema.execute(
-        _CREATE,
-        variable_values={"d": {"name": "Async", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createItem"]["node"]["name"] == "Async"
 
 
 @pytest.mark.django_db
@@ -1766,12 +1114,9 @@ def test_sync_create_meeting_async_get_queryset_raises_sync_misuse():
 def test_modelform_refetch_keeps_select_related_and_suppresses_only():
     """The ModelForm re-fetch plan KEEPS ``select_related`` and applies NO ``.only(...)`` (G2).
 
-    Pins the load-bearing property (query-shape tests must pin the
-    load-bearing property"): a relation-selecting response keeps
-    ``select_related``/``prefetch_related``, and ``.only(...)`` is suppressed
-    because the op is a MUTATION - the re-fetch rides the SAME ``036``
-    ``refetch_optimized`` G2 path. A bare "the relation came back" assertion would
-    be non-distinguishing (identical optimized or N+1).
+    ``dst_optimizer_plan`` is not a wire field. Nested ``category { name }`` on
+    live ``createItemViaForm`` proves the relation came back; this pins the
+    mutation G2 gate (``only_fields == ()``).
     """
     (
         schema,
@@ -1915,66 +1260,6 @@ def test_decode_relation_multi_empty_values_return_empty_list():
         assert decoded == []
 
 
-@pytest.mark.django_db
-def test_explicit_null_m2m_on_update_clears_not_crashes():
-    """Explicit ``null`` on an M2M relation is a clear handled by the form, NOT a TypeError.
-
-    A required M2M cleared to empty surfaces the bound form's field-keyed required
-    error; before the fix the multi decoder iterated ``None`` and raised a
-    top-level ``TypeError`` (``spec-038-form_mutations-0_0_12`` Finding 4).
-    """
-
-    class BookForm(forms.ModelForm):
-        class Meta:
-            model = library_models.Book
-            fields = ("title", "shelf", "genres")
-
-    class GenreT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Genre
-            fields = ("id", "name")
-            primary = True
-
-    class ShelfT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Shelf
-            fields = ("id", "code")
-            primary = True
-
-    class BookT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Book
-            fields = ("id", "title")
-            primary = True
-
-    class UpdateBook(DjangoModelFormMutation):
-        class Meta:
-            form_class = BookForm
-            operation = "update"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        update_book = DjangoMutationField(UpdateBook)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    branch = library_models.Branch.objects.create(name=_uniq("Br"))
-    shelf = library_models.Shelf.objects.create(code=_uniq("Sh"), branch=branch)
-    genre = library_models.Genre.objects.create(name=_uniq("G"))
-    book = library_models.Book.objects.create(title="Orig", shelf=shelf)
-    book.genres.add(genre)
-    res = schema.execute_sync(
-        "mutation($id: ID!, $d: BookFormPartialInput!){ updateBook(id:$id, data:$d){ "
-        "node{ title } errors{ field messages } } }",
-        variable_values={"id": global_id_for(BookT, book.pk), "d": {"genres": None}},
-    )
-    assert res.errors is None, res.errors  # no top-level TypeError
-    payload = res.data["updateBook"]
-    assert payload["node"] is None
-    assert "genres" in [e["field"] for e in payload["errors"]]
-
-
 # ---------------------------------------------------------------------------
 # Relation-decode edge branches (no-primary fallback / uncoercible raw pk /
 # multi short-circuit) + plain-form decode error + plain async seam
@@ -2085,37 +1370,6 @@ def test_plain_form_relation_decode_error_yields_not_ok_envelope():
     payload = res.data["pick"]
     assert payload["ok"] is False
     assert [e["field"] for e in payload["errors"]] == ["genreId"]
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_plain_form_resolve_async_seam():
-    """The plain-form ``resolve_async`` seam resolves through the async pipeline.
-
-    The existing async form test covers the ``ModelForm`` flavor; this pins the
-    plain ``DjangoFormMutation.resolve_async`` delegation (the model-less
-    ``{ ok errors }`` flavor over the async surface).
-    """
-
-    class ContactForm(forms.Form):
-        message = forms.CharField()
-
-    class Submit(DjangoFormMutation):
-        class Meta:
-            form_class = ContactForm
-            permission_classes = []
-
-    @strawberry.type
-    class Mutation:
-        submit = DjangoMutationField(Submit)
-
-    finalize_django_types()
-    schema = _schema(Mutation)
-    res = await schema.execute(
-        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
-        variable_values={"d": {"message": "hi"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["submit"]["ok"] is True
 
 
 def test_decode_form_relation_multi_non_iterable_returns_field_error():

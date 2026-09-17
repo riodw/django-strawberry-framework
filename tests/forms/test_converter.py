@@ -15,6 +15,10 @@ Covers ``django_strawberry_framework/forms/converter.py``:
 The relation id-type (Relay-``GlobalID`` vs raw pk, single + multi) is pinned at
 the input-build site (the converter returns only the ``kind`` for relations), so
 that assertion lives in ``test_inputs.py`` where the id type is finalized.
+
+Shipped ``FileField`` / ``ImageField`` -> ``Upload`` writes live in
+``test_uploads_api.py`` / ``test_products_api.py``; this file keeps converter
+dispatch, required-ness, and fail-loud unknown subclasses.
 """
 
 from __future__ import annotations

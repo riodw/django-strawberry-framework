@@ -21,9 +21,11 @@ substrate):
 
 System-under-test is the generator run against the products ``Item`` / ``Category``
 FK fixtures plus package-local fixture models / forms for the M2M, Relay-target,
-choices-enum, ``Upload``, and plain-``Form``-only shapes products does not carry
-(the spec-038 test plan; products is non-Relay and has no M2M / file /
-choices column). Mirrors the ``tests/mutations/test_inputs.py`` fixture posture.
+choices-enum, ``Upload``, and plain-``Form``-only shapes. Mirrors the
+``tests/mutations/test_inputs.py`` fixture posture. Shipped form SDL and writes
+live in ``examples/fakeshop/test_query/test_products_api.py`` /
+``test_library_api.py`` / ``test_uploads_api.py``; this file keeps generator
+fail-loud, shape identity, and throwaway-type id mapping.
 """
 
 from __future__ import annotations

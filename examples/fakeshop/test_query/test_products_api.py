@@ -14,6 +14,9 @@ wired in ``apps.products.schema`` end to end:
 * ``RelatedFilter`` traversal (``Item.category``) via the nested
   GlobalID input.
 
+Form-mutation async colour uses a module-local ``/graphql-async/`` mount
+(``graphql_client.py`` is sync-only).
+
 Per AGENTS.md, the catalog is seeded via ``services.seed_data`` and the auth
 user via ``services.create_users`` -- never hand-rolled. Faker-generated names
 vary per provider set, so assertions are data-driven: the expected rows are
@@ -32,19 +35,22 @@ from apps.products.serializers import (
     REJECTED_SERIALIZER_ITEM_NAME,
 )
 from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
-from django.test import Client, override_settings
+from django.test import AsyncClient, Client, override_settings
 from django.test.utils import CaptureQueriesContext
+from django.urls import path
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql as _post_graphql
 from graphql_client import post_graphql_raw as _post_graphql_raw
 from strawberry import relay
 
-from django_strawberry_framework.testing import TestClient
+from django_strawberry_framework.testing import AsyncTestClient, TestClient
+from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 #: Settings that open the spec-048 error policy's pass-through gate for ONE live
 #: request. ``settings.DEBUG`` is the gate, and on this tier it is the only
@@ -4175,6 +4181,137 @@ def test_submit_ping_plain_form_denied_by_default_top_level_error():
     assert payload.get("errors"), payload  # top-level authorization error
     assert payload["data"] is None
     assert "Not authorized" in payload["errors"][0]["message"]
+    assert "SubmitPing" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_wrong_type_global_id_on_category_id_is_field_error():
+    """A well-formed ``Item`` GlobalID on form ``categoryId`` is a field-keyed error, no write.
+
+    The form decoder type-checks the relation against ``Category``; a wrong-model
+    id never becomes a cross-model pk lookup or a top-level GraphQL error.
+    """
+    create_users(1)
+    seed_data(1)
+    some_item = models.Item.objects.first()
+    wrong_gid = _global_id("products.item", some_item.pk)
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"d": {"name": "WrongTypeFormWidget", "categoryId": wrong_gid}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["categoryId"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="WrongTypeFormWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash():
+    """A malformed / raw-pk ``id:`` on ``updateItemViaForm`` is a ``FieldError`` on ``id``.
+
+    Decided before locate, never coerced to a bare pk that would 500 at ``.get``.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="FormUntouched", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    for bad_id in ("not-a-global-id", str(item.pk)):
+        response = _post_graphql(
+            _UPDATE_ITEM_VIA_FORM,
+            client=client,
+            variables={"id": bad_id, "d": {"name": "RenamedForm"}},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        result = payload["data"]["updateItemViaForm"]
+        assert result["node"] is None
+        assert [e["field"] for e in result["errors"]] == ["id"]
+    item.refresh_from_db()
+    assert item.name == "FormUntouched"
+
+
+async def _async_shipped_graphql_view(request):
+    from config.schema import schema
+
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+
+urlpatterns = [path("graphql-async/", _async_shipped_graphql_view)]
+
+
+async def _post_async_shipped(query, *, variables=None, client=None):
+    """POST ``query`` against the shipped schema over ``/graphql-async/``."""
+    with override_settings(ROOT_URLCONF=__name__):
+        result = await AsyncTestClient(client=client).query(
+            query,
+            variables=variables,
+            assert_no_errors=False,
+            url="/graphql-async/",
+        )
+    assert result.response.status_code == 200
+    return result.response.json()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_create_item_via_form_over_graphql_async():
+    """``createItemViaForm`` over ``/graphql-async/`` writes the row through one sync boundary."""
+    await sync_to_async(create_users)(1)
+    await sync_to_async(seed_data)(1)
+
+    def _user_and_category():
+        from django.contrib.auth.models import Permission
+
+        user = get_user_model().objects.get(username="view_item_1")
+        perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
+        user.user_permissions.add(perm)
+        user = get_user_model().objects.get(pk=user.pk)
+        return user, models.Category.objects.first()
+
+    user, category = await sync_to_async(_user_and_category)()
+    client = AsyncClient()
+    await sync_to_async(client.force_login)(user)
+
+    payload = await _post_async_shipped(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "AsyncFormWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "AsyncFormWidget", "category": {"name": category.name}}
+    created = await models.Item.objects.aget(name="AsyncFormWidget")
+    assert created.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_submit_contact_plain_form_over_graphql_async():
+    """``submitContact`` over ``/graphql-async/`` returns the plain-form success envelope."""
+    await sync_to_async(create_users)(1)
+    payload = await _post_async_shipped(
+        _SUBMIT_CONTACT,
+        variables={"d": {"subject": "Async hello", "email": "async@example.com"}},
+    )
+    assert "errors" not in payload, payload
+    result = payload["data"]["submitContact"]
+    assert result["ok"] is True
+    assert result["errors"] == []
 
 
 # ===========================================================================

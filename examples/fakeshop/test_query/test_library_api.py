@@ -7435,6 +7435,36 @@ def test_update_book_via_form_partial_update_preserves_m2m_over_http():
 
 
 @pytest.mark.django_db
+def test_update_book_via_form_explicit_null_genres_is_form_required_error():
+    """Explicit ``null`` on required ``genres`` is a field-keyed form error, not a TypeError.
+
+    ``updateBookViaForm(data: {genres: null})`` must not iterate ``None`` in the
+    multi decoder. The bound ``BookGenresModelForm`` rejects the empty M2M as its
+    own required-field error on ``genres``; membership is unchanged.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    genre = models.Genre.objects.create(name="NullGenreKeep")
+    book = models.Book.objects.create(title="NullBeforeTitle", shelf=shelf)
+    book.genres.set([genre])
+
+    response = _post_graphql(
+        _UPDATE_BOOK_VIA_FORM,
+        variables={"id": global_id_for(BookType, book.pk), "d": {"genres": None}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["genres"]
+    book.refresh_from_db()
+    assert book.title == "NullBeforeTitle"
+    assert set(book.genres.values_list("pk", flat=True)) == {genre.pk}
+
+
+@pytest.mark.django_db
 def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_over_http():
     """A ``title``-only ``updateBookViaForm`` preserves the OMITTED optional ``subtitle``.
 

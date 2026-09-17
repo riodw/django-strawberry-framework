@@ -28,7 +28,10 @@ System-under-test is the bases / metaclasses / validation / bind, run against th
 products ``Item`` / ``Category`` FK fixtures + package-local form fixtures (a
 ``ModelForm`` over ``Item``, a plain ``Form``, a ``ModelForm`` with no model).
 Mirrors the ``tests/mutations/test_sets.py`` + ``tests/forms/test_inputs.py``
-fixture posture.
+fixture posture. Request-time permission defaults live as ``submitPing``
+(deny-by-default) and ``submitContact`` (empty ``permission_classes`` allow-any)
+in ``test_products_api.py``; this file keeps class-creation validation,
+registries, and bind/dedupe.
 """
 
 from __future__ import annotations

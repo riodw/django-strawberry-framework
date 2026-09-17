@@ -6,45 +6,39 @@ applied at app-load time by
 
 The patch replaces the **sync** ``DjangoHTTPRequestAdapter.body`` so it
 always returns the raw request bytes (the async ``get_body`` contract)
-instead of UTF-8-decoding first. That return contract is unchanged by
-spec-046; what changed is where the bytes go next. Handing them over raw
-stops an undecodable body from raising ``UnicodeDecodeError`` inside a
-*property*, where no ``except`` can translate it, and delivers them to
-whichever ``parse_json`` the mounted view resolves - on a package view
-``views.py::_RequestBodyBoundaryMixin.parse_json``, which decodes them once
-with strict UTF-8 (spec-046 Decision 9).
+instead of UTF-8-decoding first.
 
-The adapter's own contract is one half of a joint one, so the rows below
-are written as two: the adapter hands the bytes over unexamined, and the
-*rejection* of a non-UTF-8 body - BOM-less UTF-16/32 and a UTF-8 BOM
-included - belongs to the package view's decode or to the ``json.loads``
-it delegates to. The full per-encoding matrix (which mechanism refused
-which byte shape) lives in ``tests/test_views.py`` alongside the policy
-itself; this module pins the raw-bytes half plus the fact that those exact
-bytes then reach a ``400`` at the endpoint that receives them.
+What stays here, and why a live request cannot express it:
+
+- ``apply()`` lifecycle: idempotence, self-heal after a third-party revert,
+  ``AppConfig.ready()`` having installed the wrapper by collection,
+  missing-symbol / missing-capture / signature-drift refusals, and the
+  ``APPLY_UPSTREAM_PATCHES`` global and per-dependency toggles. Those are
+  install-time contracts; a GraphQL document cannot show that ``apply()``
+  was the caller or that a missing capture refused to install.
+- The adapter-property contract: ``body`` returns ``bytes`` without
+  decoding. A wire ``400`` is identical whether the adapter handed over
+  bytes or a ``str``; only an in-process read of the property can pin the
+  return type. The captured upstream getter still decoding BOM-less
+  UTF-16-LE into a ``str`` is the same class of fact (why the patch must
+  return bytes rather than wrap ``.decode()``).
+
+Wire shape lives live. UTF-16 / UTF-32 (BOM and BOM-less) and a leading
+UTF-8 BOM are a controlled ``400`` on fakeshop's ``/graphql/`` in
+``examples/fakeshop/test_query/test_products_api.py``; the async colour,
+the ``APPLY_UPSTREAM_PATCHES`` opt-out matrix, and the ``cross_web``
+half's 500-to-400 delta on Strawberry's own mount live in
+``examples/fakeshop/test_query/test_transport_api.py``. Which mechanism
+refused which byte shape (``__cause__``) is invisible over the wire and
+stays in ``tests/test_views.py``.
 """
 
 from unittest import mock
 
 import pytest
-import strawberry
-from cross_web import DjangoHTTPRequestAdapter, HTTPException
+from cross_web import DjangoHTTPRequestAdapter
 
 from django_strawberry_framework import _cross_web_patches as patches
-from django_strawberry_framework.views import DjangoGraphQLView
-
-
-@strawberry.type
-class _Query:
-    @strawberry.field
-    def ping(self) -> str:
-        return "pong"
-
-
-#: Upstream's view constructor requires a schema, and the two rows that follow the
-#: adapter's bytes into the view's ``parse_json`` need a real instance. The schema
-#: is never executed here - the whole point is that the body is refused first.
-_SCHEMA = strawberry.Schema(query=_Query)
 
 
 class _FakeRequest:
@@ -52,6 +46,10 @@ class _FakeRequest:
 
     def __init__(self, body: bytes) -> None:
         self.body = body
+
+
+class _MalformedAdapter:
+    body = object()
 
 
 def test_apply_is_idempotent():
@@ -99,9 +97,11 @@ def test_body_returns_raw_bytes_for_invalid_utf8():
     raises here - inside a ``property``, outside any ``except`` that could turn
     it into a response - which is the whole reason this getter exists. Handing
     the bytes over unexamined puts the raise one frame later, inside a
-    ``parse_json`` that can translate it into a controlled ``400``: the package
-    view's strict decode on a package mount, the patch module's widened
-    ``except`` on an upstream one.
+    ``parse_json`` that can translate it into a controlled ``400``. The live
+    ``400`` is
+    ``test_products_api.py::test_post_invalid_utf8_json_body_returns_400_not_500``;
+    the 500-to-400 delta on Strawberry's own mount is
+    ``test_transport_api.py::test_the_cross_web_half_turns_upstreams_own_500_into_a_400``.
     """
     adapter = DjangoHTTPRequestAdapter(_FakeRequest(b"\xff\xfe\xfa"))
     assert adapter.body == b"\xff\xfe\xfa"
@@ -110,43 +110,28 @@ def test_body_returns_raw_bytes_for_invalid_utf8():
 def test_body_returns_raw_bytes_for_utf8_bom():
     """UTF-8 BOM stays bytes here; the package view's parse is what rejects it.
 
-    Two halves of one joint contract. The adapter's half is unchanged - raw
-    bytes, no inspection. The rejection belongs to the view boundary, and
-    spec-046 Decision 10 chose it over stripping the BOM; it costs no branch,
-    because the bytes decode cleanly and upstream's own ``json.loads`` refuses the
-    leading U+FEFF.
-
-    Handing these exact bytes to the *view* rather than to
-    ``_patched_parse_json`` is load-bearing rather than incidental: ``json.loads``
-    on ``bytes`` detects ``utf-8-sig`` and strips the BOM itself, so the patch
-    module alone would accept this body. What refuses it is the package's own
-    strict decode, which is why the adapter's output has to be followed to the
-    endpoint that actually receives it.
+    The adapter does not inspect the bytes. ``json.loads`` on ``bytes`` detects
+    ``utf-8-sig`` and would strip the BOM, so a patch-module parse would accept
+    this body; the live ``400`` is
+    ``test_products_api.py::test_post_utf8_bom_json_body_is_rejected_as_400``.
     """
     raw = b"\xef\xbb\xbf" + b'{"a": 1}'
     adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
     assert adapter.body == raw
     assert isinstance(adapter.body, bytes)
 
-    with pytest.raises(HTTPException) as excinfo:
-        DjangoGraphQLView(schema=_SCHEMA).parse_json(adapter.body)
-    assert excinfo.value.status_code == 400
-
 
 def test_body_returns_raw_bytes_for_utf16_le_without_bom():
-    """BOM-less UTF-16-LE stays bytes here; the package view's parse rejects it.
+    """BOM-less UTF-16-LE stays bytes here; upstream's getter still decodes to ``str``.
 
     ``encode("utf-16-le")`` is NUL-padded ASCII, hence UTF-8-decodable, so
-    upstream's ``.decode()`` still *succeeds* - the sanity assertion below is
-    the live proof that the sync adapter really does bare-decode, i.e. that
-    this patch is still required. What survives of that bug is gap (1): a
-    decode inside a property raises where nothing can translate it. It is no
-    longer a wrong *success*, because under the wire contract the view's strict
-    decode reaches the same NUL-studded ``str`` and upstream's ``json.loads``
-    refuses it either way - which the second half asserts on these exact bytes.
+    upstream's ``.decode()`` still succeeds into a ``str``. That is why this
+    patch returns raw bytes rather than wrapping the decode: a try/except
+    around ``.decode()`` would still hand ``parse_json`` a ``str``. The live
+    ``400`` is
+    ``test_products_api.py::test_post_utf16_le_json_body_is_rejected_as_400``.
     """
     raw = '{"query":"{ __typename }"}'.encode("utf-16-le")
-    # Sanity: upstream still "succeeds" into a str - that is the bug shape.
     assert isinstance(
         patches._original_body_fget(DjangoHTTPRequestAdapter(_FakeRequest(raw))),
         str,
@@ -155,10 +140,6 @@ def test_body_returns_raw_bytes_for_utf16_le_without_bom():
     assert adapter.body == raw
     assert isinstance(adapter.body, bytes)
 
-    with pytest.raises(HTTPException) as excinfo:
-        DjangoGraphQLView(schema=_SCHEMA).parse_json(adapter.body)
-    assert excinfo.value.status_code == 400
-
 
 def test_patch_is_installed_false_when_symbol_missing():
     """``_patch_is_installed`` returns ``False`` when the adapter symbol moved."""
@@ -166,7 +147,14 @@ def test_patch_is_installed_false_when_symbol_missing():
         assert patches._patch_is_installed() is False
 
 
-def test_capture_returns_none_for_missing_adapter_or_body_property():
+@pytest.mark.parametrize(
+    "adapter",
+    [
+        pytest.param(None, id="missing-adapter"),
+        pytest.param(_MalformedAdapter, id="non-property-body"),
+    ],
+)
+def test_capture_returns_none_for_missing_adapter_or_body_property(adapter):
     """Neither a missing adapter nor a non-property ``body`` may capture as a usable getter.
 
     The capture runs at module scope, before ``apply()`` can complain, so both
@@ -178,13 +166,7 @@ def test_capture_returns_none_for_missing_adapter_or_body_property():
     something this patch can supersede, and capturing it would let ``apply()``
     install over an unrecognized descriptor.
     """
-    with mock.patch.object(patches, "DjangoHTTPRequestAdapter", None):
-        assert patches._captured_upstream_body_getter() is None
-
-    class _MalformedAdapter:
-        body = object()
-
-    with mock.patch.object(patches, "DjangoHTTPRequestAdapter", _MalformedAdapter):
+    with mock.patch.object(patches, "DjangoHTTPRequestAdapter", adapter):
         assert patches._captured_upstream_body_getter() is None
 
 

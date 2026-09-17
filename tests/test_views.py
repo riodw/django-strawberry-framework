@@ -20,11 +20,12 @@ What stays here:
   enforcement branches whose subject is view-internal state a wire response
   cannot show - that an over-limit *declaration* is refused without
   ``request._body`` ever being materialized, that a multipart request stays
-  unmaterialized, that GET is a no-op, and above all *how* the body is measured:
-  a wire ``413`` is identical whether the rejection cost one ``seek`` or a
-  full-body allocation, so the bound itself is only assertable from here. Every
-  request-shaped cap row (status codes, the reason on the wire, the parse /
-  execution witnesses, the ASGI fragment shapes) is live in
+  unmaterialized, that a hostile ``CONTENT_LENGTH`` on GET never caches a body,
+  and above all *how* the body is measured: a wire ``413`` is identical whether
+  the rejection cost one ``seek`` or a full-body allocation, so the bound itself
+  is only assertable from here. Every request-shaped cap row (status codes, the
+  reason on the wire, GET + a lying ``Content-Length`` answering ``200``, the
+  parse / execution witnesses, the ASGI fragment shapes) is live in
   ``examples/fakeshop/test_query/test_transport_api.py``;
 - the strict UTF-8 wire contract, now that the package view owns it
   (spec-046 Decision 9): the per-encoding ``__cause__`` matrix, which is
@@ -53,16 +54,14 @@ from cross_web import (
     DjangoHTTPRequestAdapter,
     HTTPException,
 )
-from django.conf import settings
 from django.http import (
     HttpRequest,
     HttpResponse,
     HttpResponseForbidden,
     RawPostDataException,
     UnreadablePostError,
-    multipartparser,
 )
-from django.middleware.csrf import CSRF_SECRET_LENGTH, CsrfViewMiddleware
+from django.middleware.csrf import CsrfViewMiddleware
 from django.test import (
     AsyncClient,
     AsyncRequestFactory,
@@ -554,16 +553,19 @@ def test_a_declared_over_limit_request_is_refused_without_touching_the_stream():
     assert under.body == b"x" * 16
 
 
-def test_a_multipart_request_under_the_declared_gate_is_never_materialized():
-    """Decision 7 step 3: multipart gets the declared gate and nothing else.
+@pytest.mark.parametrize("view_class", _VIEW_CLASSES)
+def test_a_multipart_request_under_the_declared_gate_is_never_materialized(view_class):
+    """Decision 7 step 3: multipart is size-gated by the declaration, never by reading ``body``.
 
     Reading ``request.body`` here would pull the whole payload into memory and
     defeat Django's streaming upload handlers, breaking the ``Upload``-scalar
     path the package ships - so the witness is that ``_body`` stays absent even
     after Django's own ``MultiPartParser`` has run and produced ``POST``. The
-    declared gate still applies to multipart, which the second half asserts.
+    over-cap ``413`` is live in
+    ``test_transport_api.py::test_a_multipart_request_over_the_declared_cap_is_refused``.
+    Both view classes, because the carve-out lives on the shared mixin.
     """
-    view = _capped_view(10_000)
+    view = _capped_view(10_000, view_class)
     request = RequestFactory().post("/graphql/", data={"operations": "{}"})
 
     assert request.content_type == "multipart/form-data"
@@ -573,21 +575,15 @@ def test_a_multipart_request_under_the_declared_gate_is_never_materialized():
     assert request.POST["operations"] == "{}"
     assert hasattr(request, "_body") is False
 
-    view.max_request_body_bytes = 8
-    with pytest.raises(HTTPException, match="request-body limit"):
-        view._enforce_request_body_limit(
-            RequestFactory().post("/graphql/", data={"operations": "{}"}),
-        )
 
+def test_a_hostile_content_length_on_get_never_materializes_the_body():
+    """GET never caches ``request._body``, even when ``CONTENT_LENGTH`` lies.
 
-def test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length():
-    """GET carries no body the view reads, so the cap does not run (Edge cases).
-
-    A hostile ``CONTENT_LENGTH`` on a GET must not turn the IDE or a GET query
-    into a ``413``: the declared gate would otherwise fire on a header that
-    describes nothing. The ``variables`` / ``extensions`` query-param size is a
-    separate concern, already shielded by
-    ``_patched_parse_query_params``.
+    The wire verdict - GET + a hostile ``CONTENT_LENGTH`` answers ``200`` on
+    ``cap-tiny/`` - is live in
+    ``test_transport_api.py::test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length``.
+    What a response cannot show is that the cap never materialized a body: the
+    declared gate would otherwise fire on a header that describes nothing.
     """
     view = _capped_view(32)
     request = RequestFactory().get("/graphql/", CONTENT_LENGTH="999999")
@@ -2226,7 +2222,8 @@ def test_both_package_views_resolve_parse_json_to_the_one_shared_mixin_method():
 #     (plus the alias matrix below, and the masking-direction row)
 #   * ``request.encoding``            -> ``..._non_utf8_request_encoding_is_refused_on_its_own``
 #     and ``..._does_not_mask_a_middleware_set_request_encoding``
-#   * ``settings.DEFAULT_CHARSET``    -> ``..._reconfigured_default_charset_is_refused_...``
+#   * ``settings.DEFAULT_CHARSET``    -> live in
+#     ``test_transport_api.py::test_a_project_that_reconfigured_default_charset_is_refused_unless_the_client_declares_utf8``
 # ---------------------------------------------------------------------------
 
 _DECLARED_CHARSETS = (
@@ -2262,13 +2259,7 @@ def _multipart_body(raw):
     )
 
 
-def _multipart_request(
-    charset=None,
-    *,
-    encoding=None,
-    method="POST",
-    data=b"x",
-):
+def _multipart_request(charset=None, *, encoding=None, data=b"x"):
     """A multipart request whose declared ``Content-Type`` carries ``charset``.
 
     Built through ``generic`` rather than ``post`` for one reason that is itself
@@ -2287,12 +2278,11 @@ def _multipart_request(
     AFTER construction on purpose: that is the only order a middleware can act
     in, and it is what overwrites the promotion
     ``HttpRequest._set_content_type_params`` performed from the declaration.
-    ``method=`` exists for the GET carve-out row.
     """
     content_type = f"multipart/form-data; boundary={_MULTIPART_BOUNDARY}"
     if charset is not None:
         content_type = f"{content_type}; charset={charset}"
-    request = RequestFactory().generic(method, "/graphql/", data=data, content_type=content_type)
+    request = RequestFactory().generic("POST", "/graphql/", data=data, content_type=content_type)
     if encoding is not None:
         request.encoding = encoding
     return request
@@ -2454,55 +2444,6 @@ def test_a_middleware_set_non_utf8_request_encoding_is_refused_on_its_own():
         view._enforce_multipart_form_encoding(_multipart_request(encoding="iso-8859-1"))
 
 
-def test_a_reconfigured_default_charset_is_refused_but_a_declared_utf8_still_wins():
-    """The effective-encoding condition's second sub-rung, and its exact boundary.
-
-    ``MultiPartParser.__init__`` resolves ``encoding or
-    settings.DEFAULT_CHARSET``, so a project that reconfigures ``DEFAULT_CHARSET``
-    away from UTF-8 changes how every undeclared multipart form is decoded, and the
-    endpoint's promise would quietly stop being true. It is refused instead.
-
-    The second half is the part a "every rung must be UTF-8" reading gets wrong,
-    and it is measured Django behavior rather than a preference: with
-    ``DEFAULT_CHARSET`` set to Latin-1 and the client declaring ``charset=utf-8``,
-    ``_set_content_type_params`` promotes ``utf-8`` onto ``request.encoding``,
-    ``MultiPartParser`` receives ``utf-8``, and the form genuinely IS decoded as
-    UTF-8 - so refusing it would be the package refusing a request Django handles
-    exactly as the contract promises. The gate tracks what Django does, not a rung
-    order of its own.
-    """
-    view = DjangoGraphQLView(schema=SCHEMA)
-
-    with override_settings(DEFAULT_CHARSET="iso-8859-1"):
-        with pytest.raises(HTTPException, match=_JSON_PARSE_REASON):
-            view._enforce_multipart_form_encoding(_multipart_request())
-
-        view._enforce_multipart_form_encoding(_multipart_request("utf-8"))
-
-
-def test_a_get_carrying_a_stray_multipart_content_type_is_not_a_multipart_form():
-    """The guard is scoped to the requests Django decodes.
-
-    ``HttpRequest._load_post_and_files`` installs an empty ``QueryDict`` without
-    parsing anything unless the method is ``POST``, so a stale
-    ``multipart/form-data`` ``Content-Type`` on a GET describes a form that will
-    never be decoded - and this endpoint reads no body on GET either. Refusing it
-    was the package inventing a rejection for bytes nobody parses, and it made the
-    mixin's own "**GET.** A no-op" sentence false.
-
-    Asserted through ``_enforce_request_boundary`` rather than the encoding guard
-    alone, because the claim is about the composed boundary: both halves have to
-    be no-ops on this request, and the second half is what regressed.
-    """
-    view = _capped_view(_PROBE_CAP)
-
-    view._enforce_request_boundary(_multipart_request("iso-8859-1", method="GET"))
-
-    post = _multipart_request("iso-8859-1")
-    with pytest.raises(HTTPException, match=_JSON_PARSE_REASON):
-        view._enforce_request_boundary(post)
-
-
 def test_a_non_multipart_request_is_not_subject_to_the_form_encoding_check():
     """The two declaration guards own disjoint request shapes.
 
@@ -2543,101 +2484,6 @@ def test_a_multipart_declaration_is_left_to_the_form_encoding_guard():
 
     view._enforce_request_boundary(_multipart_request("utf-8"))
     view._enforce_body_charset_declaration(_multipart_request("iso-8859-1"))
-
-
-_DECLARED_JSON_CHARSETS = (
-    pytest.param(None, 200, id="no-declaration"),
-    pytest.param("utf-8", 200, id="utf-8"),
-    pytest.param("UTF8", 200, id="alias-spelling"),
-    pytest.param("iso-8859-1", 400, id="latin-1"),
-    pytest.param("utf-8-sig", 400, id="utf-8-sig"),
-    pytest.param("no-such-codec", 400, id="unknown-name"),
-)
-
-#: A JSON document whose bytes decode differently under the two codecs the rows
-#: below declare: ``C3 A9`` is one character in UTF-8 and two in Latin-1. The
-#: non-ASCII byte sits inside a GraphQL comment, so the document is a valid
-#: operation whichever way an intermediary reads the rest of it.
-_NON_ASCII_JSON_BODY = json.dumps(
-    {"query": "{ ping } # \u00e9"},
-    ensure_ascii=False,
-).encode("utf-8")
-
-
-async def _declared_json_response(charset, is_async):
-    """POST the non-ASCII document with ``charset`` declared, over the real endpoint.
-
-    The bytes go on the wire untouched, which is the only way to express the shape
-    these rows are about - a declaration that contradicts the bytes it describes.
-    ``generic`` is what does that: ``post`` re-encodes the payload with the charset
-    it finds on the content type (and cannot even be handed a codec name Python
-    does not know), while ``generic`` puts both the bytes and the header through
-    unchanged.
-
-    Driven through the whole handler rather than a view instance, so the assertions
-    are the wire outcome an intermediary would see. The endpoint mounts live at the
-    bottom of this module, which doubles as its own ``ROOT_URLCONF``.
-    """
-    content_type = "application/json"
-    if charset is not None:
-        content_type = f"{content_type}; charset={charset}"
-    with override_settings(ROOT_URLCONF=__name__):
-        if is_async:
-            return await AsyncClient().generic(
-                "POST",
-                "/async-graphql/",
-                data=_NON_ASCII_JSON_BODY,
-                content_type=content_type,
-            )
-        return Client().generic(
-            "POST",
-            "/graphql/",
-            data=_NON_ASCII_JSON_BODY,
-            content_type=content_type,
-        )
-
-
-@pytest.mark.parametrize(("charset", "status"), _DECLARED_JSON_CHARSETS)
-@pytest.mark.parametrize(
-    "is_async",
-    [pytest.param(False, id="sync"), pytest.param(True, id="async")],
-)
-async def test_the_endpoint_refuses_a_json_charset_it_will_not_decode_with(
-    is_async,
-    charset,
-    status,
-):
-    """A declared charset is part of the wire boundary, not decoration.
-
-    The strict decode alone accepts ``Content-Type: application/json;
-    charset=iso-8859-1`` for any body that happens to be valid UTF-8, and answers
-    ``200``. The bytes then mean two different things at two hops: this endpoint
-    reads ``C3 A9`` as one character, while a proxy, WAF, audit or signing layer
-    that honours the declaration reads two - the same parser differential
-    Decision 9's narrowing of the success set exists to remove, arriving through the
-    header instead of through the body.
-
-    So the declaration is refused rather than ignored, with the boundary's shared
-    ``400``, and the rows cover exactly what "refused" means: absent is not a
-    declaration and passes, every alias Python resolves to UTF-8 passes, and
-    ``utf-8-sig`` - a different codec, whose BOM Decision 10 refuses - and an
-    unknown codec name do not.
-
-    Both transports run the same header-only check from the same
-    ``_enforce_request_boundary``, and running the matrix twice is what keeps that
-    structural claim honest end to end: an override or an ordering change reaching
-    only one ``run`` would leave the other endpoint answering ``200`` for a
-    declaration it does not honour. The accepted rows also assert the non-ASCII
-    document really executed, rather than being quietly repaired into one that
-    parses.
-    """
-    response = await _declared_json_response(charset, is_async)
-
-    assert response.status_code == status
-    if status == 200:
-        assert json.loads(response.content)["data"] == {"ping": "pong"}
-    else:
-        assert response.content.decode() == _JSON_PARSE_REASON
 
 
 def test_a_bytes_control_field_is_left_to_the_strict_decode_rather_than_the_marker_check():
@@ -3128,11 +2974,6 @@ _DERIVED_BOUNDARY_MIDDLEWARE_PATH = "tests.test_views._DerivedBoundaryMiddleware
 _CSRF_MIDDLEWARE_PATH = "tests.test_views._RejectingCsrfMiddleware"
 _PASSTHROUGH_MIDDLEWARE_PATH = "tests.test_views._passthrough_middleware"
 
-#: Django's own class, for the rows whose witness is the ``request.POST`` read
-#: itself: :class:`_RejectingCsrfMiddleware` refuses before performing one, so it
-#: can prove which class the chain reached but never whether a body was parsed.
-_STOCK_CSRF_MIDDLEWARE_PATH = "django.middleware.csrf.CsrfViewMiddleware"
-
 _ORDERED_CHAIN = [_PASSTHROUGH_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH, _CSRF_MIDDLEWARE_PATH]
 
 #: The mount cap the over-limit rows are refused by. Small enough that an ordinary
@@ -3205,72 +3046,6 @@ async def _post(path, is_async, client=None, **kwargs):
     if is_async:
         return await client.post(path, **kwargs)
     return client.post(path, **kwargs)
-
-
-def _csrf_enforcing_client(is_async):
-    """A client whose CSRF check actually reaches the ``request.POST`` read.
-
-    Two fixture traps sit in front of that read, and either one silently turns a
-    parse-ordering assertion into a measurement of the fixture: a default test
-    client makes ``CsrfViewMiddleware.process_view`` short-circuit on
-    ``_dont_enforce_csrf_checks``, and an enforcing client *without* a well-formed
-    ``csrftoken`` cookie is rejected on ``REASON_NO_CSRF_COOKIE``. Only an
-    enforcing client carrying a token-shaped cookie gets as far as reading the
-    POST data - which on a multipart body is the ``MultiPartParser`` invocation the
-    boundary exists to precede.
-    """
-    client = (
-        AsyncClient(enforce_csrf_checks=True) if is_async else Client(enforce_csrf_checks=True)
-    )
-    client.cookies[settings.CSRF_COOKIE_NAME] = "a" * CSRF_SECRET_LENGTH * 2
-    return client
-
-
-@contextlib.contextmanager
-def _counting_multipart_parses():
-    """Count real ``MultiPartParser.parse`` invocations, wherever they come from.
-
-    The primary witness for every ordering row: a CSRF call log only says which
-    class the chain reached, while this says whether any component parsed the body
-    at all. The original is called through, so the request behaves normally.
-    """
-    original = multipartparser.MultiPartParser.parse
-    parses = []
-
-    def counting(self, *args, **kwargs):
-        parses.append(True)
-        return original(self, *args, **kwargs)
-
-    with mock.patch.object(multipartparser.MultiPartParser, "parse", counting):
-        yield parses
-
-
-@pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
-async def test_the_chain_refuses_an_over_limit_multipart_before_any_csrf_read(
-    under,
-    over,
-    is_async,
-):
-    """The invariant the middleware exists for: the boundary precedes the parse.
-
-    ``CsrfViewMiddleware.process_view`` reads ``request.POST`` on every
-    cookie-bearing POST, and on a multipart request that read IS the
-    ``MultiPartParser`` invocation. With the boundary running from a middleware
-    listed ahead of the CSRF entry, the ``413`` is produced before the CSRF
-    middleware is entered at all - which is what the empty call log proves, and it
-    is a stronger witness than an upload-handler sentinel because the class that
-    would have parsed the body never ran.
-
-    ``under`` is unused by this row and present only because both mounts come from
-    one parametrization; the reason the over-limit mount is a separate URL is that
-    the cap is a per-mount keyword.
-    """
-    with _chain(_ORDERED_CHAIN):
-        response = await _post(over, is_async, data={"operations": "{}"})
-
-    assert response.status_code == 413
-    assert response.content.decode() == _BODY_LIMIT_REASON
-    assert _RejectingCsrfMiddleware.calls == []
 
 
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
@@ -3601,91 +3376,6 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
         await middleware(RequestFactory().get("/graphql/"))
 
     assert bool(_CSRF_ORDERING_EXEMPTION) is True
-
-
-@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
-async def test_installing_the_middleware_parses_no_body_on_either_mount(marked, wrapped, is_async):
-    """Recognition failure must cost the CSRF class, never the ordering.
-
-    The two mounts are the same view class with the same cap, reached through
-    callbacks that differ in one attribute: the wrapper copied ``csrf_exempt`` and
-    not the boundary marker, so ``process_view`` declines it. The exemption is
-    keyed off the ``_BOUNDARY_ENFORCED`` stamp rather than off the middleware being
-    installed, so a declined callback keeps its exemption, Django's CSRF middleware
-    skips it, and the view runs the boundary itself - which is why both mounts
-    answer ``413`` with nothing parsed.
-
-    The parse counter is the witness, not the status code: the over-limit request
-    is refused either way, and what a bypass changes is only *when*. Stock CSRF and
-    a token-shaped cookie are what make the read reachable at all
-    (:func:`_csrf_enforcing_client`).
-    """
-    with _chain([_BOUNDARY_MIDDLEWARE_PATH, _STOCK_CSRF_MIDDLEWARE_PATH]):
-        with _counting_multipart_parses() as parses:
-            for route in (marked, wrapped):
-                response = await _post(
-                    route,
-                    is_async,
-                    client=_csrf_enforcing_client(is_async),
-                    data={"operations": "{}"},
-                )
-                assert (route, response.status_code) == (route, 413)
-
-    assert parses == []
-
-
-@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
-async def test_the_same_two_mounts_parse_nothing_without_the_middleware_either(
-    marked,
-    wrapped,
-    is_async,
-):
-    """The other half of the pair, and what makes the row above about a regression.
-
-    On a chain carrying no boundary middleware the exemption is unconditionally
-    true, so both callbacks are skipped by the CSRF middleware and both views
-    enforce their own cap. Holding the two rows together is what states the
-    property: installing the middleware does not change the answer for either
-    mount, so no deployment loses an ordering by installing it.
-    """
-    with _chain([_STOCK_CSRF_MIDDLEWARE_PATH]):
-        with _counting_multipart_parses() as parses:
-            for route in (marked, wrapped):
-                response = await _post(
-                    route,
-                    is_async,
-                    client=_csrf_enforcing_client(is_async),
-                    data={"operations": "{}"},
-                )
-                assert (route, response.status_code) == (route, 413)
-
-    assert parses == []
-
-
-@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
-async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class(
-    marked,
-    wrapped,
-    is_async,
-):
-    """The secondary witness, against the project's own CSRF class this time.
-
-    ``_RejectingCsrfMiddleware`` records the callbacks Django's chain brings it in a
-    checkable state, and honours an exemption exactly as the base class does. An
-    empty log on an over-limit multipart request to the *declined* mount therefore
-    says the class was never handed the request - which is the same assertion
-    ``::test_the_chain_refuses_an_over_limit_multipart_before_any_csrf_read`` makes
-    for the stamped mount, now made for the one the middleware does not recognize.
-
-    ``marked`` is unused here and present only because both mounts come from one
-    parametrization.
-    """
-    with _chain(_ORDERED_CHAIN):
-        response = await _post(wrapped, is_async, data={"operations": "{}"})
-
-    assert response.status_code == 413
-    assert response.content.decode() == _BODY_LIMIT_REASON
-    assert _RejectingCsrfMiddleware.calls == []
 
 
 @pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)

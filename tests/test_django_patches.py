@@ -1,34 +1,46 @@
 """Django patch tests for DB connection wrapping and multi-database safety.
 
-System-under-test: :mod:`django_strawberry_framework._django_patches`,
-applied at app-load time by
+Repo / test-runner patch lifecycle for
+:mod:`django_strawberry_framework._django_patches`, applied at app-load
+by
 :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`.
+These rows pin ``apply()`` idempotence and self-heal, the identity of
+the ``SimpleTestCase._remove_databases_failures`` replacement (and its
+inheritance onto ``TransactionTestCase`` / ``TestCase``), the Trac
+#37064 unwrap-vs-skip contract against synthetic test-case subclasses,
+the audited-upstream-body SET plus loud refusal of drift, the
+``APPLY_UPSTREAM_PATCHES`` global and per-dependency toggles, and
+``importlib.reload()`` leaving a still-installed generation's teardown
+valid.
 
-The currently-shipped patch hardens
+The shipped patch hardens
 ``SimpleTestCase._remove_databases_failures`` against Django Trac
 #37064 (closed upstream as ``wontfix``):
-<https://code.djangoproject.com/ticket/37064>. Without the patch, any
-code path that replaces a connection method between ``setUpClass`` and
-``tearDownClass`` crashes the cleanup loop with
-``AttributeError: 'function' object has no attribute 'wrapped'``.
-Django defines the classmethod on ``SimpleTestCase`` itself, so a
-single patch on the base class covers ``TransactionTestCase`` and
-``TestCase`` via normal inheritance - including direct
-``SimpleTestCase`` subclasses, which ``TransactionTestCase`` is NOT in
+<https://code.djangoproject.com/ticket/37064>. Without it, replacing a
+connection method between ``setUpClass`` and ``tearDownClass`` crashes
+cleanup with ``AttributeError: 'function' object has no attribute
+'wrapped'``. Django defines the classmethod on ``SimpleTestCase``
+itself, so one patch covers the whole hierarchy - including direct
+``SimpleTestCase`` subclasses, which ``TransactionTestCase`` is not in
 the MRO of.
+
+A live ``/graphql/`` request cannot express any of this: GraphQL
+execution never runs Django's test-case cleanup loop, never calls
+``apply()``, and cannot observe whether a classmethod descriptor on
+``SimpleTestCase`` is this package's replacement. There is no live
+sibling in ``examples/fakeshop/test_query/``.
 
 These tests do not require ``FAKESHOP_SHARDED=1``; they drive the
 patched method directly against synthetic ``SimpleTestCase`` /
 ``TransactionTestCase`` subclasses with hand-built ``databases``
 allow-lists. The test ``default`` alias is always present, so a
 one-alias multi-DB scenario is enough to exercise both branches of
-the patched loop. (The end-to-end demo shape from
+the patched loop. The demo shape at
 <https://github.com/riodw/django-remove_databases_failures-demo> runs
 under vanilla ``manage.py test`` rather than pytest-django and cannot
-be reproduced 1:1 under our test runner - pytest-django's per-test
-flush calls ``connection.cursor()`` mid-lifecycle and crashes on the
-swapped cursor before reaching ``tearDownClass``. The unit tests
-below isolate the bug class from that machinery.)
+be reproduced 1:1 here: pytest-django's per-test flush calls
+``connection.cursor()`` mid-lifecycle and crashes on the swapped
+cursor before ``tearDownClass``.
 """
 
 import importlib
@@ -360,20 +372,19 @@ def test_apply_fails_loudly_when_upstream_body_drifts():
         SimpleTestCase._remove_databases_failures = saved
 
 
-def test_validation_accepts_every_audited_upstream_body_and_refuses_a_third():
-    """The body pin is a SET of audited shapes, not a single version's body.
+def test_audited_upstream_bodies_are_exactly_the_two_known_shapes():
+    """The body pin is a closed SET of the two audited Django shapes."""
+    assert _django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES == (
+        _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
+        _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
+    )
 
-    Django rewrote ``_remove_databases_failures`` once across the supported
-    range: up to 6.0.x the disallowed-method pairs live on the
-    ``SimpleTestCase._disallowed_connection_methods`` class attribute, and from
-    6.1 they are read per connection from
-    ``connection.features.disallowed_simple_test_case_connection_methods``.
-    Both bodies are reimplemented by
-    :func:`_patched_remove_databases_failures`, so validation must accept
-    either regardless of which Django is installed - while a body outside the
-    audited set is still refused. The classes below are declared at nested
-    indentation so their dedented source is compared verbatim against the
-    pinned constants.
+
+def test_validation_accepts_the_class_attribute_upstream_body():
+    """Django 5.2.16-6.0.x body is accepted regardless of which Django is installed.
+
+    Nested so ``inspect.getsource`` after ``textwrap.dedent`` matches the
+    pinned constant.
     """
 
     class _ClassAttributeShape:
@@ -386,6 +397,24 @@ def test_validation_accepts_every_audited_upstream_body_and_refuses_a_third():
                 for name, _ in cls._disallowed_connection_methods:
                     method = getattr(connection, name)
                     setattr(connection, name, method.wrapped)
+
+    with mock.patch.object(
+        _django_patches,
+        "_original_remove_databases_failures",
+        _ClassAttributeShape.__dict__["_remove_databases_failures"],
+    ):
+        assert (
+            _django_patches._validate_upstream_shape()
+            == _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE
+        )
+
+
+def test_validation_accepts_the_feature_flag_upstream_body():
+    """Django 6.1 body is accepted regardless of which Django is installed.
+
+    Nested so ``inspect.getsource`` after ``textwrap.dedent`` matches the
+    pinned constant.
+    """
 
     class _FeatureFlagShape:
         @classmethod
@@ -401,25 +430,26 @@ def test_validation_accepts_every_audited_upstream_body_and_refuses_a_third():
                     method = getattr(connection, name)
                     setattr(connection, name, method.wrapped)
 
+    with mock.patch.object(
+        _django_patches,
+        "_original_remove_databases_failures",
+        _FeatureFlagShape.__dict__["_remove_databases_failures"],
+    ):
+        assert (
+            _django_patches._validate_upstream_shape()
+            == _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE
+        )
+
+
+def test_validation_refuses_an_unaudited_upstream_body():
+    """A body outside the audited SET is refused, not installed."""
+
     class _UnauditedShape:
         @classmethod
         def _remove_databases_failures(cls):
             for alias in connections:
                 if alias not in cls.databases:
                     connections[alias].reset_disallowed_methods()
-
-    audited = (
-        (_ClassAttributeShape, _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE),
-        (_FeatureFlagShape, _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE),
-    )
-    assert len(_django_patches._AUDITED_REMOVE_DATABASES_FAILURES_SOURCES) == len(audited)
-    for shape, expected_source in audited:
-        with mock.patch.object(
-            _django_patches,
-            "_original_remove_databases_failures",
-            shape.__dict__["_remove_databases_failures"],
-        ):
-            assert _django_patches._validate_upstream_shape() == expected_source
 
     with mock.patch.object(
         _django_patches,

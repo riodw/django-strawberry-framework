@@ -1,8 +1,26 @@
-"""AppConfig tests for package registration and upstream patch dispatch."""
+"""AppConfig tests for package registration and upstream patch dispatch.
+
+``DjangoStrawberryFrameworkConfig`` is Django app-loader state: the class
+identity, ``name`` / ``verbose_name``, registry pickup, the AppConfig attributes
+the package refuses to set, and ``ready()`` as the process-wide dispatcher for
+the four upstream-patch appliers. None of that is a GraphQL wire shape. A live
+``/graphql/`` request can show that a patched parse is in effect; it cannot show
+that ``ready()`` was the caller, that a reloaded applier kept its upstream
+capture, or that the AppConfig omitted ``default_auto_field``.
+
+Request-shaped outcomes of the patches ``ready()`` dispatches live in
+``examples/fakeshop/test_query/test_products_api.py`` (GET
+``parse_query_params`` shield) and
+``examples/fakeshop/test_query/test_transport_api.py`` (body cap, UTF-8,
+``APPLY_UPSTREAM_PATCHES`` opt-out). Per-module ``apply()`` install lifecycle
+stays in ``tests/test_django_patches.py``, ``tests/test_strawberry_patches.py``,
+``tests/test_cross_web_patches.py``, and ``tests/test_graphql_core_patches.py``.
+"""
 
 import importlib
 
 import django.apps
+import pytest
 from cross_web import DjangoHTTPRequestAdapter
 from django.test.testcases import SimpleTestCase
 from graphql.execution.execute import ExecutionContext
@@ -29,9 +47,13 @@ def test_djangostrawberryframeworkconfig_is_appconfig_subclass():
     assert issubclass(DjangoStrawberryFrameworkConfig, django.apps.AppConfig)
 
 
-def test_djangostrawberryframeworkconfig_pins_name_and_verbose_name():
-    assert DjangoStrawberryFrameworkConfig.name == "django_strawberry_framework"
-    assert DjangoStrawberryFrameworkConfig.verbose_name == "Django Strawberry Framework"
+@pytest.mark.parametrize(
+    ("attribute", "expected"),
+    [("name", "django_strawberry_framework"), ("verbose_name", "Django Strawberry Framework")],
+    ids=["name", "verbose-name"],
+)
+def test_djangostrawberryframeworkconfig_pins_name_and_verbose_name(attribute, expected):
+    assert getattr(DjangoStrawberryFrameworkConfig, attribute) == expected
 
 
 def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry():
@@ -39,22 +61,27 @@ def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry():
     assert isinstance(config, DjangoStrawberryFrameworkConfig)
 
 
-def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes():
-    # ``ready`` is deliberately absent from this set: it is required on
-    # this class, not forbidden. The package ships a ``ready()`` body
-    # that dispatches the four upstream patch modules' ``apply()``
-    # calls, and the ``ready`` tests below pin it positively. See
-    # ``django_strawberry_framework/apps.py`` ``ready()`` docstring and
-    # the four ``_*_patches`` module docstrings.
-    forbidden = {
-        "label": "Decision 2 (default last-segment label is already unique)",
-        "default_auto_field": "Decision 5 (package ships zero Django models)",
-        "default": "Decision 8 (no `default` attribute at any value)",
-    }
-    for key, why in forbidden.items():
-        assert key not in DjangoStrawberryFrameworkConfig.__dict__, (
-            f"{key!r} is forbidden on DjangoStrawberryFrameworkConfig: {why}"
-        )
+@pytest.mark.parametrize(
+    ("attribute", "why"),
+    [
+        ("label", "Decision 2 (default last-segment label is already unique)"),
+        ("default_auto_field", "Decision 5 (package ships zero Django models)"),
+        ("default", "Decision 8 (no `default` attribute at any value)"),
+    ],
+    ids=["label", "default-auto-field", "default"],
+)
+def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes(attribute, why):
+    """The AppConfig class body omits ``label``, ``default_auto_field``, and ``default``.
+
+    ``ready`` is deliberately absent from this set: it is required on this class,
+    not forbidden. The package ships a ``ready()`` body that dispatches the four
+    upstream patch modules' ``apply()`` calls, and the ``ready`` tests below pin
+    it positively. See ``django_strawberry_framework/apps.py`` ``ready()``
+    docstring and the four ``_*_patches`` module docstrings.
+    """
+    assert attribute not in DjangoStrawberryFrameworkConfig.__dict__, (
+        f"{attribute!r} is forbidden on DjangoStrawberryFrameworkConfig: {why}"
+    )
 
 
 def test_djangostrawberryframeworkconfig_defines_ready_for_django_patches():
@@ -149,7 +176,30 @@ def test_ready_dispatches_all_four_patch_appliers_and_refires_safely():
         ExecutionContext.complete_list_value = saved_complete
 
 
-def test_ready_reinstalls_patches_after_their_modules_reload():
+@pytest.mark.parametrize(
+    ("module", "original_names"),
+    [
+        (_django_patches, ("_original_remove_databases_failures",)),
+        (
+            _strawberry_patches,
+            (
+                "_original_parse_json",
+                "_original_parse_query_params",
+                "_original_sync_parse_multipart",
+                "_original_async_parse_multipart",
+            ),
+        ),
+        (_cross_web_patches, ("_original_body_fget",)),
+        (_graphql_core_patches, ("_original_complete_list_value",)),
+    ],
+    ids=[
+        "django",
+        "strawberry",
+        "cross-web",
+        "graphql-core",
+    ],
+)
+def test_ready_reinstalls_patches_after_their_modules_reload(module, original_names):
     """A reloaded applier retains its true upstream capture and re-installs cleanly.
 
     An interactive test session can reload a private patch module while its
@@ -174,42 +224,34 @@ def test_ready_reinstalls_patches_after_their_modules_reload():
     worker's run.
     """
     config = django.apps.apps.get_app_config("django_strawberry_framework")
-    modules_and_originals = (
-        (_django_patches, ("_original_remove_databases_failures",)),
-        (
-            _strawberry_patches,
-            (
-                "_original_parse_json",
-                "_original_parse_query_params",
-                "_original_sync_parse_multipart",
-                "_original_async_parse_multipart",
-            ),
-        ),
-        (_cross_web_patches, ("_original_body_fget",)),
-        (_graphql_core_patches, ("_original_complete_list_value",)),
-    )
-    saved_namespaces = {module: dict(module.__dict__) for module, _ in modules_and_originals}
+    saved_namespace = dict(module.__dict__)
     saved_slots = tuple(
         (owner, attribute, owner.__dict__[attribute]) for owner, attribute in _PATCHED_SLOTS
     )
     try:
-        for module, original_names in modules_and_originals:
-            original_captures = tuple(getattr(module, name) for name in original_names)
+        original_captures = tuple(getattr(module, name) for name in original_names)
 
-            for _ in range(2):
-                importlib.reload(module)
+        importlib.reload(module)
+        assert tuple(getattr(module, name) for name in original_names) == original_captures
+        config.ready()
+        assert _all_patches_installed() == (
+            True,
+            True,
+            True,
+            True,
+        )
 
-                assert tuple(getattr(module, name) for name in original_names) == original_captures
-                config.ready()
-                assert _all_patches_installed() == (
-                    True,
-                    True,
-                    True,
-                    True,
-                )
+        importlib.reload(module)
+        assert tuple(getattr(module, name) for name in original_names) == original_captures
+        config.ready()
+        assert _all_patches_installed() == (
+            True,
+            True,
+            True,
+            True,
+        )
     finally:
-        for module, namespace in saved_namespaces.items():
-            module.__dict__.clear()
-            module.__dict__.update(namespace)
+        module.__dict__.clear()
+        module.__dict__.update(saved_namespace)
         for owner, attribute, descriptor in saved_slots:
             setattr(owner, attribute, descriptor)

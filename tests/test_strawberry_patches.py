@@ -39,13 +39,16 @@ the captured original ``parse_json`` - so the guard never fires on
 upstream's GET ``variables`` / ``extensions`` parses, where upstream has
 its own precise per-param handling (``null`` -> ``None`` -> the request
 executes; a scalar -> a per-param 400). Every wire-observable outcome of
-both gap 2's envelope guard and the shield - the rejected scalar and
-non-object-batch bodies, the object and malformed GET params - is earned
-over real HTTP in ``examples/fakeshop/test_query/test_products_api.py``;
-the rows here pin the parse semantics that have no wire shape of their
-own (the falsy skip, the scalar pass-through upstream then rejects, the
-well-typed batch handed on to upstream's own validator), the full
-install lifecycle, and the reimplementer's body pin.
+both gap 2's envelope guard and the shield - rejected scalar and
+non-object-batch bodies, object / null / malformed / scalar GET params,
+and the RecursionError 400 on a nested body or GET param - is earned
+over real HTTP in ``examples/fakeshop/test_query/test_products_api.py``.
+The rows here pin the parse semantics that have no wire shape of their
+own (the falsy skip, the well-typed batch handed on to upstream's own
+validator), the UnicodeDecodeError ``__cause__`` a live JSON 400 cannot
+isolate from the view's own decode, multipart structural vs
+non-structural translation, the full install lifecycle, and the
+reimplementer's body pin.
 
 **What is deliberately absent here.** The strict UTF-8 wire contract
 (spec-046 Decision 9) used to live in this module and no longer does: it
@@ -442,37 +445,6 @@ def test_patched_sync_parse_multipart_preserves_valid_batched_operations():
     assert parsed == [{"query": "{ __typename }", "variables": {"upload": "upload"}}]
 
 
-@pytest.mark.parametrize("param", ["variables", "extensions"])
-def test_patched_parse_query_params_parses_null_param_to_none(param):
-    """A ``null`` query param parses to ``None`` - the scalar guard must not fire.
-
-    ``None`` is a valid "object or null" value per upstream's own contract
-    (``parse_http_body``'s per-param isinstance checks), so the shield must
-    hand it through for the request to execute. An unshielded guard raised
-    the request-body 400 here, regressing a previously-succeeding GET.
-    """
-    result = patches._patched_parse_query_params(
-        BaseView(),
-        {"query": "{ __typename }", param: "null"},
-    )
-    assert result[param] is None
-    assert result["query"] == "{ __typename }"
-
-
-def test_patched_parse_query_params_passes_scalar_through_for_upstream_handling():
-    """A scalar param parses and passes through so upstream's per-param 400 owns it.
-
-    ``parse_http_body`` raises the precise "`variables` must be an object or
-    null, if provided." for a non-dict value; the shield must not shadow it
-    with the guard's request-body message.
-    """
-    result = patches._patched_parse_query_params(
-        BaseView(),
-        {"query": "{ __typename }", "variables": "42"},
-    )
-    assert result["variables"] == 42
-
-
 def test_patched_parse_query_params_skips_empty_string_param():
     """An empty-string param is left unparsed - upstream's falsy skip, byte-for-byte."""
     result = patches._patched_parse_query_params(BaseView(), {"variables": ""})
@@ -710,46 +682,6 @@ def test_capture_returns_none_when_upstream_owner_is_missing():
     supersede".
     """
     assert patches._captured_upstream_method(None, "parse_json") is None
-
-
-def test_patched_parse_json_translates_a_pathologically_nested_body(pathological_json_text):
-    """A body nested past the parser's C stack -> controlled 400, not a raw escape.
-
-    The second half of gap 1: ``json.loads`` answers a pathologically nested
-    document with ``RecursionError`` - a ``RuntimeError``, so neither
-    upstream's ``except json.JSONDecodeError`` nor a ``ValueError`` widening
-    catches it, and it escaped as an unhandled ``500`` from every one of the
-    nine call sites. The translation is the same ``HTTPException(400, ...)``
-    upstream already gives unparseable JSON, indistinguishable but for
-    ``__cause__``.
-    """
-    with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_json(BaseView(), pathological_json_text)
-
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
-    assert type(excinfo.value.__cause__) is RecursionError
-
-
-@pytest.mark.parametrize("param", ["variables", "extensions"])
-def test_patched_parse_query_params_translates_a_deep_param(param, pathological_json_text):
-    """The GET shield owns gap 1's error channel without owning its guard.
-
-    The shield routes the two query-param parses around the envelope guard
-    (upstream's per-param handling owns validity there), but a deep param
-    still drives ``json.loads`` past the C stack - client input that must
-    meet the same controlled ``400`` as malformed JSON, not an unhandled
-    ``RecursionError`` -> ``500`` on a bodyless GET.
-    """
-    with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_query_params(
-            BaseView(),
-            {"query": "{ __typename }", param: pathological_json_text},
-        )
-
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
-    assert type(excinfo.value.__cause__) is RecursionError
 
 
 def test_patched_sync_parse_multipart_translates_a_deep_operations_document(

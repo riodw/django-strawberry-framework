@@ -1,5 +1,17 @@
 """Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 
+Package-tier because fakeshop has no ``config/asgi.py`` and no WebSocket
+mount: a live ``/graphql/`` HTTP request cannot present a Channels scope,
+drive ``WebsocketCommunicator``, or reach either actor-revalidation
+checkpoint. That fixture gap is recorded in
+``examples/fakeshop/test_query/README.md``; this file does not add the mount.
+
+The HTTP transport boundary is earned over fakeshop's real ``/graphql/``
+in ``examples/fakeshop/test_query/test_transport_api.py``. Router HTTP
+delegation stays here: fakeshop does not mount
+``DjangoGraphQLProtocolRouter``, so live ``/graphql/`` proves Django's
+view, not ``ProtocolTypeRouter`` dispatch.
+
 Both dependency states are exercised (spec-041 Decision 8, as amended by
 spec-046 Decision 2):
 
@@ -25,15 +37,12 @@ the supplied Django ASGI application untouched. The request contract, the
 schema pass-through with extensions intact, and the authenticated-session round
 trip are all proven over the **WebSocket** branch, which is where the package's
 own Channels composition (and therefore ``AuthMiddlewareStack``) still lives.
-The live HTTP boundary itself is earned over fakeshop's real ``/graphql/`` in
-``examples/fakeshop/test_query/test_transport_api.py``.
 
 The WebSocket consumer-injection seam and the actor revalidation matrix (spec-046
 Decision 11, Test plan rows 25-30) also live here: the composition rows are
 structural, and the revalidation rows drive real sockets through
 ``WebsocketCommunicator`` on BOTH subprotocols. Decision 13 #"Placement" pins
-them at this tier - fakeshop has no ``asgi.py``, so the router half keeps the
-documented genuinely-unreachable-live exemption.
+them at this tier.
 
 Revalidation has **two** checkpoints, and the rows are organized around that
 split:
@@ -1332,6 +1341,9 @@ def test_router_is_a_protocol_type_router_mapping_exactly_http_and_websocket():
 
     Framed as a current-shape parity assertion (upstream maps exactly these
     two); the behavior tests below are what the mapping must actually deliver.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     router = _router()
     assert isinstance(router, ProtocolTypeRouter)
@@ -1343,9 +1355,15 @@ def test_http_branch_is_the_supplied_django_application_by_identity():
 
     Object identity, not structural equality: after the protocol split there is
     nothing left to introspect on the HTTP branch, which is the point. The
-    negative assertions name the three wrappers the ``0.0.14`` composition used
-    to interpose (``AuthMiddlewareStack``'s outermost layer, the ``URLRouter``
-    that held the GraphQL route, and the origin validator WS still carries).
+    negative assertions name the three wrappers a composed HTTP branch would
+    interpose (``AuthMiddlewareStack``'s outermost layer, a ``URLRouter``
+    holding the GraphQL route, and the origin validator WS still carries).
+
+    Fakeshop has no ``config/asgi.py`` and does not mount this router, so rungs
+    1-3 cannot observe ``ProtocolTypeRouter`` HTTP dispatch. Live HTTP sibling:
+    ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_routing_policy_is_djangos_urlconf_not_the_routers``,
+    ``test_the_package_view_serves_an_ordinary_graphql_response``).
     """
     django_application = _RecordingDjangoApplication()
     router = _router(django_application=django_application)
@@ -1359,13 +1377,17 @@ def test_construction_rejects_an_omitted_or_unusable_django_application():
     """Spec-046 row 10: omission is ``TypeError``; unusable is ``ConfigurationError``.
 
     Omission fails as a required parameter should - Python's own signature
-    binding, naming the parameter. Explicit ``None`` (the shape a ``0.0.14``
-    migrant carries over) and any non-callable get the prose instead, naming all
+    binding, naming the parameter. Explicit ``None`` (what an asgi.py written for
+    the removed consumer-served HTTP mode still passes) and any non-callable get
+    the prose instead, naming all
     three facts Error shapes requires: the security reason the old mode was
     unsafe, that the mode is REMOVED rather than flagged, and both halves of the
     two-place repair. The message substrings are
     deliberately RE-TYPED rather than imported from the module: asserting the
     constant against itself could never catch the hint drifting.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with pytest.raises(TypeError, match="django_application"):
         _router_class()(SCHEMA)
@@ -1387,6 +1409,12 @@ def test_graphql_http_consumer_left_the_router_module_entirely():
     is absent from ``dir()`` whether or not the module still references it, so
     only the source text proves the import left in the same change as the
     composition (Decision 2).
+
+    Fakeshop has no ``config/asgi.py`` and does not mount this router, so rungs
+    1-3 cannot observe ``ProtocolTypeRouter`` HTTP dispatch. Live HTTP sibling:
+    ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_routing_policy_is_djangos_urlconf_not_the_routers``,
+    ``test_the_package_view_serves_an_ordinary_graphql_response``).
     """
     source = Path(routers_module.__file__).read_text(encoding="utf-8")
     assert "GraphQLHTTPConsumer" not in source
@@ -1401,6 +1429,9 @@ def test_websocket_branch_wraps_origin_validator_outside_the_auth_stack():
     Decision 19, Decision 13 #"gains an outer layer"). Nothing is weakened: the
     origin validator's position relative to the auth stack is still what the
     middle unwrap asserts.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     router = _router()
     inner = unwrap_origin_validator(
@@ -1419,6 +1450,9 @@ def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path():
     ``websocket_url_pattern=`` governs one branch; the HTTP value stays the
     identical supplied object, because HTTP path matching belongs entirely to
     the consumer's Django URLconf (Decision 4).
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     django_application = _RecordingDjangoApplication()
     router = _router(
@@ -1441,13 +1475,21 @@ def test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path():
     ],
 )
 def test_malformed_websocket_url_pattern_fails_at_construction(pattern):
-    """A malformed route value cannot silently install a never-matching WebSocket route."""
+    """A malformed route value cannot silently install a never-matching WebSocket route.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     with pytest.raises(ConfigurationError, match="websocket_url_pattern"):
         _router(websocket_url_pattern=pattern)
 
 
 def test_hostile_websocket_url_pattern_repr_still_has_a_typed_error():
-    """The malformed-route rejection remains render-safe for hostile string subclasses."""
+    """The malformed-route rejection remains render-safe for hostile string subclasses.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
 
     class HostilePattern(str):
         def __repr__(self):
@@ -1469,6 +1511,9 @@ def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias(
     two more keywords, so both halves of the rename are pinned
     here: a compatibility alias or a relaxed positional boundary has to fail
     loudly instead of arriving as a convenience edit.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with pytest.raises(TypeError, match="url_pattern"):
         _router(url_pattern="^graphql")
@@ -1478,7 +1523,11 @@ def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias(
 
 
 def test_repeated_access_returns_the_cached_class_which_is_subclassable():
-    """The builder memoizes into ``_ROUTER_CLASS``; the class is a real base."""
+    """The builder memoizes into ``_ROUTER_CLASS``; the class is a real base.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     first = _router_class()
     second = _router_class()
     assert first is second
@@ -1493,7 +1542,11 @@ def test_repeated_access_returns_the_cached_class_which_is_subclassable():
 
 
 def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch):
-    """Concurrent lazy access cannot materialize two router class identities."""
+    """Concurrent lazy access cannot materialize two router class identities.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     original_guard = routers_module.require_channels
     monkeypatch.setattr(routers_module, "_ROUTER_CLASS", None)
     entered = threading.Event()
@@ -1569,9 +1622,13 @@ def test_the_default_websocket_consumer_is_the_packages_revalidating_subclass():
 
     ``websocket_consumer_class=None`` selects ``consumers.py``'s revalidating
     subclass - a real ``GraphQLWSConsumer`` subclass that is NOT
-    ``GraphQLWSConsumer`` itself (which is what the ``0.0.14`` mount was) - and
+    ``GraphQLWSConsumer`` itself (the bare upstream class, which the router
+    mounts only when a consumer passes it explicitly) - and
     it is handed the exact schema object plus the default window of ``0.0``,
     which is the "revalidate every operation" spelling.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     callback = _mounted_ws_callback(_router())
 
@@ -1597,6 +1654,9 @@ def test_the_generated_consumer_installs_a_derived_websocket_adapter_class():
     (there is no seam that runs between the adapter's construction and its first
     frame), and mutating upstream's own class attribute (process-wide, and it would
     gate an injected consumer that opted out).
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     upstream_consumer = _graphql_ws_consumer()
     upstream_adapter = upstream_consumer.websocket_adapter_class
@@ -1625,6 +1685,9 @@ def test_only_information_bearing_frames_reach_the_outbound_checkpoint():
     individually rather than left implied by the equality: ``ka`` in particular has
     no behavioral row, because the router exposes no ``keep_alive`` knob for the
     legacy protocol's keep-alive loop to be switched on with.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     gated = consumers_module._INFORMATION_BEARING_FRAME_TYPES
     assert gated == frozenset({"next", "data", "error"})
@@ -1650,6 +1713,9 @@ def test_an_injected_consumer_class_still_sits_inside_all_three_wrappers():
     unaffected. The behavioral half - a hostile ``Host`` and a hostile ``Origin``
     each denying an injected consumer's handshake - is
     ``test_an_injected_consumer_is_denied_by_both_handshake_boundaries``.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     class Injected(_graphql_ws_consumer()):
@@ -1691,6 +1757,9 @@ def test_an_injected_consumer_factory_is_called_with_the_schema_and_mounted():
     *unwrapped* - ``_mounted_ws_callback`` asserts ``AllowedHostsOriginValidator``
     and ``AuthMiddlewareStack`` are still the two layers above the route, so the
     new validation neither moves nor unwraps them.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     received = {}
 
@@ -1729,6 +1798,9 @@ def test_a_factory_returning_a_non_application_fails_at_construction(returned, e
     f-string tail would have raised ``ValueError`` from inside the rejection and
     replaced the promised ``ConfigurationError``. The message degrades to the
     type instead (``exceptions.py::describe_value``).
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     def factory(*, schema):
@@ -1757,6 +1829,9 @@ def test_an_async_factory_is_rejected_and_the_refused_coroutine_is_closed():
     unraisable ``RuntimeWarning`` from the garbage collector at an unrelated
     moment, which is noise pointing at the package in a normal consumer process
     and a hard error under this suite's own ``-W error`` policy.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     async def async_factory(*, schema):
@@ -1788,6 +1863,9 @@ def test_a_factory_that_cannot_accept_the_schema_keyword_fails_at_construction()
     ``factory(schema=schema)`` is the seam's one calling convention, so a factory
     that cannot bind it is a configuration error naming the convention, with the
     binding ``TypeError`` preserved as ``__cause__`` rather than surfacing bare.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     def factory():
@@ -1810,6 +1888,9 @@ def test_a_factory_that_raises_from_its_body_is_not_normalized():
     correct factory's body stays a ``TypeError`` with its own traceback. Catching
     ``TypeError`` around the call instead would have collapsed a consumer bug into
     "your factory has the wrong signature", which is the wrong diagnosis.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     def factory(*, schema):
@@ -1826,6 +1907,9 @@ def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
     or - as here - an object carrying a lying ``__signature__``). That is not
     evidence the call would fail, so the pre-check skips and the factory is
     judged by its result, which mounts normally.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     class _Unintrospectable:
@@ -1840,7 +1924,11 @@ def test_a_factory_whose_signature_cannot_be_read_is_judged_by_the_call():
 
 
 def test_a_factory_signature_descriptor_failure_is_treated_as_unintrospectable():
-    """A consumer-defined signature descriptor may fail without blocking a valid factory."""
+    """A consumer-defined signature descriptor may fail without blocking a valid factory.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
 
     class _BrokenSignature:
         @property
@@ -1871,6 +1959,9 @@ def test_an_unusable_websocket_consumer_class_is_a_construction_error(unusable):
     routed into the factory branch (a class is callable, so the ordering is
     load-bearing), and a non-callable is not a factory. Both name the accepted
     shapes and the value received; the substrings are RE-TYPED.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with pytest.raises(ConfigurationError) as exc_info:
         _router(websocket_consumer_class=unusable)
@@ -1914,6 +2005,9 @@ def test_the_revalidation_window_rejects_unusable_values(unusable):
     from CPython's 4300-digit integer-to-string guard. Both arms are now inside
     the boundary, and the negative twin is here because its ``value < 0`` check
     could never run either.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with pytest.raises(ConfigurationError, match="websocket_revalidation_window"):
         _router(websocket_revalidation_window=unusable)
@@ -1928,6 +2022,9 @@ def test_the_huge_window_rejection_chains_its_cause_and_still_renders():
     traceback still says *why* the number is unusable), and the message renders at
     all - the value degrades to its type instead of raising ``ValueError`` while
     the rejection is being formatted.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with pytest.raises(ConfigurationError) as exc_info:
         _router(websocket_revalidation_window=10**10000)
@@ -1963,6 +2060,9 @@ def test_the_revalidation_window_admits_the_builtin_numbers_exactly(subclass_val
     row states the resulting contract without hedging: the rejection is about the
     TYPE, not about whether a particular instance happens to misbehave, because
     only the type is knowable before the conversion runs.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with pytest.raises(ConfigurationError, match="websocket_revalidation_window"):
         _router(websocket_revalidation_window=subclass_value)
@@ -1994,6 +2094,9 @@ def test_the_revalidation_window_accepts_and_coerces_numbers(accepted, expected)
     where ``int`` stops having a ``float`` image: these convert, and the
     ``10**10000`` row above does not, which is the whole distinction the guarded
     ``float()`` step exists to draw.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     callback = _mounted_ws_callback(_router(websocket_revalidation_window=accepted))
 
@@ -2009,6 +2112,9 @@ def test_injecting_a_consumer_class_with_a_window_is_a_construction_error():
     injected class is rejected instead of silently ignored. An explicit ``0.0``
     stays legal - it configures nothing either way - which is the corner that
     keeps the rule about the window's EFFECT rather than about its presence.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     class Injected(_graphql_ws_consumer()):
@@ -2030,6 +2136,9 @@ def test_the_two_new_websocket_keywords_are_keyword_only():
     later convenience edit that relaxes one of them into a positional has to fail
     loudly. Read off ``inspect.signature`` rather than probed with a call, so the
     contract is asserted on the signature itself.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     parameters = inspect.signature(_router_class().__init__).parameters
 
@@ -2073,6 +2182,12 @@ async def test_http_branch_delegates_every_path_to_the_supplied_application():
     GET reach the supplied application, which records each path and answers its
     own ``418``. No package route intercepts either - which is the whole content
     of Decision 2 on the HTTP side.
+
+    Fakeshop has no ``config/asgi.py`` and does not mount this router, so rungs
+    1-3 cannot observe ``ProtocolTypeRouter`` HTTP dispatch. Live HTTP sibling:
+    ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_routing_policy_is_djangos_urlconf_not_the_routers``,
+    ``test_the_package_view_serves_an_ordinary_graphql_response``).
     """
     django_application = _RecordingDjangoApplication()
     router = _router(django_application=django_application)
@@ -2111,6 +2226,9 @@ async def test_websocket_handshake_origin_directions(headers, expected_connected
     every direction rather than becoming a second reason for the denial. The
     Host directions, and the cross matrix that proves neither check does the
     other's work, are ``test_the_websocket_host_and_origin_checks_are_independent``.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     router = _router()
     communicator = WebsocketCommunicator(
@@ -2146,6 +2264,9 @@ async def test_default_websocket_url_pattern_matches_exactly(path, expected_conn
     The reject direction uses ``send_input`` + ``wait()`` rather than
     ``connect()``: ``connect()`` would sit out its whole timeout before
     re-raising the application task's exception.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     router = _router()
     communicator = WebsocketCommunicator(
@@ -2170,11 +2291,14 @@ async def test_default_websocket_url_pattern_matches_exactly(path, expected_conn
 async def test_schema_object_passes_through_unchanged_with_extensions_intact():
     """Spec-046 row 12: the consumer holds the exact schema; extensions execute.
 
-    Subject preserved from the ``0.0.14`` test, transport moved: the HTTP
-    consumer no longer exists to interrogate, so the structural half reads the
+    The transport is the WebSocket branch: the package composes no HTTP
+    consumer to interrogate, so the structural half reads the
     WebSocket consumer's ``initkwargs`` and the execution half drives the
     operation over the WebSocket branch. Still the async-safe shape (no ORM, no
     ``DjangoType``): a recording Strawberry extension fires through the router.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     fired = []
 
@@ -2388,9 +2512,8 @@ def test_the_host_projection_matches_djangos_asgi_adapter_key_for_key(headers, s
 
     ``consumers.py::_host_validation_request`` promises to reproduce
     ``ASGIRequest.__init__`` item by item, and the items are separable, so they get
-    separable rows. Five of them were previously pinned by three behavioral rows
-    between them - two items sharing one row, and the no-``server`` fallback pinned
-    by nothing at all - which is the shape the weakly-pinned rule exists to refuse.
+    separable rows. Two items sharing one row, or the no-``server`` fallback pinned
+    by nothing, is the shape the weakly-pinned rule exists to refuse.
 
     One param per item, each asserted against Django's OWN constructor rather than a
     typed-out expectation:
@@ -2418,6 +2541,10 @@ def test_the_host_projection_matches_djangos_asgi_adapter_key_for_key(headers, s
     ``HTTP_X_FORWARDED_PORT`` or the ``SECURE_PROXY_SSL_HEADER`` header - both
     provably verdict-neutral - fails here rather than silently widening a security
     boundary's input surface.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     projected = consumers_module._host_validation_request(_handshake_scope(headers, server)).META
 
@@ -2456,6 +2583,10 @@ async def test_the_websocket_host_and_origin_checks_are_independent(
     ``WebsocketDenier``. A ``Host`` refusal is therefore indistinguishable on the
     wire from an ``Origin`` refusal, which is the non-disclosure property the
     package gets for free by reusing Channels' consumer.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     router = _router()
     connected, detail = await _ws_handshake(router, host=host, origin=origin)
@@ -2492,6 +2623,10 @@ async def test_django_owns_the_websocket_host_matching(allowed_hosts, host, orig
     The ``Origin`` of each row is chosen to PASS, so the only variable is the Host
     decision. ``AllowedHostsOriginValidator`` reads ``ALLOWED_HOSTS`` at
     CONSTRUCTION, so the router is built inside the override.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     with override_settings(ALLOWED_HOSTS=allowed_hosts):
         router = _router()
@@ -2512,6 +2647,10 @@ async def test_the_debug_localhost_default_matches_djangos_own_websocket_side():
     the same list Channels uses for origins - and a hostile host is still refused
     under ``DEBUG``, which is what stops "development convenience" from reading as
     "no boundary".
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     with override_settings(DEBUG=True, ALLOWED_HOSTS=[]):
         router = _router()
@@ -2538,6 +2677,10 @@ async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form()
     Both duplicated values are ALLOWED on their own (``testserver`` is the one host
     this test environment permits), so nothing but the reduction can be producing the
     denial: a last-value-wins or first-value-wins projection connects here.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     duplicated = [(b"host", b"testserver"), (b"host", b"testserver")]
     joined = ASGIRequest(_handshake_scope(duplicated), BytesIO()).META["HTTP_HOST"]
@@ -2566,6 +2709,10 @@ async def test_an_odd_cased_host_header_still_reaches_the_boundary():
     simply never matches the key map, the handshake falls through to the
     ``"unknown"`` reconstruction, and a perfectly legitimate client is refused. So
     the assertion is that this handshake CONNECTS.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     odd_cased, detail = await _ws_handshake(
         _router(),
@@ -2599,6 +2746,10 @@ async def test_a_handshake_carrying_no_host_information_at_all_is_denied():
     ``SERVER_NAME = "testserver"``, so its no-host leg answers a different question.
     The control leg is what stops this from passing on a router that denies
     everything.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     assert _django_asgi_host_verdict([]) is None
 
@@ -2627,6 +2778,10 @@ async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
     ``host_validation_re`` admits only ``[a-z0-9.-]`` - so this row's subject is that
     the boundary reached a DECISION at all, agreeing with Django's HTTP answer for
     the same decoded value.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     assert _django_http_host_verdict(host=_LATIN_1_ONLY_HOST) is None
 
@@ -2655,6 +2810,10 @@ async def test_x_forwarded_host_is_honoured_only_under_the_django_setting(use_x_
     Both assertions are load-bearing: the first is the delegation proof, the second
     rules out the degenerate case where the oracle and the socket agree because
     NEITHER honours the forwarded header.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     with override_settings(
         ALLOWED_HOSTS=["testserver"],
@@ -2687,6 +2846,10 @@ async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host
     FIRST and never looks at the other. A projection that stopped collecting the
     forwarded key would connect here - the deny direction and the allow direction
     therefore fail independently, rather than the whole header resting on one row.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     with override_settings(ALLOWED_HOSTS=["testserver"], USE_X_FORWARDED_HOST=True):
         router = _router()
@@ -2719,6 +2882,10 @@ async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
     a denial - only a disallowed host becomes one - so the socket would fail with
     a traceback instead of a
     verdict.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     with override_settings(ALLOWED_HOSTS=["fallback.example"]):
         router = _router()
@@ -2753,6 +2920,10 @@ async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch):
     ``send_input`` + ``wait()`` rather than ``connect()``, the shape the
     no-route-found row already uses: ``connect()`` would sit out its whole timeout
     before re-raising the application task's exception.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     router = _router()
 
@@ -2786,6 +2957,10 @@ async def test_a_non_conformant_header_shape_propagates_instead_of_denying():
     ``ALLOWED_HOSTS`` refusal, which is indistinguishable from the boundary working
     correctly - the one failure mode nobody would ever find. So the assertion is
     that the exception reaches the caller.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     communicator = WebsocketCommunicator(
         _router(),
@@ -2825,6 +3000,10 @@ async def test_the_debug_host_and_origin_defaults_diverge_on_a_localhost_subdoma
     All three legs are asserted (Host accepts, Origin refuses, socket denied) so a
     regression on either side is attributable rather than only visible in the net
     answer.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     origin = f"http://{subdomain}"
     with override_settings(DEBUG=True, ALLOWED_HOSTS=[]):
@@ -2875,6 +3054,10 @@ async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(m
     A denial that fired after the session middleware had already loaded a session
     would still look like a denial on the wire, which is exactly why the wire is
     not what this row reads.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     reached = []
     auth_stack_entries = []
@@ -2914,6 +3097,10 @@ async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
     "by construction" is worth measuring once, because the seam's entire safety
     argument is that a project cannot mount its own consumer outside the handshake
     boundaries even by accident.
+
+    WebSocket Host handshake is not the HTTP ``ALLOWED_HOSTS`` boundary. Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``
+    (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     reached = []
     router = _router(
@@ -2965,7 +3152,11 @@ def _simulate_channels_absent():
 
 
 def test_root_package_and_star_import_stay_channels_free(_simulate_channels_absent):
-    """The root package never touches the guard; the SUBMODULE star opts in."""
+    """The root package never touches the guard; the SUBMODULE star opts in.
+
+    Absence / import-guard proof; a request cannot show what is not imported. Live
+    HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     mod = importlib.import_module("django_strawberry_framework")
     assert mod is django_strawberry_framework
     namespace = {}
@@ -2978,13 +3169,21 @@ def test_root_package_and_star_import_stay_channels_free(_simulate_channels_abse
 
 
 def test_routers_module_import_succeeds_without_channels(_simulate_channels_absent):
-    """``import django_strawberry_framework.routers`` itself pays no import."""
+    """``import django_strawberry_framework.routers`` itself pays no import.
+
+    Absence / import-guard proof; a request cannot show what is not imported. Live
+    HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     mod = importlib.import_module("django_strawberry_framework.routers")
     assert mod.__name__ == "django_strawberry_framework.routers"
 
 
 def test_symbol_access_raises_the_install_hint_without_channels(_simulate_channels_absent):
-    """The ``from ... import`` line raises ``ImportError`` naming the floor."""
+    """The ``from ... import`` line raises ``ImportError`` naming the floor.
+
+    Absence / import-guard proof; a request cannot show what is not imported. Live
+    HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     with pytest.raises(ImportError, match=_HINT_SUBSTRING) as exc_info:
         exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
     assert isinstance(exc_info.value.__cause__, ImportError)
@@ -2997,6 +3196,9 @@ def test_restore_is_two_sided_and_the_present_path_works_again():
     parent attribute to a fresh module; a one-sided restore would leave two live
     modules with independent ``_ROUTER_CLASS`` caches - the order-dependent
     Test-6 identity flake under ``pytest-xdist``.
+
+    Absence / import-guard proof; a request cannot show what is not imported. Live
+    HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with simulated_absence(
         "channels",
@@ -3036,6 +3238,9 @@ def test_consumers_module_imports_with_channels_absent():
     answering from the cache. Same shape as
     ``tests/test_views.py::test_views_module_imports_with_channels_absent``, and
     the same two-sided ``(parent, attr)`` restore.
+
+    Absence / import-guard proof; a request cannot show what is not imported. Live
+    HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with simulated_absence(
         "channels",
@@ -3057,7 +3262,11 @@ def test_consumers_module_imports_with_channels_absent():
 
 
 def test_unrelated_attribute_miss_stays_a_plain_attribute_error(_simulate_channels_absent):
-    """A non-router attribute miss raises ``AttributeError``, never the hint."""
+    """A non-router attribute miss raises ``AttributeError``, never the hint.
+
+    Absence / import-guard proof; a request cannot show what is not imported. Live
+    HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     mod = importlib.import_module("django_strawberry_framework.routers")
     with pytest.raises(AttributeError, match="DefinitelyNotARouter"):
         _ = mod.DefinitelyNotARouter
@@ -3092,6 +3301,9 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
     ``strawberry.channels`` consumer import names BOTH halves, so a broken
     Strawberry install is never misreported as a Channels problem. Both chain the
     original ``ImportError``.
+
+    Absence / import-guard proof; a request cannot show what is not imported. Live
+    HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     with evicted_modules(
         *_CHANNELS_PREFIXES,
@@ -3127,6 +3339,9 @@ async def test_request_contract_resolves_over_the_websocket_branch():
     ``request_from_info()`` resolves the Strawberry-Channels dict context to the
     wrapping adapter instead of raising ``ConfigurationError``, and the
     ``AuthMiddlewareStack``-populated ``scope["user"]`` is the (anonymous) actor.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     router = _router()
     data = await _ws_graphql_data(router, "{ actor }")
@@ -3137,10 +3352,9 @@ async def test_request_contract_resolves_over_the_websocket_branch():
 async def test_authenticated_session_round_trip_reaches_the_resolver():
     """A real session cookie flows through ``AuthMiddlewareStack`` to the actor.
 
-    Subject preserved from the ``0.0.14`` test, transport moved: the cookie used
-    to traverse the HTTP branch's ``AuthMiddlewareStack``, which the protocol
-    split removed, so it now rides the WebSocket handshake headers into the one
-    stack the package still composes.
+    The transport is the WebSocket handshake: the HTTP branch composes no
+    ``AuthMiddlewareStack`` for a cookie to traverse, so it rides the handshake
+    headers into the one stack the package does compose.
 
     The user + session rows are created async-safely (``database_sync_to_async``,
     since ``AuthMiddlewareStack`` resolves the user on the event loop's executor
@@ -3148,6 +3362,9 @@ async def test_authenticated_session_round_trip_reaches_the_resolver():
     - what actually earns the "session user on the scope" claim.
     The mint itself now lives at module level (``_make_user_and_session``), where
     the revalidation rows share it; the assertions are unchanged.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _session_key = await _make_user_and_session("channels_probe")
     router = _router()
@@ -3201,6 +3418,9 @@ async def test_a_revoked_session_closes_the_socket_on_the_next_operation_without
     nothing emitted. That operation is a controlled subscription precisely so the
     refusal is observable: its resolver never runs, so upstream's
     ``handle_subscribe`` was never reached.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("revalidation_probe")
     probe = _instrument_revalidation(monkeypatch)
@@ -3242,6 +3462,9 @@ async def test_a_valid_session_keeps_executing_and_the_next_operation_sees_the_r
     ``DjangoModelPermission`` both resolve their actor through, so proving
     freshness there proves both layers - and only a genuine re-read can produce
     the new values, because the connect-time actor object holds the old ones.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, _session_key = await _make_user_and_session("freshness_probe")
     router = _router()
@@ -3277,6 +3500,9 @@ async def test_the_revalidation_window_defers_the_denial_until_it_expires(monkey
     that exists for exactly this: an ``asyncio.sleep`` would make the row
     wall-clock dependent, and this suite runs under ``-W error`` with
     ``-n auto``.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("window_probe")
     probe = _instrument_revalidation(monkeypatch)
@@ -3318,6 +3544,9 @@ async def test_the_legacy_graphql_ws_protocol_is_revalidated_at_handle_start():
 
     The success baseline is a subscription because a query cannot execute on this
     protocol at all (see ``Subscription.tick``).
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("legacy_probe")
     router = _router()
@@ -3354,6 +3583,9 @@ async def test_a_revalidation_store_failure_denies_the_operation_and_is_logged(
     once the connection is revoked, a pipelined frame is refused from the
     connection-local flag, so exactly ONE failure is logged however many
     operations arrive behind it.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _session_key = await _make_user_and_session("failclosed_probe")
     router = _router()
@@ -3401,6 +3633,9 @@ async def test_a_failing_auth_backend_load_also_fails_closed(monkeypatch, caplog
     unreachable", this one is "the auth backend or user table is". Both must close the
     socket rather than continue on the cached actor, and neither may be the only shape
     the suite knows about.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     import channels.auth
 
@@ -3436,6 +3671,9 @@ async def test_an_anonymous_socket_is_not_revalidated(monkeypatch, caplog):
     denied fail-closed, and this row would fail - so the successful operation
     plus the empty log is a positive proof that no read occurred, not merely that
     one was tolerated.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _poison_the_session_store(monkeypatch)
     router = _router()
@@ -3460,6 +3698,9 @@ async def test_a_subscribe_before_connection_init_is_closed_by_upstream_without_
     carries a REAL session cookie here, so the actor on the scope IS
     authenticated: only the acknowledged carve-out can be what skipped the read,
     and the poisoned resolver proves it was skipped.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _session_key = await _make_user_and_session("unacked_probe")
     _poison_the_session_store(monkeypatch)
@@ -3505,6 +3746,9 @@ async def test_revalidation_resolves_its_session_store_outside_the_opt_in_auth_p
     fails closed, so ``next`` with the real username is only reachable
     if the store resolved through the new module - which the positive assertion on
     ``utils.sessions`` pins by name.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _session_key = await _make_user_and_session("import_boundary_probe")
     router = _router()
@@ -3548,6 +3792,9 @@ async def test_a_real_second_request_logout_denies_the_next_operation_on_the_ope
     and the helper asserts it targeted the SAME session as the socket before this
     row asserts the denial. Only then is operation 2 on the ORIGINAL communicator -
     no reconnect, same handshake - refused, by the connection-level close.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, session_key = await _make_user_and_session("logout_probe")
     router = _router()
@@ -3608,6 +3855,9 @@ async def test_a_running_subscription_cannot_emit_a_result_after_revocation(
     proves upstream's own disconnect / shutdown path finished the teardown: no
     operation task, no close attempt still in flight, no unawaited coroutine, no
     lingering async generator, under a suite that treats every warning as an error.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, session_key = await _make_user_and_session("running_probe")
     controller = _controller("running")
@@ -3660,6 +3910,9 @@ async def test_a_valid_session_keeps_a_running_subscription_emitting_every_resul
     validation instead - the mutation the design explicitly rules out - changes
     nothing observable on the wire in this harness (see ``_record_outbound_gate``),
     so without this assertion that mutation would pass the whole suite.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _session_key = await _make_user_and_session("control_probe")
     controller = _controller("control")
@@ -3738,6 +3991,9 @@ async def test_every_subscription_event_is_masked_before_it_reaches_the_wire(sub
     client the part of the event that succeeded, and the raw frame text is
     searched for the exception's own string because "the message was replaced" and
     "the message is gone" are different claims.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
     router = _router(_masking_schema())
@@ -3781,6 +4037,9 @@ async def test_the_subscription_seam_masks_only_what_the_policy_asks_it_to():
     it, an implementation that unconditionally replaced every subscription error
     would pass the masking row while ignoring the policy entirely - and a consumer
     who owns their own masking would have no way back to their own text.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     router = _router(_masking_schema(error_policy={"enabled": False}))
 
@@ -3808,6 +4067,9 @@ async def test_a_delayed_query_revoked_after_admission_never_sends_its_response(
     ``graphql-transport-ws`` only: the legacy protocol reaches Strawberry through
     ``Schema.subscribe`` and cannot execute a query at all (see
     ``Subscription.tick``).
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("delayed_query_probe")
     controller = _controller("delayed")
@@ -3850,6 +4112,9 @@ async def test_an_operation_error_produced_after_revocation_is_suppressed_by_the
     The gated extension is what makes the timing real rather than hopeful: a
     validation error is otherwise produced with no ``await`` the test body could
     interleave a revocation with.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("error_frame_probe")
     controller = _controller(_GATED_EXTENSION_CHANNEL)
@@ -3895,6 +4160,9 @@ async def test_the_connection_lock_stops_a_sibling_payload_escaping_after_revoca
     altogether is what that count catches - ``b`` would then validate concurrently
     and the row would see four reads - while the *placement* of the release is
     pinned by the control row's ``sends_under_lease``.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("sibling_probe")
     first_controller = _controller("sibling-a")
@@ -3964,6 +4232,9 @@ async def test_a_revoked_but_idle_socket_stays_open_until_its_next_protected_che
     which spec-046 Decision 11 rejects (it makes freshness a function of a detection
     interval and multiplies reads by idle connection count); the ``reads`` assertion
     across the idle window is what rules one out.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("idle_probe")
     probe = _instrument_revalidation(monkeypatch)
@@ -4007,6 +4278,9 @@ async def test_the_connection_lock_never_serializes_a_second_connection(monkeypa
 
     ``probe.hold_key`` is why socket 2's own reads are not parked by the same probe:
     only socket 1's session key is held.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _first_user, first_cookie, first_key = await _make_user_and_session("blast_radius_one")
     _second_user, second_cookie, _second_key = await _make_user_and_session("blast_radius_two")
@@ -4067,6 +4341,9 @@ async def test_a_positive_window_defers_the_close_on_a_running_subscription(monk
     The read count is the point of the row: two delivered frames and a third
     refused one cost exactly ONE read while the window held, not one per frame. A
     positive window that only cached across admissions would show three.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("window_frame_probe")
     controller = _controller("window-frame")
@@ -4118,6 +4395,9 @@ async def test_connection_control_frames_never_reach_the_outbound_checkpoint(mon
     reaches the checkpoint, and the read count stays at the two the operation's own
     two checkpoints paid. Gating a control frame would price a keep-alive as an
     authorization event: the same socket would perform a session read per ping.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _session_key = await _make_user_and_session("control_frame_probe")
     gate = _record_outbound_gate(monkeypatch)
@@ -4152,6 +4432,9 @@ async def test_control_frame_send_serializes_with_a_concurrent_revocation():
     asynchronous upstream send. Without that lease, the send can suspend after its
     ``revoked`` check, a concurrent checkpoint can publish the revocation, and the
     control frame can then commit after the connection-wide cut-off.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -4257,6 +4540,9 @@ async def test_the_subscription_limit_error_frame_is_gated_from_the_connections_
     Deliberately NOT lowered: the limit is upstream's, so the cost of the row (a
     hundred admissions, ~1s) is the cost of testing the real path rather than a
     configured stand-in the router cannot even express.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _key = await _make_user_and_session(f"limit_probe_{subprotocol[:9]}")
     gate = _record_outbound_gate(monkeypatch)
@@ -4348,6 +4634,9 @@ async def test_a_revoked_operation_stops_when_its_every_later_result_is_already_
     - the sibling operation - admitted while the session was valid, and holding a
       payload of its own - is left to upstream's disconnect path, which cancels and
       awaits it; its ``finally`` runs only after the socket is torn down.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _key = await _make_user_and_session(f"burst_probe_{subprotocol[:9]}")
     controller = _controller("burst")
@@ -4415,6 +4704,9 @@ async def test_a_client_cancelling_the_detecting_operation_cannot_abandon_the_cl
     attempt is the whole point in both directions: a later checkpoint must not
     inherit a false "already closed", and the ordinary path must never put two
     ``4403`` frames on the wire.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _key = await _make_user_and_session(f"parked_close_{subprotocol[:9]}")
     controller = _controller("parked-close")
@@ -4488,6 +4780,9 @@ async def test_a_close_that_raised_is_retried_by_the_next_permitted_checkpoint(
     The information-bearing gate never depended on any of this: operation 2's own
     payload was suppressed before the close was ever attempted, which is why a
     failing close is a connection-contract defect rather than a disclosure.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("close_retry_probe")
     close_probe = _instrument_consumer_close(monkeypatch)
@@ -4542,6 +4837,9 @@ async def test_the_revocation_close_retry_is_bounded_and_still_refuses_every_pay
     never runs and the socket emits nothing, on a connection the package could not
     close - which is why the gate is the security boundary and the close is the
     connection contract.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session("close_bound_probe")
     close_probe = _instrument_consumer_close(monkeypatch)
@@ -4643,7 +4941,11 @@ async def _discard(task):
 
 
 async def test_a_prestart_cancelled_close_task_becomes_abandoned():
-    """A close task cancelled before its body starts cannot leave CLOSING behind."""
+    """A close task cancelled before its body starts cannot leave CLOSING behind.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     revocation = consumers_module._ConnectionRevocation()
     revocation.decide()
     starter = asyncio.create_task(revocation.close(_ParkedCloseWebSocket()))
@@ -4667,6 +4969,9 @@ async def test_close_observes_an_already_cancelled_attempt_as_abandoned():
     without silently retrying a close on a socket whose first attempt already
     reached the transport. The attempt count and the attempt's identity are what
     say so - a second attempt would show up as either.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     revocation = consumers_module._ConnectionRevocation()
     revocation.decide()
@@ -4717,6 +5022,9 @@ async def test_cancelling_the_teardown_ends_the_close_attempt_instead_of_orphani
     flight, and every later checkpoint would await a task that will never complete -
     so the connection ends ``ABANDONED``, still revoked and still permitting no
     further attempt.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     revocation = consumers_module._ConnectionRevocation()
     websocket, starter = await _revocation_with_a_parked_attempt(revocation)
@@ -4756,6 +5064,9 @@ async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(mo
     ``send`` can be issued after the ASGI application has returned. The subsequent
     ``settle()`` is the no-second-close half: a terminal state is not a fresh start,
     and the transport sees exactly the one ``4403`` it already saw.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     teardown_reached = asyncio.Event()
 
@@ -4798,6 +5109,9 @@ async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(mo
     uncommitted the cancellation cannot leave ``disconnect``, so releasing the
     transport is what lets the attempt record its real outcome, ``CLOSED``, with the
     caller's cancellation then propagating unchanged.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     teardown_reached = asyncio.Event()
     teardown_cancelled = asyncio.Event()
@@ -4846,6 +5160,9 @@ async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(mon
     releasing the transport lets the attempt record its real outcome, ``CLOSED``,
     with the upstream failure then propagating unchanged rather than being
     swallowed by the settlement that ran under it.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     teardown_reached = asyncio.Event()
 
@@ -4916,6 +5233,9 @@ async def test_nothing_is_written_to_the_socket_after_the_revocation_close(
     operation, and on the legacy protocol a cancelled operation answers with a
     ``complete`` of its own. So "nothing after the close" has to survive the
     teardown, not merely the revocation.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     user, cookie, session_key = await _make_user_and_session(f"after_close_{subprotocol[:9]}")
     controller = _controller("after-close")
@@ -4978,6 +5298,9 @@ async def test_a_delegated_control_frame_is_suppressed_once_the_revocation_is_de
     Reading the transport log rather than the communicator is what pins "suppressed
     rather than merely late": ``receive_nothing`` would be satisfied by a frame
     still queued behind the parked close.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _key = await _make_user_and_session(f"delegated_{subprotocol[:9]}")
     warm = _controller("delegated-warm")
@@ -5116,6 +5439,9 @@ def test_the_stop_aware_schema_passes_every_upstream_schema_read_through():
     ``AsyncBaseHTTPView.run`` is not part of the question: it reads the consumer's
     own attribute, passes it to the handler as an ordinary keyword, and never sees
     the wrapper.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     sources = _upstream_handler_sources()
     reads = set()
@@ -5207,6 +5533,9 @@ async def test_the_stop_aware_schema_accepts_an_async_iterator_without_aclose(se
     depends on the installed upstream release, and the two are separate methods
     on the wrapper: covering only one would leave a whole protocol's cleanup
     unasserted on the other's release.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     schema = _SchemaReturningAsyncIterator()
     wrapper = consumers_module._StopAwareSchema(
@@ -5233,6 +5562,9 @@ async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unc
 
     The maskable value beside it is what keeps the row honest - the gate has to
     exclude by shape rather than simply do nothing.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     leaked = GraphQLError("the resolver's own words", original_error=ValueError("raw"))
     maskable = StrawberryExecutionResult(data={"ok": None}, errors=[leaked])
@@ -5356,6 +5688,9 @@ async def test_a_same_socket_logout_stops_a_running_subscription_on_both_protoco
     denies an actor which is anonymous now but was not always. An implementation
     that read the live scope actor would find an anonymous socket, take the
     read-free carve-out, and send result 2.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, _session_key = await _make_user_and_session(f"same_socket_{subprotocol[:9]}")
     controller = _controller("same-socket")
@@ -5409,6 +5744,9 @@ async def test_the_logout_mutations_own_reply_is_suppressed_by_the_connection_cl
     distinction the gated set exists to avoid, and the teardown has already
     completed durably - which the deleted session row proves independently of the
     wire.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _user, cookie, session_key = await _make_user_and_session("logout_frame_probe")
     probe = _instrument_revalidation(monkeypatch)
@@ -5445,6 +5783,9 @@ async def test_an_anonymous_socket_that_logs_out_keeps_the_read_free_carve_out(
     resolver makes "zero session reads" a positive proof rather than an
     observation - a read would raise, fail closed, and close the socket - and the
     socket then runs another operation to show it is still fully usable.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     _poison_the_session_store(monkeypatch)
     probe = _instrument_revalidation(monkeypatch)
@@ -5491,6 +5832,9 @@ async def test_a_same_socket_logout_cannot_complete_across_a_parked_protected_se
     the connection carry an anonymous actor. Every LATER protected frame is refused
     and the socket takes the documented close, at no session read: the refusal is
     the connection's authenticated provenance, not a fresh lookup.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     from django_strawberry_framework.auth.sessions import _SCOPE_LOCK_KEY
 
@@ -5577,6 +5921,9 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
     delegate to upstream), and the read count is unchanged (so nothing revalidated
     either). When the transition finally releases the lease both refuse on
     provenance, still read-free, and the connection takes the documented close.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     import channels.auth
 
@@ -5661,7 +6008,11 @@ async def test_router_delegates_non_text_frame_close_behavior_per_protocol(
     subprotocol,
     expected_close,
 ):
-    """Malformed non-text frames retain Strawberry's protocol-specific closes."""
+    """Malformed non-text frames retain Strawberry's protocol-specific closes.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     communicator = _ws_communicator(_router(), subprotocol=subprotocol)
     connected, _ = await communicator.connect(timeout=10)
     assert connected
@@ -5673,7 +6024,11 @@ async def test_router_delegates_non_text_frame_close_behavior_per_protocol(
 
 @pytest.mark.django_db
 async def test_router_delegates_legacy_invalid_json_continuation():
-    """Legacy graphql-ws ignores malformed JSON and continues its connection."""
+    """Legacy graphql-ws ignores malformed JSON and continues its connection.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     communicator = _ws_communicator(_router(), subprotocol=_LEGACY_WS)
     connected, _ = await communicator.connect(timeout=10)
     assert connected
@@ -5686,7 +6041,11 @@ async def test_router_delegates_legacy_invalid_json_continuation():
 
 @pytest.mark.django_db
 async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unauthenticated():
-    """A custom or duck-typed actor object lacking is_authenticated is treated as unauthenticated."""
+    """A custom or duck-typed actor object lacking is_authenticated is treated as unauthenticated.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
 
     class CustomActor:
         pass
@@ -5812,6 +6171,9 @@ async def test_a_non_dispatchable_frame_is_refused_and_the_connection_ends(
     distinguishes "refused" from the dead-but-open socket the containment
     replaces. ``{}`` rides the transport-ws KeyError arm; on legacy it reaches
     the package's guard through the same refusal.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     communicator = _ws_communicator(_router(), subprotocol=subprotocol)
     connected, _ = await communicator.connect(timeout=10)
@@ -5836,7 +6198,11 @@ async def test_a_non_dispatchable_frame_is_refused_and_the_connection_ends(
 async def test_an_unhashable_operation_id_is_refused_and_the_connection_ends(
     subprotocol,
 ):
-    """An unhashable operation id cannot crash the connection task."""
+    """An unhashable operation id cannot crash the connection task.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     operation_frame = "subscribe" if subprotocol == _TRANSPORT_WS else "start"
     async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
         await communicator.send_json_to(
@@ -5853,7 +6219,11 @@ async def test_an_unhashable_operation_id_is_refused_and_the_connection_ends(
 async def test_a_non_mapping_payload_is_refused_and_the_connection_ends_properly(
     subprotocol,
 ):
-    """A non-mapping payload is a refusal, not a dead loop."""
+    """A non-mapping payload is a refusal, not a dead loop.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     operation_frame = "subscribe" if subprotocol == _TRANSPORT_WS else "start"
     async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
         await communicator.send_json_to({"type": operation_frame, "id": "1", "payload": "nope"})
@@ -5872,6 +6242,9 @@ async def test_a_missing_payload_is_refused_per_protocol(subprotocol):
     ``except KeyError`` turned a missing payload into its 4400 refusal, while the
     legacy loop crashed with a raw ``KeyError('payload')`` and went silent. The
     refusal is now the same shape on both.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     operation_frame = "subscribe" if subprotocol == _TRANSPORT_WS else "start"
     async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
@@ -5891,6 +6264,9 @@ async def test_a_legacy_stop_for_an_unstarted_id_is_refused_and_the_connection_e
     for one already cleaned up - used to kill the message-loop task outright.
     The transport-ws protocol's own ``complete`` early-returns for an unknown id,
     which is the contrast row below.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     async with _open_ws(_router(), subprotocol=_LEGACY_WS) as communicator:
         await communicator.send_json_to({"type": "stop", "id": "nope"})
@@ -5909,6 +6285,9 @@ async def test_a_transport_ws_complete_for_an_unstarted_id_still_leaves_a_live_s
     know, so the connection must still be usable after two of them - the row
     that proves the loop containment did not take over work upstream already
     contains, and that a surviving connection still answers control frames.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     async with _open_ws(_router(), subprotocol=_TRANSPORT_WS) as communicator:
         await communicator.send_json_to({"type": "complete", "id": "nope"})
@@ -5932,6 +6311,9 @@ async def test_a_stack_overflowing_document_is_refused_and_the_connection_ends(
     message seam there, and the HTTP tier's ``parse_json`` translation
     (``_strawberry_patches.py``) is never entered over WebSocket. The contained
     close arrives on both protocols, and the teardown completes.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
         await communicator.send_to(text_data=pathological_json_text)
@@ -5953,6 +6335,9 @@ async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loo
     the handler contains that as an operation error. Later releases parse
     inside the operation task. Either way the loop and the socket stay usable,
     which the follow-up subscription round trip below proves.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
     async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
@@ -6074,6 +6459,9 @@ async def test_the_containment_close_names_whose_fault_the_escape_was(
     either code. The server-side record is asserted the other way round - the
     traceback IS attached to the log record, because a package or consumer bug
     that nobody can see is the failure mode the honest close creates.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     transport = _ScriptedTransport(iter_exception=escape)
     handler = _mounted_handler(handler_class, transport)
@@ -6099,6 +6487,9 @@ async def test_a_cancellation_delivered_mid_loop_propagates_untouched(handler_cl
     caller untouched, and must NOT spend the refusal close - swallowing it here
     would hang the connection's own teardown, which is why the guard re-raises
     the cancellation trio explicitly.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     transport = _ScriptedTransport(iter_exception=asyncio.CancelledError())
     handler = _mounted_handler(handler_class, transport)
@@ -6111,7 +6502,11 @@ async def test_a_cancellation_delivered_mid_loop_propagates_untouched(handler_cl
 async def test_a_broken_transport_during_the_refusal_is_logged_not_raised(
     handler_class,
 ):
-    """A close that raises still ends the containment; the loop never escapes."""
+    """A close that raises still ends the containment; the loop never escapes.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     transport = _ScriptedTransport(
         iter_exception=TypeError("list indices must be integers or slices, not str"),
         close_exception=OSError("transport gone"),
@@ -6125,7 +6520,11 @@ async def test_a_broken_transport_during_the_refusal_is_logged_not_raised(
 
 @pytest.mark.parametrize("handler_class", _revalidating_handler_classes())
 async def test_a_cancellation_during_the_refusal_close_propagates(handler_class):
-    """Cancellation delivered while the refusal is being written propagates."""
+    """Cancellation delivered while the refusal is being written propagates.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
+    """
     transport = _ScriptedTransport(
         iter_exception=TypeError("unsubscriptable object"),
         close_exception=asyncio.CancelledError(),
@@ -6149,6 +6548,9 @@ async def test_a_process_level_exception_bypasses_the_guard(handler_class):
     hard-coded propagation trio would be a list that future subclasses fall
     through. Driving a ``GeneratorExit`` through a scripted iterator is what a
     live socket cannot produce with deterministic timing.
+
+    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
+    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
 
     class _ProcessLevelSentinel(BaseException):

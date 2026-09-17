@@ -25,7 +25,8 @@ too, against three more mounts of the package view that differ only in their
 or understated ``Content-Length`` can and cannot do on each transport, a
 cumulative multi-fragment body, malformed JSON on both sides of the cap,
 multipart, the parse-and-execution witnesses, which of the two ceilings fired,
-and the three precedence rungs. Row 18 (the py3.10 / Django 5.2.16 floor) is a
+the three precedence rungs, and a GET with a hostile ``Content-Length`` still
+answering ``200`` on ``cap-tiny/``. Row 18 (the py3.10 / Django 5.2.16 floor) is a
 separately-invoked run of this same file, not a separate row.
 
 Test plan rows 19 / 22 / 23 add one more async row. The strict UTF-8
@@ -1664,6 +1665,34 @@ async def test_the_async_mount_fails_loud_on_a_bodyless_request_too():
             )
 
 
+@pytest.mark.parametrize(
+    ("path", "is_async"),
+    [
+        pytest.param("/cap-tiny/", False, id="sync"),
+        pytest.param("/async-cap-tiny/", True, id="async"),
+    ],
+)
+async def test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length(path, is_async):
+    """GET carries no body the view reads, so a lying ``Content-Length`` cannot ``413`` it.
+
+    The declared gate would otherwise fire on a header that describes nothing and
+    turn the IDE or a GET query into a body-limit rejection. Both transports, on
+    the tiny-cap mounts, so a GET no-op that lived in only one ``run`` would leave
+    the other answering ``413``. ``_body`` never being cached is the package-tier
+    witness in
+    ``tests/test_views.py::test_a_hostile_content_length_on_get_never_materializes_the_body``.
+    """
+    query = {"query": _TYPENAME}
+    with override_settings(ROOT_URLCONF=__name__):
+        if is_async:
+            response = await AsyncClient().get(path, query, CONTENT_LENGTH="999999")
+        else:
+            response = Client().get(path, query, CONTENT_LENGTH="999999")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
+
+
 # ---------------------------------------------------------------------------
 # The async twin carries the same cap
 # ---------------------------------------------------------------------------
@@ -2071,6 +2100,92 @@ def test_the_upstream_bug_workaround_still_respects_its_own_opt_out():
 
     assert guarded.status_code == 400
     assert b"request body" in guarded.content
+
+
+# ---------------------------------------------------------------------------
+# A declared JSON charset is part of the wire boundary, not decoration.
+# ---------------------------------------------------------------------------
+
+_DECLARED_JSON_CHARSETS = (
+    pytest.param(None, 200, id="no-declaration"),
+    pytest.param("utf-8", 200, id="utf-8"),
+    pytest.param("UTF8", 200, id="alias-spelling"),
+    pytest.param("iso-8859-1", 400, id="latin-1"),
+    pytest.param("utf-8-sig", 400, id="utf-8-sig"),
+    pytest.param("no-such-codec", 400, id="unknown-name"),
+)
+
+#: A JSON document whose bytes decode differently under the two codecs the rows
+#: below declare: ``C3 A9`` is one character in UTF-8 and two in Latin-1. The
+#: non-ASCII byte sits inside a GraphQL comment, so the document is a valid
+#: operation whichever way an intermediary reads the rest of it.
+_NON_ASCII_JSON_BODY = json.dumps(
+    {"query": "{ __typename } # \u00e9"},
+    ensure_ascii=False,
+).encode("utf-8")
+
+
+async def _declared_json_response(charset, is_async):
+    """POST the non-ASCII document with ``charset`` declared, over the real endpoint.
+
+    The bytes go on the wire untouched, which is the only way to express the shape
+    these rows are about - a declaration that contradicts the bytes it describes.
+    ``generic`` is what does that: ``post`` re-encodes the payload with the charset
+    it finds on the content type (and cannot even be handed a codec name Python
+    does not know), while ``generic`` puts both the bytes and the header through
+    unchanged.
+    """
+    content_type = "application/json"
+    if charset is not None:
+        content_type = f"{content_type}; charset={charset}"
+    if is_async:
+        with override_settings(ROOT_URLCONF=__name__):
+            return await AsyncClient().generic(
+                "POST",
+                "/async-graphql/",
+                data=_NON_ASCII_JSON_BODY,
+                content_type=content_type,
+            )
+    return Client().generic(
+        "POST",
+        "/graphql/",
+        data=_NON_ASCII_JSON_BODY,
+        content_type=content_type,
+    )
+
+
+@pytest.mark.parametrize(("charset", "status"), _DECLARED_JSON_CHARSETS)
+@pytest.mark.parametrize(
+    "is_async",
+    [pytest.param(False, id="sync"), pytest.param(True, id="async")],
+)
+async def test_the_endpoint_refuses_a_json_charset_it_will_not_decode_with(
+    is_async,
+    charset,
+    status,
+):
+    """A declared charset is part of the wire boundary, not decoration.
+
+    The strict decode alone accepts ``Content-Type: application/json;
+    charset=iso-8859-1`` for any body that happens to be valid UTF-8, and answers
+    ``200``. The bytes then mean two different things at two hops: this endpoint
+    reads ``C3 A9`` as one character, while a proxy, WAF, audit or signing layer
+    that honours the declaration reads two. So the declaration is refused rather
+    than ignored, with the boundary's shared ``400``.
+
+    Sync hits fakeshop's real ``/graphql/``; async hits ``/async-graphql/``. Both
+    transports run the same header-only check from the same
+    ``_enforce_request_boundary``. The accepted rows also assert the non-ASCII
+    document really executed.
+    """
+    response = await _declared_json_response(charset, is_async)
+
+    assert response.status_code == status
+    if status == 200:
+        assert response.json()["data"] == {"__typename": "Query"}
+    else:
+        assert response.content == b"Unable to parse request body as JSON"
+        _assert_no_graphql_envelope(response)
 
 
 # ===========================================================================

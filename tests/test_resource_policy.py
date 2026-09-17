@@ -7,25 +7,34 @@ payload, and a real upload are charged - are pinned over HTTP in
 where they matter. What is left here is the surface a request cannot express:
 
 - policy construction and per-bound validation, including the ``bool`` trap
-  (``True`` is an ``int``) and the deadline's separate domain;
+  (``True`` is an ``int``) and the deadline's separate domain (no live sibling:
+  ``ConfigurationError`` at construction never reaches a view);
 - the precedence ladder (constructor argument > setting > package default) and
-  the settings-shape rejections;
+  the settings-shape rejections (live sibling: the enforcement-authority rows
+  on ``/rp-authority/`` / ``/rp-retained/``);
 - the narrowing rule, which no request can exercise because it is a
-  build-time contract between a field and the schema policy;
+  build-time contract between a field and the schema policy (live sibling:
+  ``/rp-rows/`` collection ceilings);
 - context threading against the frozen / dict / object context shapes, and the
-  fail-closed default a missing stash produces;
+  fail-closed default a missing stash produces (live sibling: ``/rp-deadline/``
+  and the authority mounts);
 - the walker's degenerate inputs - an unknown fragment, a cyclic fragment set,
-  an operation the request did not name, an untyped container, an upload that
-  cannot report its size - which a valid request cannot produce but a hostile or
-  unusual one can (a malformed document IS expressible over the wire, so the
-  swallow-the-lexer-error pair lives in the live suite);
+  an operation kind the schema does not define, an untyped container, an upload
+  that cannot report its size - which a valid request cannot produce but a
+  hostile or unusual one can (a malformed document IS expressible over the
+  wire, so the swallow-the-lexer-error pair lives in the live suite;
+  named-operation post-parse charging lives on ``/rp-shape/``);
 - the value walker's IDENTITY contracts, which need constructed object graphs a
   JSON body cannot express: a container referenced twice charged twice, two
   distinct-but-equal containers both charged, and cycles closing onto a parent
-  and onto a grandparent through both container families;
+  and onto a grandparent through both container families (live sibling:
+  ``test_one_variable_spliced_into_two_mutation_fields_is_charged_twice``);
 - the connection SHAPE test from both sides, against probe types that borrow the
   ``edges`` name without the edge shape - which the example schema, having only
-  real connections, cannot supply; and
+  real connections, cannot supply (live sibling: collection-cost rows on
+  ``/rp-cost/``);
+- hostile numeric subclasses a JSON body cannot carry (live sibling: ordinary
+  int / string charges on ``/rp-values/``); and
 - the ID-scalar FALLBACK half of the relation-list classification, which a
   mutation the package did not generate (no bind specs) rides - the example
   schema's writes are all package-generated, so their spec-keyed twins are
@@ -94,6 +103,9 @@ from django_strawberry_framework.schema import _with_resource_policy_extension
 
 # ---------------------------------------------------------------------------
 # Construction and validation
+#
+# No live sibling: ``ConfigurationError`` at construction never reaches a view.
+# Consumer bounds live in examples/fakeshop/test_query/test_resource_policy_api.py.
 # ---------------------------------------------------------------------------
 
 
@@ -208,6 +220,8 @@ def test_a_bound_at_the_representable_maximum_is_accepted_and_can_reject():
     row builds the policy AND renders the typed rejection the bound drives -
     which is where an over-large value fails, inside CPython's integer-to-string
     conversion limit, rather than at construction.
+
+    Live sibling: ``test_a_bound_at_the_representable_maximum_reaches_the_database``.
     """
     policy = ResourcePolicy(max_list_rows=MAX_RESOURCE_BOUND)
     assert policy.max_list_rows == MAX_RESOURCE_BOUND
@@ -247,6 +261,8 @@ def test_a_field_declared_collection_bound_shares_the_representable_maximum():
 
 # ---------------------------------------------------------------------------
 # The precedence ladder
+#
+# Live sibling: enforcement-authority rows on ``/rp-authority/`` / ``/rp-retained/``.
 # ---------------------------------------------------------------------------
 
 
@@ -315,6 +331,8 @@ def test_an_unknown_bound_name_is_rejected_with_the_valid_vocabulary():
 
 # ---------------------------------------------------------------------------
 # The narrowing rule
+#
+# Live sibling: ``/rp-rows/`` collection ceilings.
 # ---------------------------------------------------------------------------
 
 
@@ -432,6 +450,8 @@ def test_a_field_declared_collection_bound_must_be_a_positive_integer(value):
 
 # ---------------------------------------------------------------------------
 # Context threading
+#
+# Live sibling: ``/rp-deadline/`` and the authority mounts.
 # ---------------------------------------------------------------------------
 
 
@@ -538,6 +558,8 @@ async def test_nested_async_schema_restores_the_outer_policy_and_deadline():
 
 # ---------------------------------------------------------------------------
 # The cooperative deadline
+#
+# Live sibling: ``test_a_passed_deadline_stops_*`` on ``/rp-deadline/``.
 # ---------------------------------------------------------------------------
 
 
@@ -706,6 +728,8 @@ def test_a_non_finite_deadline_with_no_budget_armed_fails_closed(written):
 
 # ---------------------------------------------------------------------------
 # The armed budget
+#
+# Live sibling: a resolver cannot widen the next request on ``/rp-authority/``.
 # ---------------------------------------------------------------------------
 
 
@@ -908,6 +932,8 @@ async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread():
 
 # ---------------------------------------------------------------------------
 # ``bounded_rows``
+#
+# Live sibling: ``/rp-rows/`` list-field ceilings and window rejections.
 # ---------------------------------------------------------------------------
 
 
@@ -1906,6 +1932,8 @@ def test_bounded_rows_shared_policy_seams_spy(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # The pre-parse text scan
+#
+# Live sibling: token / depth rows on ``/rp-tokens/`` and ``/rp-depth/``.
 # ---------------------------------------------------------------------------
 
 
@@ -1997,6 +2025,10 @@ def test_pre_parse_scan_depth_across_delimiter_families(doc, limit, should_excee
 
 # ---------------------------------------------------------------------------
 # Walker degenerate inputs
+#
+# Live sibling: named-operation, malformed-document, and introspection rows in
+# examples/fakeshop/test_query/test_resource_policy_api.py. What remains is
+# inputs a valid HTTP JSON body cannot produce.
 # ---------------------------------------------------------------------------
 
 
@@ -2130,20 +2162,20 @@ def test_an_absent_optional_argument_value_is_charged_as_nothing():
     _charge("query T($t: [String!]) { echo(tags: $t) }", {"t": None})
 
 
-def test_only_the_named_operation_is_charged():
-    """A document carrying several operations charges the one the request named."""
-    document = "query A { echo } query B { echo }"
-    _charge(document, operation_name="A")
-    with pytest.raises(ResourceLimitExceeded):
-        _charge(document, operation_name=None, policy=ResourcePolicy(max_selections=1))
-
-
 def test_an_operation_kind_the_schema_does_not_define_is_skipped():
-    """A mutation against a query-only schema has no root type to walk."""
+    """A mutation against a query-only schema has no root type to walk.
+
+    Live sibling: named-operation rows on ``/rp-shape/`` (fakeshop defines both
+    root types, so this skip is not a request a consumer can issue).
+    """
     _charge("mutation { echo }")
 
 
 def test_an_unknown_fragment_spread_is_skipped():
+    """Validation would reject it; the walker must not crash on a missing fragment.
+
+    Live sibling: fragment-expansion charging on ``/rp-shape/``.
+    """
     _charge("{ ...Missing }")
 
 
@@ -2167,10 +2199,6 @@ def test_an_inline_fragment_names_its_own_type_condition():
 def test_an_unknown_argument_is_skipped():
     """Validation would reject it; the walker charges only arguments it can type."""
     _charge('{ echo(nope: "x") }')
-
-
-def test_typename_and_introspection_fields_carry_no_field_definition():
-    _charge("{ __typename __schema { queryType { name } } }")
 
 
 def test_an_untyped_container_inside_a_scalar_is_still_charged():
@@ -2232,6 +2260,11 @@ def test_a_container_referenced_twice_is_charged_per_reference():
 
 
 def test_a_self_referential_value_terminates():
+    """A mapping that contains itself is a cycle, not an unbounded walk.
+
+    Live sibling: ``test_one_variable_spliced_into_two_mutation_fields_is_charged_twice``
+    (identity a JSON variable CAN express). A self-edge cannot ride JSON.
+    """
     payload: dict = {}
     payload["self"] = payload
     _charge("query B($p: JSON!) { blob(payload: $p) }", {"p": payload})
@@ -2260,46 +2293,6 @@ def test_two_distinct_but_equal_containers_are_both_charged():
             {"p": payload},
             policy=ResourcePolicy(max_input_nodes=4),
         )
-
-
-def test_a_deeply_nested_variable_value_is_bounded_by_value_depth():
-    """The bound the pre-parse depth scan cannot supply.
-
-    ``max_depth`` counts brackets in the document TEXT, and a variable payload
-    has none: this document is three brackets deep however deep its value is.
-    """
-    payload: Any = "leaf"
-    for _ in range(8):
-        payload = [payload]
-    document = "query B($p: JSON!) { blob(payload: $p) }"
-    _charge(document, {"p": payload}, policy=ResourcePolicy(max_value_depth=8))
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge(document, {"p": payload}, policy=ResourcePolicy(max_value_depth=4))
-    assert caught.value.bound == "max_value_depth"
-    assert caught.value.limit == 4
-
-
-def test_introspection_selections_are_charged_like_any_other():
-    """``__schema`` / ``__type`` / ``__typename`` resolve to their meta-field definitions.
-
-    Answering ``None`` for them charged the whole of introspection as one
-    selection and then stopped descending, which made introspection the one
-    document shape no depth, selection, or collection bound could see.
-    """
-    _charge("{ __typename __schema { queryType { name } } }")
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge(
-            "{ __typename __schema { queryType { name } } }",
-            policy=ResourcePolicy(max_selections=3),
-        )
-    assert caught.value.bound == "max_selections"
-
-
-def test_an_introspection_meta_field_argument_is_charged():
-    """``__type(name: ...)`` carries a real typed argument, so its value is charged."""
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge('{ __type(name: "Query") { name } }', policy=ResourcePolicy(max_scalar_bytes=4))
-    assert caught.value.bound == "max_scalar_bytes"
 
 
 class _AmountNoBoundCanExceed(int):
@@ -2350,6 +2343,9 @@ def test_a_type_that_merely_has_an_edges_field_is_not_a_connection():
     to expose one called ``edges``: a list of such types charges 100 for the
     outer list and then multiplies it by the inner list's own 100, which is the
     10,100 asserted here and would be a bare 100 if the exemption applied.
+
+    Live sibling: nested collection-cost charging on ``/rp-cost/`` (real
+    connections only).
     """
     with pytest.raises(ResourceLimitExceeded) as caught:
         _charge("{ fauxes { edges } }", policy=ResourcePolicy(max_collection_cost=5_000))
@@ -2368,6 +2364,9 @@ def test_a_type_whose_edges_field_is_not_a_list_is_not_a_connection():
 
 # ---------------------------------------------------------------------------
 # Values the walk cannot take at their word
+#
+# Live sibling: ordinary JSON containers on ``/rp-values/``. These rows need
+# in-process subclasses a JSON body cannot carry.
 # ---------------------------------------------------------------------------
 
 
@@ -2599,6 +2598,8 @@ def test_a_text_leaf_is_measured_by_the_built_in_encoding_not_its_own():
 
     A ``str`` SUBCLASS carries its own ``encode``, and the byte count the bound
     compares against was that method's return value.
+
+    Live sibling: ``test_a_scalar_larger_than_the_byte_bound_is_rejected``.
     """
 
     class _LyingEncode(str):
@@ -2649,7 +2650,16 @@ def test_a_buffer_leaf_is_measured_through_the_buffer_protocol():
     ids=["bytes", "bytearray", "memoryview"],
 )
 def test_every_buffer_shape_keeps_charging_its_real_size(value, expected):
-    """The control for the three buffer types the leaf charge admits."""
+    """The control for the three buffer types the leaf charge admits.
+
+    Live sibling: ``test_a_scalar_larger_than_the_byte_bound_is_rejected`` (a
+    JSON string). These types cannot ride a JSON variable.
+    """
+    _charge(
+        "query T($p: JSON) { blob(payload: $p) }",
+        {"p": value},
+        policy=ResourcePolicy(max_scalar_bytes=expected),
+    )
     with pytest.raises(ResourceLimitExceeded) as caught:
         _charge(
             "query T($p: JSON) { blob(payload: $p) }",
@@ -2661,6 +2671,9 @@ def test_every_buffer_shape_keeps_charging_its_real_size(value, expected):
 
 # ---------------------------------------------------------------------------
 # The extension's own wiring
+#
+# Live sibling: admission / authority / validation-cache rows on the ``/rp-*``
+# mounts. What remains is hook identity and construction-time installation.
 # ---------------------------------------------------------------------------
 
 
@@ -3262,34 +3275,6 @@ def test_an_untyped_container_list_is_not_classified_as_membership_list():
     assert caught.value.bound == "max_container_width"
 
 
-def test_binary_scalar_values_are_bounded_by_max_scalar_bytes():
-    """bytes, bytearray, and memoryview scalar payloads are bounded by byte length."""
-    document = "query B($p: JSON!) { blob(payload: $p) }"
-    _charge(document, {"p": b"short"}, policy=ResourcePolicy(max_scalar_bytes=10))
-    _charge(document, {"p": bytearray(b"short")}, policy=ResourcePolicy(max_scalar_bytes=10))
-    _charge(document, {"p": memoryview(b"short")}, policy=ResourcePolicy(max_scalar_bytes=10))
-
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge(document, {"p": b"0123456789abcde"}, policy=ResourcePolicy(max_scalar_bytes=10))
-    assert caught.value.bound == "max_scalar_bytes"
-
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge(
-            document,
-            {"p": bytearray(b"0123456789abcde")},
-            policy=ResourcePolicy(max_scalar_bytes=10),
-        )
-    assert caught.value.bound == "max_scalar_bytes"
-
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge(
-            document,
-            {"p": memoryview(b"0123456789abcde")},
-            policy=ResourcePolicy(max_scalar_bytes=10),
-        )
-    assert caught.value.bound == "max_scalar_bytes"
-
-
 def test_charge_document_accepts_none_variables():
     """charge_document safely accepts variables=None."""
     charge_document(
@@ -3309,49 +3294,12 @@ def test_field_definition_with_none_parent_type():
     assert _field_definition(fake_schema, None, "__schema") is None
 
 
-def test_variable_default_values_are_charged_when_variable_omitted():
-    """Default values declared in operation variable definitions are charged if omitted from runtime variables."""
-    document = (
-        'query WithDefaults($tags: [String!] = ["a", "b", "c", "d", "e"]) { echo(tags: $tags) }'
-    )
-    _charge(document, variables={}, policy=ResourcePolicy(max_membership_items=5))
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge(document, variables={}, policy=ResourcePolicy(max_membership_items=4))
-    assert caught.value.bound == "max_membership_items"
-    assert caught.value.charged == 5
-
-
-def test_variable_default_values_not_used_when_variable_explicitly_passed():
-    """When a variable is explicitly provided, its runtime value is charged instead of the default value."""
-    document = (
-        'query WithDefaults($tags: [String!] = ["a", "b", "c", "d", "e"]) { echo(tags: $tags) }'
-    )
-    # Explicit 2 items passed should pass max_membership_items=3 even though default is 5:
-    _charge(
-        document,
-        variables={"tags": ["a", "b"]},
-        policy=ResourcePolicy(max_membership_items=3),
-    )
-    # Explicit 4 items passed should fail max_membership_items=3 with charged=4:
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        _charge(
-            document,
-            variables={
-                "tags": [
-                    "a",
-                    "b",
-                    "c",
-                    "d",
-                ],
-            },
-            policy=ResourcePolicy(max_membership_items=3),
-        )
-    assert caught.value.bound == "max_membership_items"
-    assert caught.value.charged == 4
-
-
 def test_memoryview_multibyte_buffer_charged_by_nbytes():
-    """Multibyte memoryview payloads are bounded by true byte size (nbytes), not element count."""
+    """Multibyte memoryview payloads are bounded by true byte size (nbytes), not element count.
+
+    Live sibling: ``test_a_scalar_larger_than_the_byte_bound_is_rejected`` (a
+    JSON string). A JSON body cannot carry a multi-byte ``memoryview``.
+    """
     import array
 
     arr = array.array("i", range(10))  # 10 32-bit ints = 40 bytes
@@ -3461,6 +3409,33 @@ def test_policy_from_info_answers_twice_with_two_objects():
         end_resource_budget(token)
 
 
+def test_disarming_with_a_token_from_another_variable_is_not_swallowed():
+    """The cross-context tolerance is for WHERE teardown ran, not for the wrong token.
+
+    ``ContextVar.reset`` answers two different mistakes with ``ValueError``: a
+    token minted in another context, which teardown legitimately reaches when a
+    dropped stream is closed from a foreign task and which there is nothing to
+    undo for; and a token minted by another VARIABLE, which is this module
+    disarming something it never armed. Only the first is tolerated. A catch
+    wide enough to cover both would turn the second into a silent no-op and
+    leave the real budget armed for the rest of the process.
+    """
+    import contextvars
+
+    from django_strawberry_framework.resource_policy import _BudgetScope
+
+    context: dict[str, Any] = {}
+    scope = begin_resource_budget(context, ResourcePolicy(max_list_rows=2))
+    try:
+        foreign = contextvars.ContextVar("foreign_budget", default=None)
+        mismatched = _BudgetScope(lease=scope.lease, token=foreign.set(None))
+
+        with pytest.raises(ValueError, match="different ContextVar"):
+            end_resource_budget(mismatched)
+    finally:
+        end_resource_budget(scope)
+
+
 def test_the_package_default_is_never_the_object_a_miss_hands_back():
     """The fail-closed baseline is process-lived; handing it out would let one write widen it."""
     info = SimpleNamespace(context={})
@@ -3477,33 +3452,6 @@ def test_a_mirror_holding_a_policy_subclass_reads_back_as_the_package_default():
     info = SimpleNamespace(context={DST_RESOURCE_POLICY: _LiesAfterValidating()})
 
     assert policy_from_info(info) == DEFAULT_RESOURCE_POLICY
-
-
-def test_the_pre_parse_scan_charges_an_operation_the_request_did_not_name():
-    """``max_document_tokens`` is a request-level bound, and says so.
-
-    It exists to bound the parse; the parse reads the whole document whatever
-    ``operationName`` says, and no operation is identified until it has finished.
-    Charging the named operation alone would name a cost nobody pays and leave the
-    one somebody does pay unbounded.
-    """
-    document = "query Small { echo } query Big { echo echo echo echo }"
-    with pytest.raises(ResourceLimitExceeded) as caught:
-        scan_document_text(ResourcePolicy(max_document_tokens=6), document)
-
-    assert caught.value.bound == "max_document_tokens"
-
-
-def test_the_post_parse_walk_charges_only_the_operation_the_request_named():
-    """Its counterpart: the bounds charged after the parse do filter by name."""
-    document = "query Small { echo } query Big { echo echo echo echo }"
-    charge_document(
-        ResourcePolicy(max_selections=1),
-        DjangoSchema(query=_Probe)._schema,
-        parse(document),
-        {},
-        "Small",
-    )
 
 
 # ---------------------------------------------------------------------------

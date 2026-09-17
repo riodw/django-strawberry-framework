@@ -27,8 +27,12 @@ Decision 8):
 
 Around the matrix sit the properties a single row cannot state: one FRESH id per
 masked error, the id reaching the server log with the original traceback, the
-retained ``path``, sync/async parity, and the two ways out (``DEBUG=True`` and
-``error_policy={"enabled": False}``).
+retained ``path``, sync/async parity, the two ways out (``DEBUG=True`` and
+``error_policy={"enabled": False}``), a ``DEBUG`` value that is set but is not
+the boolean ``True`` (still masked), a resolver that writes
+``info.schema.error_policy`` (still masked: the attribute is a copy), and a
+factory-supplied policy that still masks once (the client's id is the logged
+id, not a second mint from an automatic copy left beside the factory).
 
 The scaffolding is one probe-schema factory over fakeshop's own ``Query`` /
 ``Mutation``, extended with resolvers that raise on demand - a real schema
@@ -37,8 +41,10 @@ the framework's own rejection sites. It is built per request rather than cached
 because the acceptance tier reloads ``config.schema`` before every test.
 
 ``tests/test_error_policy.py`` holds what no request can express: the policy
-object's validation and precedence ladder, the correlation-id format, the
-extension's install position, and the standalone-schema fallback.
+object's validation and precedence ladder, the correlation-id format sampled
+from the generator, the extension's install position and consumer-supplied
+suppression, the standalone-schema fallback, teardown no-ops, and fail-closed
+degrades over objects no engine builds.
 """
 
 from __future__ import annotations
@@ -47,6 +53,9 @@ import asyncio
 import json
 import logging
 import re
+import threading
+import warnings
+from functools import cache
 
 import pytest
 import strawberry
@@ -61,9 +70,11 @@ from django.urls import include, path
 from graphql import GraphQLError
 from graphql_client import post_graphql
 from strawberry import relay
+from strawberry.extensions.base_extension import SchemaExtension
 
 from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
+    DjangoErrorPolicyExtension,
     DjangoSchema,
     strawberry_config,
 )
@@ -122,7 +133,7 @@ def _probe_query_type():
 
     @strawberry.type
     class ProbeQuery(Query):
-        """The fakeshop query surface plus four deliberate failure modes."""
+        """The fakeshop query surface plus resolvers that fail or mutate on demand."""
 
         @strawberry.field
         def boom(self) -> str | None:
@@ -146,6 +157,12 @@ def _probe_query_type():
         def fine(self) -> str:
             """Succeed, so a partially-failing response has something in ``data``."""
             return "fine"
+
+        @strawberry.field
+        def unmask(self, info: strawberry.Info) -> str:
+            """Write ``enabled=False`` on the schema policy a resolver can reach."""
+            info.schema.error_policy.__dict__["enabled"] = False
+            return "written"
 
         @strawberry.field
         def boom_non_null(self) -> str:
@@ -207,9 +224,168 @@ def _probe_async_view(**schema_kwargs):
 #: surviving the policy, not about where the bound sits (spec-047 owns that).
 _MAX_TOKENS = 4
 
+
+def _error_policy_factory():
+    """A factory the schema cannot identify at construction, so the auto prepend is dropped at resolve."""
+    return DjangoErrorPolicyExtension()
+
+
+#: The four spellings Strawberry accepts for an extension entry. A class and a
+#: fresh factory resolve to a new extension per operation; an instance and a
+#: factory returning a singleton resolve to ONE object every operation shares,
+#: which is what makes the masking question different for them.
+ENTRY_SPELLINGS = (
+    "class",
+    "fresh-factory",
+    "instance",
+    "singleton-factory",
+)
+
+
+@strawberry.type
+class _SharedEntryQuery:
+    """A standalone surface with one failing field and one that nests an operation.
+
+    Deliberately not fakeshop's ``Query``: these mounts are CACHED, because the
+    shared spellings only mean anything when every request meets the same schema
+    object, and a cached schema over reloaded fakeshop types would hold a
+    previous test's registry.
+    """
+
+    @strawberry.field
+    def fine(self) -> str:
+        """Succeed, so a later request can prove the mount still answers normally."""
+        return "fine"
+
+    @strawberry.field
+    def boom(self) -> str | None:
+        """Raise a plain exception carrying the sensitive string."""
+        raise ValueError(_SENSITIVE)
+
+    @strawberry.field
+    def nested_then_boom(self, info: strawberry.Info) -> str | None:
+        """Run a whole inner operation through this schema, then fail.
+
+        The inner operation is the second assignment onto a shared entry, made
+        while the outer operation is still running. When the outer teardown
+        masks by reading its own state, the inner call changes nothing; when it
+        reads an attribute, the outer failure is the one that goes to the client
+        unmasked.
+        """
+        inner = info.schema.execute_sync("{ fine }")
+        assert inner.errors is None, inner.errors
+        raise ValueError(_SENSITIVE)
+
+
+class _SharedEntryCoordinator(SchemaExtension):
+    """Hold one operation open between the parse hooks while another one runs.
+
+    Parks in the parsing hook's setup half and changes nothing else - no policy,
+    no execution context, no extension list, no result - so the overlap is a
+    property of the schedule rather than of anything this wrote. Bounded by an
+    event, never a sleep.
+    """
+
+    parked = threading.Event()
+    released = threading.Event()
+    armed = False
+
+    def on_parse(self):
+        """Park the failing document, once, while the overlap row is armed."""
+        if _SharedEntryCoordinator.armed and "boom" in (self.execution_context.query or ""):
+            _SharedEntryCoordinator.parked.set()
+            _SharedEntryCoordinator.released.wait(timeout=10)
+        yield
+
+
+@cache
+def _shared_error_extension() -> DjangoErrorPolicyExtension:
+    """The ONE error-policy object the shared spellings hand every operation."""
+    return DjangoErrorPolicyExtension()
+
+
+def _shared_entry_entry(spelling: str):
+    """The ``extensions=[...]`` entry that spells ``spelling``.
+
+    Strawberry resolves an entry as ``ext if isinstance(ext, SchemaExtension)
+    else ext()`` once per operation, so a class and a factory take the same
+    branch and differ only in what the call returns. The fresh-factory spelling
+    is therefore a real callable rather than the class a second time: handing
+    back the class would make that row the class row under another id, and the
+    pair would be counted twice while only one of them was ever built.
+    """
+    if spelling == "class":
+        return DjangoErrorPolicyExtension
+    if spelling == "fresh-factory":
+        return lambda: DjangoErrorPolicyExtension()
+    if spelling == "instance":
+        return _shared_error_extension()
+    return _shared_error_extension
+
+
+@cache
+def _shared_entry_schema(spelling: str) -> DjangoSchema:
+    """One cached schema per entry spelling.
+
+    A consumer entry of the policy's own kind suppresses the automatic prepend,
+    so the entry under test is the only masker on the schema and the row cannot
+    be answered by a second one the constructor added.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return DjangoSchema(
+            query=_SharedEntryQuery,
+            extensions=[_shared_entry_entry(spelling), _SharedEntryCoordinator],
+        )
+
+
+def _shared_entry_view(spelling: str):
+    """Mount the synchronous package view over one entry spelling."""
+
+    def view(request, *args, **kwargs):
+        built = DjangoGraphQLView.as_view(schema=_shared_entry_schema(spelling))
+        return built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+def _shared_entry_async_view(spelling: str):
+    """Mount the asynchronous package view over one entry spelling."""
+
+    async def view(request, *args, **kwargs):
+        built = AsyncDjangoGraphQLView.as_view(schema=_shared_entry_schema(spelling))
+        return await built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+#: Where each entry spelling is mounted, per view color.
+ENTRY_MOUNTS = {
+    (spelling, color): f"/ep-entry-{spelling}-{color}/"
+    for spelling in ENTRY_SPELLINGS
+    for color in ("sync", "async")
+}
+
+
+#: Every shared-entry row, with the node id its spelling and color read as.
+ENTRY_ROWS = list(ENTRY_MOUNTS)
+ENTRY_IDS = [f"{spelling}-{color}" for spelling, color in ENTRY_ROWS]
+
+
 urlpatterns = [
     path("", include("config.urls")),
     path("ep/", _probe_view()),
+    # Mounted from ``ENTRY_MOUNTS`` rather than spelled out, so the mounts and the
+    # parametrized rows cannot disagree about which spellings exist.
+    *(
+        path(
+            mount.lstrip("/"),
+            (_shared_entry_view if color == "sync" else _shared_entry_async_view)(spelling),
+        )
+        for (spelling, color), mount in ENTRY_MOUNTS.items()
+    ),
     path("ep-async/", _probe_async_view()),
     path("ep-off/", _probe_view(error_policy={"enabled": False})),
     path(
@@ -219,6 +395,7 @@ urlpatterns = [
         ),
     ),
     path("ep-limits/", _probe_view(resource_policy={"max_document_tokens": _MAX_TOKENS})),
+    path("ep-factory/", _probe_view(extensions=[_error_policy_factory])),
 ]
 
 
@@ -350,6 +527,28 @@ def test_the_correlation_id_reaches_the_server_log_with_the_original_exception(c
 
 
 @pytest.mark.django_db
+def test_a_factory_policy_entry_masks_once_so_the_client_id_is_the_logged_id(caplog):
+    """A factory-produced policy is the operation's one mask: one error, one id, that id in the log.
+
+    A factory cannot be identified at construction, so the automatic entry is
+    prepended beside it and dropped when the operation resolves extensions.
+    Two copies would each mint a correlation id; the client would quote one
+    that is not the id in the log that carries the traceback.
+    """
+    caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
+    _, payload = _post("/ep-factory/", "{ boom }")
+    correlation_id = _masked_error(payload)["extensions"]["correlationId"]
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == _PACKAGE_LOGGER and record.levelno == logging.ERROR
+    ]
+    assert len(records) == 1, caplog.records
+    assert correlation_id in records[0].getMessage()
+
+
+@pytest.mark.django_db
 def test_two_unexpected_errors_in_one_response_carry_two_different_ids(caplog):
     """One FRESH id PER MASKED ERROR, not one per operation.
 
@@ -398,6 +597,7 @@ def test_a_validation_error_keeps_its_own_message_and_carries_no_correlation_id(
     so the name discloses nothing the client could not introspect.
     """
     _, payload = _post("/ep/", "{ noSuchFieldAnywhere }")
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert "Cannot query field 'noSuchFieldAnywhere'" in error["message"], error
     assert "correlationId" not in (error.get("extensions") or {})
@@ -580,16 +780,34 @@ def test_debug_true_restores_the_original_message_end_to_end():
 
 
 @pytest.mark.django_db
-def test_a_malformed_truthy_debug_setting_keeps_production_masking_end_to_end():
-    """A stringified ``DEBUG=False`` must not disable the fail-closed policy."""
+@pytest.mark.parametrize(
+    "debug_value",
+    [
+        pytest.param("False", id="string-false"),
+        pytest.param(1, id="truthy-int"),
+        pytest.param(object(), id="object"),
+    ],
+)
+def test_a_malformed_debug_setting_keeps_production_masking_end_to_end(debug_value):
+    """Only an explicit ``DEBUG=True`` opens the development pass-through gate."""
     with _override_settings(
-        DEBUG="False",
+        DEBUG=debug_value,
         MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
     ):
         _, payload = _post("/ep/", "{ boom }")
     error = _masked_error(payload)
     assert _SENSITIVE not in json.dumps(payload)
     assert error["path"] == ["boom"]
+
+
+@pytest.mark.django_db
+def test_a_resolver_cannot_turn_masking_off_by_writing_the_schemas_policy():
+    """``info.schema.error_policy`` is a copy, so a resolver write cannot unmask this request."""
+    response, payload = _post("/ep/", "{ unmask boom }")
+    _masked_error(payload)
+    assert payload["data"] == {"unmask": "written", "boom": None}
+    body = response.content.decode()
+    assert _SENSITIVE not in body, body
 
 
 @pytest.mark.django_db
@@ -616,3 +834,98 @@ def test_a_custom_message_and_extension_key_both_reach_the_wire():
     assert _CORRELATION_ID.fullmatch(error["extensions"][_CUSTOM_KEY])
     assert "correlationId" not in error["extensions"]
     assert _SENSITIVE not in json.dumps(payload)
+
+
+def _entry_request(entry, query):
+    """POST one document to a shared-entry mount through that entry's own view color.
+
+    ``entry`` is the ``(spelling, color)`` key rather than the mount, because the
+    mount is display text ``ENTRY_MOUNTS`` derives from that key: reading the color
+    back out of the URL would route an async mount through the synchronous client
+    the moment the mount naming changes, and the row would still pass.
+    """
+    _, color = entry
+    mount = ENTRY_MOUNTS[entry]
+    if color == "async":
+        response = _await_response(
+            AsyncTestClient().query(query, assert_no_errors=False, url=mount),
+        )
+        return json.loads(response.response.content)
+    _, payload = _post(mount, query)
+    return payload
+
+
+def _assert_masked_and_clean(payload, body):
+    """The whole masking contract for one shared-entry row, in one place."""
+    error = _masked_error(payload)
+    assert _SENSITIVE not in body
+    assert error["message"] == DEFAULT_ERROR_POLICY.message
+    return error
+
+
+@pytest.mark.parametrize(
+    ("spelling", "color"),
+    ENTRY_ROWS,
+    ids=ENTRY_IDS,
+)
+def test_a_nested_operation_does_not_unmask_the_outer_failure(spelling, color):
+    """A whole inner operation runs mid-resolver, and the outer failure still masks.
+
+    The masking teardown reads the completed result off this operation's engine
+    context. On a shared entry the inner operation assigned its own context over
+    that read's source, and the inner result carries no errors - so the teardown
+    would find nothing to mask and the outer exception's own text would reach the
+    client. No scheduling is involved: one request is enough.
+
+    The following request proves the mount was not left in some other state by
+    the nesting.
+    """
+    entry = (spelling, color)
+    payload = _entry_request(entry, "{ nestedThenBoom }")
+    _assert_masked_and_clean(payload, json.dumps(payload))
+    assert payload["data"] == {"nestedThenBoom": None}
+
+    after = _entry_request(entry, "{ fine }")
+    assert after["data"] == {"fine": "fine"}
+    assert after.get("errors") is None
+
+
+@pytest.mark.parametrize(
+    ("spelling", "color"),
+    ENTRY_ROWS,
+    ids=ENTRY_IDS,
+)
+def test_an_overlapping_request_does_not_unmask_a_failing_one(spelling, color):
+    """Two requests overlap on one entry, and the failing one is still masked.
+
+    The failing request is held open between its parse hooks, a benign request
+    runs to completion, and only then is the first released. Both a fresh id and
+    the policy message have to be on the failing response, and the sensitive text
+    on neither.
+    """
+    entry = (spelling, color)
+    _SharedEntryCoordinator.parked.clear()
+    _SharedEntryCoordinator.released.clear()
+    _SharedEntryCoordinator.armed = True
+    overlapped = {}
+
+    def _run_failing():
+        overlapped["payload"] = _entry_request(entry, "{ boom }")
+
+    held = threading.Thread(target=_run_failing)
+    held.start()
+    try:
+        assert _SharedEntryCoordinator.parked.wait(timeout=10), "the failing request never parked"
+        benign = _entry_request(entry, "{ fine }")
+    finally:
+        _SharedEntryCoordinator.released.set()
+        held.join(timeout=10)
+        _SharedEntryCoordinator.armed = False
+
+    assert benign["data"] == {"fine": "fine"}
+    assert benign.get("errors") is None
+    payload = overlapped["payload"]
+    _assert_masked_and_clean(payload, json.dumps(payload))
+
+    after = _entry_request(entry, "{ fine }")
+    assert after["data"] == {"fine": "fine"}

@@ -16,7 +16,10 @@ Row groups, in the order a request meets them:
 
 - the document text bounds (tokens, structural depth) - charged before the parse;
 - the expanded-document bounds (selections, aliases, collection cost) - charged
-  before validation, with fragment / alias / directive evasion rows;
+  before validation, with fragment / alias / directive evasion rows, and the
+  named-operation filter (post-parse bounds charge only the operation
+  ``operationName`` selects; the token bound on the same two-operation
+  document is the request-level counterpart);
 - the value bounds (node ids, membership items, relation ids, nested rows,
   container width, value depth, input nodes, scalar bytes, uploads) - charged
   over a TINY document carrying a LARGE variable payload, which is the shape
@@ -36,10 +39,12 @@ Row groups, in the order a request meets them:
   different requests, together with the two things that authority is identified
   and taken by - the schema's own identity and a private copy of the policy the
   deployment supplied, and the policy an accepted extension instance holds -
-  alongside the boundary the value budget sits on - the raw argument the request
-  carried, charged before a custom scalar converts it, whichever of the three
-  places a request can carry one it came from - and the largest configurable
-  bound executing as a real ``LIMIT``; and
+  a factory-supplied extension's own ``max_list_rows`` as the resolve-time bound
+  (the automatic copy appended beside a factory is dropped, or the package
+  defaults would arm last), alongside the boundary the value budget sits on -
+  the raw argument the request carried, charged before a custom scalar converts
+  it, whichever of the three places a request can carry one it came from - and
+  the largest configurable bound executing as a real ``LIMIT``; and
 - the cross-cutting proofs: zero ORM work after a rejection, and one typed error
   code shared by the sync and async transports.
 
@@ -52,6 +57,7 @@ degenerate inputs.
 from __future__ import annotations
 
 import json
+import threading
 import warnings
 from functools import cache
 from typing import NewType
@@ -59,7 +65,7 @@ from typing import NewType
 import pytest
 import strawberry
 from apps.library import models as library_models
-from apps.products.services import seed_data
+from apps.products.services import create_users, seed_data
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -328,6 +334,29 @@ def _authority_view(request, *args, **kwargs):
 
 
 _authority_view.csrf_exempt = True
+
+
+def _narrow_list_factory():
+    """A factory the schema cannot identify at construction, so the auto append is dropped at resolve."""
+    return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+
+
+@cache
+def _factory_rows_schema() -> DjangoSchema:
+    """Schema whose only narrow bound is the factory's ``max_list_rows``, not ``resource_policy=``."""
+    return DjangoSchema(
+        query=_AuthorityQuery,
+        config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
+        extensions=[_narrow_list_factory],
+    )
+
+
+def _factory_rows_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_factory_rows_schema())
+    return built(request, *args, **kwargs)
+
+
+_factory_rows_view.csrf_exempt = True
 
 
 class _EqualSchema(DjangoSchema):
@@ -829,9 +858,136 @@ def _retained_view(request, *args, **kwargs):
 _retained_view.csrf_exempt = True
 
 
+#: Aliases one operation may carry on the shared-entry mounts. An ordinary
+#: two-alias document is over it, so the oversized and benign documents differ in
+#: nothing but the alias the bound is about.
+ENTRY_ALIASES = 1
+
+#: The four spellings Strawberry accepts for an extension entry, and what each one
+#: resolves to per operation. Two of them resolve to the SAME object every time -
+#: an instance is passed through unchanged and a factory returning a singleton
+#: returns it again - which is what makes the shared-entry rows different in kind
+#: from their fresh controls rather than a repetition of them.
+ENTRY_SPELLINGS = (
+    "class",
+    "fresh-factory",
+    "instance",
+    "singleton-factory",
+)
+
+
+class _OverlapCoordinator(SchemaExtension):
+    """Hold the oversized operation open until a second operation has run.
+
+    Parks in the PARSING hook's setup half, which is the window the defect lives
+    in: every entry's parsing hook sets up before the document is parsed, and the
+    enforcing entry charges it in its teardown - so an operation held here is one
+    whose charge has not happened yet while another request assigns its own
+    context over a shared entry.
+
+    It changes nothing. No policy, no execution context, no extension list and no
+    result is touched, and the pause is bounded by an event rather than by a
+    sleep, so the row measures the boundary rather than a scheduling guess.
+    """
+
+    parked = threading.Event()
+    released = threading.Event()
+    armed = False
+
+    def on_parse(self):
+        """Park the oversized document, once, while the overlap row is armed."""
+        if _OverlapCoordinator.armed and "a: rows" in (self.execution_context.query or ""):
+            _OverlapCoordinator.parked.set()
+            _OverlapCoordinator.released.wait(timeout=10)
+        yield
+
+
+@cache
+def _entry_extension(spelling: str) -> DjangoResourcePolicyExtension:
+    """The ONE extension object a shared-entry mount hands every operation."""
+    return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=ENTRY_ALIASES))
+
+
+def _entry_entry(spelling: str):
+    """The ``extensions=[...]`` entry that spells ``spelling``."""
+    if spelling == "class":
+        return DjangoResourcePolicyExtension
+    if spelling == "fresh-factory":
+        return lambda: DjangoResourcePolicyExtension(
+            policy=ResourcePolicy(max_aliases=ENTRY_ALIASES),
+        )
+    if spelling == "instance":
+        return _entry_extension(spelling)
+    return lambda: _entry_extension(spelling)
+
+
+@cache
+def _entry_schema(spelling: str) -> DjangoSchema:
+    """One schema per entry spelling, built once so the mount is the same object.
+
+    The class spelling reads its bound off the schema, because a bare class entry
+    is constructed with no arguments; the other three carry the same bound on the
+    entry itself. Every mount therefore refuses the same document for the same
+    reason, which is what makes the four rows comparable.
+
+    Strawberry's deprecation warning for the instance spelling is suppressed here
+    rather than at each row: the mount is built inside a request, where a raised
+    warning would be a response rather than a test outcome.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return DjangoSchema(
+            query=_WitnessQuery,
+            resource_policy={"max_aliases": ENTRY_ALIASES},
+            extensions=[_ExecutionWitness, _OverlapCoordinator, _entry_entry(spelling)],
+        )
+
+
+def _entry_view(spelling: str):
+    """Mount the synchronous package view over one entry spelling."""
+
+    def view(request, *args, **kwargs):
+        built = DjangoGraphQLView.as_view(schema=_entry_schema(spelling))
+        return built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+def _entry_async_view(spelling: str):
+    """Mount the asynchronous package view over one entry spelling."""
+
+    async def view(request, *args, **kwargs):
+        built = AsyncDjangoGraphQLView.as_view(schema=_entry_schema(spelling))
+        return await built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
+#: Where each entry spelling is mounted, per view color.
+ENTRY_MOUNTS = {
+    (spelling, color): f"/rp-entry-{spelling}-{color}/"
+    for spelling in ENTRY_SPELLINGS
+    for color in ("sync", "async")
+}
+
+
+#: Every shared-entry row, with the node id its spelling and color read as.
+ENTRY_ROWS = list(ENTRY_MOUNTS)
+ENTRY_IDS = [f"{spelling}-{color}" for spelling, color in ENTRY_ROWS]
+
+
 urlpatterns = [
     path("", include("config.urls")),
     path("rp-authority/", _authority_view),
+    # Mounted from ``ENTRY_MOUNTS`` rather than spelled out, so the mounts and the
+    # parametrized rows cannot disagree about which spellings exist.
+    *(
+        path(mount.lstrip("/"), (_entry_view if color == "sync" else _entry_async_view)(spelling))
+        for (spelling, color), mount in ENTRY_MOUNTS.items()
+    ),
+    path("rp-factory-rows/", _factory_rows_view),
     path("rp-equal-narrow/", _equal_view(1)),
     path("rp-equal-wide/", _equal_view(3)),
     path("rp-retained/", _retained_view),
@@ -1086,6 +1242,102 @@ def test_the_same_field_under_many_aliases_is_charged_once_per_alias():
     assert extensions["charged"] == MAX_ALIASES + 1
 
 
+#: Two operations, one small and one over a post-parse bound. Naming ``Small``
+#: is what proves the walk filters by ``operationName``: the pre-parse token
+#: pair on ``/rp-tokens/`` is the counterpart that does not filter.
+_SHAPE_ALIAS_FIELDS = " ".join(f"a{index}: __typename" for index in range(MAX_ALIASES + 1))
+_SHAPE_SPREAD_FIELDS = " ".join("...F" for _ in range(MAX_SELECTIONS + 1))
+_SHAPE_NAMED_ALIAS_DOCUMENT = (
+    f"query Small {{ __typename }}\nquery Big {{ {_SHAPE_ALIAS_FIELDS} }}"
+)
+_SHAPE_NAMED_SPREAD_DOCUMENT = (
+    f"query Small {{ __typename }}\nquery Big {{ {_SHAPE_SPREAD_FIELDS} }}"
+    "\nfragment F on Query { __typename }"
+)
+#: Anonymous leading operation so Strawberry does not infer ``operationName`` from
+#: a first named operation (``query Small`` would execute ``Small`` and skip
+#: ``Big``). That is the wire shape that leaves the walk's operation filter unset.
+_SHAPE_ANON_ALIAS_DOCUMENT = f"{{ __typename }}\nquery Big {{ {_SHAPE_ALIAS_FIELDS} }}"
+_SHAPE_ANON_SPREAD_DOCUMENT = (
+    f"{{ __typename }}\nquery Big {{ {_SHAPE_SPREAD_FIELDS} }}"
+    "\nfragment F on Query { __typename }"
+)
+_SHAPE_OVERSIZE_CASES = [
+    pytest.param(
+        _SHAPE_NAMED_ALIAS_DOCUMENT,
+        "max_aliases",
+        MAX_ALIASES + 1,
+        id="oversized-aliases",
+    ),
+    pytest.param(
+        _SHAPE_NAMED_SPREAD_DOCUMENT,
+        "max_selections",
+        MAX_SELECTIONS + 1,
+        id="oversized-fragment-spreads",
+    ),
+]
+_SHAPE_ANON_OVERSIZE_CASES = [
+    pytest.param(
+        _SHAPE_ANON_ALIAS_DOCUMENT,
+        "max_aliases",
+        MAX_ALIASES + 1,
+        id="oversized-aliases",
+    ),
+    pytest.param(
+        _SHAPE_ANON_SPREAD_DOCUMENT,
+        "max_selections",
+        MAX_SELECTIONS + 1,
+        id="oversized-fragment-spreads",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "document",
+    [_SHAPE_NAMED_ALIAS_DOCUMENT, _SHAPE_NAMED_SPREAD_DOCUMENT],
+    ids=["oversized-aliases", "oversized-fragment-spreads"],
+)
+def test_naming_the_small_operation_does_not_charge_the_oversized_sibling(document):
+    """Post-parse bounds charge only the operation ``operationName`` names.
+
+    ``Big`` is over the alias or selection ceiling; ``Small`` is not. Naming
+    ``Small`` therefore executes, which is what fails if the walk still charged
+    every operation in the document. The token-bound pair on ``/rp-tokens/`` is
+    the other half: the parse still reads the whole request.
+    """
+    payload = _post_named("/rp-shape/", document, "Small")
+    _no_rejection(payload)
+    assert payload["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.parametrize(
+    ("document", "bound", "charged"),
+    _SHAPE_OVERSIZE_CASES,
+)
+def test_naming_the_oversized_operation_rejects_on_its_own_shape(document, bound, charged):
+    """The must-not: naming the oversized sibling still charges it."""
+    extensions = _rejection(_post_named("/rp-shape/", document, "Big"))
+    assert extensions["bound"] == bound
+    assert extensions["charged"] == charged
+
+
+@pytest.mark.parametrize(
+    ("document", "bound", "charged"),
+    _SHAPE_ANON_OVERSIZE_CASES,
+)
+def test_an_unnamed_multi_operation_document_is_charged_in_full(document, bound, charged):
+    """With no ``operationName``, every operation in the document is charged.
+
+    The leading operation is anonymous so the engine cannot infer a name from
+    the first definition and skip ``Big``. GraphQL would then refuse the
+    document for lacking a name, but the budget runs first: ``Big`` is over a
+    post-parse ceiling, so the typed resource rejection is what the client sees.
+    """
+    extensions = _rejection(_post("/rp-shape/", document))
+    assert extensions["bound"] == bound
+    assert extensions["charged"] == charged
+
+
 def test_nested_collections_are_charged_multiplicatively():
     """Two nested full pages cost their product, which is what the cost bound sees."""
     query = """
@@ -1233,29 +1485,42 @@ def test_membership_list_at_the_bound_is_not_rejected():
     _no_rejection(_post("/rp-values/", _GENRE_IN, {"ids": ["1"] * MAX_MEMBERSHIP}))
 
 
+_MEMBERSHIP_DEFAULT_OVER = (
+    'query MyQuery($ids: [String!] = ["1", "2", "3", "4", "5"]) { '
+    "allLibraryGenres(filter: { id: { in: $ids } }) { name } "
+    "}"
+)
+_MEMBERSHIP_DEFAULT_AT = (
+    'query MyQuery($ids: [String!] = ["1", "2", "3", "4"]) { '
+    "allLibraryGenres(filter: { id: { in: $ids } }) { name } "
+    "}"
+)
+
+
 @pytest.mark.django_db
 def test_variable_default_value_in_operation_header_is_rejected_when_omitted():
-    """Variable default values written in document operation header must be charged if omitted from variables."""
-    query = (
-        'query MyQuery($ids: [String!] = ["1", "2", "3", "4", "5"]) { '
-        "allLibraryGenres(filter: { id: { in: $ids } }) { name } "
-        "}"
-    )
-    extensions = _rejection(_post("/rp-values/", query, {}))
+    """An omitted variable is charged as its document default, over and at the bound."""
+    extensions = _rejection(_post("/rp-values/", _MEMBERSHIP_DEFAULT_OVER, {}))
     assert extensions["bound"] == "max_membership_items"
     assert extensions["charged"] == MAX_MEMBERSHIP + 1
+    _no_rejection(_post("/rp-values/", _MEMBERSHIP_DEFAULT_AT, {}))
 
 
 @pytest.mark.django_db
 def test_variable_default_value_in_operation_header_ignored_when_overridden():
-    """When a variable is explicitly passed, its runtime value is charged instead of the default value."""
-    query = (
-        'query MyQuery($ids: [String!] = ["1", "2", "3", "4", "5"]) { '
-        "allLibraryGenres(filter: { id: { in: $ids } }) { name } "
-        "}"
+    """An explicit variable is charged as the runtime list, not the document default.
+
+    Under the bound the request runs; over it the charge is the runtime width
+    (five), never the default that would have been five either - a walker that
+    ignored both would pass the under-bound arm, and a walker that still charged
+    the default would fail it.
+    """
+    _no_rejection(_post("/rp-values/", _MEMBERSHIP_DEFAULT_OVER, {"ids": ["1", "2"]}))
+    extensions = _rejection(
+        _post("/rp-values/", _MEMBERSHIP_DEFAULT_OVER, {"ids": ["1"] * (MAX_MEMBERSHIP + 1)}),
     )
-    # Explicit 2 items passed should pass max_membership_items=4:
-    _no_rejection(_post("/rp-values/", query, {"ids": ["1", "2"]}))
+    assert extensions["bound"] == "max_membership_items"
+    assert extensions["charged"] == MAX_MEMBERSHIP + 1
 
 
 @pytest.mark.django_db
@@ -1609,6 +1874,16 @@ def test_a_scalar_larger_than_the_byte_bound_is_rejected():
     assert extensions["charged"] == MAX_SCALAR_BYTES + 1
 
 
+def test_an_inline_string_argument_is_bounded_by_scalar_bytes():
+    """A string literal in the document is charged the same bound as a variable string."""
+    name = "Q" * (MAX_SCALAR_BYTES + 1)
+    extensions = _rejection(
+        _post("/rp-values/", '{ __type(name: "%s") { name } }' % name),
+    )
+    assert extensions["bound"] == "max_scalar_bytes"
+    assert extensions["charged"] == MAX_SCALAR_BYTES + 1
+
+
 @pytest.mark.django_db
 def test_total_input_nodes_are_bounded_across_several_arguments():
     """Several individually-legal arguments can still exhaust the request's node budget."""
@@ -1688,11 +1963,21 @@ def test_list_argument_smaller_limit_serializes_subset_and_charges_full_collecti
     assert ext["limit"] == MAX_LIST_ROWS - 1
 
 
+def _seed_five_branches():
+    """Seed five same-city branches - more rows than the narrowed policy ceiling.
+
+    The count is what makes an at-ceiling page a real window rather than the whole
+    table, so a page of ``MAX_LIST_ROWS`` proves the bound and not the row count.
+    """
+    return [
+        library_models.Branch.objects.create(name=f"B{index}", city="Boston") for index in range(5)
+    ]
+
+
 @pytest.mark.django_db
 def test_list_argument_limit_at_and_over_narrowed_policy_ceiling():
     """Client limit at policy ceiling succeeds; over ceiling reports narrowed bound."""
-    for i in range(5):
-        library_models.Branch.objects.create(name=f"B{i}", city="Boston")
+    _seed_five_branches()
 
     # limit == MAX_LIST_ROWS (3) succeeds
     payload_at = _post(
@@ -1720,16 +2005,11 @@ def test_list_argument_limit_at_and_over_narrowed_policy_ceiling():
 @pytest.mark.django_db
 def test_list_argument_offset_at_and_over_narrowed_policy_ceiling():
     """Ordered offset at policy ceiling succeeds; over ceiling reports narrowed bound."""
-    staff = get_user_model().objects.create_user(
-        username="staff_rp_offset",
-        password="pw",
-        is_staff=True,
-    )
+    create_users(1)
     client = Client()
-    client.force_login(staff)
+    client.force_login(get_user_model().objects.get(username="staff_1"))
 
-    for i in range(5):
-        library_models.Branch.objects.create(name=f"B{i}", city="Boston")
+    _seed_five_branches()
 
     # offset == MAX_LIST_ROWS (3) with active ordering succeeds
     payload_at = _post(
@@ -1788,6 +2068,7 @@ def test_list_argument_rejections_and_limit_zero_perform_no_sql():
             "{ allLibraryBranchesViaListField(limit: -1) { name } }",
         )
     assert "errors" in payload_neg
+    assert payload_neg["data"] is None, payload_neg
     assert len(ctx.captured_queries) == 0
 
     # 2. Limit zero short-circuit
@@ -1943,6 +2224,20 @@ def test_an_unarmed_deadline_never_rejects():
 # ---------------------------------------------------------------------------
 # Enforcement authority: what a resolver reaches through ``info.schema``
 # ---------------------------------------------------------------------------
+
+
+def test_a_factory_configured_bound_is_the_one_a_request_is_held_to():
+    """A factory-produced resource extension is the operation's one armed budget.
+
+    A factory cannot be identified at construction, so the automatic entry is
+    appended beside it and dropped when the operation resolves extensions.
+    Left in, it would arm last and answer every resolve-time bound with the
+    package defaults while the consumer's own policy went on charging the
+    document.
+    """
+    payload = _post("/rp-factory-rows/", "{ rows }")
+    _no_rejection(payload)
+    assert payload["data"] == {"rows": ["a"]}
 
 
 def test_a_resolver_cannot_widen_the_next_request_through_the_schema():
@@ -2531,3 +2826,81 @@ def _await_response(coroutine):
 
 async def _resolve(coroutine):
     return await coroutine
+
+
+def _entry_request(entry, query):
+    """POST one document to a shared-entry mount through that entry's own view color.
+
+    ``entry`` is the ``(spelling, color)`` key rather than the mount, because the
+    mount is display text ``ENTRY_MOUNTS`` derives from that key: reading the color
+    back out of the URL would route an async mount through the synchronous client
+    the moment the mount naming changes, and the row would still pass.
+    """
+    _, color = entry
+    mount = ENTRY_MOUNTS[entry]
+    if color == "async":
+        response = _await_response(
+            AsyncTestClient().query(query, assert_no_errors=False, url=mount),
+        )
+        return json.loads(response.response.content)
+    return _post(mount, query)
+
+
+@pytest.mark.parametrize(
+    ("spelling", "color"),
+    ENTRY_ROWS,
+    ids=ENTRY_IDS,
+)
+def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling, color):
+    """Whichever object the entry resolves to, the charge lands on its own document.
+
+    Strawberry resolves a class and a fresh factory into a new extension per
+    operation, and passes an instance and a singleton-returning factory through
+    as ONE object every operation shares. The engine assigns
+    ``execution_context`` on whatever it resolved, so for the shared pair a
+    second request's assignment is a write onto the object the first request is
+    still being charged through - and the document the enforcing hook reads
+    would be the second request's benign one.
+
+    The oversized request is held open between its parse hooks, the benign one
+    runs to completion, and only then is the first released. The rejection has
+    to be identical to the one the same document gets with no overlap at all,
+    and the executing stage has to have been entered for the benign document
+    alone.
+    """
+    entry = (spelling, color)
+    oversized = "{ a: rows b: rows }"
+    benign = "{ rows }"
+
+    _ExecutionWitness.entered.clear()
+    alone = _rejection(_entry_request(entry, oversized))
+    assert alone["bound"] == "max_aliases"
+    assert alone["limit"] == ENTRY_ALIASES
+    assert _ExecutionWitness.entered == []
+
+    _OverlapCoordinator.parked.clear()
+    _OverlapCoordinator.released.clear()
+    _OverlapCoordinator.armed = True
+    overlapped = {}
+
+    def _run_oversized():
+        overlapped["payload"] = _entry_request(entry, oversized)
+
+    held = threading.Thread(target=_run_oversized)
+    held.start()
+    try:
+        assert _OverlapCoordinator.parked.wait(timeout=10), "the oversized request never parked"
+        benign_payload = _entry_request(entry, benign)
+    finally:
+        _OverlapCoordinator.released.set()
+        held.join(timeout=10)
+        _OverlapCoordinator.armed = False
+
+    _no_rejection(benign_payload)
+    assert benign_payload["data"] == {"rows": ["a", "b", "c"]}
+    assert _rejection(overlapped["payload"]) == alone
+    assert _ExecutionWitness.entered == [benign]
+
+    _ExecutionWitness.entered.clear()
+    assert _rejection(_entry_request(entry, oversized)) == alone
+    assert _ExecutionWitness.entered == []

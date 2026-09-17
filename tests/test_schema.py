@@ -1,4 +1,11 @@
-"""Permanent behavioral tests for django_strawberry_framework.schema."""
+"""Permanent behavioral tests for django_strawberry_framework.schema.
+
+Construction, hostile extension matching, mutation-lock identity, rollback
+windows, and the enforcement-seal / WeakKeyDictionary / GC rows a request
+cannot express. Consumer-visible policy enforcement and masking live in
+``examples/fakeshop/test_query/test_resource_policy_api.py`` and
+``examples/fakeshop/test_query/test_error_policy_api.py``.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +21,12 @@ from apps.library.models import Branch
 from django.db import connection
 from graphql import ExecutionContext, GraphQLError
 from strawberry.extensions.base_extension import SchemaExtension
+from strawberry.extensions.runner import SchemaExtensionsRunner
 
 from django_strawberry_framework.error_policy import ErrorPolicy
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.error_policy import DjangoErrorPolicyExtension
+from django_strawberry_framework.extensions.operation_state import _ResumedStream
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
 from django_strawberry_framework.resource_policy import ResourcePolicy, bounded_rows
 from django_strawberry_framework.schema import (
@@ -134,24 +143,6 @@ def test_extension_entry_matches_adversarial():
 
     assert not _extension_entry_matches(DjangoErrorPolicyExtension, BrokenClass)
     assert not _extension_entry_matches(DjangoErrorPolicyExtension(), BrokenClass)
-
-
-def test_get_extensions_sync_and_async():
-    schema = DjangoSchema(query=DummyQuery)
-    sync_exts = schema.get_extensions(sync=True)
-    async_exts = schema.get_extensions(sync=False)
-    assert len(sync_exts) >= 2
-    assert len(async_exts) >= 2
-
-
-def test_get_extensions_with_custom_factory_dedup():
-    def error_factory():
-        return DjangoErrorPolicyExtension()
-
-    schema = DjangoSchema(query=DummyQuery, extensions=[error_factory])
-    exts = schema.get_extensions(sync=True)
-    error_exts = [e for e in exts if isinstance(e, DjangoErrorPolicyExtension)]
-    assert len(error_exts) == 1
 
 
 def test_get_extensions_when_explicitly_passed_class():
@@ -442,31 +433,6 @@ def test_get_extensions_with_a_custom_resource_factory_dedups():
     assert isinstance(resource_exts[0], CustomResourcePolicyExtension)
 
 
-def test_a_factory_configured_bound_is_the_one_a_request_is_held_to():
-    """The behavioral half: a second armed budget answers the resolve-time bounds.
-
-    The automatic entry is appended after the consumer's, so it arms last and
-    ``policy_from_info`` answers with the package defaults - the consumer's own
-    policy goes on charging the document while the rows it meant to bound are
-    unbounded.
-    """
-
-    @strawberry.type
-    class _RowQuery:
-        @strawberry.field
-        def rows(self, info: strawberry.Info) -> list[str]:
-            return list(bounded_rows(["a", "b", "c"], info, None))
-
-    def resource_factory():
-        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
-
-    schema = DjangoSchema(query=_RowQuery, extensions=[resource_factory])
-    result = schema.execute_sync("{ rows }")
-
-    assert result.errors is None, result.errors
-    assert result.data == {"rows": ["a"]}
-
-
 def test_get_extensions_leaves_an_unrelated_factory_its_automatic_resource_extension():
     """The control: a factory producing something else still gets the package's own entry."""
 
@@ -546,73 +512,6 @@ def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute):
 
     with pytest.raises(AttributeError):
         setattr(schema, attribute, ResourcePolicy(max_list_rows=999))
-
-
-def test_a_resolver_cannot_disarm_enforcement_by_emptying_the_extension_list():
-    """A ``DjangoSchema`` enforces because it is one, not because a list still says so.
-
-    Emptying ``schema.extensions`` would remove the budget and the masking from
-    every later operation on the process, which is a wider primitive than
-    widening one bound: the next request would run with no policy extension
-    instantiated at all. The attribute is a property, so the ``__dict__``
-    spelling that gets past an ordinary one lands in a name nothing reads.
-    """
-
-    @strawberry.type
-    class _Query:
-        @strawberry.field
-        def rows(self, info: strawberry.Info) -> list[str]:
-            info.schema.__dict__["extensions"] = ()
-            return list(bounded_rows(["a", "b", "c"], info, None))
-
-    schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=1))
-    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
-
-    second = schema.execute_sync("{ rows }")
-    assert second.errors is None, second.errors
-    assert second.data == {"rows": ["a"]}
-    resolved = schema.get_extensions(sync=True)
-    assert any(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved)
-    assert any(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved)
-
-
-def test_a_resolver_cannot_nominate_a_wider_policy_by_replacing_the_extension_list():
-    """Presence of an enforcement extension is not evidence that it was configured.
-
-    A replacement list can carry an ordinary ``DjangoResourcePolicyExtension``
-    of its own with a wider policy: deduplication and presence checks both
-    succeed on it, and the accepted bound is gone for the life of the process.
-    What enforces an operation is what the schema was constructed with, so the
-    assignment is refused where it is made rather than reconciled afterwards.
-    The refusal reaches the client as any other unexpected exception out of a
-    resolver does - masked, with a correlation id - so what the row reads is
-    that the operation failed and that the next one is still held to the
-    accepted bound.
-    """
-
-    @strawberry.type
-    class _Query:
-        @strawberry.field
-        def rows(self, info: strawberry.Info) -> list[str]:
-            return list(bounded_rows(["a", "b", "c"], info, None))
-
-        @strawberry.field
-        def widen(self, info: strawberry.Info) -> int:
-            info.schema.extensions = [
-                lambda: DjangoResourcePolicyExtension(
-                    policy=ResourcePolicy(max_list_rows=999),
-                ),
-            ]
-            return 1
-
-    schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=1))
-    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
-
-    attacked = schema.execute_sync("{ widen }")
-    assert attacked.errors is not None
-    assert "correlationId" in attacked.errors[0].extensions
-
-    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
 
 
 @strawberry.type
@@ -1242,24 +1141,6 @@ def test_a_retained_policy_argument_is_not_the_one_the_schema_enforces(
     assert getattr(getattr(schema, argument), field) != widened
 
 
-def test_a_retained_policy_argument_cannot_widen_a_later_request():
-    """The observable half: a bound settled at construction stays settled."""
-
-    @strawberry.type
-    class _Query:
-        @strawberry.field
-        def rows(self, info: strawberry.Info) -> list[str]:
-            return list(bounded_rows(["a", "b", "c"], info, None))
-
-    policy = ResourcePolicy(max_list_rows=1)
-    schema = DjangoSchema(query=_Query, resource_policy=policy)
-    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
-
-    policy.__dict__["max_list_rows"] = 999
-
-    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
-
-
 def test_a_policy_behind_the_setting_is_snapshotted_like_an_explicit_one(settings):
     """The two override slots are one ladder, so they detach on the same terms.
 
@@ -1509,3 +1390,51 @@ def test_a_refused_chain_runs_no_consumer_hook_and_no_resolver():
 
     _assert_configuration_refusal(schema.execute_sync("{ hello }"))
     assert seen == []
+
+
+class _UpstreamRunnerSchema(DjangoSchema):
+    """A subclass that opts out of the package's runner, and of what depends on it.
+
+    Both overrides are needed together. Every extension ``DjangoSchema`` installs
+    reads its request through the operation state the package's runner binds, so
+    a subclass that swapped only the runner would have stripped those extensions
+    of their context while still running them; a subclass that meant to use
+    upstream's machinery replaces both halves.
+    """
+
+    def create_extensions_runner(self, execution_context, extensions):
+        """Build the plain upstream runner, as such a subclass may."""
+        return SchemaExtensionsRunner(
+            execution_context=execution_context,
+            extensions=extensions,
+        )
+
+    def get_extensions(self, sync: bool = False):
+        """Run no extension, so nothing in the operation needs the package's runner."""
+        return []
+
+
+@pytest.mark.asyncio
+async def test_a_stream_whose_runner_is_not_the_packages_is_handed_back_untouched():
+    """The resume wrapper binds what a ``DjangoExtensionsRunner`` owns, and nothing else.
+
+    A subclass may build its own runner, and upstream's holds no per-task state:
+    wrapping it would put a resume hook around frames whose producer has nothing
+    to rebind, so the stream is returned exactly as upstream built it.
+
+    The package's own schema is the other half of the row. Without it, "this one
+    is not wrapped" would read the same whether the check discriminates or the
+    wrapper had stopped being applied to anything at all.
+    """
+    foreign = _UpstreamRunnerSchema(query=DummyQuery)
+    plain = DjangoSchema(query=DummyQuery)
+
+    foreign_stream = await foreign.stream("{ hello }")
+    plain_stream = await plain.stream("{ hello }")
+    try:
+        assert not isinstance(foreign_stream, _ResumedStream)
+        assert isinstance(plain_stream, _ResumedStream)
+
+        assert [frame.errors async for frame in foreign_stream] == [None]
+    finally:
+        await plain_stream.aclose()

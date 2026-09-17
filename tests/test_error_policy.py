@@ -3,7 +3,8 @@
 The package tier of the production error policy: everything a live ``/graphql/``
 request cannot reach. What a client actually reads out of a masked response - the
 category matrix, the correlation id on the wire and in the log, the retained
-``path``, sync/async parity, and both opt-outs - is pinned over real HTTP in
+``path``, sync/async parity, both opt-outs, a non-boolean ``DEBUG`` value, and a
+resolver write to ``info.schema.error_policy`` - is pinned over real HTTP in
 ``examples/fakeshop/test_query/test_error_policy_api.py``, because that is where
 it matters. What is left here is the surface a request cannot express:
 
@@ -16,17 +17,20 @@ it matters. What is left here is the surface a request cannot express:
 - the extension's INSTALL POSITION, which is a property of the extensions list
   rather than of any response, and the consumer-supplied suppression that keeps
   a consumer's own entry exactly where they put it;
+- the schema attribute answering a duplicate of the stored policy (identity is
+  not on the wire; the resolver-write consequence is live);
 - the standalone fallback a plain ``strawberry.Schema`` takes, which has no
   ``error_policy`` attribute to read, and the isinstance-guarded fallback a schema
   carrying a WRONG ``error_policy`` attribute takes;
 - the two teardown no-ops (a ``None`` result, an error-free result) whose whole
-  observable behavior is that nothing happened;
+  observable behavior is that nothing happened, and the async
+  ``PreExecutionError`` whose ``original_error is None`` the JSON envelope cannot
+  show (the client-visible validation message is live);
 - the two fail-closed degrades, which need an error object and a result object no
   engine builds;
-- the gate and the floor under inputs no engine produces either: a ``DEBUG``
-  setting that cannot be read at all or that is not a bool at all, an
-  ``ErrorPolicy`` subclass whose attribute
-  reads raise, a container that lies about its emptiness, and an error whose
+- the gate and the floor under inputs no engine produces: a ``DEBUG`` setting
+  that cannot be read at all, an ``ErrorPolicy`` subclass whose attribute reads
+  raise, a container that lies about its emptiness, and an error whose
   ``original_error`` read raises - every read the policy cannot verify answers
   toward MASKING, and the floor that everything degrades onto cannot itself
   raise; and
@@ -241,32 +245,17 @@ def test_the_schema_resolves_and_exposes_its_policy_once():
     assert schema.error_policy.message == "Nope."
 
 
-def test_a_resolver_cannot_turn_masking_off_by_writing_the_schemas_policy(settings):
-    """``info.schema.error_policy`` is in every resolver's reach, so it is a copy.
+def test_reading_schema_error_policy_answers_a_copy():
+    """The object a resolver can reach is not the stored policy.
 
-    A frozen dataclass refuses ``setattr`` and accepts
-    ``policy.__dict__["enabled"] = False``, and the resolved policy outlives the
-    request, so one such write on the stored object would put raw exception text
-    on the wire for every request the process served afterwards.
+    Writing ``__dict__["enabled"]`` on the handed-out object must not change a
+    later read. The wire-visible consequence (a resolver write cannot unmask the
+    response) lives in ``examples/fakeshop/test_query/test_error_policy_api.py``.
     """
-
-    @strawberry.type
-    class _UnmaskingQuery:
-        @strawberry.field
-        def unmask(self, info: strawberry.Info) -> str:
-            info.schema.error_policy.__dict__["enabled"] = False
-            return "written"
-
-        @strawberry.field
-        def boom(self) -> str | None:
-            raise ValueError(_SENSITIVE)
-
-    assert settings.DEBUG is False
-    schema = DjangoSchema(query=_UnmaskingQuery, error_policy=ErrorPolicy())
-
-    result = schema.execute_sync("{ unmask boom }")
-
-    assert [error.message for error in result.errors] == [DEFAULT_ERROR_POLICY.message]
+    schema = DjangoSchema(query=_Query, error_policy=ErrorPolicy())
+    reached = schema.error_policy
+    reached.__dict__["enabled"] = False
+    assert reached.enabled is False
     assert schema.error_policy.enabled is True
 
 
@@ -377,18 +366,6 @@ def test_an_instance_entry_also_suppresses_the_prepend():
     assert _with_error_policy_extension([installed]) == [installed]
 
 
-@pytest.mark.parametrize("debug_value", ["False", 1, object()])
-def test_a_malformed_debug_setting_does_not_disable_production_masking(settings, debug_value):
-    """Only an explicit ``DEBUG=True`` opens the development pass-through gate."""
-    settings.DEBUG = debug_value
-    schema = DjangoSchema(query=_Query)
-
-    result = schema.execute_sync("{ boom }")
-
-    assert result.errors[0].message == DEFAULT_ERROR_POLICY.message
-    assert _SENSITIVE not in result.errors[0].message
-
-
 # ---------------------------------------------------------------------------
 # The standalone-schema fallback
 # ---------------------------------------------------------------------------
@@ -473,29 +450,20 @@ def test_a_graphql_core_execution_result_is_rewritten_in_place_preserving_order(
     assert result.errors[1].original_error is None
 
 
-async def test_an_async_pre_execution_error_keeps_its_own_message(settings):
-    """The ``original_error is None`` branch, reached the way a request reaches it.
+async def test_an_async_pre_execution_error_carries_no_original_error(settings):
+    """Strawberry's async validation result has ``original_error is None``.
 
-    That branch is NOT reached by anything graphql-core builds during execution:
-    every exception it surfaces from a field - including the value-completion
-    ``TypeError`` for a non-nullable ``null`` - arrives ``located_error``-wrapped
-    with ``original_error`` set. The branch's real traffic is the ASYNC
-    pre-execution path: Strawberry assigns a ``PreExecutionError`` (which IS an
-    ``ExecutionResult``, so it passes the teardown's shape gate) carrying the
-    validation errors it built from the document itself, and those have nothing
-    behind them.
-
-    So the row runs a real async operation that fails validation and requires the
-    client to keep reading graphql-core's own explanation of its own mistake -
-    masking it would delete information without hiding any.
+    graphql-core never builds this shape during execution; the async path assigns
+    a ``PreExecutionError`` that passes the teardown shape gate with nothing
+    behind the errors. The JSON envelope cannot show that field. The
+    client-visible message, ``data: null``, and absent correlation id live in
+    ``examples/fakeshop/test_query/test_error_policy_api.py``.
     """
     assert settings.DEBUG is False
     schema = DjangoSchema(query=_Query)
 
     result = await schema.execute("{ notAField }")
 
-    assert result.data is None
-    assert len(result.errors) == 1
     assert "notAField" in result.errors[0].message
     assert result.errors[0].original_error is None
     assert result.errors[0].extensions in (None, {})

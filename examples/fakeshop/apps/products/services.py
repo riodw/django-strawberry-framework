@@ -462,6 +462,25 @@ def delete_data(target: int | str) -> dict[str, int]:
     return result
 
 
+# Every row the named fixture helpers below create is named with a ``zzz_`` prefix,
+# and that prefix is a grammar rather than a habit:
+#
+# * ``seed_data`` names its rows after Faker providers and methods, none of which
+#   begin with ``zzz_``. A fixture row therefore never collides with a catalog row,
+#   and a name-ordered page always ends with the fixture rows.
+# * ``Category.name`` is unique across the WHOLE table
+#   (``examples/fakeshop/apps/products/models.py::Category``), while ``Item.name``
+#   and ``Property.name`` are unique only within their category
+#   (``unique_item_per_category`` / ``unique_property_per_category``). So a category
+#   name belongs to this module, not to the helper that writes it: two helpers one
+#   test calls together collide on a shared category name and raise
+#   ``IntegrityError`` at seed time rather than showing up as a visible-rows
+#   difference.
+#
+# ``examples/fakeshop/apps/products/tests/test_services.py::test_every_named_fixture_helper_seeds_into_one_database``
+# holds that second rule, by calling every helper below against one database.
+
+
 def seed_cascade_split(db_alias: str = "default") -> dict[str, object]:
     """Seed a deterministic private/public 2-deep chain for cascade-visibility tests.
 
@@ -475,7 +494,10 @@ def seed_cascade_split(db_alias: str = "default") -> dict[str, object]:
       PUBLIC entry -- everything below the category is public, so only the category's
       privacy can hide the entry through the cascade;
     * a PUBLIC category holding the mirror public item / property / entry (a fully
-      visible control chain).
+      visible control chain);
+    * two mixed-edge PUBLIC entries that isolate one hop each: item under the
+      private category with a public-category property, and the reverse. Either
+      hop alone must hide the entry; a both-private chain cannot tell them apart.
 
     Returns the key rows so a test can assert against them by identity.
     """
@@ -516,6 +538,18 @@ def seed_cascade_split(db_alias: str = "default") -> dict[str, object]:
         item=item_under_public,
         is_private=False,
     )
+    entry_via_private_item = Entry.objects.using(db_alias).create(
+        value="zzz_entry_via_private_item",
+        property=pub_prop,
+        item=item_under_private,
+        is_private=False,
+    )
+    entry_via_private_property = Entry.objects.using(db_alias).create(
+        value="zzz_entry_via_private_property",
+        property=priv_prop,
+        item=item_under_public,
+        is_private=False,
+    )
     return {
         "private_cat": private_cat,
         "public_cat": public_cat,
@@ -525,4 +559,173 @@ def seed_cascade_split(db_alias: str = "default") -> dict[str, object]:
         "item_under_public": item_under_public,
         "entry_under_private": entry_under_private,
         "entry_under_public": entry_under_public,
+        "entry_via_private_item": entry_via_private_item,
+        "entry_via_private_property": entry_via_private_property,
     }
+
+
+# The two row names ``seed_decoy_and_target_rows`` is read by name for. Exported so a
+# ``get_queryset`` hook can name those rows without hand-rolling them; every other
+# fixture below is asserted against by identity and needs no constant.
+DECOY_CATEGORY_NAME = "zzz_decoy_category"
+TARGET_ITEM_NAME = "zzz_target_item"
+
+
+def seed_cascade_identity_chain(db_alias: str = "default") -> dict[str, object]:
+    """Seed one public ``Category -> Item + Property -> Entry`` chain.
+
+    The minimal shape for the identity-hook cascade rows: every edge is public, so
+    a registered target contributes a subquery without narrowing anything and the
+    entry survives. Returns each row so a test asserts by identity, not by name.
+    """
+    category = Category.objects.using(db_alias).create(name="zzz_identity_cat")
+    item = Item.objects.using(db_alias).create(name="zzz_identity_item", category=category)
+    prop = Property.objects.using(db_alias).create(name="zzz_identity_prop", category=category)
+    entry = Entry.objects.using(db_alias).create(
+        value="zzz_identity_entry",
+        item=item,
+        property=prop,
+    )
+    return {
+        "category": category,
+        "item": item,
+        "property": prop,
+        "entry": entry,
+    }
+
+
+def seed_public_category_with_item(db_alias: str = "default") -> dict[str, object]:
+    """Seed one public ``Category`` holding one public ``Item``.
+
+    The control fixture for rows that assert a permissive hook leaves the item
+    visible: nothing in the chain is private, so any narrowing that shows up came
+    from the walk under test rather than from the data.
+    """
+    category = Category.objects.using(db_alias).create(name="zzz_control_cat", is_private=False)
+    item = Item.objects.using(db_alias).create(
+        name="zzz_control_item",
+        category=category,
+        is_private=False,
+    )
+    return {"category": category, "item": item}
+
+
+def seed_field_scope_split(db_alias: str = "default") -> dict[str, object]:
+    """Seed public/hidden ``Item`` and ``Property`` rows under one public category.
+
+    Three entries isolate the two cascade edges: one wholly public, one whose item
+    is hidden, and one whose property is hidden. Scoping the walk to a single edge
+    must keep the entry whose OTHER edge is the hidden one.
+    """
+    category = Category.objects.using(db_alias).create(name="zzz_scope_cat")
+    public_item = Item.objects.using(db_alias).create(name="zzz_pub_item", category=category)
+    hidden_item = Item.objects.using(db_alias).create(
+        name="zzz_hidden_item",
+        category=category,
+        is_private=True,
+    )
+    public_prop = Property.objects.using(db_alias).create(
+        name="zzz_pub_prop",
+        category=category,
+    )
+    hidden_prop = Property.objects.using(db_alias).create(
+        name="zzz_hidden_prop",
+        category=category,
+        is_private=True,
+    )
+    keeps = Entry.objects.using(db_alias).create(
+        value="zzz_keeps",
+        item=public_item,
+        property=public_prop,
+    )
+    drops_item = Entry.objects.using(db_alias).create(
+        value="zzz_drops_item",
+        item=hidden_item,
+        property=public_prop,
+    )
+    survives_prop = Entry.objects.using(db_alias).create(
+        value="zzz_survives_prop",
+        item=public_item,
+        property=hidden_prop,
+    )
+    return {
+        "category": category,
+        "public_item": public_item,
+        "hidden_item": hidden_item,
+        "public_prop": public_prop,
+        "hidden_prop": hidden_prop,
+        "keeps": keeps,
+        "drops_item": drops_item,
+        "survives_prop": survives_prop,
+    }
+
+
+def seed_gate_name_split(db_alias: str = "default") -> dict[str, object]:
+    """Seed one public and one hidden ``Category`` for the gated-``name`` filter rows.
+
+    A gate walks the filter INPUT, so the hidden row is what proves a passing input
+    still cannot recover a row the cascade already dropped.
+    """
+    public = Category.objects.using(db_alias).create(name="zzz_gate_public", is_private=False)
+    hidden = Category.objects.using(db_alias).create(name="zzz_gate_name_hidden", is_private=True)
+    return {"public": public, "hidden": hidden}
+
+
+def seed_gate_order_split(db_alias: str = "default") -> dict[str, object]:
+    """Seed two public ``Category`` rows out of alphabetical order, plus a hidden one.
+
+    Insertion order deliberately contradicts name order so an ascending sort is
+    observable, and the hidden row pins that ordering arranges only what the
+    cascade left visible.
+    """
+    beta = Category.objects.using(db_alias).create(name="zzz_gate_beta", is_private=False)
+    alpha = Category.objects.using(db_alias).create(name="zzz_gate_alpha", is_private=False)
+    hidden = Category.objects.using(db_alias).create(name="zzz_gate_order_hidden", is_private=True)
+    return {"alpha": alpha, "beta": beta, "hidden": hidden}
+
+
+def seed_gate_existence_split(db_alias: str = "default") -> dict[str, object]:
+    """Seed a public and a private ``Category``, each holding one public ``Item``.
+
+    The no-existence-leak fixture: the item under the private category is dropped
+    by the cascade itself, so deleting that chain changes the data without changing
+    the visible rows - which is what makes two gate denials comparable.
+    """
+    public_cat = Category.objects.using(db_alias).create(
+        name="zzz_leak_public_cat",
+        is_private=False,
+    )
+    private_cat = Category.objects.using(db_alias).create(
+        name="zzz_leak_private_cat",
+        is_private=True,
+    )
+    visible_item = Item.objects.using(db_alias).create(
+        name="zzz_leak_visible_item",
+        category=public_cat,
+        is_private=False,
+    )
+    hidden_item = Item.objects.using(db_alias).create(
+        name="zzz_leak_hidden_item",
+        category=private_cat,
+        is_private=False,
+    )
+    return {
+        "public_cat": public_cat,
+        "private_cat": private_cat,
+        "visible_item": visible_item,
+        "hidden_item": hidden_item,
+    }
+
+
+def seed_decoy_and_target_rows(db_alias: str = "default") -> dict[str, object]:
+    """Seed a ``Category`` no query returns beside a ``Category`` holding one ``Item``.
+
+    The decoy row exists only so a test can prove the answer came from the ``Item``
+    table: a walk that resolved against ``Category`` instead would surface
+    ``DECOY_CATEGORY_NAME``. Names are module constants so a ``get_queryset`` hook
+    can name the rows without creating them.
+    """
+    decoy = Category.objects.using(db_alias).create(name=DECOY_CATEGORY_NAME)
+    holder = Category.objects.using(db_alias).create(name="zzz_target_category")
+    item = Item.objects.using(db_alias).create(name=TARGET_ITEM_NAME, category=holder)
+    return {"decoy": decoy, "holder": holder, "item": item}

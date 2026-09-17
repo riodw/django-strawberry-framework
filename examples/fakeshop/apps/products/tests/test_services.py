@@ -1,9 +1,11 @@
 """Products service tests for Faker discovery, catalog lifecycle, and user lifecycle."""
 
+import inspect
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError
 from faker import Faker
 
 from apps.products import services
@@ -298,3 +300,58 @@ def test_delete_users_all_mode_wipes_non_superusers():
     assert result["users"] == 6
     assert User.objects.filter(is_superuser=True).count() == 1
     assert User.objects.filter(is_superuser=False).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Named fixture helpers
+# ---------------------------------------------------------------------------
+
+
+def _named_fixture_helpers():
+    """Discover the named fixture helpers by shape, never from a written list.
+
+    A hand-kept roster would be a second definition of the family and would drift
+    the first time someone adds a helper without remembering this file, which is
+    the drift the gate below exists to catch. The family's shape is public,
+    ``seed_``-prefixed, and callable with no arguments (``seed_data`` takes a
+    required ``count`` and is a catalog seeder, not a fixture).
+    """
+    found = {}
+    for name in dir(services):
+        if not name.startswith("seed_"):
+            continue
+        helper = getattr(services, name)
+        if not callable(helper):
+            continue
+        parameters = inspect.signature(helper).parameters.values()
+        if all(parameter.default is not inspect.Parameter.empty for parameter in parameters):
+            found[name] = helper
+    return found
+
+
+@pytest.mark.django_db
+def test_every_named_fixture_helper_seeds_into_one_database():
+    """No two fixture helpers claim the same ``Category`` name.
+
+    ``Category.name`` is unique across the whole table, so a category name belongs
+    to the module rather than to the helper that writes it. A test calling two
+    helpers together dies at seed time on a name they share, and the failure
+    arrives as an ``IntegrityError`` raised inside a helper the test was only using
+    as a control. Calling every helper against one database moves that collision
+    here, where the helper that introduced it is still named.
+
+    The trailing count is the can't-be-vacuous half: every helper seeds at least
+    one category, so a discovery predicate that matched nothing, or helpers that
+    quietly stopped writing, fails instead of passing on an empty loop.
+    """
+    helpers = _named_fixture_helpers()
+    assert services.seed_cascade_split in helpers.values(), sorted(helpers)
+
+    for name, helper in sorted(helpers.items()):
+        try:
+            helper()
+        except IntegrityError as exc:
+            raise AssertionError(f"{name} reuses a name an earlier helper seeded") from exc
+
+    seeded = Category.objects.filter(name__startswith="zzz_").count()
+    assert seeded >= len(helpers), (seeded, sorted(helpers))

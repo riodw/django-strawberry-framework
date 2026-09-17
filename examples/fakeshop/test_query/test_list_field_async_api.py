@@ -12,6 +12,7 @@ No case sets ``DJANGO_ALLOW_ASYNC_UNSAFE``. All tests carry
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import time
 from typing import Any
@@ -100,6 +101,15 @@ async def _post_async(
         _CURRENT["schema"] = None
         _CURRENT["view_class"] = None
         clear_url_caches()
+
+
+@strawberry.type
+class _AwaitableChild:
+    """Throwaway child whose ``name`` field is awaitable, for residual-awaitable completion."""
+
+    @strawberry.field
+    async def name(self) -> str:
+        return "resolved"
 
 
 class _ClosableAsyncIterator:
@@ -253,6 +263,320 @@ async def test_async_queryset_completion_async_def_queryset_resolver():
     assert payload["data"]["branches"] == [{"name": "Bravo"}]
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_async_get_queryset_is_awaited(monkeypatch):
+    """An ``async def get_queryset`` runs under the async view, not the sync skip."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="hidden-a", city="Boston")
+
+    original = library_schema.BranchType.get_queryset
+
+    async def _async_get_queryset(cls, queryset, info, **kwargs):
+        qs = original(queryset, info, **kwargs)
+        return qs.exclude(name__startswith="hidden")
+
+    monkeypatch.setattr(
+        library_schema.BranchType,
+        "get_queryset",
+        classmethod(_async_get_queryset),
+    )
+
+    @strawberry.type
+    class _BranchQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+
+    payload = await _post_async(
+        DjangoSchema(query=_BranchQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "resolver",
+    [
+        lambda root, info: library_models.Branch.objects.all(),
+        lambda root, info: library_models.Branch.objects,
+    ],
+    ids=["queryset", "manager"],
+)
+async def test_async_a_query_source_resolver_still_applies_target_visibility(resolver):
+    """Async completion of a ``QuerySet`` or ``Manager`` still runs ``get_queryset``."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+
+    @strawberry.type
+    class _SourceQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=resolver,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_SourceQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_a_materialized_list_skips_target_visibility():
+    """An async python-list resolver returns restricted-city rows the queryset path hides."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+
+    async def _resolve(root, info):
+        return await sync_to_async(
+            lambda: list(library_models.Branch.objects.order_by("name")),
+        )()
+
+    @strawberry.type
+    class _ListQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolve,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_ListQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha", "Hidden"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_nullable_none_resolver_returns_null():
+    """An async resolver returning ``None`` on a nullable list field renders ``null``."""
+
+    async def _resolve(root, info):
+        return None
+
+    @strawberry.type
+    class _NoneQuery:
+        branches: list[library_schema.BranchType] | None = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolve,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_NoneQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    assert payload["data"] == {"branches": None}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_limit_alone_windows_without_order_by():
+    """``limit`` without ``orderBy`` still runs the async argument pipeline."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Bravo", city="Boston")
+
+    @strawberry.type
+    class _BranchQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+
+    payload = await _post_async(
+        DjangoSchema(query=_BranchQuery, config=strawberry_config()),
+        "{ branches(limit: 1) { name } }",
+    )
+    assert "errors" not in payload, payload
+    assert len(payload["data"]["branches"]) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_http_rejects_a_sync_resolver_that_returns_a_coroutine():
+    """A plain ``def`` returning a coroutine is rejected, never silently leaked."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+
+    async def _inner():
+        return library_models.Branch.objects.all()
+
+    def _sync_returning_coroutine(root, info):
+        return _inner()
+
+    @strawberry.type
+    class _MisdeclaredQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_sync_returning_coroutine,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_MisdeclaredQuery, config=strawberry_config()),
+        "{ branches { name } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    assert payload["data"] is None
+    assert "returned an awaitable" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_http_rejects_a_sync_resolver_that_returns_a_custom_awaitable():
+    """A non-coroutine ``__await__`` result cannot bypass queryset visibility."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+
+    class _DeferredQueryset:
+        def __await__(self):
+            if False:
+                yield None
+            return library_models.Branch.objects.all()
+
+    def _sync_returning_awaitable(root, info):
+        return _DeferredQueryset()
+
+    @strawberry.type
+    class _MisdeclaredQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_sync_returning_awaitable,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_MisdeclaredQuery, config=strawberry_config()),
+        "{ branches { name } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    assert payload["data"] is None
+    assert "returned an awaitable" in payload["errors"][0]["message"]
+
+
+def _async_callable_object_resolver():
+    class _AsyncResolver:
+        async def __call__(self, root, info):
+            return library_models.Branch.objects.all()
+
+    return _AsyncResolver()
+
+
+def _partial_async_def_resolver():
+    async def _resolve(prefix, root, info):
+        return library_models.Branch.objects.all()
+
+    return functools.partial(_resolve, "ignored")
+
+
+def _partial_async_callable_object_resolver():
+    class _AsyncResolver:
+        async def __call__(
+            self,
+            prefix,
+            root,
+            info,
+        ):
+            return library_models.Branch.objects.all()
+
+    return functools.partial(_AsyncResolver(), "ignored")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "resolver",
+    [
+        _async_callable_object_resolver(),
+        _partial_async_def_resolver(),
+        _partial_async_callable_object_resolver(),
+    ],
+    ids=["callable_object", "partial_async_def", "partial_callable_object"],
+)
+async def test_async_http_classified_resolver_still_applies_visibility(resolver):
+    """Factory-classified exotic async resolvers still run ``BranchType.get_queryset``.
+
+    ``inspect.iscoroutinefunction`` is False for an ``async def __call__`` instance
+    and for ``functools.partial`` of that instance. Misclassification looks like a
+    type with no visibility hook: the Hidden/restricted row would leak.
+    """
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+
+    @strawberry.type
+    class _ClassifiedQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=resolver,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_ClassifiedQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_http_staticmethod_resolver_still_applies_visibility():
+    """A class-body ``@staticmethod async def`` resolver is unwrapped as async.
+
+    The class-body name is the raw descriptor. Without ``.__func__`` it is
+    classified sync and the Hidden/restricted row leaks or the call raises.
+    """
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+
+    @strawberry.type
+    class _StaticQuery:
+        @staticmethod
+        async def _resolve(root, info):
+            return library_models.Branch.objects.all()
+
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolve,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_StaticQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_http_partial_async_generator_resolver_is_bounded():
+    """A partial-wrapped async-generator instance is capped by ``max_rows``."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Bravo", city="Boston")
+    rows = await sync_to_async(lambda: list(library_models.Branch.objects.order_by("name")))()
+
+    class _Resolver:
+        async def __call__(
+            self,
+            prefix,
+            root,
+            info,
+        ):
+            for row in rows:
+                yield row
+
+    @strawberry.type
+    class _GenQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=functools.partial(_Resolver(), "ignored"),
+            max_rows=1,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_GenQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    assert len(payload["data"]["branches"]) == 1
+
+
 # ---------------------------------------------------------------------------
 # 5. Optimizer on vs off parity
 # ---------------------------------------------------------------------------
@@ -352,6 +676,7 @@ async def test_async_pipeline_parity():
     """
     payload_denied = await _post_async(schema, query_denied)
     assert "errors" in payload_denied
+    assert payload_denied["data"] is None, payload_denied
     assert payload_denied["errors"][0]["extensions"]["code"] == "ORDER_PERMISSION_DENIED"
 
 
@@ -679,6 +1004,8 @@ async def test_async_a_rejection_names_the_argument_in_the_schema_spelling():
         "{ branches(order_by: [{ id: null }], offset: 1) { name } }",
     )
 
+    assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert payload["errors"][0]["extensions"]["argument"] == "offset"
     assert payload["errors"][0]["extensions"]["reason"] == "order_required"
 
@@ -709,6 +1036,7 @@ async def test_async_a_failing_aclose_does_not_displace_the_argument_rejection()
     )
 
     assert "errors" in payload
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert error["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
     assert error["extensions"]["reason"] == "order_required"
@@ -1494,3 +1822,112 @@ async def test_async_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_i
     assert "errors" not in payload, payload
     assert [row["name"] for row in payload["data"]["branches"]] == ["B0", "B1"]
 
+
+# ---------------------------------------------------------------------------
+# graphql-core async-iterable list completion (awaitable children)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_iterable_with_awaitable_children_completes_over_http():
+    """An async-iterable list whose child fields are awaitable completes to resolved data.
+
+    graphql-core materializes the ``AsyncIterable`` then recursively completes
+    the list, and returns that recursive completion without awaiting it when a
+    child field is awaitable. A request that selected only synchronous children
+    would still succeed with that second await removed, so this row selects an
+    async field on purpose.
+    """
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def children(self) -> list[_AwaitableChild]:
+            return _ClosableAsyncIterator([_AwaitableChild()])
+
+    payload = await _post_async(strawberry.Schema(query=Query), "{ children { name } }")
+
+    assert "errors" not in payload, payload
+    assert payload["data"] == {"children": [{"name": "resolved"}]}
+
+
+class _HostileBranchQuerySet(models.QuerySet):
+    """A predicate-erasing subclass: ``__iter__`` yields the raw table.
+
+    Hand-copied from ``test_list_field_api.py``; see that copy for why the pair is
+    kept separate and why a change to the adversary is a change to both files.
+    """
+
+    def filter(self, *args, **kwargs):
+        return library_models.Branch.objects.all()
+
+    def order_by(self, *args, **kwargs):
+        return library_models.Branch.objects.all()
+
+    def __iter__(self):
+        return iter(library_models.Branch.objects.all().order_by("pk"))
+
+    def __aiter__(self):
+        return library_models.Branch.objects.all().order_by("pk").__aiter__()
+
+
+def _hostile_branch_hook(cls, queryset, info, **kwargs):
+    """Apply the visibility predicate through unbound ``QuerySet.filter``."""
+    return models.QuerySet.filter(
+        _HostileBranchQuerySet(model=library_models.Branch),
+        city="Boston",
+    )
+
+
+def _degrading_branch_manager():
+    manager = type("ListManager", (models.Manager,), {"all": lambda self: ["secret"]})()
+    manager.model = library_models.Branch
+    manager._db = None
+    return manager
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_hostile_queryset_subclass_cannot_leak_restricted_rows(monkeypatch):
+    """The async view seals a hostile ``QuerySet`` subclass the same way the sync one does."""
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+    monkeypatch.setattr(
+        library_schema.BranchType,
+        "get_queryset",
+        classmethod(_hostile_branch_hook),
+    )
+
+    @strawberry.type
+    class _BranchQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+
+    payload = await _post_async(
+        DjangoSchema(query=_BranchQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_manager_that_degrades_to_a_list_is_rejected():
+    """An async resolver returning a list-degrading Manager is a typed refusal."""
+
+    async def _resolve(root, info):
+        return _degrading_branch_manager()
+
+    @strawberry.type
+    class _DegradeQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolve,
+        )
+
+    payload = await _post_async(
+        DjangoSchema(query=_DegradeQuery, config=strawberry_config()),
+        "{ branches { name } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    assert payload["data"] is None
+    assert "must produce a QuerySet" in payload["errors"][0]["message"]

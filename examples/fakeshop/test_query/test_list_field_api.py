@@ -16,10 +16,11 @@ from apps.glossary import schema as glossary_schema
 from apps.library import models as library_models
 from apps.library import schema as library_schema
 from apps.library.orders import BranchOrder
+from apps.products import schema as products_schema
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection, models
-from django.db.models.expressions import Func, RawSQL
+from django.db.models.expressions import Func, OrderBy, RawSQL
 from django.db.models.functions import Coalesce, Lower, Random
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -360,6 +361,7 @@ def test_shipped_branches_nonzero_offset_without_order_rejected():
     """
     payload = graphql_payload(query)
     assert "errors" in payload
+    assert payload["data"] is None, payload
     err = payload["errors"][0]
     assert err["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
     assert err["extensions"]["reason"] == "order_required"
@@ -421,6 +423,29 @@ def test_shipped_branches_offset_rejects_a_random_model_default(monkeypatch):
     """
     _seed_three_branches()
     monkeypatch.setattr(library_models.Branch._meta, "ordering", ("?",))
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_apply_order_unchanged))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "ordering",
+    [
+        (Random(),),
+        (OrderBy(Random()),),
+    ],
+    ids=["random-expr", "orderby-random"],
+)
+def test_shipped_branches_offset_rejects_a_random_expression_model_default(monkeypatch, ordering):
+    """A ``Random()`` ``Meta.ordering`` is the same shuffle as ``"?"``, written as an expression."""
+    _seed_three_branches()
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", ordering)
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_apply_order_unchanged))
 
     payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
@@ -572,6 +597,34 @@ def test_shipped_branches_offset_rejects_an_f_reference_to_a_random_annotation(m
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    "term",
+    ["-rnd", "rnd__abs"],
+    ids=["desc-prefix", "lookup-through-alias"],
+)
+def test_shipped_branches_offset_rejects_a_desc_or_lookup_random_alias(monkeypatch, term):
+    """An annotation alias is resolved after a leading ``-`` or a lookup suffix too."""
+    _seed_three_branches()
+
+    def _aliased(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.annotate(rnd=Random()).order_by(term)
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_aliased))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
 def test_shipped_branches_offset_rejects_an_extra_select_ordering(monkeypatch):
     """Raw SQL reached through ``extra`` is opaque, and opaque is not deterministic.
 
@@ -592,6 +645,34 @@ def test_shipped_branches_offset_rejects_an_extra_select_ordering(monkeypatch):
         return queryset.extra(select={"rnd": "RANDOM()"}, order_by=["rnd"])
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_extra_select_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert branch_sql == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "term",
+    ["library_branch.name", "library_branch.city"],
+    ids=["dotted-name", "dotted-city"],
+)
+def test_shipped_branches_offset_rejects_a_dotted_extra_order(monkeypatch, term):
+    """A dotted ``extra`` term is opaque: the package does not parse that SQL."""
+    _seed_three_branches()
+
+    def _dotted_extra(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.extra(order_by=[term])
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_dotted_extra))
 
     payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
 
@@ -830,12 +911,97 @@ def test_shipped_branches_offset_accepts_a_stable_annotated_order(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_shipped_branches_offset_accepts_a_container_predicate_of_readable_leaves(monkeypatch):
+    """The control for the container rule: a sequence lookup of literals still pages.
+
+    Reading one bracket deeper is what the ``name__in`` rejection above is about,
+    not the container itself. A guard that refused every predicate holding a
+    sequence would keep that rejection green while breaking ordinary conditional
+    sorts - ``__in`` and ``__range`` are how a ``When`` names a set of rows - so
+    this row fails the moment the container branch stops classifying its members
+    and starts refusing them wholesale.
+    """
+    _seed_three_branches()
+
+    def _container_of_literals(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by(
+            models.Case(
+                models.When(
+                    models.Q(name__in=["Alpha", "Charlie"]),
+                    then=models.Value(0),
+                ),
+                default=models.Value(1),
+            ),
+            "name",
+        )
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_container_of_literals))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    assert "errors" not in payload, payload
+    # Alpha and Charlie sort ahead of Bravo, so offset 1 lands on Charlie.
+    assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Charlie"}]
+    assert len(branch_sql) == 1
+    statement = branch_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    # Read the fragment out of the ordering itself: the visibility filter is
+    # spelled ``NOT (city = ...)`` today, but a future ``city__in`` would
+    # satisfy a whole-statement assertion without the predicate under test.
+    order_clause = statement.split("ORDER BY", 1)[1]
+    assert "CASE WHEN" in order_clause, statement
+    assert " IN (" in order_clause, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+def test_shipped_branches_offset_accepts_a_row_count_order(monkeypatch):
+    """The control for the aggregate leaf: ``Count("*")`` carries no column and is admitted.
+
+    An aggregate's star stands for every row rather than for a named column, so
+    it reaches the leaf test as its own expression type (``Star``). A classifier
+    that certified only columns and literals would refuse it and reject this
+    page. What the row pins is admission, not the arrangement: on a model
+    queryset the count groups by every selected column, so every group is one
+    row and the page equals the name-ordered page; ``COUNT(`` is asserted on the
+    whole statement because Django orders by the annotation's ordinal.
+    """
+    _seed_three_branches()
+
+    def _row_count_ordering(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.annotate(row_count=models.Count("*")).order_by("row_count", "name")
+
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_row_count_ordering))
+
+    payload, branch_sql = _branch_offset_page(_OFFSET_WITH_ACTIVE_ORDER)
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryBranchesViaListField"] == [{"name": "Bravo"}]
+    assert len(branch_sql) == 1
+    statement = branch_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "COUNT(" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
 def test_shipped_branches_offset_bounds_rejected():
     # Negative offset
     payload_neg = graphql_payload(
         "{ allLibraryBranchesViaListField(offset: -1) { name } }",
     )
     assert "errors" in payload_neg
+    assert payload_neg["data"] is None, payload_neg
     err_neg = payload_neg["errors"][0]
     assert err_neg["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
     assert err_neg["extensions"]["reason"] == "negative"
@@ -847,6 +1013,7 @@ def test_shipped_branches_offset_bounds_rejected():
         "{ allLibraryBranchesViaListField(offset: 101) { name } }",
     )
     assert "errors" in payload_ceil
+    assert payload_ceil["data"] is None, payload_ceil
     err_ceil = payload_ceil["errors"][0]
     assert err_ceil["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
     assert err_ceil["extensions"]["reason"] == "over_ceiling"
@@ -862,6 +1029,7 @@ def test_shipped_branches_limit_bounds_rejected():
         "{ allLibraryBranchesViaListField(limit: -1) { name } }",
     )
     assert "errors" in payload_neg
+    assert payload_neg["data"] is None, payload_neg
     err_neg = payload_neg["errors"][0]
     assert err_neg["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
     assert err_neg["extensions"]["reason"] == "negative"
@@ -873,6 +1041,7 @@ def test_shipped_branches_limit_bounds_rejected():
         "{ allLibraryBranchesViaListField(limit: 101) { name } }",
     )
     assert "errors" in payload_ceil
+    assert payload_ceil["data"] is None, payload_ceil
     err_ceil = payload_ceil["errors"][0]
     assert err_ceil["extensions"]["code"] == "LIST_ARGUMENT_INVALID"
     assert err_ceil["extensions"]["reason"] == "over_ceiling"
@@ -889,6 +1058,15 @@ def test_shipped_branches_limit_bounds_rejected():
 _LIMIT_VARIABLE_QUERY = """
 query($lim: Int) {
   allLibraryBranchesViaListField(limit: $lim) {
+    name
+  }
+}
+"""
+
+
+_OFFSET_VARIABLE_QUERY = """
+query($off: Int) {
+  allLibraryBranchesViaListField(offset: $off) {
     name
   }
 }
@@ -915,6 +1093,25 @@ def test_shipped_branches_a_limit_variable_outside_int_is_refused_before_sql(bad
         payload = graphql_payload(_LIMIT_VARIABLE_QUERY, variables={"lim": bad_value})
 
     assert "errors" in payload
+    assert payload["data"] is None, payload
+    assert len(ctx.captured_queries) == 0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "bad_value",
+    ["one", True, 1.5],
+    ids=["string", "boolean", "non-integral-float"],
+)
+def test_shipped_branches_an_offset_variable_outside_int_is_refused_before_sql(bad_value):
+    """Offset uses the same Int gate as ``limit``; coercion never reaches the resolver."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    with CaptureQueriesContext(connection) as ctx:
+        payload = graphql_payload(_OFFSET_VARIABLE_QUERY, variables={"off": bad_value})
+
+    assert "errors" in payload
+    assert payload["data"] is None, payload
     assert len(ctx.captured_queries) == 0
 
 
@@ -929,6 +1126,22 @@ def test_shipped_branches_a_float_limit_literal_is_refused_before_sql():
         )
 
     assert "errors" in payload
+    assert payload["data"] is None, payload
+    assert len(ctx.captured_queries) == 0
+
+
+@pytest.mark.django_db
+def test_shipped_branches_a_float_offset_literal_is_refused_before_sql():
+    """The document-literal path for ``offset`` is the same gate as for ``limit``."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    with CaptureQueriesContext(connection) as ctx:
+        payload = graphql_payload(
+            "{ allLibraryBranchesViaListField(offset: 1.5) { name } }",
+        )
+
+    assert "errors" in payload
+    assert payload["data"] is None, payload
     assert len(ctx.captured_queries) == 0
 
 
@@ -968,6 +1181,7 @@ def test_shipped_branches_offset_with_limit_zero_precondition():
         "{ allLibraryBranchesViaListField(offset: 1, limit: 0) { name } }",
     )
     assert "errors" in payload_no_ord
+    assert payload_no_ord["data"] is None, payload_no_ord
     assert payload_no_ord["errors"][0]["extensions"]["reason"] == "order_required"
 
     # offset: 1, limit: 0 with active ordering short-circuits with 0 row queries
@@ -1018,9 +1232,71 @@ def test_holder_trusted_widened_field():
     # Client offset over policy ceiling (101 > 100) still rejects
     payload_offset = _post_sync(schema, "{ branchesTrusted(offset: 101) { name } }")
     assert "errors" in payload_offset
+    assert payload_offset["data"] is None, payload_offset
     err = payload_offset["errors"][0]
     assert err["extensions"]["reason"] == "over_ceiling"
     assert err["extensions"]["ceiling"] == 100
+
+
+@pytest.mark.django_db
+def test_holder_trusted_max_rows_rejects_a_limit_above_the_field_bound():
+    """Trusted ``max_rows`` widens the limit ceiling to the field bound, not past it."""
+
+    @strawberry.type
+    class _TrustedQuery:
+        branches_trusted: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            max_rows=105,
+            trusted_max_rows=True,
+        )
+
+    schema = DjangoSchema(query=_TrustedQuery, config=strawberry_config())
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    payload = _post_sync(schema, "{ branchesTrusted(limit: 106) { name } }")
+    assert payload["errors"][0]["extensions"]["reason"] == "over_ceiling"
+    assert payload["errors"][0]["extensions"]["argument"] == "limit"
+    assert payload["errors"][0]["extensions"]["ceiling"] == 105
+
+
+@pytest.mark.django_db
+def test_holder_untrusted_max_rows_caps_an_omitted_limit():
+    """A field ``max_rows`` without the trusted opt-in narrows the default window."""
+
+    @strawberry.type
+    class _NarrowQuery:
+        branches_narrow: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            max_rows=1,
+        )
+
+    schema = DjangoSchema(query=_NarrowQuery, config=strawberry_config())
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+    library_models.Branch.objects.create(name="Bravo", city="Boston")
+
+    payload = _post_sync(schema, "{ branchesNarrow { name } }")
+    assert "errors" not in payload, payload
+    assert len(payload["data"]["branchesNarrow"]) == 1
+
+
+@pytest.mark.django_db
+def test_holder_untrusted_max_rows_is_the_limit_ceiling():
+    """Without the trusted opt-in, the field bound is the limit ceiling."""
+
+    @strawberry.type
+    class _NarrowQuery:
+        branches_narrow: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            max_rows=50,
+        )
+
+    schema = DjangoSchema(query=_NarrowQuery, config=strawberry_config())
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    payload = _post_sync(schema, "{ branchesNarrow(limit: 51) { name } }")
+    assert payload["errors"][0]["extensions"]["reason"] == "over_ceiling"
+    assert payload["errors"][0]["extensions"]["argument"] == "limit"
+    assert payload["errors"][0]["extensions"]["ceiling"] == 50
 
 
 @pytest.mark.django_db
@@ -1117,6 +1393,58 @@ def test_holder_materialized_and_nullable_none_fields():
 
     p_none_ord = _post_sync(schema, "{ branchesNullableNone(orderBy: []) { name } }")
     assert p_none_ord["errors"][0]["extensions"]["reason"] == "queryset_required"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "resolver",
+    [
+        lambda root, info: library_models.Branch.objects.all(),
+        lambda root, info: library_models.Branch.objects,
+    ],
+    ids=["queryset", "manager"],
+)
+def test_holder_a_query_source_resolver_still_applies_target_visibility(resolver):
+    """A ``QuerySet`` or ``Manager`` resolver still runs ``BranchType.get_queryset``."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+    library_models.Branch.objects.create(name="Hidden", city="restricted")
+
+    @strawberry.type
+    class _SourceQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=resolver,
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_SourceQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha"]
+
+
+@pytest.mark.django_db
+def test_holder_a_materialized_list_skips_target_visibility():
+    """A python-list resolver returns restricted-city rows the queryset path hides."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+    library_models.Branch.objects.create(name="Hidden", city="restricted")
+
+    @strawberry.type
+    class _ListQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=lambda root, info: list(library_models.Branch.objects.order_by("name")),
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_ListQuery, config=strawberry_config()),
+        "{ branches { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["branches"]]
+    assert names == ["Alpha", "Hidden"]
 
 
 @pytest.mark.django_db
@@ -1717,6 +2045,87 @@ def test_holder_model_default_ordering_verdicts():
         "{ termsClearedOrdering(offset: 1) { title } }",
     )
     assert payload_cleared["errors"][0]["extensions"]["reason"] == "order_required"
+
+
+@pytest.mark.django_db
+def test_holder_reversed_model_default_ordering_still_pages():
+    """``.reverse()`` keeps the model's own order, so a positive offset is still served."""
+
+    @strawberry.type
+    class _ReversedQuery:
+        terms_reversed: list[glossary_schema.GlossaryTermType] = DjangoListField(
+            glossary_schema.GlossaryTermType,
+            resolver=lambda root, info: glossary_models.GlossaryTerm.objects.all().reverse(),
+        )
+
+    schema = DjangoSchema(query=_ReversedQuery, config=strawberry_config())
+    status = glossary_models.GlossaryStatus.objects.create(key="shipped", label="Shipped")
+    glossary_models.GlossaryTerm.objects.create(
+        title="Alpha",
+        title_sort="a",
+        anchor="alpha",
+        status=status,
+        status_text="Shipped",
+        entry_order=1,
+    )
+    glossary_models.GlossaryTerm.objects.create(
+        title="Beta",
+        title_sort="b",
+        anchor="beta",
+        status=status,
+        status_text="Shipped",
+        entry_order=2,
+    )
+    glossary_models.GlossaryTerm.objects.create(
+        title="Gamma",
+        title_sort="g",
+        anchor="gamma",
+        status=status,
+        status_text="Shipped",
+        entry_order=3,
+    )
+
+    payload = _post_sync(schema, "{ termsReversed(offset: 1) { title } }")
+    assert "errors" not in payload, payload
+    titles = [row["title"] for row in payload["data"]["termsReversed"]]
+    assert titles == ["Beta", "Alpha"]
+
+
+@pytest.mark.django_db
+def test_holder_empty_model_ordered_queryset_still_pages():
+    """An empty source that still carries ``Meta.ordering`` serves a positive offset as []."""
+
+    @strawberry.type
+    class _EmptyQuery:
+        rows: list[glossary_schema.GlossaryTermType] = DjangoListField(
+            glossary_schema.GlossaryTermType,
+            resolver=lambda root, info: glossary_models.GlossaryTerm.objects.none(),
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_EmptyQuery, config=strawberry_config()),
+        "{ rows(offset: 1) { title } }",
+    )
+    assert "errors" not in payload, payload
+    assert payload["data"]["rows"] == []
+
+
+@pytest.mark.django_db
+def test_holder_empty_unordered_queryset_still_requires_order():
+    """An empty source with no model order is still ``order_required`` for a positive offset."""
+
+    @strawberry.type
+    class _EmptyQuery:
+        rows: list[library_schema.MembershipCardType] = DjangoListField(
+            library_schema.MembershipCardType,
+            resolver=lambda root, info: library_models.MembershipCard.objects.none(),
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_EmptyQuery, config=strawberry_config()),
+        "{ rows(offset: 1) { barcode } }",
+    )
+    assert payload["errors"][0]["extensions"]["reason"] == "order_required"
 
 
 @pytest.mark.django_db
@@ -2448,3 +2857,283 @@ def test_a_policy_a_resolver_widened_does_not_outlive_its_own_request(reach):
 
     assert "errors" not in payload, payload
     assert [row["name"] for row in payload["data"]["branches"]] == ["B0", "B1"]
+
+
+@pytest.mark.django_db
+def test_holder_item_list_field_drops_rows_under_a_hidden_category():
+    """``DjangoListField`` over ``ItemType`` applies the cascade inside ``get_queryset``."""
+    from apps.products.services import seed_cascade_split
+
+    chain = seed_cascade_split()
+
+    @strawberry.type
+    class _ItemQuery:
+        items: list[products_schema.ItemType] = DjangoListField(products_schema.ItemType)
+
+    payload = _post_sync(
+        DjangoSchema(query=_ItemQuery, config=strawberry_config()),
+        "{ items { name } }",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["items"]]
+    assert chain["item_under_public"].name in names
+    assert chain["item_under_private"].name not in names
+
+
+@pytest.mark.django_db
+def test_holder_membership_card_list_elides_patron_id_to_one_query():
+    """An id-only forward relation on a list field uses the source FK column alone."""
+    patron = library_models.Patron.objects.create(name="Cardholder", email="c@example.com")
+    library_models.MembershipCard.objects.create(patron=patron, barcode="CARD-1")
+
+    @strawberry.type
+    class _CardQuery:
+        cards: list[library_schema.MembershipCardType] = DjangoListField(
+            library_schema.MembershipCardType,
+        )
+
+    optimizer = DjangoOptimizerExtension()
+    schema = DjangoSchema(
+        query=_CardQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_sync(schema, "{ cards { barcode patron { id } } }")
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["cards"] == [{"barcode": "CARD-1", "patron": {"id": patron.pk}}]
+    card_sql = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "library_membershipcard"' in entry["sql"]
+    ]
+    assert len(card_sql) == 1, card_sql
+    assert "JOIN" not in card_sql[0].upper()
+    assert "patron_id" in card_sql[0]
+    patron_sql = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "library_patron"' in entry["sql"]
+    ]
+    assert patron_sql == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field_name", "hidden_name"),
+    [("primaryPatrons", "from-primary"), ("publicPatrons", "from-secondary")],
+    ids=["primary", "secondary"],
+)
+def test_holder_list_field_uses_the_named_targets_queryset(monkeypatch, field_name, hidden_name):
+    """The field target's ``get_queryset`` runs; the other type on the model does not."""
+    library_models.Patron.objects.create(name="from-primary", email="a@example.com")
+    library_models.Patron.objects.create(name="from-secondary", email="b@example.com")
+    library_models.Patron.objects.create(name="kept", email="c@example.com")
+
+    monkeypatch.setattr(
+        library_schema.PatronType,
+        "get_queryset",
+        classmethod(lambda cls, queryset, info, **kwargs: queryset.exclude(name="from-primary")),
+    )
+    monkeypatch.setattr(
+        library_schema.PublicPatronType,
+        "get_queryset",
+        classmethod(lambda cls, queryset, info, **kwargs: queryset.exclude(name="from-secondary")),
+    )
+
+    @strawberry.type
+    class _PatronQuery:
+        primary_patrons: list[library_schema.PatronType] = DjangoListField(
+            library_schema.PatronType,
+        )
+        public_patrons: list[library_schema.PublicPatronType] = DjangoListField(
+            library_schema.PublicPatronType,
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_PatronQuery, config=strawberry_config()),
+        f"{{ {field_name} {{ name }} }}",
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"][field_name]]
+    assert "kept" in names
+    assert hidden_name not in names
+    other = "from-secondary" if hidden_name == "from-primary" else "from-primary"
+    assert other in names
+
+
+@pytest.mark.django_db
+def test_shipped_branches_sync_http_rejects_an_async_get_queryset(monkeypatch):
+    """The sync view refuses an async ``get_queryset`` instead of skipping visibility."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    async def _async_get_queryset(cls, queryset, info, **kwargs):
+        return queryset
+
+    monkeypatch.setattr(
+        library_schema.BranchType,
+        "get_queryset",
+        classmethod(_async_get_queryset),
+    )
+    with override_settings(**_ERROR_POLICY_PASS_THROUGH):
+        payload = graphql_payload("{ allLibraryBranchesViaListField { name } }")
+
+    assert payload["data"] is None
+    assert "returned a coroutine in a sync resolver context" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset(monkeypatch):
+    """A custom awaitable from ``get_queryset`` cannot skip the sync visibility seal."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+
+    class _DeferredQueryset:
+        def __await__(self):
+            if False:
+                yield None
+            return library_models.Branch.objects.all()
+
+    monkeypatch.setattr(
+        library_schema.BranchType,
+        "get_queryset",
+        classmethod(lambda cls, queryset, info, **kwargs: _DeferredQueryset()),
+    )
+    with override_settings(**_ERROR_POLICY_PASS_THROUGH):
+        payload = graphql_payload("{ allLibraryBranchesViaListField { name } }")
+
+    assert payload["data"] is None
+    assert "returned an awaitable in a sync resolver context" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_holder_sync_http_rejects_an_async_generator_resolver():
+    """Sync HTTP refuses an async-generator resolver before GraphQL slices it."""
+
+    async def _resolve(root, info):
+        if False:
+            yield None
+
+    @strawberry.type
+    class _GenQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolve,
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_GenQuery, config=strawberry_config()),
+        "{ branches { name } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    assert payload["data"] is None
+    assert (
+        "returned an AsyncIterable in a sync execution context" in payload["errors"][0]["message"]
+    )
+
+
+class _HostileBranchQuerySet(models.QuerySet):
+    """A predicate-erasing subclass: ``__iter__`` yields the raw table.
+
+    Hand-copied into ``test_list_field_async_api.py``, which seals the same
+    adversary through the async view. The copy is deliberate: each live suite
+    stands alone at its own HTTP boundary and mounts nothing the other owns. It
+    is also the pair's only shared body, so a change to the adversary - another
+    terminal hooked, another column erased - is a change to BOTH files.
+    """
+
+    def filter(self, *args, **kwargs):
+        return library_models.Branch.objects.all()
+
+    def order_by(self, *args, **kwargs):
+        return library_models.Branch.objects.all()
+
+    def __iter__(self):
+        return iter(library_models.Branch.objects.all().order_by("pk"))
+
+    def __aiter__(self):
+        return library_models.Branch.objects.all().order_by("pk").__aiter__()
+
+
+def _hostile_branch_hook(cls, queryset, info, **kwargs):
+    """Apply the visibility predicate through unbound ``QuerySet.filter``."""
+    return models.QuerySet.filter(
+        _HostileBranchQuerySet(model=library_models.Branch),
+        city="Boston",
+    )
+
+
+def _degrading_branch_manager():
+    manager = type("ListManager", (models.Manager,), {"all": lambda self: ["secret"]})()
+    manager.model = library_models.Branch
+    manager._db = None
+    return manager
+
+
+def _alias_drift_branch_manager():
+    class _DriftManager(models.Manager):
+        def get_queryset(self):
+            return library_models.Branch.objects.using("elsewhere")
+
+    manager = _DriftManager()
+    manager.model = library_models.Branch
+    manager._db = "other"
+    return manager
+
+
+@pytest.mark.django_db
+def test_shipped_branches_hostile_queryset_subclass_cannot_leak_restricted_rows(monkeypatch):
+    """A hostile ``QuerySet`` subclass cannot widen ``allLibraryBranchesViaListField``."""
+    library_models.Branch.objects.create(name="Alpha", city="Boston")
+    library_models.Branch.objects.create(name="Hidden", city="restricted")
+    monkeypatch.setattr(
+        library_schema.BranchType,
+        "get_queryset",
+        classmethod(_hostile_branch_hook),
+    )
+
+    payload = graphql_payload("{ allLibraryBranchesViaListField { name } }")
+
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["allLibraryBranchesViaListField"]]
+    assert names == ["Alpha"]
+
+
+@pytest.mark.django_db
+def test_holder_manager_that_degrades_to_a_list_is_rejected():
+    """A ``Manager.all()`` that returns a list is a typed refusal, not a raw list."""
+
+    @strawberry.type
+    class _DegradeQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=lambda root, info: _degrading_branch_manager(),
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_DegradeQuery, config=strawberry_config()),
+        "{ branches { name } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    assert payload["data"] is None
+    assert "must produce a QuerySet" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_holder_manager_that_drifts_alias_is_rejected():
+    """A manager pinned to one alias cannot ``.all()`` onto another."""
+
+    @strawberry.type
+    class _DriftQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=lambda root, info: _alias_drift_branch_manager(),
+        )
+
+    payload = _post_sync(
+        DjangoSchema(query=_DriftQuery, config=strawberry_config()),
+        "{ branches { name } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+    assert payload["data"] is None
+    assert "preserve the manager's explicit routing" in payload["errors"][0]["message"]

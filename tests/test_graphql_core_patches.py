@@ -1,10 +1,34 @@
-"""Regression coverage for the dependency-owned graphql-core workaround."""
+"""Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
+
+System-under-test: :mod:`django_strawberry_framework._graphql_core_patches`,
+applied at app-load by
+:meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`.
+
+What stays here, and why a live request cannot express it:
+
+- ``apply()`` lifecycle: installed at AppConfig load, idempotence, self-heal
+  after a reverted executor method, missing-symbol / signature-drift
+  ``RuntimeError``, and the ``APPLY_UPSTREAM_PATCHES`` global and per-dependency
+  (``graphql_core`` vs ``strawberry``) toggles. A GraphQL document cannot show
+  that ``apply()`` was the caller or that a missing capture refused to install.
+- The captured upstream method still yielding a residual awaitable after one
+  ``await``: that is the retirement sentinel (spec-050 Decision 13). With the
+  patch installed a live request sees completed list data, never the residual
+  coroutine.
+- ``_captured_upstream_method(None, ...)`` returning ``None`` rather than
+  raising: a graphql-core build that omits ``ExecutionContext`` never reaches a
+  schema.
+
+Wire-observable async list completion lives in
+``examples/fakeshop/test_query/test_list_field_async_api.py`` (queryset
+completion with synchronous children, and an async-iterable list whose child
+fields are awaitable).
+"""
 
 import inspect
 from unittest import mock
 
 import pytest
-import strawberry
 from graphql.execution.execute import ExecutionContext
 
 from django_strawberry_framework import _graphql_core_patches as patches
@@ -41,7 +65,7 @@ def test_apply_reinstalls_a_reverted_executor_method():
 
 
 def test_captured_upstream_still_returns_a_residual_awaitable():
-    """Prove the installed upstream bug still exists before preserving its workaround."""
+    """The captured upstream method still yields a residual awaitable after one ``await``."""
 
     class Context:
         is_awaitable = staticmethod(inspect.isawaitable)
@@ -120,52 +144,6 @@ def test_apply_obeys_global_disable(settings):
         assert patches._patch_is_installed() is False
     finally:
         ExecutionContext.complete_list_value = saved
-
-
-async def test_patch_awaits_async_iterable_with_awaitable_children():
-    @strawberry.type
-    class Child:
-        @strawberry.field
-        async def name(self) -> str:
-            return "resolved"
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def children(self) -> list[Child]:
-            return _SimpleAsyncIterable([Child()])
-
-    result = await strawberry.Schema(query=Query).execute("{ children { name } }")
-    assert result.errors is None
-    assert result.data == {"children": [{"name": "resolved"}]}
-
-
-async def test_patch_preserves_async_iterable_with_synchronous_children():
-    @strawberry.type
-    class Child:
-        name: str
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def children(self) -> list[Child]:
-            return _SimpleAsyncIterable([Child(name="resolved")])
-
-    result = await strawberry.Schema(query=Query).execute("{ children { name } }")
-    assert result.errors is None
-    assert result.data == {"children": [{"name": "resolved"}]}
-
-
-def test_patch_delegates_synchronous_iterables():
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def values(self) -> list[str]:
-            return ["resolved"]
-
-    result = strawberry.Schema(query=Query).execute_sync("{ values }")
-    assert result.errors is None
-    assert result.data == {"values": ["resolved"]}
 
 
 def test_captured_upstream_method_returns_none_without_an_owner():

@@ -197,14 +197,21 @@ card actually moved - every Strawberry-internals and queryset-compilation bounda
 `tests/test_relay_connection.py`, `tests/test_keyset_connection.py`, `tests/orders/test_sets.py`,
 `tests/utils/test_querysets.py`, `tests/optimizer/`, `tests/test_relay_node_field.py`,
 `tests/test_registry.py`, `tests/types/`, `tests/test_resource_policy.py`,
-`tests/test_graphql_core_patches.py`, and the four live modules
+`tests/test_graphql_core_patches.py`, the four suites the enforcement, operation-state and
+execution-mode architecture added or rewrote - `tests/test_schema.py`,
+`tests/extensions/test_operation_state.py`, `tests/utils/test_execution_mode.py`,
+`tests/test_error_policy.py` - and the six live modules
 `examples/fakeshop/test_query/test_list_field_api.py`,
 `examples/fakeshop/test_query/test_list_field_async_api.py`,
 `examples/fakeshop/test_query/test_products_visibility_api.py`,
-`examples/fakeshop/test_query/test_keyset_api.py`.
+`examples/fakeshop/test_query/test_keyset_api.py`,
+`examples/fakeshop/test_query/test_resource_policy_api.py`,
+`examples/fakeshop/test_query/test_error_policy_api.py`.
 
-That is seventeen paths: thirteen package modules or directories and the four live modules. A
-floor run that narrows this set is not this card's floor verification. The shared `.venv` is
+That is twenty-three paths: seventeen package modules or directories and the six live modules. A
+floor run that narrows this set is not this card's floor verification. The `Schema.stream` rows
+in the four architecture suites skip below strawberry-graphql 0.319.0 by their own gate, so a
+floor run reports them as skips, not as absent. The shared `.venv` is
 read back afterwards and must be unmutated.
 
 ### What each proof fails on

@@ -549,6 +549,10 @@ The project hits the goal when a Django developer can:
 
 The project misses the goal if users must routinely hand-build the same schema machinery the package is supposed to generate, or must read the source to deploy it safely.
 
+## Trust boundary
+
+The package sits on Django, Strawberry and graphql-core and is no more secure than they are. The wire is untrusted: every bound in the production security profile exists for the document, variables, headers and uploads a request carries. Configuration is validated at construction, then trusted. Application Python - resolvers, `get_queryset` hooks, sidecar overrides, project `QuerySet` classes, extension factories - is trusted: the package validates what it can establish mechanically about their results and states the contract each must keep, and does not promise to contain code running inside its own process. Django's security policy is the model: a defect must be reachable through code that could feasibly exist in a project using supported public API. What this package guarantees beyond upstream - a bounded raw list, per-operation isolation of its own extensions, an error masked for the right operation - the docs state as its own.
+
 ## Non-goals
 
 This package should not become:

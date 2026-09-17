@@ -46,6 +46,19 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
   async-generator finalization assertion, declined the sync cleanup contract explicitly, split
   the sync live suite out of the library application suite, and queued two amendments to the
   parent card. The joint-cut ruling moved from Decision 7 to Decision 12 during the earlier review.
+- **2026-09-17**: The completion contract. Decisions 20-22 draw the trust boundary (application
+  Python trusted, its documented result contracts validated; the wire and configuration bounded),
+  adopt Django's own reachability rule as the admission criterion for a finding against this
+  card, align the extension contract with upstream's class-or-factory spelling while stating
+  per-operation isolation as the guarantee this package adds, and close the card on one recorded
+  gate. Decision 8 gains the evaluation-state carry so a project queryset class costs what
+  Django's manager costs. The measurements behind the contract: `utils/querysets.py` at 3,380
+  lines when this spec was written and 4,294 at this revision; the package at +4,413/-647 lines
+  since the recorded gate, concentrated in four new modules
+  (`extensions/operation_state.py`, `utils/private_state.py`, `utils/execution_mode.py`,
+  `utils/operation_lease.py`) and in `schema.py` and `resource_policy.py`; the suite from 7,868
+  to 8,318 rows; the spec's uses of "refuse" from 9 to 30 and of "hostile" from 2 to 9 while the
+  public surface of the feature did not move. Those numbers are why the line is drawn where it is.
 
 ### Parent card amendments
 
@@ -119,6 +132,12 @@ pre-planned fallbacks, should a real consumer need appear, are:
 - **Django combined querysets do not compose uniformly with order and optimizer operations:**
   Fallback after Django/optimizer support exists: card the combinator-aware behavior and SQL
   matrix explicitly.
+- **A review with no admission criterion has no last round:** Fallback if the maintainer wants a
+  stricter posture for one surface: card it under the adversarial suite [`GOAL.md`][goal] names
+  for `0.1.x`, with its own threat model and its own evidence; a DONE card is not reopened for it.
+- **Upstream is retiring the instance spelling Decision 15 reads as a declaration:** Fallback
+  when upstream removes instance entries: the ladder row goes with them and no shim re-admits the
+  spelling; a consumer on that spelling migrates to the class or factory upstream documents.
 
 ## Decision entries
 
@@ -473,9 +492,91 @@ leave it false. Nothing upstream carries that flag from `get_extensions` to
 defect Decision 14 exists to close, so it travels as a member of the chain built for that one
 operation.
 
+### Decision 20 — application code is trusted, the wire is not; a finding is admitted by reachability
+
+Spec: [Decision 20][spec-050-d20].
+
+*Decision:* Adopt Django's reachability rule as this package's own admission criterion, name the
+three trust levels, and keep the shipped hardening for the ordinary-mistake class it guards.
+
+*Why:* The hardening had a legitimate job each time - cross-request error disclosure, a budget
+charged to the wrong document, a nested operation corrupting the optimizer's frame, a bound
+read from an object a resolver could overwrite - and each of those is reachable from ordinary
+application code under ordinary load. What had no finish line was the threat model: once a
+consumer's own Python counts as an adversary, every repair of one construction exposes the next
+(a `__class__` that lies, a `__getitem__` that ignores its slice, a `__bool__` that raises), and
+the spec grows a refusal vocabulary faster than the feature grows. Django's security policy
+already draws the line this package needs, and a package running on Django cannot honestly
+promise more than Django does about code inside the same process.
+
+*Rejected:* Treating application Python as hostile. It is unenforceable - in-process code can
+import, monkeypatch and rebind any package name - so every check it motivates is a check the
+adversary it imagines steps around, and each one costs a real consumer a refusal path to learn.
+
+*Rejected:* An architectural rewrite before DONE - one `ContextVar`, fresh adapters per
+operation, a separately shared optimizer cache, deletion of the membership and refusal
+machinery - judged by how much it deletes. The four new modules each carry a guarantee ordinary
+code needs (nesting, concurrency, streaming resumption, masking the right operation), the
+regression suite holds those guarantees, and a rewrite would spend the suite to reach a shape
+that is smaller by assertion rather than by evidence. Consolidation follows the DRY flow where
+duplication is demonstrated; it is not mandated by line count.
+
+*Rejected:* Dropping the shipped hardening back to the feature as first implemented. The
+original was simpler partly because it missed failure modes the suite now pins.
+
+### Decision 21 — the extension contract is upstream's; per-operation isolation is the guarantee this package adds
+
+Spec: [Decision 21][spec-050-d21].
+
+*Decision:* Document upstream's class-or-factory spellings, inherit upstream's deprecation of
+the instance spelling, and state per-operation isolation of the package's own extensions as an
+addition this package owns and tests.
+
+*Why:* The optimizer recipe in [`GOAL.md`][goal] and the shipped docs is a singleton inside a
+factory - exactly the shape upstream's guide warns shares request state. The runner makes that
+shape safe for the package's extensions, which is a guarantee worth stating as this package's
+own; presenting it as upstream behavior would be false, and presenting instance entries as a
+package-defined declaration would build on a spelling upstream is removing.
+
+*Rejected:* Package-defined instance semantics beyond the compatibility reading. A meaning of
+`extensions=[MyExtension()]` that only `DjangoSchema` has is a migration trap on the day upstream
+drops the spelling.
+
+*Rejected:* Presenting "move the authority instance into a factory" as the migration off the
+deprecated spelling. Decision 15 refuses a factory that resolves to an authority, so that advice
+would walk a consumer from a working compatibility path into a refused operation; the migration
+is the `resource_policy=` / `error_policy=` keyword, which is where enforcement is declared.
+
+*Rejected:* Authenticating or containing a third-party extension's object graph. Its lifecycle is
+upstream's, its attributes are its author's, and the package can no more make them thread-safe
+than it can make a resolver's globals thread-safe. The package isolates what it wrote.
+
+*Already settled elsewhere:* Reusing upstream's `MaxTokensLimiter`, `MaxAliasesLimiter` and
+`QueryDepthLimiter` instead of the package's one extension is answered in
+[`spec-047`][spec-047]'s borrowing posture and is not reopened here.
+
+### Decision 22 — the card closes on one recorded gate; a closed contract reopens only for a broken row
+
+Spec: [Decision 22][spec-050-d22].
+
+*Decision:* One gate, one tree, one record naming the commit; a finite list of owed work before
+it; a new card rather than a reopened one afterwards.
+
+*Why:* A gate graded at one tree says nothing about the next, so a record that is re-cited beside
+later edits is not evidence. Recording once at the final tree is the only record that certifies
+the code it names, and naming the owed work makes the finish line something a reader can check
+rather than a feeling that the reviews have stopped.
+
+*Rejected:* Recording the gate after each remediation. Each record certified a tree that the
+next edits left behind, and the figures travelled forward beside code they did not cover.
+
+*Rejected:* An open-ended review loop with no admission criterion. Decision 20 supplies the
+criterion; this decision supplies the stop.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[goal]: ../GOAL.md
 [kanban]: ../KANBAN.md
 
 <!-- docs/ -->
@@ -498,6 +599,9 @@ operation.
 [spec-050-d17]: spec-050-list_field_arguments-0_0_15.md#decision-17--a-refused-requests-document-selector-and-transport-policy-are-all-package-owned
 [spec-050-d18]: spec-050-list_field_arguments-0_0_15.md#decision-18--the-refusal-is-stable-and-the-transports-own-policy-is-the-one-exception
 [spec-050-d19]: spec-050-list_field_arguments-0_0_15.md#decision-19--execution-mode-is-operation-state-the-ambient-event-loop-is-a-different-fact
+[spec-050-d20]: spec-050-list_field_arguments-0_0_15.md#decision-20--application-code-is-trusted-the-wire-is-not-a-finding-is-admitted-by-reachability
+[spec-050-d21]: spec-050-list_field_arguments-0_0_15.md#decision-21--the-extension-contract-is-upstreams-per-operation-isolation-is-the-guarantee-this-package-adds
+[spec-050-d22]: spec-050-list_field_arguments-0_0_15.md#decision-22--the-card-closes-on-one-recorded-gate-a-closed-contract-reopens-only-for-a-broken-row
 
 <!-- docs/SPECS/ -->
 [spec-020]: SPECS/spec-020-list_field-0_0_7.md

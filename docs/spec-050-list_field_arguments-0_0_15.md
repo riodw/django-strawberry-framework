@@ -2,24 +2,16 @@
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
 Status: in flight (`0.0.15`)
-Revision: 2026-09-17 - the enforcement, operation-state and execution-mode architecture is
-specified in Decisions 14-19 and carries its own Definition-of-done rows: configuration
-authority is schema state and everything per-request is the runner's; an enforcement authority
-is a declaration rather than an extension entry; a refused request's document, operation
-selector and transport-policy snapshot are all package-owned, with the transport's own
-"allows nothing" answer as the one exception to the stable refusal; and which GraphQL executor
-drives a resolver is carried from the entry point rather than inferred from the ambient event
-loop, with the raw-`strawberry.Schema` fallback stated. On top of 2026-09-13 -
-cleanup-precedence and proof-determinism remediation complete (a
-control signal raised during async cleanup propagates instead of becoming a note; the client
-window seam is package-private beneath the exported raw-list bound; the async deadline and
-effective-order proofs carry deterministic witnesses) on top of the offset-guard and
-async-cleanup round (the non-zero-offset guard classifies the ONE ordering Django's compiler
-selects; the shared async bounding seam owns cleanup for a source its own deadline rejects)
-and the metadata-integrity round (one canonical definition across every field factory, the
-optimizer, and the connection cache; terminal ledger closure). The gate is owed: full,
-sharded, and floor verification ran clean on one tree before these rounds' production changes
-(`0.0.15`) (revision history moved to
+Revision: 2026-09-17 - the completion contract is specified in Decisions 20-22 and drawn
+into the Definition of done: application Python is trusted and its documented result contracts
+are validated mechanically, wire input and configuration are the bounded parties, and a finding
+is admitted against this card only by reachability through a feasible project shape (Decision
+20); the extension contract is upstream's class-or-factory spelling with per-operation
+isolation stated as the guarantee this package adds (Decision 21); and the card closes on one
+recorded gate, after which a new finding opens a new card (Decision 22). Decision 8 carries
+evaluation state through the raw-list seam so a project queryset class costs what Django's
+manager costs. The enforcement, operation-state and execution-mode architecture is Decisions
+14-19 (revision history in
 [`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
 
 Deliberation, rejected alternatives, and this spec's change record live in its companion
@@ -132,6 +124,10 @@ the release wording.
         `__django_strawberry_definition__` off the target class.
   - [ ] Ledger closure is terminal: a descendant holding the copied context can neither
         publish into nor claim from a closed ledger.
+  - [ ] The raw-list seam windows a source that arrives evaluated from the rows it already
+        holds, exact queryset and rebuilt subclass alike, with the query count pinned at zero
+        in the package tier and a `Manager.from_queryset` relation pinned live at Django's own
+        manager's count.
   - [ ] Package proofs arm a definition-read counter and a decoy definition through a real
         `DjangoSchema` with the optimizer installed, parametrized over hook flavour and
         relation vocabulary and over cold and warm plans, requiring a custom hook to have RUN
@@ -166,6 +162,16 @@ the release wording.
         enumerated.
   - [ ] Update `ResourcePolicy` and bounding-helper docstrings to distinguish returned/skip
         ceilings from total database rows scanned.
+  - [ ] State the trust contract of Decision 20 beside the production security profile in
+        [`docs/README.md`][docs-readme], and the extension contract of Decision 21 beside the
+        optimizer recipe there: enforcement through `resource_policy=` / `error_policy=`, class
+        or factory for ordinary extensions, the instance spelling carrying upstream's
+        deprecation unchanged, and per-operation isolation of the package's own extensions -
+        the singleton-in-a-factory recipe included - as the guarantee this package adds.
+  - [ ] Correct the executable examples, not only the prose beside them: every quick-start and
+        schema-setup example that pairs a plain `strawberry.Schema` with
+        `extensions=[lambda: _optimizer]` is rewritten onto `DjangoSchema`, which is the only
+        schema the isolation guarantee holds for.
   - [ ] Update the KANBAN database when the implementation card closes;
         [`TODAY.md`][today] is deliberately not edited (no waiting entry exists to move - see
         Doc updates).
@@ -327,6 +333,12 @@ choice between a flat list with direct offset arguments and a Relay connection w
   not carry, and applying that assumption to arbitrary GraphQL lists would undercharge them.
 - **Silent clamping.** A client value wider than its effective ceiling is an error. The
   package does not pretend the request was honored while returning a different page.
+- **Containing hostile application code.** Python running in the Django process can import,
+  monkeypatch and rebind any name in this package, so "the package holds the bound against a
+  resolver written to defeat it" is not a promise any check can keep and this card does not
+  make it. The bound holds against the wire and against ordinary application code; a
+  construction built to defeat a check is a robustness row where one is cheap and never a
+  reason for another admission layer (Decision 20).
 - **Version or release-note ownership.** Card 053 owns the shared `0.0.15` cut.
 
 ## Borrowing posture
@@ -746,11 +758,12 @@ the reported `argument` equals the introspected name.
 The record lives in [`django_strawberry_framework/list_field.py`][list-field], the argument
 owner. The shared resource-policy module does not import a list-field type (which would
 reverse the existing dependency and create a cycle); the wrapper passes only validated
-`offset` / `limit` scalars into the extended bounding helpers. Their signatures retain the
-existing positional-or-keyword third parameter `declared` so every shipped positional call
-continues to bind identically; the new `offset` and `requested_limit` parameters are
-keyword-only after `declared`, alongside the existing keyword-only `trusted` option. Those
-helpers still call the one `effective_bound` implementation when they build the final slice.
+`offset` / `limit` scalars into the package-private coordinate-bearing seam,
+[`django_strawberry_framework/resource_policy.py::_windowed_rows`][resource-policy] and its
+async sibling `_windowed_rows_async`. The exported `bounded_rows` / `bounded_rows_async` keep
+their coordinate-free signatures - positional-or-keyword `declared`, keyword-only `trusted` -
+and are thin callers of that seam with no window; they refuse both coordinates. The seam calls
+the one `effective_bound` implementation when it builds the final slice.
 
 Extending these two helpers also inherits the request deadline, which this card must not
 relocate or duplicate. Both raw-list spellings reach `effective_bound` through the shared
@@ -764,7 +777,7 @@ own, and the window arithmetic must not move ahead of that one: an argument-bear
 gets the same clock behavior as a bare one. The pre-bound rejection paths in Decision 8 hand
 no work to the database and correctly reach no deadline check at all.
 
-The client coordinate handed to the bounding helper is a distinct `requested_limit`
+The client coordinate handed to the private seam is a distinct `requested_limit`
 parameter; it must not be routed through the existing positive-only field-declaration
 validator. `limit=0` is a valid client coordinate while `max_rows=0` remains an invalid
 schema declaration. The effective returned-row ceiling comes from the existing
@@ -1239,6 +1252,22 @@ resolver normalizes the cached source before reading the rows it already fetched
 is Django's own slot on an object the package owns rather than an attribute lookup the subclass
 answers. *Derivation and rejected alternatives: see the [rationale][rationale-d8].*
 
+Evaluation state travels with the source. A queryset that reaches the seam already evaluated -
+a warm prefetch cache, a manager result a resolver iterated before returning it - is windowed
+from the rows it holds, with no further query, for the exact type and for a rebuilt subclass
+alike: the rows are read through Django's own slot on the instance state (the same
+`object.__getattribute__` read the sealer takes), and the window over them is the package's
+own list slice. Re-querying a project queryset class for rows it had already fetched would
+make `Manager.from_queryset` cost one query more than Django's manager at every relation it is
+used on, a database-level regression that buys nothing: the count is bounded either way and
+the rows are the same rows. The rebuild therefore carries the fetched rows forward when the
+source it rebuilt held them, and drops nothing but the subclass's own methods. That carry
+belongs to the raw-list seam alone, the one place where nothing is composed after the rebuild.
+Every other seal keeps its `require_unevaluated` verdict: a visibility hook's input and result
+and an `OrderSet.apply_*` result are still refused when evaluated, because a filter or an order
+applied to a queryset that already holds rows is a query Django re-runs against a cache the
+caller believes it is reading.
+
 That lower-level arithmetic remains shape-complete and is
 unit-pinned, but it does not widen the list field's order precondition, and the two tiers must
 not be blurred: positive-offset arithmetic over an async iterator is pinned against the helper
@@ -1496,7 +1525,8 @@ rejected identity-deduplication and subclass-admission designs.
 
 ### Decision 16 — the runner owns every binding, for the operation's whole lifetime
 
-One state object per (resolved extension, runner), bound by the runner around the operation
+One state object per (package-managed resolved extension, runner) - the package's own
+authorities, its optimizer, its debug extension - bound by the runner around the operation
 scope, around result collection, around the streaming-result hook, and around every resumption
 of a streamed operation. Each binding is a LEASE on a weak reference, so a task that merely
 copied the context stops reading at the instant the scope ends rather than when the owner is
@@ -1588,6 +1618,122 @@ A plain `strawberry.Schema` binds no mode, both readers fall back to ambient dis
 disagreement stays reachable there exactly as upstream leaves it. `DjangoSchema` is the spelling
 that makes execution mode authoritative. See the [rationale][rationale-d19] for the rejected
 ambient-predicate, field-local, and loop-blocking designs.
+
+### Decision 20 — application code is trusted, the wire is not; a finding is admitted by reachability
+
+Four parties meet on every operation. The contract names what is relied on from each and what
+this package answers for, because a guarantee no layer owns is one every layer assumes the
+other keeps.
+
+| Layer | Relied on | Owned here |
+|---|---|---|
+| Django | ORM semantics, parameterized SQL, transactions, the auth primitives | visibility preserved through every composition, routing, transaction boundaries, safe async ORM use |
+| Strawberry / graphql-core | schema construction, coercion, validation, execution, the extension lifecycle, the transports | using those contracts correctly and carrying this package's guarantees across their lifecycle |
+| this package | - | Meta-driven generation, the optimizer, the resource and error policies, the list pipeline: correct defaults, bounded collections, isolated per-operation state, one enforcement path |
+| the application | custom resolvers, hooks, extensions, authorization decisions | the documented result contracts are validated mechanically; the code itself is trusted |
+
+The boundary is owned by [`GOAL.md`][goal]'s "Trust boundary" section and the admission rule by
+[`AGENTS.md`][agents]; this decision applies both to this card. The line is Django's own, and
+this package cannot sit above the foundation it runs on. Django's security policy admits a report only when the code under test could feasibly exist in a Django
+project, and refuses one that depends on calling private internals unsafely
+([`docs.djangoproject.com` - internals/security][django-security-policy]). Read onto this
+package: a finding is a defect here when the code it needs could feasibly exist in a project
+using supported public API, and the input that triggers it arrives over the wire or through
+ordinary configuration. Three trust levels follow.
+
+- **Untrusted: the wire.** Every GraphQL document, variable, header, upload and transport
+  frame. Every bound in this spec and in [`spec-047`][spec-047] exists for that input.
+- **Validated, then trusted: configuration.** Canonicalized into exact built-in primitives at
+  construction, read back as copies, refused when it cannot be read back (Decision 14).
+- **Trusted: application Python.** A resolver, a `get_queryset` hook, an `OrderSet.apply_*`
+  override, a project `QuerySet` class, an extension factory. The package validates what it
+  can establish mechanically about their RESULTS - shape, model, routing, evaluation state -
+  and states the contract each must keep; it does not promise to contain what they do.
+
+What the shipped hardening guards, and stays for, is the ordinary-mistake class reachable
+through supported spellings. A singleton inside a factory is the documented optimizer recipe;
+a `ResourcePolicy` subclass, or a `__dict__` write on a frozen dataclass, is a line of ordinary
+Python; a `Manager.from_queryset` class is standard Django; a nested or concurrent operation
+is a normal deployment. Each is application code behaving as application code does, and each
+is answered so the request stays bounded and the state stays isolated. What is NOT guarded is a
+deliberate adversary already inside the process: a `__class__` property that lies, a
+`__getitem__` that ignores its slice, an object forged to look like a policy. Where such a
+row is cheap to keep it stays as a robustness row - a fail-closed typed error is better than
+an untyped one - but it is never a release blocker and never grounds for another admission
+layer.
+
+A finding therefore reopens this card only when it names all three of: (a) the
+Definition-of-done row it breaks; (b) a project shape that could feasibly exist under
+supported API; (c) the wire or configuration input that reaches it. A finding missing any of
+the three is filed to [`BACKLOG.md`][backlog] or carded with its own evidence, not remediated
+here. Upstream defects are dependency defects: reproduce against upstream, pursue the fix, and
+constrain or work around narrowly with a stated removal condition (Decision 13 is the shape);
+a known exploitable upstream defect still blocks shipping the affected configuration. See the
+[rationale][rationale-d20] for the rejected hostile-process threat model and the rejected
+architectural rewrite.
+
+### Decision 21 — the extension contract is upstream's; per-operation isolation is the guarantee this package adds
+
+Strawberry's `extensions=[...]` resolves a class, a factory callable or an instance; the
+instance spelling is deprecated upstream - `strawberry.Schema.__init__` warns on it
+([`strawberry/schema/schema.py::Schema.__init__`][strawberry-schema],
+[upstream issue 4369][upstream-strawberry-extension-isolation]) - and upstream's guide warns
+that a factory returning one long-lived object shares request state across concurrent
+operations. The contract here has three parts, stated separately because they are not the
+same rule.
+
+**Enforcement is configured, not installed.** The resource and error policies are declared
+through `DjangoSchema(resource_policy=..., error_policy=...)`; the schema builds its own
+authority extension per operation from that record (Decision 15). An exact instance of an
+authority in `extensions=[...]` is a package-specific compatibility reading - read once as a
+declaration, dropped from the chain before upstream sees it, so upstream's deprecation warning
+does not fire for it - and a factory or subclass resolving to one refuses the operation. Moving
+such an instance into a factory is therefore NOT a migration; the migration is to the keyword
+argument, and the docs say so.
+
+**Ordinary extensions follow upstream's spellings.** A class or a factory; an instance carries
+upstream's `DeprecationWarning` unchanged, because `DjangoSchema` passes ordinary entries to
+upstream as they were given and defines no instance-only semantics a consumer could come to
+depend on.
+
+**Isolation is added for the package's own extensions.** `DjangoSchema` gives every
+package-managed resolved extension - its authorities, its optimizer under a class entry or a
+factory result, the documented singleton-in-a-factory optimizer recipe included, its debug
+extension - one state per operation through the runner (Decision 16), so
+`extensions=[lambda: _optimizer]` is safe here where upstream says a shared instance is not.
+That guarantee is this package's own: stated in the docs as its own, tested here, and not a
+claim about upstream or about a third-party extension. A stranger's extension gets exactly
+upstream's lifecycle: the package records the entries it was constructed with and answers its
+configuration from that record (Decision 14), refuses an operation only where its own authority
+cannot be established (Decision 15), and does not make another author's mutable attributes
+thread-safe or claim to. See the [rationale][rationale-d21] for the rejected package-defined
+instance semantics.
+
+### Decision 22 — the card closes on one recorded gate; a closed contract reopens only for a broken row
+
+The close is one sequence, in this order and no other:
+
+1. Finish the owed work. It is finite and this is the list: the evaluation-state carry of
+   Decision 8 with its query-count controls at both tiers; the docs statements of Decisions 20
+   and 21 in Slice 5, including correcting the shipped examples that pair a plain
+   `strawberry.Schema` with the singleton optimizer recipe; the floor scope of
+   [`build-050`][build-050] widened to the suites the architecture of Decisions 14-19 added.
+   Nothing else is owed to this card.
+2. Run the gate on one identified tree: the full default suite at `fail_under = 100`, the
+   sharded suite, the complete declared supported-floor scope, and the formatting, lint,
+   structural, link, citation and tracked-path checks.
+3. Review that identified tree once, reading each finding against Decision 20's three
+   conditions. A finding meeting them is fixed and steps 2 and 3 repeat on the new tree; a
+   review that admits none ends the loop.
+4. Record the gate in [`build-050`][build-050] naming the commit, and mark the card DONE.
+   Figures from any other tree are not evidence for this one; a run carrying a failing test is
+   not recorded as green.
+
+After step 4 the spec moves under the [`NEXT.md`][next] sweep, and a later finding that meets
+the three conditions opens a new card against the row it breaks; a security finding that meets
+them is release-blocking for that new card exactly as it would have been here, so the close
+weakens no obligation, it only names which card carries it. See the
+[rationale][rationale-d22] for the rejected per-remediation gate record.
 
 ## Implementation plan
 
@@ -2379,12 +2525,21 @@ subclass answers none. [`tests/utils/test_querysets.py`][test-querysets] pins th
 admission: a value whose `__class__` raises, and one whose `__class__` names `QuerySet`, are
 both the typed `type` defect rather than a raw exception or an admission.
 
+Evaluation state is pinned beside them: an evaluated exact queryset and an evaluated project
+subclass (a `QuerySet.as_manager()` class with no overrides) are each windowed through
+`bounded_rows` and `bounded_rows_async` with the query count asserted zero and the rows asserted
+equal to the leading window of what the source held, and the async row is the same rows under
+the async adapter rather than a second fetch.
+
 Live rows in [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy]
 mount a `DjangoListField` root over `PatronType`, whose many-side `loans` target declares no
 custom `get_queryset`, at `max_list_rows=1` over a patron seeded with four loans. The reverse
 manager's `.all()` is made to return a `QuerySet` subclass, and the complete wire payload must
 carry one loan on the sync transport and one on `AsyncDjangoGraphQLView`; the same document with
-Django's own manager is the control. No shipped root pairs a `DjangoListField` with a
+Django's own manager is the control. A second control mounts the relation through a
+`Manager.from_queryset` class with no overrides under a prefetching plan and asserts the query
+count equal to Django's own manager's for the same document, so the rebuild is proven to cost no
+query of its own. No shipped root pairs a `DjangoListField` with a
 no-custom-visibility many-side target, so the root is declared in the suite, and its schema is
 built from the type the module reload left in place rather than one captured at import.
 
@@ -2509,6 +2664,16 @@ structural checks, and link/kanban verification prescribed by
 - **Django combined querysets do not compose uniformly with order and optimizer operations.**
   Preferred answer: reject every non-null argument on a combined source while preserving the
   all-null/omitted legacy branch. *Fallback: see the [rationale][rationale-risks].*
+- **A review with no admission criterion has no last round.** Each repair of an in-process
+  construction exposes the next construction, and a package that treats its own consumer's
+  Python as an adversary grows a refusal vocabulary faster than a feature. Preferred answer:
+  Decision 20's three conditions - a broken Definition-of-done row, a feasible project shape
+  under supported API, a wire or configuration input that reaches it - and Decision 22's one
+  recorded gate. *Fallback: see the [rationale][rationale-risks].*
+- **Upstream is retiring the instance spelling Decision 15 reads as a declaration.** Preferred
+  answer: Decision 21 - inherit the deprecation, document class and factory, and state the
+  per-operation isolation of the package's own extensions as the guarantee this package adds.
+  *Fallback: see the [rationale][rationale-risks].*
 
 ## Out of scope (explicitly tracked elsewhere)
 
@@ -2593,6 +2758,11 @@ structural checks, and link/kanban verification prescribed by
       relation cache before reading the rows it holds. Proven live on both transports with a
       relation manager returning a `QuerySet` subclass over a `DjangoListField` root: the
       response carries `max_list_rows` rows, not the relation's.
+- [ ] A source that arrives evaluated is windowed from the rows it holds with no further
+      query, exact queryset and rebuilt subclass alike, through `bounded_rows` and
+      `bounded_rows_async`; a relation whose manager is a `Manager.from_queryset` class with
+      no overrides costs the same query count as Django's own manager, proven live under a
+      prefetching plan (Decision 8).
 - [ ] Visibility runs before order; order runs before one combined slice; order permission
       failures occur before slicing.
 - [ ] Public `OrderSet.apply_*` results are mechanically validated as unevaluated, unsliced,
@@ -2657,6 +2827,12 @@ structural checks, and link/kanban verification prescribed by
       through latest; a local single-interpreter run is evidence, not the contract.
 - [ ] List-field docstring and shipped docs state the argument, cap, order-contract, and
       migration contracts.
+- [ ] The shipped docs state the trust contract where a deployer reads it: application Python
+      is trusted and its documented result contracts are validated; the wire and configuration
+      are the bounded parties; a class or a factory is the documented extension spelling, the
+      instance spelling carries upstream's deprecation unchanged, and per-operation isolation
+      of the package's own extensions - the singleton-in-a-factory optimizer recipe included -
+      is stated as the guarantee this package adds (Decisions 20 and 21).
 - [ ] The type registry is the one canonical metadata source: every field factory accepts only
       the definition it holds for the target (by identity), the generated-connection cache
       proves each warm entry's provenance, and the optimizer plans a relation from the child
@@ -2668,6 +2844,9 @@ structural checks, and link/kanban verification prescribed by
 - [ ] Full implementation suite passes at `fail_under = 100` with formatting and structural
       checks clean; the sharded suite and supported-floor verification are run and recorded on
       the SAME identified tree, and a run carrying any failing test is not recorded as green.
+      The record lives in [`build-050`][build-050], names the commit, and is written after the
+      one review of that tree admits no finding under Decision 20; the card is DONE at that
+      record, and a later qualifying finding opens a new card (Decision 22).
 - [ ] No version literal, version assertion, package-version glossary row,
       [`pyproject.toml`][pyproject] / `uv.lock` pseudo-bump, or
       [`CHANGELOG.md`][changelog] entry is changed; card 053 owns the joint `0.0.15` cut.
@@ -2676,6 +2855,7 @@ structural checks, and link/kanban verification prescribed by
 
 <!-- Root -->
 [agents]: ../AGENTS.md
+[backlog]: ../BACKLOG.md
 [changelog]: ../CHANGELOG.md
 [goal]: ../GOAL.md
 [kanban]: ../KANBAN.md
@@ -2750,6 +2930,9 @@ structural checks, and link/kanban verification prescribed by
 [rationale-d17]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-17--a-refused-requests-document-selector-and-transport-policy-are-all-package-owned
 [rationale-d18]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-18--the-refusal-is-stable-and-the-transports-own-policy-is-the-one-exception
 [rationale-d19]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-19--execution-mode-is-operation-state-the-ambient-event-loop-is-a-different-fact
+[rationale-d20]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-20--application-code-is-trusted-the-wire-is-not-a-finding-is-admitted-by-reachability
+[rationale-d21]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-21--the-extension-contract-is-upstreams-per-operation-isolation-is-the-guarantee-this-package-adds
+[rationale-d22]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-22--the-card-closes-on-one-recorded-gate-a-closed-contract-reopens-only-for-a-broken-row
 [rationale-risks]: spec-050-list_field_arguments-0_0_15-rationale.md#risks-and-open-questions--the-fallback-positions
 [tree]: TREE.md
 
@@ -2761,6 +2944,7 @@ structural checks, and link/kanban verification prescribed by
 [spec-053]: SPECS/spec-053-boundary_dry_squeeze-0_0_15.md
 
 <!-- docs/builder/ -->
+[build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
 [conf]: ../django_strawberry_framework/conf.py
@@ -2814,10 +2998,13 @@ structural checks, and link/kanban verification prescribed by
 [graphql-scalars]: ../.venv/lib/python3.14/site-packages/graphql/type/scalars.py
 [strawberry-info]: ../.venv/lib/python3.14/site-packages/strawberry/types/info.py
 [strawberry-name-converter]: ../.venv/lib/python3.14/site-packages/strawberry/schema/name_converter.py
+[strawberry-schema]: ../.venv/lib/python3.14/site-packages/strawberry/schema/schema.py
 [strawberry-schema-converter]: ../.venv/lib/python3.14/site-packages/strawberry/schema/schema_converter.py
 
 <!-- External -->
 [cookbook-connection-field]: ../../django-graphene-filters/django_graphene_filters/connection_field.py
+[django-security-policy]: https://docs.djangoproject.com/en/5.2/internals/security/#code-under-test-must-feasibly-exist-in-a-django-project
 [cookbook-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
 [upstream-graphene-fields]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py
+[upstream-strawberry-extension-isolation]: https://github.com/strawberry-graphql/strawberry/issues/4369
 [upstream-strawberry-pagination]: ../../strawberry-django-main/strawberry_django/pagination.py

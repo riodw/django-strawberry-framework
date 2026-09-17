@@ -465,7 +465,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
-├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
+├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
@@ -476,13 +476,13 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
-├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
-├── test_graphql_core_patches.py  # Regression coverage for the dependency-owned graphql-core workaround.
+├── test_export_dry_review.py     # Repo-tooling tests for the DRY review plan, audit, and check CLI.
+├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
-├── test_keyset_connection.py     # Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
+├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
-├── test_list_field.py            # DjangoListField tests for validation, resolvers, visibility, optimization, sidecars, and permissions.
-├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
+├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
+├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
 ├── test_predicate_pg_explain.py  # Postgres planner regression for the Part 1 row-preserving correlated ``EXISTS``.
 ├── test_prove_failability.py     # Script tests for the failability-proof runner's refusals and restore proof.
@@ -704,7 +704,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
-├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
+├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
@@ -715,13 +715,13 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
-├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
-├── test_graphql_core_patches.py  # Regression coverage for the dependency-owned graphql-core workaround.
+├── test_export_dry_review.py     # Repo-tooling tests for the DRY review plan, audit, and check CLI.
+├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
-├── test_keyset_connection.py     # Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
+├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
-├── test_list_field.py            # DjangoListField tests for validation, resolvers, visibility, optimization, sidecars, and permissions.
-├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
+├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
+├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
 ├── test_predicate_pg_explain.py  # Postgres planner regression for the Part 1 row-preserving correlated ``EXISTS``.
 ├── test_prove_failability.py     # Script tests for the failability-proof runner's refusals and restore proof.

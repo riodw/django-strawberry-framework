@@ -1,4 +1,9 @@
-"""Package init tests for version metadata and public exports."""
+"""Package init tests for version metadata and public exports.
+
+No GraphQL field exposes ``__version__``, ``__all__``, logger identity,
+``__getattr__`` hygiene, or star-import membership. The DRF soft names stay
+out of ``__all__`` so ``import *`` stays DRF-free (spec-039 Decision 12).
+"""
 
 import logging
 

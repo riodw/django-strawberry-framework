@@ -1645,6 +1645,46 @@ def test_a_misconfigured_mount_fails_loud_on_every_request_including_get():
             _post_bytes(client, json.dumps({"query": _TYPENAME}), path="/cap-misconfigured/")
 
 
+@pytest.mark.django_db
+def test_a_non_mapping_framework_dict_fails_loud_on_get():
+    """A list-shaped ``DJANGO_STRAWBERRY_FRAMEWORK`` is a ``ConfigurationError`` on GET.
+
+    The package view reads the body-cap setting on every request, so a non-mapping
+    project dict cannot hide behind a bodyless GET. ``Client`` re-raises the
+    ``ConfigurationError`` rather than returning a GraphQL envelope.
+
+    Direct assignment under ``try``/``finally`` is required:
+    ``override_settings`` sends ``setting_changed`` on enter, the package
+    receiver normalises the list and raises, and Django's ``enable()``
+    catches that, disables, and re-raises before any request is made. Only
+    the live-sync path reaches the view with the bad value still installed.
+    """
+    seed_data(1)
+    previous = settings.DJANGO_STRAWBERRY_FRAMEWORK
+    try:
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = ["not", "a", "mapping"]
+        with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*list"):
+            Client().get("/graphql/")
+    finally:
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = previous
+
+
+@pytest.mark.django_db
+def test_a_none_framework_dict_still_serves_on_get():
+    """``DJANGO_STRAWBERRY_FRAMEWORK = None`` is empty settings: GET still serves.
+
+    ``None`` is the documented "no settings configured" shape, identical to a
+    missing key: the view reads the default body cap and answers the IDE GET.
+    The list-shaped sibling on this same path fails loud. A query-less GET
+    without ``Accept: text/html`` is ``400`` on this mount; the IDE Accept is
+    what makes the request succeed.
+    """
+    seed_data(1)
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK=None):
+        response = Client().get("/graphql/", HTTP_ACCEPT="text/html")
+    assert response.status_code == 200
+
+
 async def test_the_async_mount_fails_loud_on_a_bodyless_request_too():
     """The async colour: the shared cap resolution runs ahead of the GET no-op there too.
 

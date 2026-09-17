@@ -1,4 +1,20 @@
-"""Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK."""
+"""Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
+
+The ``Settings`` class internals a GraphQL request cannot express: lazy
+django-backed load, singleton ``reload_settings`` identity, dunder probes,
+``dispatch_uid`` idempotence, hostile-shape containment, and the thin reader
+helpers' Python return values. Request-shaped consequences of keys a query
+can turn live in ``examples/fakeshop/test_query/test_transport_api.py`` (body
+cap, a non-mapping project dict on GET, ``None`` as empty settings,
+``APPLY_UPSTREAM_PATCHES``), ``test_library_api.py`` (``HIDE_FLAT_FILTERS``),
+``test_single_parent_fastpath_api.py``, ``test_client_api.py``
+(``TESTING_ENDPOINT``), and ``test_products_api.py``
+(``RELAY_GLOBALID_STRATEGY``). ``test_error_policy_api.py`` and
+``test_resource_policy_api.py`` pin the ``DjangoSchema(...)`` kwarg path,
+which outranks ``ERROR_POLICY`` / ``RESOURCE_POLICY``; those settings keys
+have no live pin. Constructor precedence lives in
+``tests/test_error_policy.py`` and ``tests/test_resource_policy.py``.
+"""
 
 from types import MappingProxyType
 
@@ -12,6 +28,8 @@ from django_strawberry_framework.conf import (
     upstream_patches_enabled,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+
+_PATCH_DEPENDENCIES = sorted(conf.UPSTREAM_PATCH_DEPENDENCIES)
 
 # ---------------------------------------------------------------------------
 # Settings.__getattr__
@@ -53,24 +71,15 @@ def test_settings_user_settings_accepts_mapping_values():
 
 
 def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings):
-    """Setting our key to ``None`` should behave like no configured settings."""
+    """``None`` normalizes to ``{}`` on ``Settings.user_settings``.
+
+    The request-shaped half (``/graphql/`` still serves under
+    ``override_settings(DJANGO_STRAWBERRY_FRAMEWORK=None)``) lives in
+    ``test_transport_api.py::test_a_none_framework_dict_still_serves_on_get``.
+    """
     settings.DJANGO_STRAWBERRY_FRAMEWORK = None
     s = Settings()
     assert s.user_settings == {}
-
-
-def test_settings_user_settings_rejects_non_mapping_django_setting(monkeypatch):
-    django_settings = type("DjangoSettings", (), {})()
-    setattr(
-        django_settings,
-        conf.DJANGO_SETTINGS_KEY,
-        ["not", "a", "mapping"],
-    )
-    monkeypatch.setattr(conf, "django_settings", django_settings)
-
-    s = Settings()
-    with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*list"):
-        _ = s.user_settings
 
 
 # ---------------------------------------------------------------------------
@@ -186,20 +195,20 @@ def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+@pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
 def test_upstream_patches_enabled_defaults_true_when_key_absent(settings, dependency):
     """Missing key (or whole dict) -> ``True``: consumers opt out, not in."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
     assert upstream_patches_enabled(dependency) is True
 
 
-@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+@pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
 def test_upstream_patches_enabled_true_when_set_true(settings, dependency):
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
     assert upstream_patches_enabled(dependency) is True
 
 
-@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+@pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
 def test_upstream_patches_enabled_false_when_set_false(settings, dependency):
     """The plain global ``False`` keeps its pre-mapping semantics (back-compat)."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
@@ -220,7 +229,7 @@ def test_upstream_patches_enabled_mapping_opts_out_per_dependency(settings):
     assert upstream_patches_enabled("graphql_core") is True
 
 
-@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+@pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
 def test_upstream_patches_enabled_empty_mapping_keeps_every_patch_on(settings, dependency):
     """An empty mapping is "no opt-outs", identical to the missing key."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {}}
@@ -275,6 +284,12 @@ def test_upstream_patches_enabled_rejects_non_string_mapping_key(settings):
         0,
         1,
         None,
+    ],
+    ids=[
+        "string-false",
+        "zero",
+        "one",
+        "none",
     ],
 )
 def test_upstream_patches_enabled_rejects_non_bool_non_mapping_value(settings, value):

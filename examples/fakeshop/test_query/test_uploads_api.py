@@ -431,6 +431,9 @@ def test_suspicious_file_operation_is_reported_not_nulled_over_http(tmp_path, mo
 
 def test_media_specimen_input_exposes_upload_over_http():
     """The generated ``MediaSpecimenInput`` maps file/image columns to NON_NULL ``Upload``."""
+    upload = _introspect_type("Upload", "name kind")
+    assert upload == {"name": "Upload", "kind": "SCALAR"}
+
     input_type = _introspect_type(
         "MediaSpecimenInput",
         "inputFields { name type { kind name ofType { kind name } } }",

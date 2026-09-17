@@ -42,6 +42,31 @@ _DATE_VALUE = datetime.date(2026, 5, 27)
 _TIME_VALUE = datetime.time(12, 34, 56)
 _DATETIME_VALUE = datetime.datetime(2026, 5, 27, 12, 34, 56, tzinfo=datetime.timezone.utc)
 _DECIMAL_VALUE = Decimal("12345.6789")
+_BIGINT_STRING_REJECTION_REASON = "BigInt requires a plain ASCII decimal integer string"
+
+# GraphQL-encoded ``exact:`` arguments. Each id is one malformed spelling the
+# live bool / float literal row does not cover; ``parse_value`` refuses them
+# before any resolver runs.
+_BIGINT_STRING_REJECTIONS = {
+    "empty": '""',
+    "whitespace-padded": '" 123 "',
+    "whitespace-tab": '"\\t123"',
+    "letters": '"abc"',
+    "decimal-point-string": '"1.9"',
+    "scientific": '"1e3"',
+    "hex": '"0x10"',
+    "underscore": '"1_000"',
+    "underscore-negative": '"-1_000"',
+    "leading-plus": '"+1"',
+    "leading-plus-zero": '"+0"',
+    "unicode-fullwidth": '"\\uFF11\\uFF12"',
+    "unicode-fullwidth-negative": '"-\\uFF11"',
+    "leading-zero": '"01"',
+    "leading-zeroes-007": '"007"',
+    "leading-zero-negative": '"-01"',
+    "negative-zero": '"-0"',
+}
+
 # Mixed-primitive payload: top-level string, int, list of ints, JSON ``null``
 # (key present, value is ``None``), and a nested dict carrying a bool. Pins
 # the round-trip shape that the migrated package test
@@ -376,8 +401,20 @@ def test_filter_specimens_by_bigint_range_out_of_range_bound_no_overflow():
 @pytest.mark.parametrize("field", ["signedBig", "unsignedBig"], ids=["signed", "unsigned"])
 @pytest.mark.parametrize(
     ("literal", "reason"),
-    [("true", "BigInt does not accept boolean values"), ("1.9", "BigInt cannot parse float")],
-    ids=["bool", "float"],
+    [
+        ("true", "BigInt does not accept boolean values"),
+        ("false", "BigInt does not accept boolean values"),
+        ("1.9", "BigInt cannot parse float"),
+        ("0.0", "BigInt cannot parse float"),
+        ("-1.0", "BigInt cannot parse float"),
+    ],
+    ids=[
+        "bool-true",
+        "bool-false",
+        "float",
+        "float-zero",
+        "float-negative",
+    ],
 )
 def test_filter_specimens_by_bigint_exact_rejects_non_integer_literal(field, literal, reason):
     """A ``bool`` / ``float`` literal in a ``BigInt`` filter argument is refused outright.
@@ -436,6 +473,68 @@ def test_filter_specimens_by_bigint_exact_accepts_decimal_string_literal(field):
     body = response.json()
     assert "errors" not in body, body
     assert body["data"]["allScalarSpecimens"] == [{"label": "keep"}]
+
+
+@pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
+@pytest.mark.parametrize("field", ["signedBig", "unsignedBig"], ids=["signed", "unsigned"])
+@pytest.mark.parametrize(
+    "literal",
+    list(_BIGINT_STRING_REJECTIONS.values()),
+    ids=list(_BIGINT_STRING_REJECTIONS),
+)
+def test_filter_specimens_by_bigint_exact_rejects_malformed_decimal_string(field, literal):
+    """A malformed decimal-string ``BigInt`` filter argument is refused outright.
+
+    GraphQL can feed every spelling here as a string literal (or the equivalent
+    variable). ``null`` cannot: Strawberry strips it before ``parse_value``, so
+    ``_parse_bigint(None)`` stays package-direct.
+    """
+    _seed_specimen(label="present", signed_big=7, unsigned_big=7)
+
+    response = _post_graphql(
+        f"query {{ allScalarSpecimens(filter: {{ {field}: {{ exact: {literal} }} }}) "
+        "{ label } }",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body.get("errors"), body
+    assert body["data"] is None, body
+    assert _BIGINT_STRING_REJECTION_REASON in body["errors"][0]["message"], body
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("argument", "column", "wire"),
+    [
+        ("0", 0, "0"),
+        ('"0"', 0, "0"),
+        ('"-42"', -42, "-42"),
+        ('"-9223372036854775808"', -(2**63), "-9223372036854775808"),
+        ('"9223372036854775807"', 2**63 - 1, "9223372036854775807"),
+    ],
+    ids=[
+        "int-zero",
+        "string-zero",
+        "negative-string",
+        "int64-min",
+        "int64-max",
+    ],
+)
+def test_scalar_specimen_by_signed_big_accepts_canonical_literals(argument, column, wire):
+    """Canonical ``BigInt`` spellings parse over HTTP and serialize as the same decimal string."""
+    _seed_specimen(label="keep", signed_big=column)
+    _seed_specimen(label="other", signed_big=7)
+
+    response = _post_graphql(
+        f"query {{ scalarSpecimenBySignedBig(signedBig: {argument}) {{ label signedBig }} }}",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    assert body["data"]["scalarSpecimenBySignedBig"] == {"label": "keep", "signedBig": wire}
 
 
 @pytest.mark.django_db

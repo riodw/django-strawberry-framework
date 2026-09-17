@@ -1,14 +1,26 @@
 """Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 
-Covers the ``BigInt`` scalar's strict parser, strict serializer, public
-top-level import surface, and the import-time deprecation-suppression
-contract. Wire-level / schema-execution behavior lives in
-``tests/types/test_converters.py`` per the [`docs/TREE.md`](../docs/TREE.md)
-mirror rule (scalar internals here; converter dispatch there). The ``BigInt``
-round trip a consumer actually sees - decimal-string serialization for both
-the signed and unsigned columns, and a decimal-string literal argument - is
-pinned over live HTTP in
-``examples/fakeshop/test_query/test_scalars_api.py``.
+Wire-reachable parse, serialize, and ``Upload`` field resolution live in
+``examples/fakeshop/test_query/test_scalars_api.py`` and
+``examples/fakeshop/test_query/test_uploads_api.py``. Converter dispatch stays
+in ``tests/types/test_converters.py``.
+
+What stays here, and why no live request can express it:
+
+- hostile ``int`` / ``str`` subclasses and unprintable objects (no GraphQL
+  argument can carry a Python subclass);
+- serializer rejection of non-int Python objects (the ORM never hands
+  ``bool`` / ``float`` / ``str`` / ``Decimal`` to ``_serialize_bigint``);
+- ``_parse_bigint`` on a Python ``bool`` / ``float`` / ``None`` (GraphQL
+  literals for bool / float are live; ``null`` is stripped before
+  ``parse_value``);
+- the public import surface and the subprocess deprecation-suppression
+  contract;
+- ``strawberry_config()`` construction (scalar_map merge, collisions,
+  kwargs forwarding);
+- ``Upload`` as Strawberry's built-in re-export, absent from the package
+  scalar map, resolving under a plain ``StrawberryConfig`` with no package
+  map (fakeshop always passes ``strawberry_config()``).
 """
 
 import subprocess
@@ -32,31 +44,8 @@ from django_strawberry_framework.scalars import (
 )
 
 # ---------------------------------------------------------------------------
-# Strict serializer - positive cases
+# Strict serializer - hostile subclasses and non-int Python objects
 # ---------------------------------------------------------------------------
-
-
-def test_bigint_serializes_int_as_decimal_string():
-    assert _serialize_bigint(42) == "42"
-
-
-def test_bigint_serializes_zero():
-    """``_serialize_bigint(0) == "0"`` - covers the ``int.__bool__ is False`` edge."""
-    assert _serialize_bigint(0) == "0"
-
-
-def test_bigint_serializes_negative_int_as_decimal_string():
-    assert _serialize_bigint(-42) == "-42"
-
-
-def test_bigint_serializes_signed_int64_min():
-    """Pin the int64-min boundary value."""
-    assert _serialize_bigint(-(2**63)) == "-9223372036854775808"
-
-
-def test_bigint_serializes_signed_int64_max():
-    """Pin the int64-max boundary value."""
-    assert _serialize_bigint(2**63 - 1) == "9223372036854775807"
 
 
 def test_bigint_int_subclasses_are_normalized_before_serialization():
@@ -92,11 +81,6 @@ def test_bigint_int_subclasses_are_normalized_before_serialization():
     assert _serialize_bigint(hex_val) == "255"
 
 
-# ---------------------------------------------------------------------------
-# Strict serializer - negative cases
-# ---------------------------------------------------------------------------
-
-
 def test_bigint_serialize_rejects_bool():
     """``True`` and ``False`` both raise ``TypeError``; bool subclasses int."""
     with pytest.raises(TypeError):
@@ -130,44 +114,7 @@ def test_bigint_serialize_rejects_non_int_types():
 
 
 # ---------------------------------------------------------------------------
-# Strict parser - positive cases
-# ---------------------------------------------------------------------------
-
-
-def test_bigint_parses_python_int():
-    assert _parse_bigint(42) == 42
-
-
-def test_bigint_parses_python_zero():
-    """``_parse_bigint(0) == 0`` - pins the int-zero branch."""
-    assert _parse_bigint(0) == 0
-
-
-def test_bigint_parses_decimal_string_to_int():
-    assert _parse_bigint("42") == 42
-
-
-def test_bigint_parses_negative_decimal_string_to_int():
-    assert _parse_bigint("-42") == -42
-
-
-def test_bigint_parses_zero_string():
-    """``_parse_bigint("0") == 0`` - pins the regex's ``(0|...)`` first alternative."""
-    assert _parse_bigint("0") == 0
-
-
-def test_bigint_parses_signed_int64_min_string():
-    """Pin the int64-min boundary string."""
-    assert _parse_bigint("-9223372036854775808") == -9223372036854775808
-
-
-def test_bigint_parses_signed_int64_max_string():
-    """Pin the int64-max boundary string."""
-    assert _parse_bigint("9223372036854775807") == 9223372036854775807
-
-
-# ---------------------------------------------------------------------------
-# Strict parser - negative cases
+# Strict parser - Python objects GraphQL cannot feed
 # ---------------------------------------------------------------------------
 
 
@@ -187,64 +134,6 @@ def test_bigint_rejects_python_float():
         _parse_bigint(0.0)
     with pytest.raises(ValueError):
         _parse_bigint(-1.0)
-
-
-def test_bigint_rejects_empty_string():
-    with pytest.raises(ValueError):
-        _parse_bigint("")
-
-
-def test_bigint_rejects_whitespace_padded_string():
-    with pytest.raises(ValueError):
-        _parse_bigint(" 123 ")
-    with pytest.raises(ValueError):
-        _parse_bigint("\t123")
-
-
-def test_bigint_rejects_non_decimal_string():
-    for bad in (
-        "abc",
-        "1.9",
-        "1e3",
-        "0x10",
-    ):
-        with pytest.raises(ValueError):
-            _parse_bigint(bad)
-
-
-def test_bigint_rejects_underscore_separator():
-    """PEP 515-style numeric literals are rejected."""
-    with pytest.raises(ValueError):
-        _parse_bigint("1_000")
-    with pytest.raises(ValueError):
-        _parse_bigint("-1_000")
-
-
-def test_bigint_rejects_leading_plus():
-    with pytest.raises(ValueError):
-        _parse_bigint("+1")
-    with pytest.raises(ValueError):
-        _parse_bigint("+0")
-
-
-def test_bigint_rejects_unicode_decimal_digits():
-    """ASCII-only - Unicode decimal digit strings rejected."""
-    with pytest.raises(ValueError):
-        _parse_bigint("\uff11\uff12")
-    with pytest.raises(ValueError):
-        _parse_bigint("-\uff11")
-
-
-def test_bigint_rejects_leading_zeroes():
-    for bad in ("01", "007", "-01"):
-        with pytest.raises(ValueError):
-            _parse_bigint(bad)
-
-
-def test_bigint_rejects_negative_zero():
-    """The regex permits ``"0"`` only - ``"-0"`` is rejected."""
-    with pytest.raises(ValueError):
-        _parse_bigint("-0")
 
 
 def test_bigint_rejects_none():
@@ -641,12 +530,6 @@ class _UploadQuery:
     def echo_name(self, file: Upload) -> str:
         """A trivial ``Upload``-typed argument forcing the scalar into the schema."""
         return getattr(file, "name", "")
-
-
-def test_upload_field_resolves_under_strawberry_config_schema():
-    """An ``Upload``-typed field builds + appears in the SDL under ``strawberry_config()``."""
-    schema = strawberry.Schema(query=_UploadQuery, config=strawberry_config())
-    assert "scalar Upload" in str(schema)
 
 
 def test_upload_field_resolves_under_plain_strawberry_config():

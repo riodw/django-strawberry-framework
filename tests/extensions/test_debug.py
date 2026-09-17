@@ -1,19 +1,28 @@
 """DjangoDebugExtension tests for payload serialization, SQL capture, errors, and execution isolation.
 
 Everything here is what a live ``/graphql/`` request cannot isolate: the two
-wire serializers and the nested ``original_error`` chain handling, the
-reference-counted ``force_debug_cursor`` coordinator's restore contract and
-partial-acquisition unwind, bounded-log slicing, ``get_results``'
-no-stash / idempotence contract (including the real engine's conditional
-double call), masking-extension ordering, extensions-map merge precedence and
-result-map replacement, the async shared-wrapper overlap restore, nested
+wire serializers (the 10s slow cut and the executemany log form; wire keys
+and interpolated ``SELECT`` duration live in
+``examples/fakeshop/test_query/test_debug_extension_api.py``) and the nested
+``original_error`` chain handling, the reference-counted
+``force_debug_cursor`` coordinator's restore contract and partial-acquisition
+unwind, bounded-log slicing, ``get_results``' no-stash / idempotence contract
+(including the real engine's conditional double call and the raising-teardown
+recovery path), masking-extension ordering, extensions-map merge precedence
+and result-map replacement, the async shared-wrapper overlap restore, nested
 same-thread attribution, concurrent sync instance isolation at the
 ``strawberry-graphql==0.316.0`` floor, the post-execution diagnostic
 non-interference degrade, the cursor-construction capture-interval boundary,
-transaction-boundary scope, sibling-hook SQL ordering, the fail-closed
-``settings.DEBUG`` gate's inert path (spec-048 Decision 5), and the payload
+sibling-hook SQL ordering, the fail-closed ``settings.DEBUG`` gate's inert
+path (no acquire / no snapshot; spec-048 Decision 5), a DELETED ``DEBUG``
+attribute, Schema.stream (fakeshop has no ASGI/WS mount), and the payload
 caps' arithmetic (spec-048 Decision 6, exercised directly against the pure
 ``_apply_payload_caps``).
+
+Parse and validation ``debug``-key absence, a malformed truthy ``DEBUG`` on
+the bare class entry, mutation ``BEGIN`` / ``COMMIT``, and the enclosing
+``ATOMIC_REQUESTS`` interval live in
+``examples/fakeshop/test_query/test_debug_extension_api.py``.
 
 The suite runs with ``settings.DEBUG`` false, which is now the extension's
 fail-closed condition, so every case that expects a published payload declares
@@ -53,7 +62,7 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
-from django.db import connection, connections, transaction
+from django.db import connection, connections
 from django.test.utils import override_settings
 from graphql import GraphQLError
 from strawberry.extensions import MaskErrors, SchemaExtension
@@ -178,13 +187,6 @@ def test_exception_serializer_chained_traceback_stack():
     ),
     [
         (
-            "SELECT * FROM t",
-            "0.001",
-            0.001,
-            False,
-            True,
-        ),
-        (
             "  select 1",
             "10.0",
             10.0,
@@ -206,14 +208,21 @@ def test_exception_serializer_chained_traceback_stack():
             False,
         ),
     ],
+    ids=["exactly-ten-is-not-slow", "over-ten-is-slow", "executemany-keeps-placeholder"],
 )
-def test_sql_row_serializer_forms(
+def test_sql_row_serializer_slow_threshold_and_executemany_form(
     sql,
     time,
     expected_duration,
     expected_slow,
     expected_select,
 ):
+    """The 10s slow cut and the executemany log form have no live SQL shape.
+
+    Wire keys, ``float`` duration, and interpolated ``SELECT`` (no ``%s``) are
+    pinned on every payload-expecting row in
+    ``examples/fakeshop/test_query/test_debug_extension_api.py``.
+    """
     wrapper = connections["default"]
 
     row = _serialize_sql_row(wrapper, {"sql": sql, "time": time})
@@ -318,7 +327,7 @@ def test_hop_policy_long_acyclic_chain_stops_at_the_ceiling():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("prior", [False, True])
+@pytest.mark.parametrize("prior", [False, True], ids=["prior-false", "prior-true"])
 def test_coordinator_saved_value_restore_and_depth(default_wrapper, prior):
     coordinator = _CursorCaptureCoordinator()
     default_wrapper.force_debug_cursor = prior
@@ -560,26 +569,13 @@ def test_generic_recovery_alone_calls_get_results_once():
     assert len(calls) == 1
 
 
-@override_settings(DEBUG=True)
-def test_parse_and_validation_failures_have_no_debug_key():
-    schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
-
-    parse_result = schema.execute_sync("{ ok")  # syntax error
-    assert parse_result.errors
-    assert "debug" not in (parse_result.extensions or {})
-
-    validation_result = schema.execute_sync("{ definitelyNotAField }")
-    assert validation_result.errors
-    assert "debug" not in (validation_result.extensions or {})
-
-
 # ---------------------------------------------------------------------------
 # Scenario 8 - the restore contract around real sync execution.
 # ---------------------------------------------------------------------------
 
 
 @override_settings(DEBUG=True)
-@pytest.mark.parametrize("prior", [False, True])
+@pytest.mark.parametrize("prior", [False, True], ids=["prior-false", "prior-true"])
 def test_execute_sync_restores_the_prior_flag_value(default_wrapper, prior):
     default_wrapper.force_debug_cursor = prior
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
@@ -599,7 +595,11 @@ def test_execute_sync_restores_the_prior_flag_value(default_wrapper, prior):
 
 
 @override_settings(DEBUG=True)
-@pytest.mark.parametrize("debug_after_masking", [True, False])
+@pytest.mark.parametrize(
+    "debug_after_masking",
+    [True, False],
+    ids=["debug-after-masking", "debug-before-masking"],
+)
 def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking):
     if debug_after_masking:
         extension_list = [lambda: MaskErrors(), DjangoDebugExtension]
@@ -710,7 +710,11 @@ async def test_prepopulated_result_extensions_map_is_replaced_not_merged():
 
 
 @override_settings(DEBUG=True)
-@pytest.mark.parametrize("completion_order", [("a", "b"), ("b", "a")])
+@pytest.mark.parametrize(
+    "completion_order",
+    [("a", "b"), ("b", "a")],
+    ids=["a-then-b", "b-then-a"],
+)
 async def test_async_overlapping_operations_share_the_wrapper_and_restore(completion_order):
     """Two overlapping async operations refcount one wrapper and restore in any order.
 
@@ -1004,63 +1008,6 @@ def test_cursor_construction_defines_the_capture_interval(default_wrapper):
 
 
 # ---------------------------------------------------------------------------
-# Scenario 19 - transaction-boundary scope.
-# ---------------------------------------------------------------------------
-
-
-@override_settings(DEBUG=True)
-@pytest.mark.django_db(transaction=True)
-def test_resolver_owned_atomic_emits_captured_transaction_rows():
-    @strawberry.type
-    class _AtomicQuery:
-        @strawberry.field
-        def write(self) -> int:
-            with transaction.atomic(), connection.cursor() as cursor:
-                cursor.execute("SELECT 20")
-            return 1
-
-    schema = strawberry.Schema(query=_AtomicQuery, extensions=[DjangoDebugExtension])
-
-    result = schema.execute_sync("{ write }")
-
-    assert result.errors is None
-    statements = [row["sql"].upper() for row in result.extensions["debug"]["sql"]]
-    assert any(statement.startswith("BEGIN") for statement in statements)
-    assert any(statement.startswith("COMMIT") for statement in statements)
-    begin_rows = [
-        row for row in result.extensions["debug"]["sql"] if row["sql"].upper().startswith("BEGIN")
-    ]
-    assert all(row["isSelect"] is False for row in begin_rows)
-
-
-@override_settings(DEBUG=True)
-@pytest.mark.django_db(transaction=True)
-def test_enclosing_transaction_boundary_statements_are_not_captured():
-    @strawberry.type
-    class _AtomicQuery:
-        @strawberry.field
-        def write(self) -> int:
-            with transaction.atomic(), connection.cursor() as cursor:
-                cursor.execute("SELECT 21")
-            return 1
-
-    schema = strawberry.Schema(query=_AtomicQuery, extensions=[DjangoDebugExtension])
-
-    # The ATOMIC_REQUESTS shape without rebuilding HTTP infrastructure: the
-    # enclosing BEGIN runs before the hook entered and the enclosing COMMIT
-    # after it tore down, so neither is captured; the resolver's atomic()
-    # inside the outer transaction is a savepoint.
-    with transaction.atomic():
-        result = schema.execute_sync("{ write }")
-
-    assert result.errors is None
-    statements = [row["sql"].upper() for row in result.extensions["debug"]["sql"]]
-    assert any("SAVEPOINT" in statement for statement in statements)
-    assert not any(statement.startswith("BEGIN") for statement in statements)
-    assert not any(statement.startswith("COMMIT") for statement in statements)
-
-
-# ---------------------------------------------------------------------------
 # Scenario 20 - sibling-hook SQL ordering.
 # ---------------------------------------------------------------------------
 
@@ -1078,7 +1025,11 @@ class _MarkerSQLExtension(SchemaExtension):
 
 @override_settings(DEBUG=True)
 @pytest.mark.django_db
-@pytest.mark.parametrize("debug_listed_first", [True, False])
+@pytest.mark.parametrize(
+    "debug_listed_first",
+    [True, False],
+    ids=["debug-listed-first", "debug-listed-second"],
+)
 def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first):
     if debug_listed_first:
         extension_list = [DjangoDebugExtension, _MarkerSQLExtension]
@@ -1220,19 +1171,6 @@ def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(monkeypatch, 
     ]
     assert len(warnings) == 1
     assert "allow_unsafe_production" in warnings[0].getMessage()
-
-
-@pytest.mark.parametrize("debug_value", ["False", 1, object()])
-def test_malformed_debug_setting_stays_fail_closed(settings, debug_value):
-    """Only the exact boolean ``True`` may enable disclosure in the bare class entry."""
-    settings.DEBUG = debug_value
-    schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
-
-    result = schema.execute_sync("{ ok }")
-
-    assert result.errors is None
-    assert result.data == {"ok": "ok"}
-    assert "debug" not in (result.extensions or {})
 
 
 @override_settings(DEBUG=False)

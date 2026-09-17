@@ -9,31 +9,32 @@ freshly-reloaded fakeshop apps, seeded through ``seed_data`` /
 
 Covered live here: happy-path SQL capture through the forced debug cursor, the
 optimizer composition (the visibility-safe two-query prefetch shape as the
-payload's demonstration surface), mutation capture, the resolver-exception row,
-the validation-versus-execution boundary, the no-SQL operation's two empty
-lists, the off-by-default posture, the fail-closed ``settings.DEBUG`` gate in
-both directions (spec-048 Decision 5: a bare class entry withholds and warns,
-the acknowledgement factory publishes), and the payload caps' end-to-end wiring
-(spec-048 Decision 6). Fakeshop's shipped aggregate schema deliberately does
-NOT enable the extension - asserted here against the project's real
-``/graphql/`` - and the probe URLconf is the established way to exercise an
-opt-in schema shape without changing every acceptance response.
+payload's demonstration surface), mutation capture including the generated
+write's own ``BEGIN`` / ``COMMIT`` and the enclosing ``ATOMIC_REQUESTS``
+interval that is not captured, the resolver-exception row, the
+validation-versus-execution boundary, the no-SQL operation's two empty lists,
+the off-by-default posture, the fail-closed ``settings.DEBUG`` gate in both
+directions (spec-048 Decision 5: a bare class entry withholds and warns, a
+malformed truthy ``DEBUG`` stays fail-closed, the acknowledgement factory
+publishes), and the payload caps' end-to-end wiring (spec-048 Decision 6).
+Fakeshop's shipped aggregate schema deliberately does NOT enable the
+extension - asserted here against the project's real ``/graphql/`` - and the
+probe URLconf is the established way to exercise an opt-in schema shape
+without changing every acceptance response.
 
 Because the suite runs with ``settings.DEBUG`` false - now the extension's
 fail-closed condition - every payload-expecting scenario here spells the
 acknowledgement factory ``_acknowledged_debug`` rather than flipping the
-setting. Flipping it is not available at this tier: fakeshop mounts the
-package's debug-toolbar middleware behind ``DEBUG``, and the toolbar's
-``djdt`` URL namespace lives on the project URLconf that the probe holder
-replaces, so a ``DEBUG=True`` live request would fail on infrastructure
-unrelated to the payload. The bare CLASS entry's own semantics (a
-zero-argument construction defaulting to the safe answer, and per-operation
-freshness) are pinned in ``tests/extensions/test_debug.py`` under
-``override_settings(DEBUG=True)``; what this tier owns of the bare entry is its
-REFUSAL, which is exactly what a ``DEBUG``-false request shows.
+setting, except the two rows that must read Django's own debug-cursor log or
+the fail-closed gate: those drop the toolbar from ``MIDDLEWARE`` (the
+``djdt`` URL namespace lives on the project URLconf the probe holder
+replaces) and then flip ``DEBUG``. The bare CLASS entry's construction
+default and per-operation freshness stay in ``tests/extensions/test_debug.py``;
+what this tier owns of the bare entry is its REFUSAL.
 
-Serializer/coordinator, merge-precedence, async-overlap, masking-order, and
-nested-reentrancy mechanics belong in ``tests/extensions/test_debug.py``.
+Serializer/coordinator, merge-precedence, async-overlap, masking-order,
+nested-reentrancy, the slow-query threshold, and the executemany log form
+belong in ``tests/extensions/test_debug.py``.
 """
 
 import contextlib
@@ -95,6 +96,18 @@ _CREATE_ITEM = (
 # production constants re-imported, so a silently widened cap fails this tier.
 _EXCEPTION_MESSAGE_CAP = 4096
 _TRUNCATION_MARKER = "... [truncated]"
+
+# Wire keys re-spelled as independent literals (spec-044 D4): a rename in the
+# serializer must fail every payload-expecting row here, not only a unit test.
+_SQL_ROW_KEYS = {
+    "vendor",
+    "alias",
+    "sql",
+    "duration",
+    "isSlow",
+    "isSelect",
+}
+_EXCEPTION_ROW_KEYS = {"excType", "message", "stack"}
 
 
 #: One unacknowledged instance, shared by the schema every request in the
@@ -182,6 +195,47 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
     _current["schema"] = None
 
 
+def _middleware_without_debug_toolbar():
+    """MIDDLEWARE minus the toolbar: a truthy ``DEBUG`` must not look up ``djdt`` routes."""
+    return [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry]
+
+
+@contextlib.contextmanager
+def _atomic_requests_enabled():
+    """Turn on ``ATOMIC_REQUESTS`` on every live alias without replacing ``DATABASES``.
+
+    The handler reads ``DATABASES[<alias>]["ATOMIC_REQUESTS"]``, not a project
+    setting named ``ATOMIC_REQUESTS``. Replacing ``DATABASES`` wholesale fires
+    Django's ``UserWarning`` (this suite treats warnings as errors). The per-alias
+    dict is the same object the handler walks, so flipping the key in place is
+    what the wrap actually reads; restored in ``finally``.
+    """
+    databases = settings.DATABASES
+    prior = {alias: config.get("ATOMIC_REQUESTS", False) for alias, config in databases.items()}
+    try:
+        for config in databases.values():
+            config["ATOMIC_REQUESTS"] = True
+        yield
+    finally:
+        for alias, value in prior.items():
+            databases[alias]["ATOMIC_REQUESTS"] = value
+
+
+def _grant_add_item_and_visible_category_gid():
+    """``view_item_1`` with ``add_item``, permission cache dropped, plus a visible category id."""
+    user_model = get_user_model()
+    user = user_model.objects.get(username="view_item_1")
+    user.user_permissions.add(
+        Permission.objects.get(codename="add_item", content_type__app_label="products"),
+    )
+    user = user_model.objects.get(pk=user.pk)
+    visible_category = Category.objects.filter(is_private=False).order_by("pk").first()
+    category_gid = str(
+        relay.GlobalID(type_name="products.category", node_id=str(visible_category.pk)),
+    )
+    return user, category_gid
+
+
 def _debug(response):
     """Validate-and-return the debug payload for executed-operation happy paths.
 
@@ -192,6 +246,11 @@ def _debug(response):
     assert "debug" in extensions, extensions
     payload = extensions["debug"]
     assert set(payload) == {"sql", "exceptions"}  # both keys always present
+    for row in payload["sql"]:
+        assert set(row) == _SQL_ROW_KEYS, row
+        assert isinstance(row["duration"], float)
+    for row in payload["exceptions"]:
+        assert set(row) == _EXCEPTION_ROW_KEYS, row
     return payload
 
 
@@ -309,26 +368,18 @@ def test_optimizer_composition_shows_the_two_query_prefetch_shape(install_probe_
 def test_mutation_capture_includes_the_insert_row(install_probe_schema):
     """The write path is captured like the read path - INSERT beside the pipeline SELECTs.
 
-    ``transaction=True`` because the assertions tolerate connection-level
-    ``BEGIN`` / ``COMMIT`` rows, which the default savepoint-wrapped test
-    transaction would suppress. The permitted writer follows the
-    ``test_client_api.py`` precedent: the NON-staff ``view_item_1`` user is
-    granted only the explicit ``add_item`` codename (never the superuser
-    short-circuit) and re-fetched to drop the stale permission cache; the
-    required ``categoryId`` derives from a category the writer can SEE.
+    ``transaction=True`` so pytest-django does not wrap the test in an outer
+    atomic: the generated mutation's own completion-spanning transaction then
+    emits real ``BEGIN`` / ``COMMIT`` inside the debug bracket. The permitted
+    writer follows the ``test_client_api.py`` precedent: the NON-staff
+    ``view_item_1`` user is granted only the explicit ``add_item`` codename
+    (never the superuser short-circuit) and re-fetched to drop the stale
+    permission cache; the required ``categoryId`` derives from a category the
+    writer can SEE.
     """
     create_users(1)
     seed_data(1)
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_item_1")
-    user.user_permissions.add(
-        Permission.objects.get(codename="add_item", content_type__app_label="products"),
-    )
-    user = user_model.objects.get(pk=user.pk)  # drop the stale perm cache
-    visible_category = Category.objects.filter(is_private=False).order_by("pk").first()
-    category_gid = str(
-        relay.GlobalID(type_name="products.category", node_id=str(visible_category.pk)),
-    )
+    user, category_gid = _grant_add_item_and_visible_category_gid()
     install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
@@ -347,6 +398,48 @@ def test_mutation_capture_includes_the_insert_row(install_probe_schema):
     assert insert_rows, [row["sql"] for row in rows]
     assert all(row["isSelect"] is False for row in insert_rows)
     assert any(row["isSelect"] is True for row in rows)  # the pipeline SELECTs ride along
+    begin_rows = [row for row in rows if row["sql"].upper().lstrip().startswith("BEGIN")]
+    commit_rows = [row for row in rows if row["sql"].upper().lstrip().startswith("COMMIT")]
+    assert begin_rows, [row["sql"] for row in rows]
+    assert commit_rows, [row["sql"] for row in rows]
+    assert all(row["isSelect"] is False for row in begin_rows)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_enclosing_atomic_requests_transaction_is_not_captured(install_probe_schema):
+    """``ATOMIC_REQUESTS`` BEGIN/COMMIT sit outside the hook; the write is a savepoint.
+
+    The handler wraps the view in ``atomic()`` before GraphQL runs, so the
+    request's ``BEGIN`` is logged (under ``DEBUG=True``) before the debug
+    snapshot and its ``COMMIT`` after teardown. The generated mutation's
+    nested ``atomic()`` is then a ``SAVEPOINT``. Toolbar middleware is dropped
+    so ``DEBUG=True`` does not look up ``djdt`` routes the probe URLconf
+    never mounted. ``ATOMIC_REQUESTS`` is flipped on the live alias dict:
+    replacing ``DATABASES`` wholesale is a ``UserWarning``.
+    """
+    create_users(1)
+    seed_data(1)
+    user, category_gid = _grant_add_item_and_visible_category_gid()
+    install_probe_schema([_acknowledged_debug])
+    client = TestClient()
+
+    with override_settings(DEBUG=True, MIDDLEWARE=_middleware_without_debug_toolbar()):
+        with _atomic_requests_enabled():
+            with client.login(user):
+                res = client.query(
+                    _CREATE_ITEM,
+                    variables={
+                        "d": {"name": "AtomicRequestsWidget", "categoryId": category_gid},
+                    },
+                )
+
+    assert res.data["createItem"]["errors"] == []
+    assert res.data["createItem"]["node"]["name"] == "AtomicRequestsWidget"
+    rows = _debug(res)["sql"]
+    statements = [row["sql"].upper() for row in rows]
+    assert any("SAVEPOINT" in statement for statement in statements), statements
+    assert not any(statement.lstrip().startswith("BEGIN") for statement in statements), statements
+    assert not any(statement.lstrip().startswith("COMMIT") for statement in statements), statements
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +563,38 @@ def test_debug_false_bare_class_entry_withholds_the_payload_and_warns(
     message = warnings[0].getMessage()
     assert "allow_unsafe_production" in message
     assert "withheld" in message
+
+
+@pytest.mark.parametrize(
+    "debug_value",
+    [
+        pytest.param("False", id="string-false"),
+        pytest.param(1, id="truthy-int"),
+        pytest.param(object(), id="object"),
+    ],
+)
+def test_a_malformed_debug_setting_stays_fail_closed_on_the_bare_class_entry(
+    install_probe_schema,
+    debug_value,
+):
+    """Only the exact boolean ``True`` may enable disclosure on a bare class entry.
+
+    ``"False"`` and ``1`` are truthy, so a ``if settings.DEBUG`` gate would
+    publish. Toolbar middleware is dropped because those values are also
+    truthy for Django's toolbar callback, which would look up ``djdt`` routes
+    the probe URLconf never mounted.
+    """
+    install_probe_schema([DjangoDebugExtension])
+    client = TestClient()
+
+    with override_settings(
+        DEBUG=debug_value,
+        MIDDLEWARE=_middleware_without_debug_toolbar(),
+    ):
+        res = client.query("query { __typename }")
+
+    assert res.data == {"__typename": "Query"}
+    assert "debug" not in (res.extensions or {})
 
 
 @override_settings(DEBUG=False)

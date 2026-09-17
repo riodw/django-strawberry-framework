@@ -17,9 +17,11 @@ drive the seams directly:
   call is refused.
 
 The disclosure these prevent is asserted where a client can see it -
-``examples/fakeshop/test_query/test_resource_policy_api.py`` and
-``test_error_policy_api.py`` carry the shared-entry matrices over both view
-colors. This module holds what no request can express.
+``examples/fakeshop/test_query/test_resource_policy_api.py``,
+``test_error_policy_api.py``, and ``test_extension_isolation_api.py`` carry
+the shared-entry matrices over both view colors. Stream-task binding and
+subscription resumption stay here: fakeshop has no ASGI/WS mount. This
+module holds what no request can express.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from django_strawberry_framework.extensions import (
 from django_strawberry_framework.extensions.operation_state import (
     _OPERATION_CARRIERS,
     _RUNNER_SCOPES,
+    DjangoExtensionsRunner,
     OperationState,
     _OperationBoundExtension,
     operation_is_nested,
@@ -1462,6 +1465,24 @@ def _mode_schema(seen):
             return "read"
 
     return DjangoSchema(query=ModeQuery), ModeQuery
+
+
+def test_a_chain_that_declares_no_mode_binds_none():
+    """The runner is a class, and a chain it did not build declares nothing.
+
+    ``DjangoSchema`` puts the executor mode in every chain it assembles, but the
+    runner can be constructed over any list - a ``strawberry.Schema`` subclass
+    that installs it, or a ``DjangoSchema`` subclass that builds its own chain.
+    There is no mode to carry there, so none is bound and the readers fall back
+    to ambient dispatch, which is what upstream would have done anyway.
+    """
+    runner = DjangoExtensionsRunner(
+        execution_context=SimpleNamespace(),
+        extensions=[SchemaExtension()],
+    )
+
+    with runner.operation():
+        assert current_operation_mode() is None
 
 
 @pytest.mark.asyncio

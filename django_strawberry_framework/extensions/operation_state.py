@@ -76,6 +76,16 @@ inside is decided where it starts running: a stream built inside one operation
 and driven after it is inside nothing by then, and the closed lease its copied
 context holds is what says so.
 
+The runner also binds the operation's EXECUTOR MODE, for the same reason and
+with the opposite timing. Which executor is driving is settled by the entry
+point the caller chose, before anything runs, and the schema puts it in the
+chain it built for this operation (:class:`_OperationModeMarker`); the runner
+reads it once and binds it everywhere it binds state. It is bound rather than
+sampled because ``execute_sync`` is callable while an event loop is running -
+from a resolver inside an asynchronous operation, among other places - so the
+ambient loop and the executor disagree exactly where a field factory must not
+guess (``utils/execution_mode.py``).
+
 **A stream is bound in the task that drives it.** An async iterator may be
 advanced, thrown into and closed by whatever task holds it, and Python runs an
 async generator's body in the context of the caller that resumed it - so every
@@ -122,6 +132,7 @@ from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.runner import SchemaExtensionsRunner
 
 from ..exceptions import ConfigurationError
+from ..utils.execution_mode import OperationMode, bind_operation_mode
 from ..utils.operation_lease import OperationLease
 from ..utils.private_state import PrivateAuthority
 
@@ -202,12 +213,21 @@ class _RunnerScope(NamedTuple):
     value, so a runner started in a task that merely COPIED an outer operation's
     context is top-level, which is what it is.
 
+    ``mode`` is the opposite kind of fact and is settled at construction: which
+    executor is driving this operation is decided by the entry point the caller
+    chose, before anything runs, and the schema puts it in the chain
+    (:class:`_OperationModeMarker`). ``None`` is a runner built for a chain
+    carrying no marker, which is a schema that is not a ``DjangoSchema`` or one
+    whose subclass builds its own chain; the readers then fall back to ambient
+    dispatch, exactly as upstream leaves it.
+
     One object per runner, identity included: a scope already bound to this
     exact object is this runner's own, which is how a scope inside the runner's
     stream resume - or inside its own operation - knows it has nothing to bind.
     """
 
     nested: bool
+    mode: OperationMode | None
 
 
 #: One binding carrier per operation-bound extension, settled at construction.
@@ -282,6 +302,42 @@ def _register_resumed_binding(variable: ContextVar[Any], token: Token[Any]) -> b
         return False
     registrar.append(_Binding(variable, token, None, adopted=True))
     return True
+
+
+class _OperationModeMarker(SchemaExtension):
+    """The operation's executor mode, carried into the chain the schema built.
+
+    ``schema.py::DjangoSchema.get_extensions`` is the one place that is handed
+    the authoritative ``sync`` flag, and ``create_extensions_runner`` is the one
+    place that sees the resolved chain and this operation's engine context
+    together. Nothing upstream passes the flag from the first to the second, and
+    recording it on the schema would be one slot two concurrent operations
+    write - the defect this whole module exists to close. So the fact travels
+    the way every other per-operation fact travels: as a member of the chain
+    that was built for this operation and nothing else.
+
+    It implements no hook. Upstream assigns ``execution_context`` on it with
+    every other resolved member and then finds nothing to call, which is the
+    whole contract: the marker is read once, by the runner, out of the list it
+    arrived in.
+    """
+
+    def __init__(self, mode: OperationMode) -> None:
+        super().__init__()
+        self.mode = mode
+
+
+def _declared_operation_mode(extensions: Iterable[Any]) -> OperationMode | None:
+    """The mode the chain declares, or ``None`` when no chain member declares one.
+
+    Exact type, and the first one found: a consumer extension that grew a
+    ``mode`` attribute declares nothing, and a chain the package built carries
+    exactly one marker.
+    """
+    for extension in extensions:
+        if type(extension) is _OperationModeMarker:
+            return extension.mode
+    return None
 
 
 def _live_scope() -> _RunnerScope | None:
@@ -565,6 +621,8 @@ def _bind(
     try:
         lease: OperationLease[Any] = OperationLease(scope)
         bindings.append(_Binding(_RUNNER_SCOPES, _RUNNER_SCOPES.set(lease), lease))
+        if scope.mode is not None:
+            bindings.append(_Binding(*bind_operation_mode(scope.mode)))
         for extension, state in states:
             carrier = _carrier(extension)
             binding: OperationLease[Any] = OperationLease(ref(state))
@@ -801,6 +859,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
     def __init__(self, execution_context: Any, extensions: list[Any] | None = None) -> None:
         super().__init__(execution_context=execution_context, extensions=extensions)
         self._operation_states = _operation_states(self.extensions, execution_context)
+        self._operation_mode = _declared_operation_mode(self.extensions)
         self._runner_scope: _RunnerScope | None = None
 
     def _scope(self) -> _RunnerScope:
@@ -814,7 +873,10 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         operation's context is inside nothing.
         """
         if self._runner_scope is None:
-            self._runner_scope = _RunnerScope(nested=_live_scope() is not None)
+            self._runner_scope = _RunnerScope(
+                nested=_live_scope() is not None,
+                mode=self._operation_mode,
+            )
         return self._runner_scope
 
     def operation(self) -> Any:

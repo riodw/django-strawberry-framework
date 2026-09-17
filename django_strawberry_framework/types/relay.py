@@ -30,9 +30,9 @@ from django.db import models
 from django.db.models import CompositePrimaryKey
 from strawberry import relay
 from strawberry.relay.exceptions import NodeIDAnnotationError
-from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
+from ..utils.execution_mode import async_execution
 
 # ``SyncMisuseError`` moved to ``utils/querysets.py``; the
 # redundant ``as`` alias re-exports it from this module so ``from
@@ -879,8 +879,8 @@ def _resolve_node_default(
     for argument 'info'``.
 
     Returns the single matching row (``qs.get()`` when ``required``,
-    ``qs.first()`` otherwise). Async detection uses
-    ``strawberry.utils.inspect.in_async_context``; on the async branch
+    ``qs.first()`` otherwise). The executor driving the operation is read from
+    ``utils/execution_mode.py::async_execution``; on the async branch
     the returned coroutine awaits ``get_queryset`` (so async
     ``get_queryset`` hooks are honored), applies the id filter, and
     awaits ``aget``/``afirst``. On the sync branch a coroutine returned
@@ -890,7 +890,7 @@ def _resolve_node_default(
     object has no attribute 'filter'``.
     """
     id_attr = cls.resolve_id_attr()
-    if in_async_context():
+    if async_execution():
         return _resolve_node_async(cls, id_attr, node_id, info=info, required=required)
     qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
     qs = _apply_node_filter(qs, id_attr, node_id=node_id)
@@ -941,7 +941,8 @@ def _resolve_nodes_default(
     ``required=True`` raises the model's ``DoesNotExist`` for missing
     ids (homogeneous with ``_resolve_node_default``'s ``qs.get()``).
 
-    Async detection routes through ``in_async_context`` so async
+    The executor driving the operation is read from
+    ``utils/execution_mode.py::async_execution`` so async
     ``get_queryset`` hooks are awaited before the id filter; in the
     async branch the caller must ``await`` the call to obtain either
     the queryset (``node_ids=None``) or the order-preserving list
@@ -951,7 +952,7 @@ def _resolve_nodes_default(
     instead.
     """
     id_attr = cls.resolve_id_attr()
-    if in_async_context():
+    if async_execution():
         return _resolve_nodes_async(cls, id_attr, node_ids, info=info, required=required)
     qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
     coerced_ids = _coerce_node_ids(node_ids)

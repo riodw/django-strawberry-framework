@@ -96,7 +96,6 @@ from django.db.models.query import (
     ValuesIterable,
     ValuesListIterable,
 )
-from strawberry.utils.inspect import in_async_context
 
 try:
     from django.db.models.query import PROHIBITED_FILTER_KWARGS
@@ -431,7 +430,12 @@ def unwrap_async_queryset_adapter(val: Any) -> tuple[Any, bool]:
     return val, False
 
 
-def reject_async_iterable_in_sync_context(value: Any, *, flavor_noun: str) -> None:
+def reject_async_iterable_in_sync_context(
+    value: Any,
+    *,
+    flavor_noun: str,
+    async_executor: bool,
+) -> None:
     """Reject an async-only resolver SOURCE under synchronous GraphQL execution.
 
     The read-flavor sibling of ``reject_async_in_sync_context`` (that one
@@ -445,8 +449,15 @@ def reject_async_iterable_in_sync_context(value: Any, *, flavor_noun: str) -> No
     declared shape, so every async-only source is caught no matter which
     construction-time branch produced it). Under async execution this is a
     no-op: the native async executor consumes the AsyncIterable itself.
+
+    ``async_executor`` is the CALLER's answer to which executor is driving
+    (``utils/execution_mode.py::operation_is_async``), never a reading this
+    guard takes for itself: the ambient event loop and the executor disagree
+    whenever a synchronous operation is started from inside an asynchronous
+    one, and a guard that sampled the loop would call that operation async and
+    pass a value its executor cannot consume.
     """
-    if is_async_only_iterable(value) and not in_async_context():
+    if is_async_only_iterable(value) and not async_executor:
         raise SyncMisuseError(
             f"A {flavor_noun} resolver returned an AsyncIterable in a sync execution "
             "context. Use `await schema.execute(...)` for async iterable resolvers.",

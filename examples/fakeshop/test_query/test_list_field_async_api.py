@@ -1931,3 +1931,51 @@ async def test_async_manager_that_degrades_to_a_list_is_rejected():
     )
     assert payload["data"] is None
     assert "must produce a QuerySet" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_a_nested_synchronous_operation_refuses_a_list_field():
+    """A nested ``execute_sync`` is driven by the synchronous executor, loop or no loop.
+
+    The one shape where the ambient event loop and the GraphQL executor
+    disagree, and it is reachable over real HTTP: an async operation runs a
+    resolver that starts a synchronous operation of its own, which the async
+    view's loop is still running under. A list field that read the loop there
+    built the async pipeline's coroutine and handed it to the executor that
+    cancels top-level awaitables, so the client got Strawberry's generic
+    "failed to complete synchronously" while the inner coroutines went
+    unawaited.
+
+    The field now refuses at the call that caused it, and the refusal is what
+    reaches the wire: a typed sync-misuse message naming both recourses. The
+    sibling row on the same schema is the control - the same field under the
+    async executor still answers with rows.
+    """
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+
+    @strawberry.type
+    class _NestedQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
+
+        @strawberry.field
+        def nested(self, info: strawberry.Info) -> str:
+            """Run a synchronous operation of this schema's own, from inside this one."""
+            inner = info.schema.execute_sync("{ branches { name } }")
+            if inner.errors:
+                return str(inner.errors[0])
+            return json.dumps(inner.data)
+
+    schema = DjangoSchema(query=_NestedQuery, config=strawberry_config())
+
+    control = await _post_async(schema, "{ branches { name } }")
+    assert "errors" not in control, control
+    assert control["data"]["branches"] == [{"name": "Alpha"}]
+
+    payload = await _post_async(schema, "{ nested }")
+
+    assert "errors" not in payload, payload
+    message = payload["data"]["nested"]
+    assert "synchronous GraphQL executor" in message
+    assert "await schema.execute" in message
+    assert "worker thread" in message
+    assert "failed to complete synchronously" not in message

@@ -2939,11 +2939,14 @@ def test_an_explicit_extension_policy_is_stored_as_an_exact_policy():
 
 
 def test_an_explicit_extension_policy_cannot_be_replaced_or_written():
-    """An accepted instance entry stays reachable, so what it holds cannot be a seam.
+    """On a plain schema an instance entry stays reachable, so what it holds cannot be a seam.
 
-    ``info.schema.extensions`` hands every resolver the entries the schema was
-    configured with, and an instance entry is the object itself - so the policy
-    it answers with bounds the NEXT operation, not the one that reached it.
+    ``strawberry.Schema`` hands every resolver its entries through
+    ``info.schema.extensions``, and an instance entry is the object itself - so
+    the policy it answers with bounds the NEXT operation, not the one that
+    reached it. ``DjangoSchema`` reads such an entry once as a declaration and
+    never puts it in the chain, but the extension is root-exported for the
+    standalone use and has to hold its configuration for that one too.
     Rebinding is refused where it is made, and the object handed out is a
     duplicate, so writing a bound on it changes only the writer's copy.
     """

@@ -30,12 +30,22 @@ rather than as another figure beside the one above:
   built per operation from the schema's construction record rather than resolved out of the
   extension entries, a direct entry of either kind is a declaration folded into that record,
   a subclass of either is refused at construction and a factory resolving to either refuses
-  the operation;
+  the operation ([`spec-050`][spec-050] Decisions 14 through 16, which also own the
+  operation-state and lease lifetimes above);
 - the refusal boundary - a refused configuration is published before the parse stage and the
-  parse is answered with a package document and a package operation selector, so a malformed
-  request and an `operationName` no document can carry both get the same stable code on the
-  synchronous, awaited and streamed paths, and the refused chain keeps the package's resource
-  extension so its pre-parse token and depth scan still bounds what the schema is sent;
+  parse is answered with a package document, a package operation selector and a package
+  snapshot of the transport's allowed-operation policy, so a malformed request, an
+  `operationName` no document can carry and a one-shot `allowed_operation_types` iterable all
+  get the same stable code on the synchronous, awaited and streamed paths; the refused chain
+  keeps the package's resource extension so its pre-parse token and depth scan still bounds
+  what the schema is sent, and a transport policy that genuinely allows nothing still gets
+  upstream's own operation-type refusal ([`spec-050`][spec-050] Decisions 17 and 18);
+- the execution-mode ownership - which GraphQL executor drives an operation is carried from
+  the entry point into the chain and bound by the runner for the operation's whole lifetime,
+  so a synchronous operation started inside an asynchronous one refuses at the field that
+  would otherwise have handed the synchronous executor a coroutine, and a plain
+  `strawberry.Schema` is stated as retaining ambient dispatch ([`spec-050`][spec-050]
+  Decision 19);
 - the resume-scoped budget binding - an operation's budget stays armed for the operation and
   bound only while a task is driving it, so between two streamed frames the driving task
   answers from its enclosing operation or from nothing.

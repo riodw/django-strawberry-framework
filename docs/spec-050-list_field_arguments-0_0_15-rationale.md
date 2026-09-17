@@ -318,6 +318,136 @@ dependency keeps disabling or retiring either workaround from silently changing 
 transitive Strawberry dependency. That makes dependency topology decide lifecycle ownership,
 couples unrelated escape hatches, and lets an HTTP-view opt-out restore an executor bug.
 
+### Decision 14 — configuration authority is schema state; everything per-request is operation state
+
+Spec: [Decision 14][spec-050-d14].
+
+*Rejected:* Holding per-operation state on the extension instance. Strawberry resolves two of
+the three accepted entry spellings to the SAME object for every operation, so one slot is
+written by two requests: a nested `info.schema.execute_sync(...)` leaves the inner document in
+it, and two overlapping requests leave whichever assigned last. The charge then lands on a
+benign document while the oversized one executes, and the mask lands on a result that is not
+the one going to the client.
+
+*Rejected:* Making the engine's `execution_context` assignment the authority. It would have to
+survive a consumer entry's setter raising midway through that loop - a failure with no package
+teardown to run, because no runner exists yet - and it is writable from a resolver, which can
+forge a context naming the real schema as often as it likes.
+
+### Decision 15 — an enforcement authority is a declaration, never an extension entry
+
+Spec: [Decision 15][spec-050-d15].
+
+*Rejected:* Deduplicating by identity - accepting an entry that IS the package's extension and
+dropping the automatic one. Identity evidence authenticates the object, not what it will do on
+the next operation, and the three spellings that keep identity while changing behavior (a
+stateful factory, a closure over a mutable cell, a singleton selector) are exactly the ones a
+resolver can reach through `info.schema.extensions`.
+
+*Rejected:* Admitting a subclass on the grounds that it passes every inheritance check. That is
+the point: a single-role subclass can override the one hook that masks or charges while
+answering every census correctly, and one class can inherit from both roles, in which case
+method resolution runs one hook and the other authority is present in name only.
+
+*Rejected:* Calling factories at construction so they could be typed there. It breaks the
+fresh-per-operation lifecycle the optimizer's documented singleton-in-a-factory depends on, and
+what a factory returns next is decided after the entry was accepted anyway.
+
+### Decision 16 — the runner owns every binding, for the operation's whole lifetime
+
+Spec: [Decision 16][spec-050-d16].
+
+*Rejected:* A plain `ContextVar` holding the state, with token reset as the whole protocol.
+`asyncio.create_task` copies the context at creation and a token reset rewrites only the
+context the token was made in, so a resolver's background task outliving the request goes on
+reading the finished operation's context, variables and result - and holds them alive. The lease
+is what a copied context observes instead.
+
+*Rejected:* Binding only around the operation scope. Upstream collects extension results AFTER
+the synchronous operation teardown has unwound, and drives a streamed operation's frames from
+whatever task holds the iterator, so both would read for no operation at all.
+
+*Rejected:* Promising the raw-`strawberry.Schema` path the same isolation. That schema never
+calls the package's runner factory, so the guarantee would be a claim with nothing behind it
+for a shared instance; a class entry and a fresh factory are operation-local there because the
+object is.
+
+### Decision 17 — a refused request's document, selector and transport policy are all package-owned
+
+Spec: [Decision 17][spec-050-d17].
+
+*Rejected:* Publishing the refusal after the parse. It would make the claim true only of
+documents that happen to be well formed: a syntax error is raised out of the parse itself and
+upstream answers with it before any statement after the hook's `yield` runs.
+
+*Rejected:* Copying the requested operation name onto the substitute document when it matches
+GraphQL's `Name` grammar. That leaves the request's own name authoritative for upstream's
+lookup for every name that does not match - and for one that does but names no operation - so
+the refusal is replaced by an operation-lookup failure raised out of the synchronous API, or
+rendered into the first frame of a stream.
+
+*Rejected:* Parsing a fresh substitute document per refused request. The refusal exists so a
+broken deployment runs nothing; a parser it runs on its own constant is still a parser running,
+and nothing validates or executes the substitutes, so one object per operation type answers
+every refused request of that type.
+
+*Rejected:* Reading the transport policy where the substitute is selected and leaving the
+caller's object in place for upstream. `allowed_operation_types` is annotated
+`Iterable[OperationType]`, a generator is a valid value for it, and a healthy operation consumes
+it exactly once - so the refusal became the second consumer and upstream read an exhausted
+iterable.
+
+*Rejected:* `allowed = value or ()` as the normalization. Truthiness is a consumer-defined
+dunder invoked on the request path of a schema already known to be broken, and it contradicts
+the no-truthiness posture the accepted-entry reader takes one function away.
+
+### Decision 18 — the refusal is stable, and the transport's own policy is the one exception
+
+Spec: [Decision 18][spec-050-d18].
+
+*Rejected:* Dropping the resource extension from the refused chain because "nothing runs
+anyway". The refusal is a statement about a document that already arrived; the pre-parse token
+and depth scan is the only thing between an unauthenticated caller and graphql-core's recursive
+parser, so a broken configuration would have traded fail-closed for an endpoint with no ceiling.
+
+*Rejected:* Appending `QUERY` to an empty transport policy, substituting the default set, or
+catching the operation-type refusal. A transport that allows nothing is a deployment decision,
+and widening it would make a broken configuration the one shape that accepts what the transport
+forbids.
+
+*Rejected:* Interpolating the refused name, document text or factory exception into the
+published message. Those are consumer strings whose own `__repr__` is consumer code; the wire
+gets the stable code and the deployment's log gets the description.
+
+### Decision 19 — execution mode is operation state; the ambient event loop is a different fact
+
+Spec: [Decision 19][spec-050-d19].
+
+*Rejected:* Keeping `strawberry.utils.inspect.in_async_context` as the dispatch predicate. It
+answers whether a loop is running in this thread, which is the right question for ORM safety and
+the wrong one for executor dispatch; the two disagree precisely where the package supports
+nesting a synchronous operation inside an asynchronous one.
+
+*Rejected:* A list-field-local `ContextVar`. The same false predicate sits in every sibling
+field factory and relation resolver, so a field-local fix would leave two definitions of
+execution color in the package and the defect in all the other ones.
+
+*Rejected:* Blocking the event-loop thread - taking the synchronous branch under a running loop
+and letting Django raise. The error names none of the cause, arrives from the ORM rather than
+from the call that caused it, and a partially completed operation is worse than a refusal.
+
+*Rejected:* Falling back to the synchronous branch silently when the mode is unknown. The one
+place the mode is unknown is a plain `strawberry.Schema`, where ambient dispatch is what
+upstream already does and what the documented spelling relies on; inventing a different answer
+there would change a working path for schemas the runner was never asked to own.
+
+*Derivation:* The `sync` flag `get_extensions` receives is the authoritative statement -
+`execute_sync` is the only entry point that sets it, and `execute`, `stream` and `subscribe` all
+leave it false. Nothing upstream carries that flag from `get_extensions` to
+`create_extensions_runner`, and recording it on the schema would be the one-slot-two-operations
+defect Decision 14 exists to close, so it travels as a member of the chain built for that one
+operation.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
@@ -337,6 +467,12 @@ couples unrelated escape hatches, and lets an HTTP-view opt-out restore an execu
 [spec-050-d10]: spec-050-list_field_arguments-0_0_15.md#decision-10--coercion-errors-stay-graphql-owned-runtime-domain-errors-are-package-owned
 [spec-050-d12]: spec-050-list_field_arguments-0_0_15.md#decision-12--the-version-bump-belongs-to-the-0015-joint-cut
 [spec-050-d13]: spec-050-list_field_arguments-0_0_15.md#decision-13--graphql-core-workarounds-have-a-dependency-owned-lifecycle
+[spec-050-d14]: spec-050-list_field_arguments-0_0_15.md#decision-14--configuration-authority-is-schema-state-everything-per-request-is-operation-state
+[spec-050-d15]: spec-050-list_field_arguments-0_0_15.md#decision-15--an-enforcement-authority-is-a-declaration-never-an-extension-entry
+[spec-050-d16]: spec-050-list_field_arguments-0_0_15.md#decision-16--the-runner-owns-every-binding-for-the-operations-whole-lifetime
+[spec-050-d17]: spec-050-list_field_arguments-0_0_15.md#decision-17--a-refused-requests-document-selector-and-transport-policy-are-all-package-owned
+[spec-050-d18]: spec-050-list_field_arguments-0_0_15.md#decision-18--the-refusal-is-stable-and-the-transports-own-policy-is-the-one-exception
+[spec-050-d19]: spec-050-list_field_arguments-0_0_15.md#decision-19--execution-mode-is-operation-state-the-ambient-event-loop-is-a-different-fact
 
 <!-- docs/SPECS/ -->
 [spec-020]: SPECS/spec-020-list_field-0_0_7.md

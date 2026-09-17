@@ -20,7 +20,6 @@ from django.db.models.expressions import Col, Star
 from graphql import GraphQLError
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.types import Info
-from strawberry.utils.inspect import in_async_context
 
 from .exceptions import (
     ConfigurationError,
@@ -43,6 +42,7 @@ from .resource_policy import (
 from .types import DjangoType
 from .types.base import _is_relay_shaped
 from .utils.directives import validated_field_directives
+from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
     _LIST_ARGUMENT_VISIBILITY_POLICY,
     SyncMisuseError,
@@ -1240,8 +1240,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
 
     # Factory-site async commitment (Decision 3; spec-020 Decision 1
     # "Async-detection asymmetry - intentional, not a harmonization candidate"):
-    # ``_default`` uses runtime ``in_async_context()`` per-call so the same
-    # factory output dispatches correctly under both ``schema.execute_sync``
+    # ``_default`` reads the operation's executor per call
+    # (``utils/execution_mode.py::async_execution``) so the same factory output
+    # dispatches correctly under both ``schema.execute_sync``
     # and ``await schema.execute``. The consumer-wrapper branch below commits
     # per-construction via ``is_async_callable(user_resolver)`` (the
     # ``__call__``/``functools.partial``-aware superset of
@@ -1280,7 +1281,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 order_by=order_by,
             )
             qs = base_queryset(target_model)
-            if in_async_context():
+            if async_execution():
                 return _execute_queryset_pipeline_async(
                     target_type,
                     qs,
@@ -1387,6 +1388,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     reject_async_iterable_in_sync_context(
                         source,
                         flavor_noun="DjangoListField",
+                        async_executor=operation_is_async(),
                     )
                     return _resolve_async_iterable(
                         source,
@@ -1408,7 +1410,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         trusted_max_rows,
                         model=target_model,
                         orderset_class=orderset_class,
-                        is_async_context=in_async_context(),
+                        is_async_context=async_execution(),
                     )
                 rejection = _build_non_queryset_rejection_error(
                     args_record,

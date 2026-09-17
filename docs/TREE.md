@@ -298,6 +298,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
     ├── directives.py             # Construction-time containment for the consumer-supplied ``directives=`` forward.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
+    ├── execution_mode.py         # Which GraphQL executor is driving this resolver, as a fact rather than a guess.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
@@ -431,6 +432,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
     ├── directives.py             # Construction-time containment for the consumer-supplied ``directives=`` forward.
     ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
+    ├── execution_mode.py         # Which GraphQL executor is driving this resolver, as a fact rather than a guess.
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
@@ -593,6 +595,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
     ├── test_directives.py        # Tests for the shared field-directives containment (``utils/directives.py``).
     ├── test_errors.py            # Shared mutation-error constructors remain total over hostile metadata.
+    ├── test_execution_mode.py    # ``utils/execution_mode.py`` - which GraphQL executor is driving this resolver.
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041).
     ├── test_init.py              # Package-init tests pinning the ``utils`` package's re-export surface.
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
@@ -837,6 +840,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
     ├── test_directives.py        # Tests for the shared field-directives containment (``utils/directives.py``).
     ├── test_errors.py            # Shared mutation-error constructors remain total over hostile metadata.
+    ├── test_execution_mode.py    # ``utils/execution_mode.py`` - which GraphQL executor is driving this resolver.
     ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041).
     ├── test_init.py              # Package-init tests pinning the ``utils`` package's re-export surface.
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).

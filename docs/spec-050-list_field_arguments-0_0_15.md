@@ -2,7 +2,15 @@
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
 Status: in flight (`0.0.15`)
-Revision: 2026-09-13 - cleanup-precedence and proof-determinism remediation complete (a
+Revision: 2026-09-17 - the enforcement, operation-state and execution-mode architecture is
+specified in Decisions 14-19 and carries its own Definition-of-done rows: configuration
+authority is schema state and everything per-request is the runner's; an enforcement authority
+is a declaration rather than an extension entry; a refused request's document, operation
+selector and transport-policy snapshot are all package-owned, with the transport's own
+"allows nothing" answer as the one exception to the stable refusal; and which GraphQL executor
+drives a resolver is carried from the entry point rather than inferred from the ambient event
+loop, with the raw-`strawberry.Schema` fallback stated. On top of 2026-09-13 -
+cleanup-precedence and proof-determinism remediation complete (a
 control signal raised during async cleanup propagates instead of becoming a note; the client
 window seam is package-private beneath the exported raw-list bound; the async deadline and
 effective-order proofs carry deterministic witnesses) on top of the offset-guard and
@@ -1423,6 +1431,146 @@ that awaiting it once still yields a residual awaitable. When upstream fixes the
 sentinel fails and the module can be removed without disturbing Strawberry body parsing. See
 the [rationale][rationale-d13] for the rejected shared-gate design.
 
+### Decision 14 — configuration authority is schema state; everything per-request is operation state
+
+Two kinds of state meet on every operation and never merge. **Configuration** - the resource
+policy a request is bounded by, the error policy it is masked by, and the extension entries a
+schema was accepted with - belongs to the schema, is canonicalized into exact built-in
+primitives at construction, and is read-only to every resolver. **Operation state** - the
+engine context, the armed budget, the optimizer's frame, the executor driving the request -
+belongs to the runner built for that one operation and is reachable only through a task-local
+binding while that runner owns it.
+
+The seam between them is what a resolver can reach. A resolver holds every shared extension
+through `info.schema.extensions` and can assign over its attributes, so an extension attribute
+is not where either kind of state can live: configuration is held behind
+[`django_strawberry_framework/utils/private_state.py`][private-state]'s authority and answered
+as a copy, and operation state is held by
+[`django_strawberry_framework/extensions/operation_state.py::DjangoExtensionsRunner`][operation-state].
+A schema that can no longer read its own configuration back refuses the operation rather than
+falling back to a wider one. See the [rationale][rationale-d14] for the rejected
+extension-attribute and engine-assignment designs.
+
+### Decision 15 — an enforcement authority is a declaration, never an extension entry
+
+`DjangoSchema` installs its own error-policy and resource-policy extension on every operation,
+built from the construction record, and a consumer entry naming either kind is read once as a
+DECLARATION that does not travel into the chain. Identity evidence about an entry authenticates
+the object, not its future behavior, and the two authorities are the one place that difference
+is fatal: a factory, a closure over a mutable cell, a singleton selector and a subclass all keep
+identity while changing what runs next.
+
+So the admission ladder is exact, and every rung is decided where it is actionable:
+
+| Entry spelling | Where it is answered | Answer |
+|---|---|---|
+| exact class or exact instance of an authority | schema construction | folded into the record; the entry is dropped |
+| subclass of an authority | schema construction | `ConfigurationError` |
+| factory resolving to either authority | `get_extensions` | the operation is refused |
+| factory that raises, or returns a non-`SchemaExtension` | `get_extensions` | the operation is refused |
+| any other class, instance or factory | unchanged | runs between the two authorities |
+
+A factory cannot be typed without calling it, and calling it at construction would break its
+fresh-per-operation lifecycle, so what a factory PRODUCES can only be admitted at resolution -
+which is why that boundary is one transaction: the factories run once, through upstream, and
+every check reads the members that came back. See the [rationale][rationale-d15] for the
+rejected identity-deduplication and subclass-admission designs.
+
+### Decision 16 — the runner owns every binding, for the operation's whole lifetime
+
+One state object per (resolved extension, runner), bound by the runner around the operation
+scope, around result collection, around the streaming-result hook, and around every resumption
+of a streamed operation. Each binding is a LEASE on a weak reference, so a task that merely
+copied the context stops reading at the instant the scope ends rather than when the owner is
+collected; each is also a token, so a nested operation restores its caller's answer on the way
+out. No token spans a `yield`: a stream is rebound in the task that drives it, because Python
+resumes an async generator in the caller's context.
+
+A plain `strawberry.Schema` never creates that runner and is not promised what it cannot be
+given: a class entry and a fresh factory are operation-local there because the object is, and a
+shared instance on a raw schema is outside the isolation guarantee. See the
+[rationale][rationale-d16] for the rejected bare-`ContextVar` and operation-scope-only designs.
+
+### Decision 17 — a refused request's document, selector and transport policy are all package-owned
+
+A refusal runs nothing, and that has to include the parser: a document is arbitrary-length
+consumer input that graphql-core parses recursively, so a deployment whose configuration broke
+must not be the one shape that still lexes and nests whatever it is sent. The parse stage is
+therefore handed a package-owned document, parsed once at import, one per operation type.
+
+Three values are replaced together, because replacing one leaves the others authoritative:
+
+1. **The document.** The request's own text stays on the execution context as an inert
+   diagnostic and takes no further part in parsing, selection, validation or execution.
+2. **The operation selector.** Upstream picks the operation to run by looking the REQUESTED
+   name up in whatever document the parse stage left behind, so a substitute reached by a name
+   still belonging to the request is a second error over the published refusal. The substitute
+   carries one anonymous operation and the provided name is cleared, so the selector is the
+   package's own.
+3. **The transport policy.** `allowed_operation_types` is annotated `Iterable[OperationType]`
+   and upstream tests the settled operation against it ONCE, after parsing. It is read once
+   here, materialized into an exact built-in `tuple`, and that tuple is assigned back to the
+   execution context before the substitute is selected from it - so package selection and
+   upstream authorization read one immutable fact, and a one-shot iterable is not consumed
+   twice. It is never asked whether it is empty: truthiness is consumer code.
+
+See the [rationale][rationale-d17] for the rejected post-parse publication, name-copying,
+per-request parse, and truthiness-normalization designs.
+
+### Decision 18 — the refusal is stable, and the transport's own policy is the one exception
+
+Every refused request answers with the same published `SCHEMA_CONFIGURATION_UNAVAILABLE` code
+and the same message, whatever it arrived with: a malformed document, a name no document can
+carry (absent, invalid, empty, non-ASCII, or not a string), a one-shot transport policy, or a
+hostile container. The refusal is PUBLISHED as a pre-execution error and restated where
+execution would begin, which is the pair of seams every transport renders - an exception out of
+a hook leaves a streamed operation with no frame at all.
+
+Two things still outrank it, and both are deliberate. The resource extension stays in the
+refused chain, so the pre-parse token and depth scan still bounds the document being refused.
+And a transport policy that genuinely allows nothing stays a policy that allows nothing:
+upstream refuses that operation type as it would on a healthy schema. Widening the policy,
+appending a default, or swallowing that refusal would make a broken configuration the one shape
+that accepts what the transport forbids. See the [rationale][rationale-d18] for the rejected
+unbounded-refusal and policy-widening designs.
+
+### Decision 19 — execution mode is operation state; the ambient event loop is a different fact
+
+Which GraphQL executor is driving a resolver decides what that resolver may hand back, and it is
+NOT the same question as whether an event loop is running in this thread. `Schema.execute_sync`
+is callable under a running loop - most directly from a resolver inside an asynchronous
+operation, a nesting shape the runner supports - and there the loop says "async" while the
+synchronous executor holds the operation. A field that read the loop there returned a coroutine
+or an async-only adapter to an executor that cancels top-level awaitables, and the client got a
+generic completion failure while the inner coroutines went unawaited.
+
+So the mode is carried rather than sampled.
+[`django_strawberry_framework/schema.py::DjangoSchema.get_extensions`][schema] receives the
+authoritative `sync` flag and puts it in both the admitted and the refused chain; the runner
+reads it once and binds it wherever it binds state.
+[`django_strawberry_framework/utils/execution_mode.py`][execution-mode] owns the one definition
+and answers two questions of it: `operation_is_async` states the fact for code with its own
+answer to every outcome, and `async_execution` is the dispatch decision, which refuses the
+disagreement with `SyncMisuseError` - naming `await schema.execute(...)` and a worker thread -
+rather than building a value the executor cannot complete or driving the ORM on the event-loop
+thread.
+
+The whole census is classified, not just the list field. Every site that asked the loop -
+`auth/mutations.py`, `mutations/fields.py`, `relay.py`, `types/relay.py`, `types/resolvers.py`,
+`connection.py`, `list_field.py` and `schema.py` - asks the same question: may this resolver
+hand the executor an awaitable or an async-only value? None of them is an ORM-safety read; the
+ORM safety lives inside the branches each one picks, and every one is wrong in the same way
+when the loop and the executor disagree. So all of them read the canonical helper and
+`strawberry.utils.inspect.in_async_context` has exactly one caller left in the package: the
+module that owns the fallback. Where the conjunction also carries a cheaper question - a
+relation that is already loaded needs no query whatever executor is driving - that question is
+asked FIRST, so the executor is consulted only where a coroutine would actually be built.
+
+A plain `strawberry.Schema` binds no mode, both readers fall back to ambient dispatch, and the
+disagreement stays reachable there exactly as upstream leaves it. `DjangoSchema` is the spelling
+that makes execution mode authoritative. See the [rationale][rationale-d19] for the rejected
+ambient-predicate, field-local, and loop-blocking designs.
+
 ## Implementation plan
 
 | Slice | Files | Delta |
@@ -2410,6 +2558,27 @@ structural checks, and link/kanban verification prescribed by
       the exported pair, and the exported names are tested to refuse both coordinates.
 - [ ] Async queryset results complete over `AsyncDjangoGraphQLView` through an async-only
       adapter, with optimizer-on/off parity and no `DJANGO_ALLOW_ASYNC_UNSAFE` override.
+- [ ] A refused request is answered by the package end to end: the document it arrived with
+      reaches no parser, the operation selector is the package's own anonymous one, and the
+      transport policy is read ONCE into an exact built-in `tuple` that is put back on the
+      execution context before the substitute document is selected from it. A one-shot
+      iterable survives `execute_sync`, `execute` and `stream` with the stable configuration
+      code; a container with a hostile `__bool__` is never truth-tested; a policy that allows
+      nothing still gets upstream's operation-type refusal rather than a widened one
+      (Decisions 17 and 18, [`tests/test_schema.py`][test-schema]).
+- [ ] Which GraphQL executor drives a resolver is carried from the entry point into the chain
+      and bound by the runner for the operation, result collection, every streamed frame and
+      every stream resume, restoring the enclosing operation's answer on the way out and
+      answering nothing from a copied context after the lease closes. Every executor-dispatch
+      reader in the package reads the one canonical helper; `execute_sync` under a running
+      event loop raises `SyncMisuseError` at the call that caused it rather than handing the
+      synchronous executor a coroutine, and a plain `strawberry.Schema` is documented as
+      retaining ambient dispatch (Decision 19,
+      [`django_strawberry_framework/utils/execution_mode.py`][execution-mode],
+      [`tests/utils/test_execution_mode.py`][test-execution-mode],
+      [`tests/extensions/test_operation_state.py`][test-operation-state],
+      [`tests/test_list_field.py`][test-list-field], and the live nested-operation row in
+      [`examples/fakeshop/test_query/test_list_field_async_api.py`][fakeshop-test-list-field-async]).
 - [ ] Live HTTP coverage exercises ordered paging, `orderBy`, visibility, cap interplay, and
       runtime/coercion errors under default and configured naming, plus both verdicts of the
       model-default order predicate, with wire-reachable async behavior in
@@ -2515,6 +2684,12 @@ structural checks, and link/kanban verification prescribed by
 [rationale-d10]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-10--coercion-errors-stay-graphql-owned-runtime-domain-errors-are-package-owned
 [rationale-d12]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-12--the-version-bump-belongs-to-the-0015-joint-cut
 [rationale-d13]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-13--graphql-core-workarounds-have-a-dependency-owned-lifecycle
+[rationale-d14]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-14--configuration-authority-is-schema-state-everything-per-request-is-operation-state
+[rationale-d15]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-15--an-enforcement-authority-is-a-declaration-never-an-extension-entry
+[rationale-d16]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-16--the-runner-owns-every-binding-for-the-operations-whole-lifetime
+[rationale-d17]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-17--a-refused-requests-document-selector-and-transport-policy-are-all-package-owned
+[rationale-d18]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-18--the-refusal-is-stable-and-the-transports-own-policy-is-the-one-exception
+[rationale-d19]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-19--execution-mode-is-operation-state-the-ambient-event-loop-is-a-different-fact
 [rationale-risks]: spec-050-list_field_arguments-0_0_15-rationale.md#risks-and-open-questions--the-fallback-positions
 [tree]: TREE.md
 
@@ -2531,30 +2706,38 @@ structural checks, and link/kanban verification prescribed by
 [conf]: ../django_strawberry_framework/conf.py
 [connection]: ../django_strawberry_framework/connection.py
 [exceptions]: ../django_strawberry_framework/exceptions.py
+[execution-mode]: ../django_strawberry_framework/utils/execution_mode.py
 [list-field]: ../django_strawberry_framework/list_field.py
+[operation-state]: ../django_strawberry_framework/extensions/operation_state.py
 [optimizer-extension]: ../django_strawberry_framework/optimizer/extension.py
 [orders-factories]: ../django_strawberry_framework/orders/factories.py
 [orders-init]: ../django_strawberry_framework/orders/__init__.py
 [orders-sets]: ../django_strawberry_framework/orders/sets.py
 [package-init]: ../django_strawberry_framework/__init__.py
+[private-state]: ../django_strawberry_framework/utils/private_state.py
 [querysets]: ../django_strawberry_framework/utils/querysets.py
 [resource-policy]: ../django_strawberry_framework/resource_policy.py
 [resource-policy-extension]: ../django_strawberry_framework/extensions/resource_policy.py
+[schema]: ../django_strawberry_framework/schema.py
 [types-resolvers]: ../django_strawberry_framework/types/resolvers.py
 [typing-utils]: ../django_strawberry_framework/utils/typing.py
 
 <!-- tests/ -->
 [test-base-init]: ../tests/base/test_init.py
+[test-execution-mode]: ../tests/utils/test_execution_mode.py
 [test-list-field]: ../tests/test_list_field.py
+[test-operation-state]: ../tests/extensions/test_operation_state.py
 [test-orders-sets]: ../tests/orders/test_sets.py
 [test-querysets]: ../tests/utils/test_querysets.py
 [test-resource-policy]: ../tests/test_resource_policy.py
+[test-schema]: ../tests/test_schema.py
 
 <!-- examples/ -->
 [fakeshop-graphql-client]: ../examples/fakeshop/graphql_client.py
 [fakeshop-kanban-constants]: ../examples/fakeshop/apps/kanban/constants.py
 [fakeshop-library-schema]: ../examples/fakeshop/apps/library/schema.py
 [fakeshop-test-library]: ../examples/fakeshop/test_query/test_library_api.py
+[fakeshop-test-list-field-async]: ../examples/fakeshop/test_query/test_list_field_async_api.py
 [fakeshop-test-multi-db]: ../examples/fakeshop/test_query/test_multi_db.py
 [fakeshop-test-query-readme]: ../examples/fakeshop/test_query/README.md
 [fakeshop-test-relations-async]: ../examples/fakeshop/test_query/test_relations_async_api.py

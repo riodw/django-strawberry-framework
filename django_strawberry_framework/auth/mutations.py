@@ -40,7 +40,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError
 from ..mutations.fields import (
@@ -69,6 +68,7 @@ from ..mutations.sets import (
 )
 from ..registry import register_subsystem_clear, registry
 from ..utils.directives import validated_field_directives
+from ..utils.execution_mode import async_execution
 from ..utils.permissions import request_from_info
 from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.sessions import actor_transition
@@ -409,7 +409,7 @@ def _make_auth_field(
 
     The ONE auth field-construction helper the three fixed factories share
     (spec-040 D12): the
-    dispatcher resolves sync-vs-async per call via ``in_async_context()`` (the
+    dispatcher resolves sync-vs-async per call via ``async_execution()`` (the
     ``DjangoMutationField`` runtime dispatch). The sync path calls ``sync_body``
     directly; the async path calls ``async_body`` - a real coroutine function whose
     returned coroutine Strawberry awaits - so no native async work is hidden behind
@@ -431,7 +431,7 @@ def _make_auth_field(
     directives = validated_field_directives("auth field", directives)
 
     def _resolve(root: Any, info: Any, **kwargs: Any) -> Any:  # noqa: ARG001
-        if in_async_context():
+        if async_execution():
             return async_body(info, **kwargs)
         return sync_body(info, **kwargs)
 

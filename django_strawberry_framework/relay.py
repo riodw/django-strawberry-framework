@@ -60,7 +60,6 @@ from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from graphql import GraphQLError
 from strawberry.types import Info
-from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
 from .list_field import _validate_relay_djangotype_target
@@ -69,6 +68,7 @@ from .resource_policy import check_deadline
 from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id
 from .utils.directives import validated_field_directives
 from .utils.errors import GLOBALID_INVALID_ERROR_CODE, coded_error_extensions
+from .utils.execution_mode import async_execution
 from .utils.querysets import (
     coerce_field_value_or_none,
     model_for,
@@ -489,7 +489,7 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # Calling the classmethod (not the underscore default) preserves
         # consumer overrides for free.
         result = resolved.resolve_node(pk, info=info, required=False)
-        if not in_async_context():
+        if not async_execution():
             result = reject_async_in_sync_context(
                 result,
                 owner=resolved.__name__,
@@ -577,7 +577,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
             pks = groups.setdefault(resolved, [])
             positions.append((resolved, len(pks)))
             pks.append(pk)
-        if in_async_context():
+        if async_execution():
             # ONE gathering coroutine; per-call dispatch because there is no
             # consumer resolver to inspect at construction (the deliberate
             # contrast with connection.py's committed-at-construction split).

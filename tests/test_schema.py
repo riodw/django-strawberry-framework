@@ -22,6 +22,7 @@ from django.db import connection
 from graphql import ExecutionContext, GraphQLError, print_ast
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.runner import SchemaExtensionsRunner
+from strawberry.schema.exceptions import InvalidOperationTypeError
 from strawberry.types import ExecutionContext as StrawberryExecutionContext
 from strawberry.types.graphql import OperationType
 
@@ -518,6 +519,7 @@ def test_get_extensions_gives_an_unrelated_factory_both_package_authorities():
         "_MarkerExtension",
         "DjangoResourcePolicyExtension",
         "_AdmissionGuard",
+        "_OperationModeMarker",
     ]
 
 
@@ -978,6 +980,7 @@ def test_an_operation_is_refused_when_the_accepted_extensions_cannot_be_read_bac
         "DjangoErrorPolicyExtension",
         "_RefusedConfiguration",
         "DjangoResourcePolicyExtension",
+        "_OperationModeMarker",
     ]
     assert _MARKS == ["accepted"]
 
@@ -1629,7 +1632,7 @@ def test_every_supported_entry_spelling_still_resolves_into_one_chain(entry):
     assert schema.execute_sync("{ hello }").data == {"hello": "world"}
     assert sum(_is_extension(e, DjangoErrorPolicyExtension) for e in resolved) == 1
     assert sum(_is_extension(e, DjangoResourcePolicyExtension) for e in resolved) == 1
-    assert len(resolved) == 4
+    assert len(resolved) == 5
 
 
 @pytest.mark.parametrize(
@@ -1683,6 +1686,7 @@ def test_a_refused_schema_still_bounds_the_document_it_is_refusing():
         "DjangoErrorPolicyExtension",
         "_RefusedConfiguration",
         "DjangoResourcePolicyExtension",
+        "_OperationModeMarker",
     ]
     over_budget = schema.execute_sync("{ a: hello b: hello }")
     assert [error.extensions["code"] for error in over_budget.errors] == [
@@ -1823,6 +1827,200 @@ async def test_a_refused_schema_streams_one_refusal_for_every_operation_name(ope
     assert [error.extensions for error in frames[0].errors] == [
         {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
     ]
+
+
+class _OneShotPolicy:
+    """A transport policy that can be traversed exactly once, and counts it.
+
+    ``allowed_operation_types`` is annotated ``Iterable[OperationType]`` on
+    every public entry point, so a generator-shaped policy is a value the API
+    accepts and a healthy operation consumes once. The traversal count is what
+    says the refusal did not become a second consumer of it.
+    """
+
+    def __init__(self, *operation_types: OperationType) -> None:
+        self._operation_types = operation_types
+        self.traversals = 0
+
+    def __iter__(self):
+        self.traversals += 1
+        if self.traversals > 1:
+            raise AssertionError("the transport policy was traversed twice")
+        return iter(self._operation_types)
+
+
+class _HostileBoolPolicy:
+    """A reusable policy whose only oddity is a ``__bool__`` that must not run.
+
+    Emptiness is a question about a consumer container, and asking it runs
+    consumer code on the request path of a schema whose configuration is
+    already broken.
+    """
+
+    def __init__(self, *operation_types: OperationType) -> None:
+        self._operation_types = operation_types
+
+    def __iter__(self):
+        return iter(self._operation_types)
+
+    def __bool__(self):
+        raise AssertionError("the transport policy was truth-tested")
+
+
+def test_a_refused_schema_answers_a_one_shot_transport_policy_synchronously():
+    """The refusal reads the caller's policy once, so upstream still reads it too.
+
+    ``execute_sync`` settles the operation type from the policy AFTER the parse
+    stage, out of the same object the caller passed. A refusal that searched
+    that object for a substitute document would leave upstream an exhausted
+    iterable and turn "queries are allowed" into "this operation type is
+    forbidden" - an error about the request, raised out of the API, in place of
+    the published statement about the schema.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    result = schema.execute_sync(
+        "{ hello }",
+        allowed_operation_types=_OneShotPolicy(OperationType.QUERY),
+    )
+
+    assert result.data is None
+    assert [error.extensions for error in result.errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_schema_answers_a_one_shot_transport_policy_when_awaited():
+    """The asynchronous API reads the same snapshot, and raises out of nothing."""
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    result = await schema.execute(
+        "{ hello }",
+        allowed_operation_types=_OneShotPolicy(OperationType.QUERY),
+    )
+
+    assert result.data is None
+    assert [error.extensions for error in result.errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_schema_streams_a_refusal_under_a_one_shot_transport_policy():
+    """The stream is where an exhausted policy was quietest.
+
+    Upstream renders its own "queries are not allowed" into the first frame
+    with no extensions at all, so a transport saw a well-formed error frame
+    carrying a different story than the schema was telling.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    stream = await schema.stream(
+        "{ hello }",
+        allowed_operation_types=_OneShotPolicy(OperationType.QUERY),
+    )
+    frames = [frame async for frame in stream]
+
+    assert len(frames) == 1
+    assert frames[0].data is None
+    assert [error.extensions for error in frames[0].errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("allowed", "expected"),
+    [
+        ((OperationType.QUERY,), "{\n  __typename\n}"),
+        ((OperationType.MUTATION,), "mutation {\n  __typename\n}"),
+        ((OperationType.SUBSCRIPTION,), "subscription {\n  __typename\n}"),
+    ],
+    ids=["query", "mutation", "subscription"],
+)
+def test_the_substitute_document_is_selected_from_a_one_shot_policy_too(allowed, expected):
+    """Selection reads the snapshot, so it is not accidentally query-only.
+
+    A mutation or subscription transport that arrived with a one-shot policy
+    gets the substitute of its own type, and the fallback that would have hidden
+    a broken selection behind a query document never runs.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+    context = StrawberryExecutionContext(
+        query="{ hello }",
+        schema=schema,
+        allowed_operations=_OneShotPolicy(*allowed),
+    )
+
+    _refuse_operation_document(context)
+
+    assert print_ast(context.graphql_document) == expected
+
+
+def test_a_refused_request_snapshots_the_transport_policy_exactly_once():
+    """One traversal, and what upstream reads back is an exact built-in tuple.
+
+    The snapshot is the whole fix: package selection and upstream authorization
+    have to read one immutable fact, so the materialized value is put back on
+    the execution context rather than kept beside the caller's object. An exact
+    ``tuple`` is asserted rather than an equal sequence, because a consumer type
+    that merely compares equal is the input this replaces.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+    policy = _OneShotPolicy(OperationType.QUERY)
+    context = StrawberryExecutionContext(
+        query="{ hello }",
+        schema=schema,
+        allowed_operations=policy,
+    )
+
+    _refuse_operation_document(context)
+
+    assert policy.traversals == 1
+    assert type(context.allowed_operations) is tuple
+    assert context.allowed_operations == (OperationType.QUERY,)
+
+
+def test_a_refused_request_never_asks_a_transport_policy_whether_it_is_empty():
+    """Emptiness is consumer code, and the refusal path is the wrong place to run it.
+
+    The same posture the accepted-entry reader takes one function away: a
+    container supplied by a consumer is normalized by being read, never by being
+    truth-tested.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    result = schema.execute_sync(
+        "{ hello }",
+        allowed_operation_types=_HostileBoolPolicy(OperationType.QUERY),
+    )
+
+    assert result.data is None
+    assert [error.extensions for error in result.errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+@pytest.mark.parametrize(
+    "schema_factory",
+    [
+        lambda: DjangoSchema(query=DummyQuery),
+        lambda: DjangoSchema(query=DummyQuery, extensions=[lambda: 7]),
+    ],
+    ids=["healthy", "refused"],
+)
+def test_a_transport_policy_that_allows_nothing_stays_a_policy_that_allows_nothing(schema_factory):
+    """A refusal owns what the caller supplied; it never widens it.
+
+    A transport that allows no operation type is a deployment decision, and
+    upstream's own answer to it is the right one on both schemas. Appending a
+    default, substituting the full set, or swallowing the refusal would make a
+    broken configuration the one shape that accepts what the transport forbids.
+    """
+    schema = schema_factory()
+
+    with pytest.raises(InvalidOperationTypeError):
+        schema.execute_sync("{ hello }", allowed_operation_types=_OneShotPolicy())
 
 
 def test_a_refused_request_keeps_the_text_it_arrived_with_and_selects_by_nothing():

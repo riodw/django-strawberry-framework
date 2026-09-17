@@ -189,6 +189,16 @@ internal [async queryset completion adapter][glossary-async-queryset-completion-
 without requiring `DJANGO_ALLOW_ASYNC_UNSAFE`. See
 [`GLOSSARY.md#djangolistfield`][glossary-djangolistfield].
 
+Which of those two paths a field takes is decided by the entry point you called, not by
+whether an event loop happens to be running: on a `DjangoSchema`, `execute_sync` is the
+synchronous executor and `execute` / `stream` / `subscribe` are the asynchronous one. That
+matters where the two disagree - calling `info.schema.execute_sync(...)` from inside an
+awaited operation, for instance - and there a field raises `SyncMisuseError` naming its two
+recourses rather than handing the synchronous executor a value it cannot complete. A plain
+`strawberry.Schema` does not build the package's runner and has no such fact to read, so on
+that schema the dispatch falls back to the ambient event loop and the disagreement remains;
+use `DjangoSchema` where a nested synchronous operation is possible.
+
 ### `DjangoConnectionField` — Relay connections
 
 Over a Relay-Node-shaped type, one line gives you `edges` / `node` / `pageInfo` cursor pagination, plus `filter:` and `orderBy:` arguments derived from the type's `Meta.filterset_class` / `Meta.orderset_class`:

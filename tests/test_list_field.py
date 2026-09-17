@@ -48,8 +48,10 @@ test_library_branches_via_djangolistfield_optimized_nested_selection``.
 import asyncio
 import contextlib
 import copy
+import gc
 import inspect
 import pickle
+import warnings
 from types import SimpleNamespace
 from typing import Any
 
@@ -68,6 +70,7 @@ from strawberry.types import Info
 from django_strawberry_framework import (
     DjangoListField,
     DjangoOptimizerExtension,
+    DjangoSchema,
     DjangoType,
     ListArgumentError,
     finalize_django_types,
@@ -2076,3 +2079,103 @@ def test_djangolistfield_accepts_and_captures_the_registrys_exact_object() -> No
     )
     assert definition is registry.get_definition(CanonicalTargetType)
     assert definition is CanonicalTargetType.__django_strawberry_definition__
+
+
+# ---------------------------------------------------------------------------
+# Executor mode versus the ambient event loop
+
+
+def _execution_mode_schema() -> DjangoSchema:
+    """One schema carrying both list-field flavors over the same rows.
+
+    Both reach a queryset representation, by different call sites: the default
+    resolver picks its pipeline, and the synchronous consumer wrapper picks the
+    final representation of what the consumer returned. They are the two places
+    the executor was read, so they are the two the matrix repeats over.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    def _sync_consumer(root: Any, info: Info) -> Any:
+        """A plain ``def`` returning a queryset, which is the committed sync wrapper."""
+        return Category.objects.all()
+
+    @strawberry.type
+    class Query:
+        default_rows: list[CategoryType] = DjangoListField(CategoryType)
+        consumer_rows: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_sync_consumer,
+        )
+
+    finalize_django_types()
+    return DjangoSchema(query=Query)
+
+
+_EXECUTION_MODE_FIELDS = ["defaultRows", "consumerRows"]
+_EXECUTION_MODE_FIELD_IDS = ["default-resolver", "sync-consumer-resolver"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field", _EXECUTION_MODE_FIELDS, ids=_EXECUTION_MODE_FIELD_IDS)
+def test_a_list_field_completes_synchronously_outside_an_event_loop(field) -> None:
+    """The ordinary synchronous state: no loop, the synchronous executor, real rows."""
+    services.seed_data(1)
+    schema = _execution_mode_schema()
+
+    result = schema.execute_sync(f"{{ {field} {{ name }} }}")
+
+    assert result.errors is None, result.errors
+    assert len(result.data[field]) == Category.objects.count()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("field", _EXECUTION_MODE_FIELDS, ids=_EXECUTION_MODE_FIELD_IDS)
+async def test_a_list_field_completes_asynchronously_inside_an_event_loop(field) -> None:
+    """The ordinary asynchronous state: a loop, the async executor, real rows."""
+    await sync_to_async(services.seed_data)(1)
+    schema = await sync_to_async(_execution_mode_schema)()
+
+    result = await schema.execute(f"{{ {field} {{ name }} }}")
+
+    assert result.errors is None, result.errors
+    assert len(result.data[field]) == await Category.objects.acount()
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("field", _EXECUTION_MODE_FIELDS, ids=_EXECUTION_MODE_FIELD_IDS)
+async def test_a_list_field_refuses_a_synchronous_operation_inside_an_event_loop(field) -> None:
+    """The third state, which is a misuse rather than a branch.
+
+    ``execute_sync`` under a running loop holds the operation with the
+    synchronous executor while the ambient loop says otherwise. A field that
+    read the loop there built the async pipeline's coroutine, handed it to the
+    executor that cancels top-level awaitables, and answered with Strawberry's
+    generic "failed to complete synchronously" while the inner coroutines went
+    unawaited. The field now refuses at the call that caused it, with the two
+    recourses that actually work.
+
+    Both halves are asserted: the public contract, and that nothing awaitable
+    was constructed to be abandoned. A control query proves the failure belongs
+    to list-field dispatch rather than to ``execute_sync`` being called under a
+    loop at all.
+    """
+    await sync_to_async(services.seed_data)(1)
+    schema = await sync_to_async(_execution_mode_schema)()
+
+    assert schema.execute_sync("{ __typename }").data == {"__typename": "Query"}
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = schema.execute_sync(f"{{ {field} {{ name }} }}")
+        gc.collect()
+
+    assert result.data is None
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "await schema.execute" in str(result.errors[0])
+    assert [str(warning.message) for warning in caught] == []

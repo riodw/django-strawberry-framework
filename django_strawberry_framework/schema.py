@@ -58,16 +58,16 @@ from graphql import GraphQLError, parse
 from graphql.execution.execute import ExecutionContext
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types.graphql import OperationType
-from strawberry.utils.inspect import in_async_context
 
 from . import logger
 from .error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, resolve_error_policy
 from .exceptions import ConfigurationError, describe_value
 from .extensions.error_policy import DjangoErrorPolicyExtension
-from .extensions.operation_state import DjangoExtensionsRunner
+from .extensions.operation_state import DjangoExtensionsRunner, _OperationModeMarker
 from .extensions.resource_policy import DjangoResourcePolicyExtension, _AdmissionGuard
 from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import DEFAULT_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
+from .utils.execution_mode import OperationMode, async_execution
 from .utils.policies import copy_policy
 from .utils.private_state import PrivateAuthority, PrivateMembership
 from .utils.querysets import run_in_one_sync_boundary
@@ -187,7 +187,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
 
         model = getattr(getattr(mutation_cls, "_mutation_meta", None), "model", None)
         alias = resolve_write_alias(model)
-        if in_async_context():
+        if async_execution():
             return self._execute_mutation_field_async(
                 alias,
                 parent_type,
@@ -520,8 +520,29 @@ def _refuse_operation_document(execution_context: Any) -> None:
     The request's own text and name stay on the execution context as request
     diagnostics for whatever transport wants to log them. Neither takes part in
     parsing, selection, validation or execution again.
+
+    The transport policy is snapshotted before it is read, because reading it
+    twice is not the same as reading it once. ``allowed_operation_types`` is
+    annotated ``Iterable[OperationType]`` on all three public entry points, and
+    upstream tests the operation it settled on against whatever object the
+    caller passed - once, after parsing. A one-shot iterable is a valid value
+    for that annotation and a healthy operation consumes it exactly once, so a
+    refusal that searched the caller's object for a substitute document would
+    hand upstream an exhausted one and turn a policy that allows this operation
+    into one that forbids it. Nor is the object asked whether it is empty: that
+    is a consumer-defined ``__bool__`` on the request path of a schema whose
+    configuration is already known to be broken, and every other read of a
+    consumer container here refuses truthiness for the same reason.
+
+    So the policy is materialized ONCE into an exact built-in tuple, that tuple
+    is put back on the execution context, and package selection and upstream
+    authorization then read one immutable fact. A policy that genuinely allows
+    nothing stays a policy that allows nothing - upstream refuses the operation
+    type it would have refused anyway, which is the transport's answer to give.
     """
-    allowed = getattr(execution_context, "allowed_operations", ()) or ()
+    # One read, no truthiness, and the snapshot is what upstream reads back.
+    allowed = tuple(execution_context.allowed_operations)
+    execution_context.allowed_operations = allowed
     execution_context.graphql_document = next(
         (
             document
@@ -594,7 +615,7 @@ class _RefusedConfiguration(SchemaExtension):
         )
 
 
-def _refused_chain(message: str, reason: str) -> list[Any]:
+def _refused_chain(message: str, reason: str, *, sync: bool) -> list[Any]:
     """The only chain a refused configuration runs: mask, refuse, and still bound.
 
     Both package authorities are kept. The masking extension is kept because the
@@ -621,13 +642,33 @@ def _refused_chain(message: str, reason: str) -> list[Any]:
     deployment's own logs. It never reaches ``message``: a factory's exception
     text and a bad member's representation are the consumer's own strings, and
     the wire gets the stable code instead.
+
+    The operation's executor mode is declared here too, behind both
+    authorities. A refused operation still runs this schema's own extensions,
+    and what they may hand back depends on which executor is driving exactly as
+    it does for an admitted one - so the fact travels on the refusal path as
+    well, rather than being the one chain where a field falls back to guessing.
     """
     logger.error("Refusing every operation on this schema: %s", reason)
     return [
         DjangoErrorPolicyExtension(),
         _RefusedConfiguration(message),
         DjangoResourcePolicyExtension(),
+        _OperationModeMarker(_operation_mode(sync=sync)),
     ]
+
+
+def _operation_mode(*, sync: bool) -> OperationMode:
+    """The executor this operation is being driven by, from the flag upstream passed.
+
+    ``get_extensions(sync=True)`` is ``execute_sync`` and nothing else;
+    ``execute``, ``stream`` and ``subscribe`` all leave it false. That flag is
+    the authoritative statement of which executor holds the operation, and it is
+    the only one: the ambient event loop answers a different question and
+    disagrees with this one whenever a synchronous operation is started from
+    inside an asynchronous one.
+    """
+    return OperationMode.SYNC if sync else OperationMode.ASYNC
 
 
 class DjangoSchema(strawberry.Schema):
@@ -902,6 +943,7 @@ class DjangoSchema(strawberry.Schema):
             return _refused_chain(
                 _UNREADABLE_CONFIGURATION,
                 "the accepted extension entries can no longer be read back",
+                sync=sync,
             )
         try:
             resolved = super().get_extensions(sync=sync)
@@ -915,6 +957,7 @@ class DjangoSchema(strawberry.Schema):
             return _refused_chain(
                 _UNRESOLVED_CHAIN,
                 f"resolving the accepted extension entries raised {describe_value(exc)}",
+                sync=sync,
             )
         for member in resolved:
             if not _is_extension(member, SchemaExtension):
@@ -922,6 +965,7 @@ class DjangoSchema(strawberry.Schema):
                     _UNRESOLVED_CHAIN,
                     f"a resolved extension entry is {describe_value(member)}, "
                     "which is not a SchemaExtension instance",
+                    sync=sync,
                 )
             claimed = _claimed_authority(member)
             if claimed is not None:
@@ -929,8 +973,9 @@ class DjangoSchema(strawberry.Schema):
                     _UNRESOLVED_CHAIN,
                     f"a resolved extension entry is {describe_value(member)}, "
                     f"which claims the {claimed} authority this schema owns",
+                    sync=sync,
                 )
-        return _admitted_chain(resolved)
+        return _admitted_chain(resolved, sync=sync)
 
     def create_extensions_runner(
         self,
@@ -1028,7 +1073,7 @@ def _claimed_authority(member: Any) -> str | None:
     return None
 
 
-def _admitted_chain(resolved: list[Any]) -> list[Any]:
+def _admitted_chain(resolved: list[Any], *, sync: bool) -> list[Any]:
     """This schema's authorities around ``resolved``, and the guard behind them.
 
     The error policy is FIRST and the resource policy LAST, and both positions
@@ -1051,12 +1096,18 @@ def _admitted_chain(resolved: list[Any]) -> list[Any]:
     configuration from this schema, which answers from the private record. An
     instance shared across operations would share one set of charge counters
     between concurrent requests.
+
+    The mode marker goes behind the guard because it is not a hook at all: it
+    declares which executor is driving this operation, the runner reads it out
+    of this list, and nothing in the chain's setup or teardown order has
+    anything to say about it (``utils/execution_mode.py``).
     """
     return [
         DjangoErrorPolicyExtension(),
         *resolved,
         DjangoResourcePolicyExtension(),
         _AdmissionGuard(),
+        _OperationModeMarker(_operation_mode(sync=sync)),
     ]
 
 

@@ -28,7 +28,6 @@ import strawberry
 from asgiref.sync import sync_to_async
 from django.db import router
 from strawberry.types import Info
-from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import OptimizerError
 
@@ -57,6 +56,7 @@ from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
 from ..resource_policy import bounded_rows, bounded_rows_async
+from ..utils.execution_mode import async_execution
 from ..utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
@@ -400,7 +400,7 @@ def _visible_related_object(related: Any, target_type: type, info: Info) -> Any:
         source = source.using(alias)
     pk = getattr(related, "pk", None)
     source = source.filter(pk=pk)
-    if in_async_context():
+    if async_execution():
 
         async def _resolve() -> Any:
             visible = await apply_type_visibility_async(target_type, source, info)
@@ -419,7 +419,7 @@ def _visible_many_rows(source: Any, target_type: type, info: Info) -> Any:
     a list), slicing one keeps it a ``QuerySet``, and every ``QuerySet`` is
     ``AsyncIterable``. A sync-iterable fallback here would be unreachable.
     """
-    if in_async_context():
+    if async_execution():
 
         async def _resolve() -> list[Any]:
             visible = await apply_type_visibility_async(target_type, source, info)
@@ -514,14 +514,17 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     a consumer-assigned attribute as "already loaded".
 
     Every branch that would otherwise reach a SYNCHRONOUS descriptor read under
-    an async execution is gated on ``in_async_context() and
-    _will_lazy_load_single(...)`` and routed through ``sync_to_async(getattr,
+    an async execution is gated on ``_will_lazy_load_single(...) and
+    async_execution()`` and routed through ``sync_to_async(getattr,
     thread_sensitive=True)``. The lazy-load predicate is load-bearing, not
     belt-and-braces: an already-populated relation (optimizer ``select_related``
     or a warm ``fields_cache``) must stay on the direct read so the common
     optimized path does not pay a thread hop per row, and only the genuinely
     unloaded descriptor - the one that would raise
-    ``SynchronousOnlyOperation`` - is offloaded.
+    ``SynchronousOnlyOperation`` - is offloaded. It is also asked FIRST, so a
+    relation that needs no query is answered directly whatever executor is
+    driving, and the executor is only consulted where a coroutine would
+    actually be built.
     """
     field_name = field.name
     # Instance reads go through the accessor; ``field_name`` stays the
@@ -571,7 +574,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             source = getattr(root, accessor_name).all()
             if visibility_type is not None:
                 return _visible_many_rows(source, visibility_type, info)
-            if in_async_context():
+            if async_execution():
                 # Unprefetched many-side under async: ``list(...)`` would execute
                 # the query on the event-loop thread. Iterate the bound queryset
                 # asynchronously instead - the same rows in the same order.
@@ -595,7 +598,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
-            if in_async_context() and _will_lazy_load_single(root, accessor_name):
+            if _will_lazy_load_single(root, accessor_name) and async_execution():
 
                 async def _resolve_async() -> Any:
                     try:
@@ -668,7 +671,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         # below, which then re-reads nothing.
         live_strictness = _active_strictness()
         if not elisions and planned is None and live_strictness in (None, "off"):
-            if in_async_context() and _will_lazy_load_single(root, field_name):
+            if _will_lazy_load_single(root, field_name) and async_execution():
 
                 async def _resolve_async() -> Any:
                     try:
@@ -739,7 +742,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             force_unplanned=elision_unsafe,
             strictness=live_strictness,
         )
-        if in_async_context() and _will_lazy_load_single(root, field_name):
+        if _will_lazy_load_single(root, field_name) and async_execution():
 
             async def _resolve_async() -> Any:
                 try:

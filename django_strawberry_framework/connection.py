@@ -57,7 +57,6 @@ from strawberry.relay.types import NodeIterableType
 from strawberry.relay.utils import should_resolve_list_connection_edges
 from strawberry.types import Info, get_object_definition
 from strawberry.utils.await_maybe import AwaitableOrValue
-from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError, _safe_class_name, _safe_type_name
 from .keyset import (
@@ -113,6 +112,7 @@ from .utils.connections import (
     window_range_plan,
 )
 from .utils.directives import validated_field_directives
+from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
@@ -1047,7 +1047,7 @@ def _resolve_keyset_connection(
                 has_next_page=False,
             ),
         )
-        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and in_async_context():
+        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
 
             async def _resolve_count_only_async() -> Any:
                 return _set_total_count(
@@ -1092,7 +1092,7 @@ def _resolve_keyset_connection(
             last_zero_quirk=last_zero_quirk,
         )
 
-    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and in_async_context():
+    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
 
         async def _resolve_async() -> Any:
             source = fetch_queryset[:fetch_limit]
@@ -2004,7 +2004,11 @@ def _build_connection_resolver(
                 source = base_queryset(definition.model)
             else:
                 source = resolver(root, info)
-                reject_async_iterable_in_sync_context(source, flavor_noun="connection")
+                reject_async_iterable_in_sync_context(
+                    source,
+                    flavor_noun="connection",
+                    async_executor=operation_is_async(),
+                )
             filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return _pipeline_sync(
                 target_type,

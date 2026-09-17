@@ -15,13 +15,13 @@ diverge from the read-side factories, both forced by timing, not style:
   ``strawberry.lazy`` forward-ref to the generated ``<Name>Payload`` on the
   synthesized resolver's return annotation - resolved at schema build, after the
   bind materializes the payload class.
-- **Runtime ``in_async_context()`` dispatch only** (spec-036 Decision 8). The
+- **Runtime ``async_execution()`` dispatch only** (spec-036 Decision 8). The
   ``DjangoListField`` async-detection asymmetry is "``is_async_callable``
-  construction-time for a consumer ``resolver=`` / ``in_async_context()`` runtime
+  construction-time for a consumer ``resolver=`` / ``async_execution()`` runtime
   for the default generated resolver". A mutation pipeline is package-owned -
   there is NO consumer ``resolver=`` seam to inspect at construction - so only the
   runtime half applies: the single synthesized resolver dispatches per call via
-  ``in_async_context()`` (mirroring ``relay.py::DjangoNodesField._resolve``), so
+  ``async_execution()`` (mirroring ``relay.py::DjangoNodesField._resolve``), so
   one factory output works under both ``schema.execute_sync`` and ``await
   schema.execute``.
 
@@ -56,10 +56,10 @@ from typing import Annotated, Any
 
 import strawberry
 from strawberry.types import Info
-from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..utils.directives import validated_field_directives
+from ..utils.execution_mode import async_execution
 from .inputs import INPUTS_MODULE_PATH
 from .operations import operation_takes_data, operation_takes_id
 
@@ -271,7 +271,7 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     resolver=...)`` - assigned with **no** class-attribute annotation
     (``create_item = DjangoMutationField(CreateItem)``).
 
-    The resolver dispatches sync-vs-async per call via ``in_async_context()`` (the
+    The resolver dispatches sync-vs-async per call via ``async_execution()`` (the
     runtime half of the ``DjangoListField`` asymmetry; there is no consumer
     ``resolver=`` to inspect at construction), so one factory output works under
     both ``schema.execute_sync`` and ``await schema.execute``.
@@ -291,7 +291,7 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
         call_kwargs: dict[str, Any] = {"data": data}
         if takes_id:
             call_kwargs["id"] = kwargs.get("id", strawberry.UNSET)
-        if in_async_context():
+        if async_execution():
             return mutation_cls.resolve_async(info, **call_kwargs)
         return mutation_cls.resolve_sync(info, **call_kwargs)
 

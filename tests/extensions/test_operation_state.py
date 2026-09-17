@@ -56,6 +56,10 @@ from django_strawberry_framework.resource_policy import (
     armed_resource_policy,
     policy_from_info,
 )
+from django_strawberry_framework.utils.execution_mode import (
+    OperationMode,
+    current_operation_mode,
+)
 
 
 @strawberry.type
@@ -440,35 +444,53 @@ def test_rerunning_the_optimizer_constructor_is_refused():
         extension.__init__()
 
 
-def test_a_resolver_cannot_replace_the_binding_carrier_or_rerun_the_constructor():
+#: Every way a resolver holding a shared extension can reach for the mechanism
+#: that CARRIES its operation state, and what each one has to be answered with.
+#:
+#: One attack per row, and one row per test node: they are independent attempts
+#: on the same object, so an aggregate node would report the first failure and
+#: leave the rest of the matrix unrun.
+_CARRIER_ATTACKS = [
+    (lambda extension: setattr(extension, "execution_context", None), "ignored"),
+    (lambda extension: extension.__dict__.update(_compatibility_state=None), "ignored"),
+    (lambda extension: extension.__init__(), "refused"),
+]
+
+_CARRIER_ATTACK_IDS = ["assign-the-context", "inject-a-carrier", "rerun-the-constructor"]
+
+
+@pytest.mark.parametrize(
+    ("attack", "expected"),
+    _CARRIER_ATTACKS,
+    ids=_CARRIER_ATTACK_IDS,
+)
+def test_a_resolver_cannot_reach_the_binding_carrier(attack, expected):
     """The mechanism that CARRIES operation state is state in its own right.
 
     Distinct from the configuration-tamper rows: those are about the policy a
     request is enforced by, this is about the object every one of those reads
     goes through. A resolver holds the extension through
     ``info.schema.extensions``, so it can assign over the context, write into
-    ``__dict__``, and call ``__init__`` again - and none of the three may change
-    what this operation reads or what the next one gets.
+    ``__dict__``, and call ``__init__`` again - and none of them may change what
+    this operation reads or what the next one gets.
+
+    A fresh extension and a fresh schema per row, so no attempt can be the
+    reason another one is answered the way it is.
     """
     shared = _Probe()
-    attempts: list[str] = []
+    outcome: list[str] = []
 
     @strawberry.type
     class TamperQuery:
         @strawberry.field
         def tamper(self, info: strawberry.Info) -> str:
             during = shared.execution_context
-            for name, attempt in (
-                ("assign-the-context", lambda: setattr(shared, "execution_context", None)),
-                ("inject-a-carrier", lambda: shared.__dict__.update(_compatibility_state=None)),
-                ("rerun-the-constructor", shared.__init__),
-            ):
-                try:
-                    attempt()
-                except ConfigurationError:
-                    attempts.append(f"{name}: refused")
-                else:
-                    attempts.append(f"{name}: ignored")
+            try:
+                attack(shared)
+            except ConfigurationError:
+                outcome.append("refused")
+            else:
+                outcome.append("ignored")
             assert shared.execution_context is during, "the running operation lost its state"
             return "tampered"
 
@@ -480,11 +502,7 @@ def test_a_resolver_cannot_replace_the_binding_carrier_or_rerun_the_constructor(
 
     attacked = schema.execute_sync("{ tamper }")
     assert attacked.errors is None, attacked.errors
-    assert attempts == [
-        "assign-the-context: ignored",
-        "inject-a-carrier: ignored",
-        "rerun-the-constructor: refused",
-    ]
+    assert outcome == [expected]
 
     after = schema.execute_sync("{ hello }")
     assert after.data == {"hello": "hi"}
@@ -1426,3 +1444,170 @@ def test_an_extension_a_raw_schema_used_first_is_managed_once_a_django_schema_ru
 
     assert raw.execute_sync("{ hello }").errors is None
     assert shared.execution_context is None
+
+
+# ---------------------------------------------------------------------------
+# The operation's executor mode
+
+
+def _mode_schema(seen):
+    """A schema whose resolver records the mode, and can start a nested operation."""
+
+    @strawberry.type
+    class ModeQuery:
+        @strawberry.field
+        def mode(self) -> str:
+            seen.setdefault("rows", []).append(current_operation_mode())
+            seen.setdefault("copied", contextvars.copy_context())
+            return "read"
+
+    return DjangoSchema(query=ModeQuery), ModeQuery
+
+
+@pytest.mark.asyncio
+async def test_a_nested_operation_restores_the_outer_mode_on_the_way_out():
+    """Mode is a token, so the enclosing operation gets its own answer back.
+
+    A synchronous operation started from inside an asynchronous one is the shape
+    the whole binding exists for: while it runs, the loop and the executor
+    disagree, and every field factory in it must read SYNC. The moment it
+    returns, the outer operation is asynchronous again - and nothing about the
+    inner one may survive into it.
+    """
+    seen: dict = {}
+    inner_schema, _ = _mode_schema(seen)
+
+    @strawberry.type
+    class OuterQuery:
+        @strawberry.field
+        def outer(self) -> str:
+            """Read, nest a synchronous operation, then read again."""
+            before = current_operation_mode()
+            assert inner_schema.execute_sync("{ mode }").data == {"mode": "read"}
+            after = current_operation_mode()
+            return f"{before}->{after}"
+
+    outer_schema = DjangoSchema(query=OuterQuery)
+
+    result = await outer_schema.execute("{ outer }")
+
+    assert result.data == {"outer": "OperationMode.ASYNC->OperationMode.ASYNC"}
+    assert seen["rows"] == [OperationMode.SYNC]
+    assert current_operation_mode() is None
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_copied_an_operations_context_reads_no_mode():
+    """The binding is a lease, so a copied context stops answering when the scope ends.
+
+    A token reset repairs the context that made it and nothing else, so a
+    resolver's background task would otherwise go on reading the mode of an
+    operation that finished - and answer a field factory with it.
+    """
+    seen: dict = {}
+    schema, _ = _mode_schema(seen)
+
+    assert (await schema.execute("{ mode }")).errors is None
+    assert seen["rows"] == [OperationMode.ASYNC]
+
+    read: dict = {}
+    seen["copied"].run(lambda: read.update(mode=current_operation_mode()))
+
+    assert read == {"mode": None}
+
+
+@pytest.mark.asyncio
+async def test_every_frame_of_a_stream_carries_the_operations_mode():
+    """A frame produced in another task is the same operation as the one before it.
+
+    Python resumes an async generator in the caller's context, so the mode bound
+    while frame one was produced is simply absent for frame two. The resume
+    wrapper rebinds it in the driving task, which is what keeps a subscription's
+    resolvers from falling back to the ambient loop halfway through.
+    """
+    seen: dict = {"rows": []}
+
+    @strawberry.type
+    class TickingSubscription:
+        @strawberry.subscription
+        async def ticks(self) -> AsyncGenerator[str, None]:
+            """Record the mode this frame is produced under, then yield it."""
+            for index in range(2):
+                seen["rows"].append(current_operation_mode())
+                yield f"tick-{index}"
+
+    schema = DjangoSchema(query=_Query, subscription=TickingSubscription)
+    stream = await schema.subscribe("subscription { ticks }")
+
+    first = await _frame_in_its_own_task(stream)
+    second = await _frame_in_its_own_task(stream)
+
+    assert [first.data, second.data] == [{"ticks": "tick-0"}, {"ticks": "tick-1"}]
+    assert seen["rows"] == [OperationMode.ASYNC, OperationMode.ASYNC]
+    await stream.aclose()
+    assert current_operation_mode() is None
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_stream_leaves_no_mode_bound():
+    """Cancellation unwinds the generator's ``finally``, and the mode resets there.
+
+    A transport that drops a subscription cancels the task driving it. The
+    binding has to come off that path too, or the next operation in that task
+    starts with a mode that belongs to a request nobody is serving.
+    """
+    seen: dict = {"rows": []}
+
+    @strawberry.type
+    class TickingSubscription:
+        @strawberry.subscription
+        async def ticks(self) -> AsyncGenerator[str, None]:
+            """Yield forever, so cancellation is the only way out."""
+            while True:
+                seen["rows"].append(current_operation_mode())
+                yield "tick"
+
+    schema = DjangoSchema(query=_Query, subscription=TickingSubscription)
+    started = asyncio.Event()
+
+    async def _drive():
+        stream = await schema.subscribe("subscription { ticks }")
+        async for _frame in stream:
+            started.set()
+            await asyncio.sleep(3600)
+
+    task = asyncio.create_task(_drive())
+    await asyncio.wait_for(started.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert seen["rows"] == [OperationMode.ASYNC]
+    assert current_operation_mode() is None
+    assert (await schema.execute("{ hello }")).errors is None
+    assert current_operation_mode() is None
+
+
+@pytest.mark.asyncio
+async def test_an_operation_that_fails_in_front_of_its_hooks_binds_no_mode_either():
+    """A failure before the operation scope opens leaves the mode unbound.
+
+    The mode rides the same binding list as every other value the runner owns,
+    so an extension that raises during setup unwinds it with the rest rather
+    than leaving the task marked as being inside an operation.
+    """
+
+    class _RaisingSetup(SchemaExtension):
+        def on_operation(self):
+            """Fail where the operation scope would otherwise open."""
+            raise RuntimeError("setup")
+            yield  # pragma: no cover - unreachable, the hook raises first
+
+    seen: dict = {}
+    _, mode_query = _mode_schema(seen)
+    failing = DjangoSchema(query=mode_query, extensions=[_RaisingSetup])
+
+    result = await failing.execute("{ mode }")
+
+    assert result.errors is not None
+    assert current_operation_mode() is None

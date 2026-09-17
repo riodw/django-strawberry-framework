@@ -278,7 +278,7 @@ def test_the_error_policy_extension_runs_first_in_every_chain():
     schema = DjangoSchema(query=_Query)
     resolved = schema.get_extensions(sync=True)
     assert isinstance(resolved[0], DjangoErrorPolicyExtension)
-    assert isinstance(resolved[-2], DjangoResourcePolicyExtension)
+    assert isinstance(resolved[-3], DjangoResourcePolicyExtension)
 
 
 def test_a_callable_policy_entry_cannot_become_the_masking_authority():
@@ -333,6 +333,7 @@ def test_a_consumer_extension_is_prepended_behind_the_policy_not_in_front_of_it(
         "_ConsumerExtension",
         "DjangoResourcePolicyExtension",
         "_AdmissionGuard",
+        "_OperationModeMarker",
     ]
 
 

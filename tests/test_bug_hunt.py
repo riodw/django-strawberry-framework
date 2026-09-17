@@ -63,6 +63,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
         responses = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): f"{full_sha}\n",
+            ("status", "--short"): " M docs/GLOSSARY.md\n?? notes.md\n",
         }
         return responses[tuple(args)]
 
@@ -83,11 +84,16 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     assert "Status: in-progress" in report
     assert "Mode: autonomous" in report
     assert f"Baseline commit: `{full_sha}`" in report
+    assert f"Run id: `{release}-{full_sha}`" in report
+    assert "## Cycle baseline" in report
+    assert "```text\n M docs/GLOSSARY.md\n?? notes.md\n```" in report
     assert "Could state escape its request?" in report
     assert "Break things, break things, break things" in report
     assert "every extreme, test the opposite extreme" in report
+    assert "Record the contract row for every boundary before probing it" in report
+    assert "Every claim links to an evidence record" in report
     assert "Do not clean up scratch probes" in report
-    assert "leave it intact so Worker 0 can independently verify it" in report
+    assert "leave it intact so Worker 2 can replay it" in report
     assert "Report evidence, changed files, tests, and validation to Worker 0" in report
     assert "layers often fail only when several reasonable assumptions stack together" in report
     assert "- [ ] django_strawberry_framework/module.py" in report
@@ -109,12 +115,20 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
         "so this shadow is missing unexpectedly -- treat the snapshot as incomplete)" in report
     )
     assert "- [ ] django_strawberry_framework/__init__.py" not in report
+    assert "## Scenarios" in report
+    assert "- [ ] Scenario: Pagination window semantics" in report
+    assert "- [ ] Scenario: Authorization and visibility across actors" in report
+    assert "- [ ] Scenario: Transaction and session lifecycle under interruption" in report
     assert "- [ ] Package integration" in report
     assert "including public exports and `__init__.py` files" in report
     assert "- [ ] Final test gate" in report
     assert "    - Owner: Worker 0" in report
-    assert report.index(stripped.name) < report.index("Package integration")
+    assert "## Owned changes" in report
+    assert "## Outcomes" in report
+    assert report.index(stripped.name) < report.index("## Scenarios")
+    assert report.index("## Scenarios") < report.index("Package integration")
     assert report.index("Package integration") < report.index("Final test gate")
+    assert report.index("Final test gate") < report.index("## Owned changes")
     assert refreshes == [(full_sha, bug_hunt.DEFAULT_PACKAGE_DIR, current_dir.resolve())]
 
     assert bug_hunt.main([]) == 3
@@ -149,6 +163,7 @@ def test_empty_dicta_still_renders_the_package_questions_section(
         responses = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
+            ("status", "--short"): "",
         }
         return responses[tuple(args)]
 
@@ -165,6 +180,8 @@ def test_empty_dicta_still_renders_the_package_questions_section(
 
     assert "## Package questions" in report
     assert "No maintainer-authored probing questions were supplied" in report
+    assert "## Cycle baseline\n\n" in report
+    assert "Clean tree at generation." in report
 
 
 @pytest.mark.parametrize(
@@ -481,6 +498,7 @@ def test_target_release_overrides_the_package_version(tmp_path: Path, monkeypatc
         responses = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
+            ("status", "--short"): "",
         }
         return responses[tuple(args)]
 
@@ -506,6 +524,7 @@ def test_generator_rejects_invalid_target_release(tmp_path: Path, monkeypatch, c
         responses = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
+            ("status", "--short"): "",
         }
         return responses[tuple(args)]
 

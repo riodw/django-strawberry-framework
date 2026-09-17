@@ -6,9 +6,13 @@ the snapshot helper's ``docs/shadow/current/`` folder in-process via
 (the output location is imported as ``SHADOW_DIR`` so it cannot drift
 from the snapshot helper), reads the passed-in dicta (default
 ``docs/bug_hunt/dicta.md``), inventories the live package, and writes a
-progress header, the static single-file hunt brief, one checkbox per live
-non-``__init__.py`` Python file, a package-integration item, and the final
-test gate. Matching shadows are optional baseline aids for those live files.
+progress header carrying the run id, the cycle baseline (``git status
+--short`` at generation, every listed path being concurrent work), the
+static hunt brief, one checkbox per live non-``__init__.py`` Python file,
+the standing cross-file scenario items, a package-integration item, the
+final test gate, and the empty owned-changes ledger and outcomes sections
+that Worker 0 fills. Matching shadows are optional baseline aids for the
+live files. The method itself lives in ``docs/bug_hunt/HUNT.md``.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt-<release>.md``, where
 ``<release>`` is the package ``__version__`` in
@@ -61,36 +65,69 @@ _FALLBACK_DICTA = (
     "shadow inputs are orientation only.\n"
 )
 
-# Static boilerplate describing the Worker 1 single-file hunt.
-_HOW_TO_REVIEW_ONE_FILE = """## How to hunt one file
-Each item uses one source file as its entry point into the live system. The
-target is narrow; the investigation and root-cause fix may cross files.
+# Static boilerplate summarizing the method; ``docs/bug_hunt/HUNT.md`` is canonical.
+_HOW_TO_HUNT_ONE_ITEM = """## How to hunt one item
+Each file item uses one source file as its entry point into the live system;
+scenario items own one cross-file contract. The target is narrow; the
+investigation and root-cause fix cross files. `docs/bug_hunt/HUNT.md` is the
+method; this brief is a reminder, not a substitute.
 
 - Read the shadow overview and stripped source for baseline orientation, then
   read the complete live target. Shadow markers and stripped line numbers are
   never authoritative.
+- Record the contract row for every boundary before probing it: boundary,
+  failure class, promised wire shape, masking, rollback, absent unauthorized
+  effects. A contract nobody can cite is reported blocked, never fixed.
 - Trace callers, dependencies, state, framework hooks, tests, examples, and
   public contracts far enough to understand the target's real behavior. Clean
   layers often fail only when several reasonable assumptions stack together;
   hunt those interactions, not only suspicious local lines.
-- Break things, break things, break things. Write messy scratch test files and
-  be maximally destructive inside disposable scratch scope: mutate throwaway
-  state, force hostile sequences, interrupt lifecycles, and try to make every
-  connected layer fail.
+- Break things, break things, break things, inside the disposable workspace
+  copy only: mutate throwaway state, force hostile sequences, interrupt
+  lifecycles, and try to make every connected layer fail. A probe that imports
+  the shared checkout or opens its database is invalid whatever it found.
 - For every extreme, test the opposite extreme and then combine them across
-  layers. Try to disprove every candidate and record only confirmed defects.
-- Do not clean up scratch probes or disposable state. Report every path and
-  leave it intact so Worker 0 can independently verify it and clean it up only
-  after the item passes.
-- Implement the root-cause fix at the layer that owns the broken invariant,
-  including connected files when required. Add a permanent behavioral test for
-  every production fix at the strongest tier required by `AGENTS.md`.
+  layers. Discharge every axis of the mandatory matrix. Try to disprove every
+  candidate and record only confirmed defects.
+- Every claim links to an evidence record: workspace path, imported package
+  path, database target, exact command, source digests, collected and executed
+  counts, the assertion proving the boundary was reached, a positive control.
+- Do not clean up scratch probes, workspaces, or disposable state. Report every
+  path and leave it intact so Worker 2 can replay it and Worker 0 can remove it
+  only after the item is verified.
+- Implement the root-cause fix at the layer that owns the broken invariant in
+  the shared tree, attributing every hunk of a dirty path first, including
+  connected files when required. Add a permanent behavioral test for every
+  production fix at the strongest tier required by `AGENTS.md`.
 - After edits run `uv run ruff format .` and `uv run ruff check --fix .`.
 - Report evidence, changed files, tests, and validation to Worker 0. Do not edit
-  this progress file; Worker 0 independently verifies fixes and advances it.
+  this progress file; Worker 0 runs the mechanical checks, a fresh Worker 2
+  verifies, and Worker 0 advances it.
 
 ## Hunt items
 """
+
+# Standing cross-file contracts the per-file sweep structurally misses.
+_SCENARIOS = (
+    (
+        "Pagination window semantics",
+        "connection.py, keyset.py, relay.py: cursor round trips fix schema, order and key "
+        "context; first/last/after/before algebra; a bigger document never charges less on a "
+        "named charge dimension.",
+    ),
+    (
+        "Authorization and visibility across actors",
+        "utils/querysets.py seal, mutations/permissions.py, resource_policy.py, "
+        "optimizer/_context.py: forbidden rows absent across actor switches, prefetch and "
+        "reverse relations, cache reuse across executions, awaitable truthiness, point-in-time "
+        "authorization.",
+    ),
+    (
+        "Transaction and session lifecycle under interruption",
+        "utils/write_transaction.py, the three write pipelines, consumers.py: locks, rollback, "
+        "commit hooks, cancellation, sync_to_async boundaries, failure during failure handling.",
+    ),
+)
 
 
 def _run_git(args: Sequence[str]) -> str:
@@ -252,12 +289,60 @@ def _file_block(
 
 
 def _progress_header(commit: str, release: str) -> str:
-    """Render the stable metadata for one autonomous hunt."""
+    """Render the stable metadata for one autonomous hunt, run id included."""
     return (
         f"# Bug hunt: {release}\n\n"
         "Status: in-progress\n"
         "Mode: autonomous\n"
+        f"Run id: `{release}-{commit}`\n"
         f"Baseline commit: `{commit}`\n"
+    )
+
+
+def _cycle_baseline_block(status_output: str) -> str:
+    """Render the concurrent-work inventory captured at generation time.
+
+    Every path listed here was dirty or untracked before the hunt began, so no
+    item may edit, revert, tidy, or claim it. An empty listing is stated rather
+    than omitted, so a missing section reads as lost instead of as clean.
+    """
+    listing = status_output.rstrip("\n")
+    body = f"```text\n{listing}\n```\n" if listing else "Clean tree at generation.\n"
+    return (
+        "## Cycle baseline\n\n"
+        "`git status --short` at generation. Every path below is concurrent work: never edited, "
+        "reverted, tidied, or attributed to an item. Worker 0 appends the `CYCLE_BASELINE` stash "
+        "object once at start and nothing afterwards.\n\n"
+        f"{body}"
+    )
+
+
+def _scenarios_block() -> str:
+    """Render the standing scenario items; Worker 0 appends discovered ones below them."""
+    lines = ["## Scenarios", ""]
+    for index, (title, prompt) in enumerate(_SCENARIOS):
+        lines.extend(
+            [
+                *([""] if index else []),
+                f"- [ ] Scenario: {title}",
+                "    - Status: pending",
+                "    - Prompt:",
+                f"        - {prompt} Hunt the contract across every entry point; implement "
+                "every confirmed root-cause fix.",
+            ],
+        )
+    lines.extend(["", "## Integration and final gate", ""])
+    return "\n".join(lines) + "\n"
+
+
+def _ledger_blocks() -> str:
+    """Render the sections Worker 0 fills: the owned-changes ledger and the outcomes."""
+    return (
+        "## Owned changes\n\n"
+        "Path, item, symbols for every tracked edit or new file a verified item landed. A later "
+        "item may build on a path listed here; any other dirty hunk is external.\n\n"
+        "## Outcomes\n\n"
+        "Filled by Worker 0 at closeout before any scratch is removed.\n"
     )
 
 
@@ -400,6 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     baseline_paths = _baseline_python_paths(head_sha, package_dir)
+    status_output = _run_git(["status", "--short"])
     try:
         _refresh_historical_package_snapshot(
             head_sha,
@@ -412,8 +498,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     sections: list[str] = [
         _progress_header(head_sha, release),
+        _cycle_baseline_block(status_output),
         _read_dicta(dicta_path),
-        _HOW_TO_REVIEW_ONE_FILE,
+        _HOW_TO_HUNT_ONE_ITEM,
     ]
     for source in source_paths:
         stripped, overview = _shadow_inputs(
@@ -423,7 +510,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             baseline_paths,
         )
         sections.append(_file_block(source, stripped, overview, baseline_paths))
-    sections.extend([_integration_block(), _final_gate_block()])
+    sections.extend(
+        [
+            _scenarios_block(),
+            _integration_block(),
+            _final_gate_block(),
+            _ledger_blocks(),
+        ],
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(sections), encoding="utf-8")

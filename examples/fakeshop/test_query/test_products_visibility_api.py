@@ -8,6 +8,11 @@ hook per parent. Planned, and the resolver stands down
 because the plan already applied it to the child queryset, which makes the plan
 the sole authority for those rows. Both halves are covered here, each against the
 staff branch that must NOT be scoped.
+
+Authority over WHICH ROWS is not authority over WHICH CONNECTION: the last two
+rows pin the planned child's hook to the connection the walker seeded it on, so a
+hook that pins an alias of its own fails the relation closed while a hook that only
+narrows still serves its scoped page.
 """
 
 import pytest
@@ -21,10 +26,13 @@ from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
 from graphql_client import assert_graphql_success, post_graphql
+from strategy_schemas import make_django_type
 from strawberry import relay
 from strawberry.django.views import GraphQLView
 
+from django_strawberry_framework import finalize_django_types, strawberry_config
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
@@ -538,3 +546,89 @@ def test_staff_planned_relation_connection_window_keeps_every_row():
 
     assert pages == _expected_item_names(include_private=True)
     assert pages[hidden_parent] == hidden_names
+
+
+def _child_routing_schema(child_hook):
+    """A live ``categories { items }`` schema whose CHILD type carries ``child_hook``.
+
+    The root hands back a queryset under a mounted optimizer, so the walker plans
+    ``items`` as a ``Prefetch`` and builds that child itself
+    (``django_strawberry_framework/optimizer/walker.py::_build_child_queryset``).
+    ``child_hook`` is then the only consumer code running inside the child's seal.
+    """
+    registry.clear()
+    make_django_type(
+        "RoutingItemType",
+        Item,
+        ("id", "name"),
+        node=False,
+        namespace_extra={"get_queryset": classmethod(child_hook)},
+    )
+    category_type = make_django_type(
+        "RoutingCategoryType",
+        Category,
+        ("id", "name", "items"),
+        node=False,
+    )
+    finalize_django_types()
+
+    @strawberry.type
+    class RoutingQuery:
+        @strawberry.field
+        def categories(self) -> list[category_type]:
+            return Category.objects.all()
+
+    optimizer = DjangoOptimizerExtension()
+    return strawberry.Schema(
+        query=RoutingQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+
+
+_CHILD_ROUTING_QUERY = "{ categories { name items { name } } }"
+
+
+def test_planned_prefetch_child_may_not_pin_its_own_connection(db):
+    """A child ``get_queryset`` calling ``.using(...)`` fails the planned relation closed.
+
+    The walker seeds the prefetch child unrouted and never holds the parent the
+    child will be attached to, so the child's effective alias is ``None`` and ANY
+    explicit alias - the connection the request is already on included - is a
+    divergence rather than a match. Refusing it is what keeps one resolution's
+    parent rows and related rows on one connection; a second database is only
+    what makes the consequence visible, not what makes the hook's alias explicit.
+    """
+    services.seed_data(1)
+
+    payload = _post_visibility_query(
+        _child_routing_schema(lambda cls, queryset, info: queryset.using("default")),
+        _CHILD_ROUTING_QUERY,
+    )
+
+    assert payload["data"] is None
+    assert len(payload["errors"]) == 1, payload
+    message = payload["errors"][0]["message"]
+    assert "RoutingItemType.get_queryset" in message
+    assert "routed to alias 'default'" in message
+
+
+def test_planned_prefetch_child_still_serves_rows_when_the_hook_only_narrows(db):
+    """The control: an unrouted hook still scopes the planned child and serves its rows."""
+    services.seed_data(1)
+    Item.objects.update(is_private=False)
+    hidden = Item.objects.order_by("pk").first()
+    assert hidden is not None
+    Item.objects.filter(pk=hidden.pk).update(is_private=True, name="hidden-from-planned-child")
+
+    payload = _post_visibility_query(
+        _child_routing_schema(lambda cls, queryset, info: queryset.filter(is_private=False)),
+        _CHILD_ROUTING_QUERY,
+    )
+
+    assert payload.get("errors") is None, payload
+    served = sorted(row["name"] for page in payload["data"]["categories"] for row in page["items"])
+    assert served == sorted(
+        Item.objects.filter(is_private=False).values_list("name", flat=True),
+    )
+    assert "hidden-from-planned-child" not in served

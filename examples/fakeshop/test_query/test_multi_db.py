@@ -11,6 +11,11 @@ Resolver isolation and debug capture (per spec Goals item 3 + Test plan
   ``using("shard_b")`` resolver.
 - A debug-enabled probe captures SQL from ``shard_b`` with the correct database
   alias and restores every connection's debug-cursor state.
+- A planned prefetch child cannot pin an alias of its own: a child
+  ``get_queryset`` returning ``.using("shard_b")`` under a ``default`` parent
+  fails the relation closed before either alias runs a ``library_book`` read,
+  while the same hook without the routing call follows whichever alias the
+  parent was pinned to.
 
 The suite also owns the alias pins that only a second database can prove: the
 row-preserving relational leaf predicate executing wholly on ``shard_b``, the write
@@ -76,6 +81,7 @@ from graphql_client import (
 from graphql_client import (
     graphql_payload,
 )
+from strategy_schemas import make_django_type
 from strawberry import relay
 from strawberry.django.views import GraphQLView
 from strawberry.types import Info
@@ -1424,3 +1430,149 @@ def test_serializer_mutation_envelope_rolls_back_on_the_write_alias(_project_sch
     # Nothing changed on either alias.
     assert models.Book.objects.using("shard_b").get(pk=91011).title == "ser-book-shard_b"
     assert models.Book.objects.using("default").get(pk=91011).title == "ser-book-default"
+
+
+# ---------------------------------------------------------------------------
+# The planned prefetch child's connection
+# ---------------------------------------------------------------------------
+
+
+def _prefetch_alias_schema(child_hook, *, root_alias=None):
+    """A ``shelves { books }`` schema whose CHILD type carries ``child_hook``.
+
+    The root resolver hands back a queryset (pinned to ``root_alias`` when one is
+    given) under a mounted optimizer, so the walker plans ``books`` as a
+    ``Prefetch`` and builds that child itself
+    (``django_strawberry_framework/optimizer/walker.py::_build_child_queryset``).
+    ``child_hook`` is the only consumer code running inside the child's seal, and
+    the child is the only thing in the query that could name a second connection.
+    """
+    registry.clear()
+    make_django_type(
+        "AliasBookType",
+        models.Book,
+        ("id", "title"),
+        node=False,
+        namespace_extra={"get_queryset": classmethod(child_hook)},
+    )
+    shelf_type = make_django_type(
+        "AliasShelfType",
+        models.Shelf,
+        ("id", "code", "books"),
+        node=False,
+    )
+    finalize_django_types()
+
+    @strawberry.type
+    class _PrefetchAliasQuery:
+        @strawberry.field
+        def shelves(self, info: Info) -> list[shelf_type]:
+            queryset = models.Shelf.objects.all()
+            if root_alias is not None:
+                queryset = queryset.using(root_alias)
+            return queryset
+
+    optimizer = DjangoOptimizerExtension()
+    return strawberry.Schema(
+        query=_PrefetchAliasQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+
+
+_PREFETCH_ALIAS_QUERY = "{ shelves { code books { title } } }"
+
+
+def _post_prefetch_alias_query(schema):
+    """POST ``_PREFETCH_ALIAS_QUERY`` against ``schema``; return (payload, per-alias SQL)."""
+    _current["schema"] = schema
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            with CaptureQueriesContext(connections["default"]) as on_default:
+                with CaptureQueriesContext(connections["shard_b"]) as on_shard_b:
+                    payload = graphql_payload(
+                        _PREFETCH_ALIAS_QUERY,
+                        client=Client(),
+                        url="/graphql/",
+                    )
+    finally:
+        _current["schema"] = None
+        clear_url_caches()
+    book_sql = {
+        alias: [
+            entry["sql"]
+            for entry in captured.captured_queries
+            if 'FROM "library_book"' in entry["sql"]
+        ]
+        for alias, captured in (("default", on_default), ("shard_b", on_shard_b))
+    }
+    return payload, book_sql
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_planned_prefetch_child_cannot_route_itself_to_the_other_shard():
+    """A child hook returning ``.using('shard_b')`` fails the planned relation closed.
+
+    Nothing else in the query names ``shard_b``: the parent rows are read on
+    ``default``, so accepting the child would schedule one GraphQL resolution
+    across two connections and serve the other shard's rows through a relation
+    whose parents do not exist there. The refusal is what keeps that from
+    reaching SQL at all - neither alias runs a ``library_book`` read.
+    """
+    _seed_book_chain("default", title="on-default")
+    _seed_book_chain("shard_b", title="on-shard-b")
+
+    payload, book_sql = _post_prefetch_alias_query(
+        _prefetch_alias_schema(lambda cls, queryset, info: queryset.using("shard_b")),
+    )
+
+    assert payload["data"] is None
+    assert len(payload["errors"]) == 1, payload
+    message = payload["errors"][0]["message"]
+    assert "AliasBookType.get_queryset" in message
+    assert "routed to alias 'shard_b'" in message
+    assert book_sql == {"default": [], "shard_b": []}
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_planned_prefetch_child_inherits_an_unrouted_parents_connection():
+    """Control: an unrouted child under an unrouted parent stays on ``default``."""
+    _seed_book_chain("default", title="on-default")
+    _seed_book_chain("shard_b", title="on-shard-b")
+
+    payload, book_sql = _post_prefetch_alias_query(
+        _prefetch_alias_schema(lambda cls, queryset, info: queryset.exclude(title="")),
+    )
+
+    assert payload.get("errors") is None, payload
+    titles = [row["title"] for shelf in payload["data"]["shelves"] for row in shelf["books"]]
+    assert titles == ["on-default"]
+    assert len(book_sql["default"]) == 1, book_sql
+    assert book_sql["shard_b"] == []
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_planned_prefetch_child_follows_a_routed_parent_onto_its_shard():
+    """Control: the same unrouted child follows a ``.using('shard_b')`` parent.
+
+    The child queryset the walker builds carries no alias of its own, which is
+    exactly what lets Django resolve it against the parent rows' connection at
+    fetch time - so pinning the parent is how a consumer moves a whole resolution
+    onto another shard, and the child never has to say so itself.
+    """
+    _seed_book_chain("default", title="on-default")
+    _seed_book_chain("shard_b", title="on-shard-b")
+
+    payload, book_sql = _post_prefetch_alias_query(
+        _prefetch_alias_schema(
+            lambda cls, queryset, info: queryset.exclude(title=""),
+            root_alias="shard_b",
+        ),
+    )
+
+    assert payload.get("errors") is None, payload
+    titles = [row["title"] for shelf in payload["data"]["shelves"] for row in shelf["books"]]
+    assert titles == ["on-shard-b"]
+    assert len(book_sql["shard_b"]) == 1, book_sql
+    assert book_sql["default"] == []

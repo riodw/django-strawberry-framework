@@ -14,7 +14,7 @@ from strawberry.utils.str_converters import to_camel_case
 from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..utils.querysets import (
-    _UNRECOMPOSED_CHILD_POLICY,
+    _PREFETCH_CHILD_POLICY,
     apply_type_visibility_sync,
     base_queryset,
 )
@@ -438,24 +438,42 @@ def _build_child_queryset(
     connection field's documented "nested async ``get_queryset`` ->
     ``relation_shapes = list``" recourse. The base queryset stays the related
     model's own ``_default_manager.all()`` (NOT ``initial_queryset(target_type)``
-    - the prefetch child is keyed on ``field.related_model``).
+    - the prefetch child is keyed on ``field.related_model``) and carries no
+    explicit ``.using(...)``. A plan walk is a read with no write pipeline in
+    force, so nothing pins an alias ahead of that seed either: the child's
+    effective alias entering the hook is ``None`` on this path, and the hook
+    cannot pin one of its own.
     """
     queryset = base_queryset(field.related_model)
     if has_custom_qs:
-        # ``_UNRECOMPOSED_CHILD_POLICY``: a nested-connection child may legitimately
-        # return a sliced queryset, and the plan's own gate
+        # ``_PREFETCH_CHILD_POLICY`` sets the two facts that hold one edge down.
+        #
+        # ``reject_sliced=False``: a nested-connection child may legitimately return a
+        # sliced queryset, and the plan's own gate
         # (``nested_fetch.py::unwindowable_child_queryset_reason``) detects that shape
         # and degrades to the fully-unplanned per-parent fallback WITHOUT recomposing
         # filters / ordering, so the seal's slice rejection (which exists because
         # recomposing surfaces would raise a raw ``TypeError``) must not pre-empt the
         # designed degradation (``spec-045-visibility_boundary-0_0_14`` Decision 5
         # degrade-to-unplanned).
+        #
+        # ``require_shared_alias=True``: the value built here is installed as the
+        # ``Prefetch`` queryset of a parent this walk never holds, and the plan
+        # carrying it is reused across requests, so the child must leave this call
+        # UNROUTED. Its effective alias is the unpinned seed's ``None``, and a hook
+        # returning an explicitly routed queryset therefore fails closed instead of
+        # scheduling the parent and its related rows on two connections; an unrouted
+        # child inherits the parent's connection at fetch time, so a routed parent
+        # still carries its children. A consumer-supplied ``Prefetch`` child meets the
+        # same rule in ``utils/querysets.py::_sealed_prefetch_related_lookups``, which
+        # the generated one never passes through: the plan applies it after the
+        # parent's own seal has run.
         queryset = apply_type_visibility_sync(
             target_type,
             queryset,
             info,
             model=target_model,
-            policy=_UNRECOMPOSED_CHILD_POLICY,
+            policy=_PREFETCH_CHILD_POLICY,
         )
     return queryset
 

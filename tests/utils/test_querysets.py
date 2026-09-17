@@ -4555,6 +4555,61 @@ def test_prefetch_child_over_target_subclass_seals():
     assert defect is None, defect
 
 
+class _ProxyTargetCategory(Category):
+    """Proxy of ``Category``, used as a relation TARGET (it reads Category's table)."""
+
+    class Meta:
+        proxy = True
+        app_label = "products"
+
+
+class _ProxyTargetHolder(models.Model):
+    """A model whose foreign key is declared to a PROXY model."""
+
+    cat = models.ForeignKey(
+        _ProxyTargetCategory,
+        related_name="proxy_target_holders",
+        on_delete=models.CASCADE,
+    )
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+@pytest.mark.parametrize("child", ["proxy", "concrete"])
+def test_prefetch_child_for_proxy_targeted_relation_seals(child):
+    """A relation declared TO a proxy admits any child over that proxy's own table.
+
+    The relation-target proof closes a cross-TABLE leak, and a proxy reads its
+    concrete model's table, so both the proxy itself and the concrete model it
+    proxies are legitimate children of a proxy-targeted relation. Comparing the
+    child's concrete model against the DECLARED target instead rejected both -
+    including the relation's own proxy - for reading the very table the relation
+    targets.
+    """
+    model = _ProxyTargetCategory if child == "proxy" else Category
+    qs = _ProxyTargetHolder.objects.prefetch_related(
+        Prefetch("cat", queryset=model.objects.all()),
+    )
+    _, defect = _seal_or_defect(qs, _ProxyTargetHolder, None)
+    assert defect is None, defect
+
+
+def test_prefetch_child_over_unrelated_table_still_fails_for_proxy_target():
+    """Reducing both sides to their concrete model does not widen the rule.
+
+    A child over a genuinely different table is still refused when the relation
+    target is a proxy, so the proxy admission cannot be read as "any model".
+    """
+    qs = _ProxyTargetHolder.objects.prefetch_related(
+        Prefetch("cat", queryset=Property.objects.all()),
+    )
+    code, detail = _seal_or_defect(qs, _ProxyTargetHolder, None)[1]
+    assert code == "untrusted"
+    assert "Property" in detail
+
+
 @pytest.mark.django_db
 def test_prefetch_child_wrong_model_nested_path_fails_closed():
     """The relation-target proof walks MULTI-SEGMENT paths to the final relation."""

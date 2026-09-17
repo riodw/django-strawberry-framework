@@ -2428,9 +2428,13 @@ def _sealed_prefetch_related_lookups(
     is resolved here one segment at a time on the candidate's own model (the same
     resolution Django performs at fetch -- the declared ``related_name`` AND the
     default ``<model>_set`` accessor spelling a relation without one is reached
-    by, e.g. ``Permission.user_set``) and the child must be the related model
-    or one of its SUBCLASSES (proxy and MTI children are compatible, per
-    Django's own directional contract); a child over an unrelated model fails
+    by, e.g. ``Permission.user_set``) and the child's CONCRETE model must be the
+    relation target's concrete model or one of its SUBCLASSES (proxy and MTI
+    children are compatible, per Django's own directional contract). Both sides
+    are reduced to their concrete model because the rule closes a cross-TABLE
+    leak and a proxy reads its concrete model's table: a relation declared TO a
+    proxy targets that same table, so comparing against the declared class would
+    fail every child of such a relation closed. A child over an unrelated model fails
     the outer seal closed as ``untrusted``. A path whose target cannot be
     resolved here (a non-relation segment, a generic-FK alias) is left to
     Django's own fetch-time traversal unchanged -- the guard only ever narrows
@@ -2489,11 +2493,22 @@ def _sealed_prefetch_related_lookups(
             # path resolves from the parent's model metadata with no dispatch; an
             # unresolvable path (a generic FK, a traversal Django resolves
             # differently at fetch) is left untouched here, exactly as before.
+            #
+            # Both sides of the comparison are CONCRETE models, because the leak
+            # the rule closes is a cross-TABLE one and a proxy shares its
+            # concrete model's table. A relation may legitimately be declared to
+            # a proxy model, and ``inner_concrete`` is already the child's
+            # concrete model, so comparing it against the declared target would
+            # reject every child of such a relation -- including the relation's
+            # own proxy -- for reading the very table the relation targets.
             relation_target = _prefetch_relation_target_or_none(
                 parent_model,
                 entry_state.get("prefetch_through"),
             )
-            if relation_target is not None and not issubclass(inner_concrete, relation_target):
+            relation_concrete = (
+                _concrete_or_none(relation_target) if relation_target is not None else None
+            )
+            if relation_concrete is not None and not issubclass(inner_concrete, relation_concrete):
                 lookup = entry_state.get("prefetch_through")
                 return None, (
                     "untrusted",

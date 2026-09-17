@@ -5,18 +5,39 @@ Spec: ``docs/SPECS/spec-030-connection_field-0_0_9.md``. Package tests; system-u
 ``connection.py`` module per ``docs/TREE.md`` and the ``tests/test_list_field.py``
 precedent.
 
-``DjangoConnectionField`` IS now reachable from a live ``/graphql/`` query
-(the fakeshop ``library`` app ships
-``all_library_genres_connection: DjangoConnection[GenreType] = DjangoConnectionField(GenreType)``,
-and the products app is connections-only), and the live suite carries the
-consumer round-trips (filter + orderBy + cursor + totalCount). The tests here
-stay package-side because they assert what a live query cannot: the
-``resolve_connection`` ``first`` + ``last`` guard driven at the classmethod
-directly (the guard runs before any ``info`` use), generated-connection-type
-caching, the concrete-subclass specialization regression, and the
-non-queryset-iterable guards - per the ``examples/fakeshop/test_query/README.md``
-live-HTTP-first rule's "keep when it asserts internal state / construction-time
-validation" clause.
+Consumer round-trips live in ``examples/fakeshop/test_query/``: pagination
+errors and ``totalCount`` opt-in in ``test_connection_pagination_api.py``
+(including which ``filter:`` / ``orderBy:`` arguments the shipped connections
+publish); genre-connection filter + order + slice + ``totalCount`` in
+``test_library_api.py``; cascade-narrowed product connections in
+``test_products_api.py`` / ``test_products_visibility_api.py``; keyset
+visibility + ``totalCount`` in ``test_keyset_api.py``. This file keeps what a
+response cannot uniquely show:
+
+- classmethod-direct ``first`` + ``last`` (the guard runs before any ``info``
+  use; through-schema twins already live);
+- generated-connection identity (concrete subclass, not the ``DjangoConnection[T]``
+  alias; cache keyed on target; name from ``graphql_type_name``);
+- constructor ``ConfigurationError`` (non-DjangoType, non-callable ``resolver=``,
+  non-Relay, hostile ``directives=``);
+- ``_total_count_requested`` AST walk (direct-child vs nested vs fragment);
+- consumer ``resolver=`` source-shape guards (Manager / iterable / generator /
+  pre-sliced / SyncMisuseError / residual awaitable) - shipped connections use
+  the default seed, so a holder would be rung 3;
+- queryset-shaping helpers (``_finalize_queryset`` pk tiebreaker, default
+  ordering, ``_ends_in_unique_column``);
+- plan-object cooperation (``dst_optimizer_plan`` on a hook-free throwaway;
+  live SQL for the hooked products/library graphs is the sibling); the
+  optimizer-absent short-circuit; ``strictness="raise"`` unplanned N+1 on a
+  seeded empty plan (fakeshop ships default strictness);
+- neither-sidecar argument absence (no shipped connection omits both;
+  presence is live) and orphan-ledger registration at field construction;
+- custom ``relay_max_results`` (the default cap of 100 is live);
+- async ``.acount()`` / ``apply_async`` (not uniquely visible vs sync HTTP);
+- cascade composed with ``totalCount`` (shipped cascading types declare no
+  connection opt-in; visibility+count without cascade is live on issues);
+- hostile containment, sealed-execution, Manager degrade/drift, registry and
+  connection-type cache, captured-definition read counts.
 """
 
 import asyncio
@@ -291,6 +312,12 @@ def test_connection_type_for_returns_concrete_subclass_when_total_count_false():
 
 # =============================================================================
 # _total_count_requested selection-gating (unit)
+# Live COUNT SQL / skip / fragment gating is ``test_library_api.py``
+# (``test_genre_connection_total_count_omitted_no_count``,
+# ``test_genre_connection_total_count_skip_include_no_count``,
+# ``test_anonymous_inline_fragment_with_total_count_resolves``). These rows pin
+# the helper's AST walk: a nested ``totalCount`` under ``edges.node`` must not
+# fire, and fragment wrappers at the connection's own level must.
 # =============================================================================
 
 
@@ -380,7 +407,12 @@ def test_total_count_requested_recurses_through_fragments():
 
 @pytest.mark.django_db(transaction=True)
 async def test_total_count_async_path_counts_via_acount():
-    """The async execution path counts via ``.acount()`` and attaches it to the instance."""
+    """The async execution path counts via ``.acount()`` and attaches it to the instance.
+
+    The wire count on a sync HTTP request is live
+    (``test_connection_pagination_api.py::test_total_count_is_a_field_only_on_the_connection_that_opted_in``).
+    ``.acount()`` vs ``.count()`` is not uniquely visible in a response.
+    """
     from asgiref.sync import sync_to_async
 
     await sync_to_async(services.seed_data)(2)
@@ -608,27 +640,19 @@ def test_connection_type_for_generates_total_count_for_direct_relay_inheritance(
     assert "totalCount" in sdl
 
 
-# --- Argument presence / absence by sidecar declaration ----------------------
-
-
-def test_connection_field_derives_filter_arg_from_filterset():
-    """A type with ``filterset_class`` emits a ``filter:`` argument in the SDL."""
-    schema = _field_schema(_make_sidecar_node_type("FilterArgNode", orderset=None))
-    sdl = str(schema)
-    assert "filter:" in sdl
-    assert "orderBy:" not in sdl
-
-
-def test_connection_field_derives_orderby_arg_from_orderset():
-    """A type with ``orderset_class`` emits an ``orderBy:`` argument in the SDL."""
-    schema = _field_schema(_make_sidecar_node_type("OrderArgNode", filterset=None))
-    sdl = str(schema)
-    assert "orderBy:" in sdl
-    assert "filter:" not in sdl
+# --- Argument absence when neither sidecar is declared -----------------------
+# Presence of ``filter:`` / ``orderBy:`` on shipped connections is live
+# (``test_connection_pagination_api.py``). No fakeshop connection omits BOTH
+# sidecars, so the neither-sidecar shape stays here.
 
 
 def test_connection_field_omits_args_without_sidecars():
-    """A type with neither sidecar emits only the four Relay pagination args."""
+    """A type with neither sidecar emits only the four Relay pagination args.
+
+    No shipped connection omits both sidecars (``GenreType`` declares both;
+    ``IssueType`` declares only ``orderset_class``). Live argument presence is
+    ``test_connection_pagination_api.py::test_root_connection_arguments_follow_declared_sidecars``.
+    """
     schema = _field_schema(
         _make_sidecar_node_type("NoSidecarNode", filterset=None, orderset=None),
     )
@@ -679,7 +703,13 @@ def test_consumer_resolver_manager_coerced():
 
 @pytest.mark.django_db
 def test_consumer_resolver_queryset_full_pipeline():
-    """A ``QuerySet`` return runs visibility / filter / order / default-order / optimizer."""
+    """A consumer ``resolver=`` returning a ``QuerySet`` still runs the sidecar pipeline.
+
+    Default-seed filter + order + slice + ``totalCount`` is live
+    (``test_library_api.py::test_genre_connection_filter_order_and_slice_compose``).
+    Shipped connections do not take ``resolver=``; this row keeps that entry
+    feeding ``_pipeline_sync``.
+    """
     services.seed_data(2)
 
     def resolver(root, info) -> Iterable:
@@ -1022,11 +1052,20 @@ def test_default_ordering_preserves_meta_ordering():
 
 @pytest.mark.django_db
 def test_connection_resolver_composition_order():
-    """Visibility runs before filter before order before default-order before slice.
+    """Visibility runs before filter before order, and the count is taken pre-slice.
 
-    An instrumented ``get_queryset`` + filterset + orderset record their call
-    order; the query slices to ``first: 1`` while ``totalCount`` reflects the
-    full post-filter pre-slice count (so the count is captured pre-slice).
+    Stays package-side: the ORDER the three stages run in is not a wire shape.
+    Visibility, filter and order each narrow or arrange the same set, so on the
+    shipped fixtures every sequence of the three yields the same page, and only
+    instrumented hooks can record which ran first. The count's position IS a
+    wire shape and is pinned live: ``totalCount == 2`` beside a one-edge page in
+    ``examples/fakeshop/test_query/test_connection_pagination_api.py::test_total_count_is_a_field_only_on_the_connection_that_opted_in``.
+    Live siblings pin the RESULT of the composition
+    (``examples/fakeshop/test_query/test_products_api.py::test_cascade_composes_with_filter_and_order_live``;
+    genre filter + order + slice pages in
+    ``examples/fakeshop/test_query/test_library_api.py::test_genre_connection_filter_order_and_slice_compose``);
+    this row pins the sequence that produces it, and that the count is taken
+    after the filter and before the slice.
     """
     services.seed_data(3)
     calls: list[str] = []
@@ -1096,8 +1135,10 @@ def test_relay_max_results_cap():
     The one conformance-matrix entry a live fakeshop query cannot reach
     (the project schema uses the default ``StrawberryConfig``): ``first``
     over the cap surfaces Strawberry's own error before any row math, and
-    ``first`` at the cap succeeds. Error text source-verified against the
-    locked engine (``strawberry/relay/utils.py::SliceMetadata.from_arguments``).
+    ``first`` at the cap succeeds. The default cap of 100 is live
+    (``test_connection_pagination_api.py::test_live_over_cap_first_is_graphql_error``).
+    Error text source-verified against the locked engine
+    (``strawberry/relay/utils.py::SliceMetadata.from_arguments``).
     """
     services.seed_data(2)
     schema = _field_schema(
@@ -1116,7 +1157,11 @@ def test_relay_max_results_cap():
 
 @pytest.mark.django_db(transaction=True)
 async def test_connection_resolver_async_dispatch():
-    """The default resolver dispatches correctly on the async ``execute`` path (incl. ``.acount()``)."""
+    """The default resolver dispatches correctly on the async ``execute`` path (incl. ``.acount()``).
+
+    Sync HTTP ``totalCount`` is live; this row pins the default field's async
+    ``execute`` path using ``.acount()``, which a response cannot uniquely show.
+    """
     from asgiref.sync import sync_to_async
 
     await sync_to_async(services.seed_data)(2)
@@ -1153,6 +1198,10 @@ def test_connection_sync_async_generator_resolver_raises_sync_misuse():
 
 @pytest.mark.django_db(transaction=True)
 async def test_connection_async_generator_resolver_executes_on_async_path():
+    """An async-generator ``resolver=`` paginates on ``schema.execute`` (the sync twin is SyncMisuseError).
+
+    Shipped connections use the default seed, not a consumer async generator.
+    """
     from asgiref.sync import sync_to_async
 
     await sync_to_async(services.seed_data)(2)
@@ -1394,6 +1443,10 @@ def test_root_connection_field_queryset_is_planned():
     B5 plan-introspection shape from ``tests/optimizer/test_extension.py``): its
     presence on the context proves ``apply_to`` -> ``_publish_plan_to_context``
     ran for the connection field, which it does ONLY through the field's helper.
+    Live SQL for a hooked target is Prefetch, not ``select_related``
+    (``test_products_api.py::test_products_optimizer_merges_duplicate_root_field_nodes_over_http``);
+    this row keeps the plan-object for a hook-free throwaway, which no shipped
+    type reproduces.
     """
     services.seed_data(2)
     # ``ItemNode`` exposes the forward FK ``category`` - the relation a plain
@@ -1431,7 +1484,13 @@ def test_root_connection_field_queryset_is_planned():
 
 @pytest.mark.django_db
 def test_root_connection_field_queryset_prefetches_node_many_relation():
-    """A many-side relation under ``edges.node`` is planned as a prefetch."""
+    """A many-side relation under ``edges.node`` is planned as a prefetch.
+
+    Live SQL for the same many-side under a root connection is
+    ``test_products_visibility_api.py``'s planned-list / planned-connection rows
+    (one ``FROM "products_item"`` query). This row keeps the plan-object
+    (``prefetch_related`` / ``only_fields``) a response cannot uniquely show.
+    """
     services.seed_data(2)
     _make_relation_node_type("PlanPrefetchItemNode", fields=("id", "name"), model=Item)
     category_node = _make_relation_node_type(
@@ -1459,6 +1518,12 @@ def test_root_connection_field_queryset_prefetches_node_many_relation():
 @pytest.mark.django_db
 def test_nested_connection_unplanned_raises_under_strictness():
     """Strictness ``"raise"`` still surfaces an unplanned connection relation access.
+
+    Fakeshop ships the optimizer at default strictness, not ``"raise"``. The
+    optimizer-less nested cost is live
+    (``test_products_visibility_api.py::test_nested_connection_costs_one_query_per_parent_without_the_optimizer``).
+    This row keeps the ``OptimizerError("Unplanned N+1: items")`` envelope on a
+    seeded empty plan, which no shipped mount publishes.
 
     A root ``DjangoConnectionField`` over ``CategoryNode`` reaches the reverse-FK
     many-side relation ``items`` under ``edges { node { items { ... } } }``.
@@ -1761,6 +1826,12 @@ def _make_cascading_item_node(name: str) -> type:
 @pytest.mark.django_db
 def test_connection_over_cascading_type_narrows_edges_and_total_count():
     """A ``DjangoConnectionField`` over a cascading type narrows ``edges`` AND ``totalCount``.
+
+    Shipped cascading types (products) declare no ``Meta.connection`` opt-in, so
+    live cascade rows cannot read ``totalCount``. Visibility + ``totalCount`` on
+    a non-cascading connection is live on ``allLibraryIssuesConnection``
+    (``test_keyset_api.py``). This row keeps the cascade composed with a counted
+    connection, which no shipped type pairs.
 
     Wrap a type whose ``get_queryset`` calls ``apply_cascade_permissions``; assert
     edges drop the cascade-hidden rows and ``totalCount`` (counted post-visibility)
@@ -2085,7 +2156,7 @@ async def test_connection_resolver_manager_degrading_to_list_fails_closed_async(
 
 
 # =============================================================================
-# Bug-hunt 0.0.14: exception-containment and directive validation
+# Exception containment and directive validation
 # =============================================================================
 
 

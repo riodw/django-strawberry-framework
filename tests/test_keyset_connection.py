@@ -1,20 +1,45 @@
-"""Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
+"""Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
 
-The live acceptance surface (round-trips, stability, nested windows,
-permission-aware decode) runs in
-``examples/fakeshop/test_query/test_keyset_api.py``. These stay package-side
-per the README's "genuinely unreachable from a live query" clause: the
-generated-class keyset-state cache, the slicer's structural guards (the
-non-queryset source, the pre-sliced source), the ``orderBy``-derivation error
-arms driven with hand-built order states, the async execution color (the live
-``/graphql/`` view is sync-only), and the defensive backward-window arm the
-walker never plans.
+Consumer-visible keyset behaviour lives in
+``examples/fakeshop/test_query/test_keyset_api.py`` (root and nested
+round-trips, resolver-contract refusals over HTTP, and the async slicer colour
+on ``/graphql-async/``). Pagination bound errors on the shipped keyset field
+live in ``examples/fakeshop/test_query/test_connection_pagination_api.py``.
+
+This module keeps claims no GraphQL request can express:
+
+- The generated connection class's ``_dst_keyset_state`` slot (identity cache
+  and the offset-type ``None`` sentinel). The live sibling is
+  ``test_root_keyset_first_page_orders_by_cursor_field``.
+- ``declared_cursor_state_for_definition`` lookup, including a ``None``
+  definition.
+- Defensive ``_WindowedConnectionRows`` arms the walker never plans: ``last``
+  over a window wrapper, and a counted keyset window missing the seek-count
+  annotation. Nested ``last:`` / ``before:`` over HTTP fall back before a
+  wrapper is built
+  (``test_nested_keyset_backward_falls_back_per_parent_with_same_cursors``).
+- ``_keyset_order_state`` derivation with hand-built states: column-object
+  reuse, and rejection of expression / nulls-positioning / nullable / JSON /
+  optional-or-multivalued related orders. ``IssueOrder`` only publishes
+  non-null local and required-FK paths, so those error arms are not reachable
+  on the shipped schema. Related-path acceptance is live
+  (``test_root_keyset_order_by_related_path_seeks_via_annotation``).
+- Pure helpers ``_keyset_order_ref`` and ``_resolve_order_path_field``
+  (including detached / virtual fields and an unmanaged MTI parent link
+  fakeshop does not ship).
+- Nested-planner ``_keyset_window_slice_from_arguments`` returning ``None`` /
+  ``UnwindowableConnection`` (the walker swallows those internally). Live
+  nested first/after/last rows pin the consumer consequence.
+- ``_extend_only_projection`` passthrough arms. The consumer-visible restore
+  of a deferred cursor column is live
+  (``test_nested_keyset_unselected_cursor_column_is_not_lazy_loaded_per_edge``)
+  and on the async holder
+  (``test_async_keyset_deferred_cursor_column_is_loaded``).
 """
 
 from types import SimpleNamespace
 
 import pytest
-import strawberry
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
 from django.db import models
@@ -22,10 +47,7 @@ from django.db.models import Count, F
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
 
-from django_strawberry_framework import (
-    DjangoConnectionField,
-    finalize_django_types,
-)
+from django_strawberry_framework import finalize_django_types
 from django_strawberry_framework.connection import (
     _connection_type_for,
     _keyset_connection_context,
@@ -119,173 +141,6 @@ def test_declared_cursor_state_for_definition_none_without_cursor_field():
         declared_cursor_state_for_definition(plain_type.__django_strawberry_definition__) is None
     )
     assert declared_cursor_state_for_definition(None) is None
-
-
-# =============================================================================
-# the slicer's structural guards (through-schema)
-# =============================================================================
-
-
-@pytest.mark.django_db
-def test_keyset_connection_rejects_non_queryset_source():
-    issue_type = _make_issue_type("KeysetListSourceNode")
-
-    def _list_resolver(root, info):
-        return list(Issue.objects.all())
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type, resolver=_list_resolver)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    periodical = Periodical.objects.create(name="P")
-    Issue.objects.create(periodical=periodical, number=1, title="one")
-    result = schema.execute_sync("{ issues(first: 1) { edges { cursor } } }")
-    assert result.errors
-    assert "must return a QuerySet" in str(result.errors[0])
-
-
-@pytest.mark.django_db
-def test_keyset_connection_rejects_pre_sliced_source():
-    issue_type = _make_issue_type("KeysetSlicedSourceNode")
-
-    def _sliced_resolver(root, info):
-        return Issue.objects.all()[:5]
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type, resolver=_sliced_resolver)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    result = schema.execute_sync("{ issues(first: 1) { edges { cursor } } }")
-    assert result.errors
-    assert "already-sliced" in str(result.errors[0])
-
-
-@pytest.mark.django_db
-def test_bare_keyset_connection_routes_through_keyset_slicer():
-    issue_type = _make_issue_type("BareKeysetNode", connection=None)
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    periodical = Periodical.objects.create(name="P")
-    Issue.objects.create(periodical=periodical, number=1, title="one")
-    result = schema.execute_sync("{ issues(first: 1) { edges { cursor } } }")
-    assert not result.errors, result.errors
-    assert len(result.data["issues"]["edges"]) == 1
-
-
-@pytest.mark.django_db
-def test_keyset_connection_validates_page_sizes_and_sync_count_only():
-    issue_type = _make_issue_type("KeysetValidationNode")
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-
-    negative = schema.execute_sync("{ issues(first: -1) { edges { cursor } } }")
-    assert negative.errors
-    assert "non-negative" in str(negative.errors[0])
-
-    over_cap = schema.execute_sync("{ issues(first: 101) { edges { cursor } } }")
-    assert over_cap.errors
-    assert "cannot be higher than 100" in str(over_cap.errors[0])
-
-    count_only = schema.execute_sync("{ issues { totalCount } }")
-    assert not count_only.errors, count_only.errors
-    assert count_only.data["issues"]["totalCount"] == 0
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_keyset_connection_async_execution_slices_and_counts():
-    """The async color: coroutine slicing via the async engine + ``acount``."""
-    issue_type = _make_issue_type("KeysetAsyncNode")
-
-    async def _async_resolver(root, info):
-        return Issue.objects.all()
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type, resolver=_async_resolver)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    periodical = await Periodical.objects.acreate(name="P")
-    for number in (1, 2, 3):
-        await Issue.objects.acreate(periodical=periodical, number=number, title=f"i{number}")
-    result = await schema.execute(
-        """
-        { issues(first: 2) { totalCount
-            pageInfo { hasNextPage endCursor }
-            edges { node { title } } } }
-        """,
-    )
-    assert not result.errors, result.errors
-    connection_payload = result.data["issues"]
-    assert connection_payload["totalCount"] == 3
-    assert connection_payload["pageInfo"]["hasNextPage"] is True
-    assert [e["node"]["title"] for e in connection_payload["edges"]] == ["i3", "i2"]
-    # Round-trip the minted cursor on the async path too.
-    result = await schema.execute(
-        """
-        query($c: String!) { issues(first: 2, after: $c) { edges { node { title } } } }
-        """,
-        variable_values={"c": connection_payload["pageInfo"]["endCursor"]},
-    )
-    assert not result.errors, result.errors
-    assert [e["node"]["title"] for e in result.data["issues"]["edges"]] == ["i1"]
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_keyset_connection_async_total_count_only_uses_acount():
-    """A totalCount-only async query must not call synchronous ``QuerySet.count()``."""
-    issue_type = _make_issue_type("KeysetAsyncCountOnlyNode")
-
-    async def _async_resolver(root, info):
-        return Issue.objects.all()
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type, resolver=_async_resolver)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    periodical = await Periodical.objects.acreate(name="P")
-    for number in (1, 2, 3):
-        await Issue.objects.acreate(periodical=periodical, number=number, title=f"i{number}")
-    result = await schema.execute("{ issues { totalCount } }")
-    assert not result.errors, result.errors
-    assert result.data["issues"]["totalCount"] == 3
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_keyset_connection_async_deferred_cursor_column_is_loaded():
-    """Cursor minting must not lazy-load a deferred order column in async execution."""
-    issue_type = _make_issue_type("KeysetAsyncDeferredCursorNode")
-
-    async def _async_resolver(root, info):
-        return Issue.objects.defer("number", "title")
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type, resolver=_async_resolver)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    periodical = await Periodical.objects.acreate(name="P")
-    await Issue.objects.acreate(periodical=periodical, number=1, title="one")
-    result = await schema.execute("{ issues(first: 1) { edges { cursor } } }")
-    assert not result.errors, result.errors
-    assert len(result.data["issues"]["edges"]) == 1
 
 
 # =============================================================================
@@ -432,28 +287,20 @@ def test_keyset_order_state_rejects_json_columns():
 
 
 @pytest.mark.django_db
-def test_keyset_order_state_annotates_related_paths():
-    state = _issue_order_state()
-    columns, fingerprint, queryset = _keyset_order_state(
-        state,
-        Issue.objects.order_by("periodical__name", "id"),
-    )
-    assert fingerprint == "periodical__name,id"
-    assert columns[0].value_source == "_dst_cursor_value_0"
-    assert "_dst_cursor_value_0" in queryset.query.annotations
-
-
-@pytest.mark.django_db
-def test_keyset_order_state_rejects_optional_or_multivalued_related_paths():
+@pytest.mark.parametrize(
+    "order",
+    [("card__barcode", "id"), ("loans__note", "id")],
+    ids=["optional-o2o", "multivalued-reverse"],
+)
+def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(order):
     state_stub = SimpleNamespace(
         definition=SimpleNamespace(model=Patron),
         cursor_field=("name",),
         columns=cursor_columns_for(Patron, ("name",)),
         fingerprint=order_fingerprint(("name",)),
     )
-    for order in (("card__barcode", "id"), ("loans__note", "id")):
-        with pytest.raises(GraphQLError, match="cannot anchor stable cursors"):
-            _keyset_order_state(state_stub, Patron.objects.order_by(*order))
+    with pytest.raises(GraphQLError, match="cannot anchor stable cursors"):
+        _keyset_order_state(state_stub, Patron.objects.order_by(*order))
 
 
 def test_keyset_order_ref_parses_strings_and_rejects_nulls():
@@ -614,84 +461,22 @@ def test_keyset_window_slice_from_arguments_arms():
 
 
 @pytest.mark.django_db
-def test_extend_only_projection_arms():
-    from django_strawberry_framework.optimizer.plans import deferred_loading_of
+def test_extend_only_projection_passthrough_arms():
+    """Identity / no-op arms of ``_extend_only_projection`` have no wire shape.
 
-    # Unreadable/non-queryset state: defensive passthrough.
+    Restoring a deferred or ``only()``-masked cursor column is live:
+    ``test_nested_keyset_unselected_cursor_column_is_not_lazy_loaded_per_edge``
+    (optimizer ``only()``) and
+    ``test_async_keyset_deferred_cursor_column_is_loaded`` (async ``defer()``).
+    """
     sentinel = object()
     assert _extend_only_projection(sentinel, ("number",)) is sentinel
 
-    # No projection: untouched.
     plain = Issue.objects.all()
     assert _extend_only_projection(plain, ("number",)) is plain
-    # Explicit empty only() state: untouched.
     only_empty = Issue.objects.only()
     assert _extend_only_projection(only_empty, ("number",)) is only_empty
-    # defer() mode that does not mask a cursor column is untouched.
     deferred = Issue.objects.defer("title")
     assert _extend_only_projection(deferred, ("number",)) is deferred
-    # A deferred cursor column is restored while unrelated defers survive.
-    masked_deferred = Issue.objects.defer("number", "title")
-    extended_deferred = _extend_only_projection(masked_deferred, ("number",))
-    names, defer_flag = deferred_loading_of(extended_deferred)
-    assert defer_flag is True
-    assert names == frozenset({"title"})
-    # Already-covered names: untouched.
     covered = Issue.objects.only("number", "id")
     assert _extend_only_projection(covered, ("number",)) is covered
-    # A missing cursor column joins the load-only set.
-    masked = Issue.objects.only("title")
-    extended = _extend_only_projection(masked, ("number",))
-    names, defer_flag = deferred_loading_of(extended)
-    assert defer_flag is False
-    assert "number" in names and "title" in names
-
-
-@pytest.mark.django_db
-def test_resolve_keyset_connection_with_strawberry_unset(isolate_global_registry):
-    """Keyset connection resolver ignores `strawberry.UNSET` for pagination and cursor arguments."""
-    from django_strawberry_framework.connection import _resolve_keyset_connection
-
-    periodical = Periodical.objects.create(name="The Journal")
-    for i in range(5):
-        Issue.objects.create(periodical=periodical, number=i, title=f"Issue {i:02d}")
-
-    issue_type = make_django_type(
-        "KeysetUnsetIssueNode",
-        Issue,
-        ("id", "number", "title"),
-        meta_extra={"cursor_field": ("number", "id"), "primary": True},
-    )
-    finalize_django_types()
-    conn_cls = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
-    state = _keyset_connection_context(conn_cls)
-
-    info = SimpleNamespace(
-        selected_fields=[
-            SimpleNamespace(
-                name="issues",
-                selections=[
-                    SimpleNamespace(name="edges", selections=[]),
-                    SimpleNamespace(name="pageInfo", selections=[]),
-                ],
-            ),
-        ],
-        _raw_info=SimpleNamespace(field_nodes=[]),
-        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=100)),
-    )
-
-    conn = _resolve_keyset_connection(
-        conn_cls,
-        Issue.objects.all(),
-        info=info,
-        state=state,
-        before=strawberry.UNSET,
-        after=strawberry.UNSET,
-        first=strawberry.UNSET,
-        last=strawberry.UNSET,
-        max_results=100,
-        want_count=False,
-    )
-    assert len(conn.edges) == 5
-    assert conn.page_info.has_next_page is False
-    assert conn.page_info.has_previous_page is False

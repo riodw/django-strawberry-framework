@@ -8,10 +8,15 @@ newest-first mixed-direction shape) and ``PeriodicalType.issuesConnection``
 - value cursors round-trip (``endCursor`` -> ``after:``) and SURVIVE inserts
   and deletes before the cursor - the motivating fix for offset-cursor drift;
 - ``totalCount`` stays the PRE-seek partition count on every ``after:`` page;
+- a ``totalCount``-only document counts that set without fetching page rows;
+- omitting every pagination argument serves the full set when it is under the
+  Relay cap;
 - nested seeks apply UNIFORM VALUE-POSITION semantics across every parent
   partition, and the batched window stays one prefetch query;
 - tampered, foreign-order, and offset (``arrayconnection``) cursors are
   rejected with the uniform invalid-cursor error;
+- minted cursors are deterministic across requests and do not disclose
+  ordering values in the clear (AES-SIV authenticated-encrypted payload);
 - a cursor outlives a ``SECRET_KEY`` rotation that declares the old key in
   ``SECRET_KEY_FALLBACKS``, and dies with one that does not;
 - cursors are permission-aware by construction: a staff-minted cursor
@@ -19,22 +24,105 @@ newest-first mixed-direction shape) and ``PeriodicalType.issuesConnection``
 - the nested window itself is scoped by the target hook the plan applied, so a
   keyset page is partitioned over the viewer's rows and counted on them.
 
+Resolver-contract refusals (a list source, an already-sliced QuerySet) and the
+async slicer colour (``acount``, async iteration, deferred cursor columns) ride
+a test-local holder: ``/graphql-test/`` (sync ``DjangoGraphQLView``) and
+``/graphql-async/`` (``AsyncDjangoGraphQLView``) over shipped ``IssueType``.
+Async rows are exempt from ``graphql_client.py`` (sync-only) and use
+``AsyncTestClient`` with ``django_db(transaction=True)``.
+
 Cursors are always MINTED then round-tripped - never pinned as literals -
 because the payload is authenticated-encrypted opaque bytes (the codec contract).
 """
 
+import base64
+from typing import Any
+
 import pytest
+import strawberry
 from apps.library import models
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.urls import clear_url_caches, path
 from graphql_client import assert_graphql_success as _assert_graphql_success
+from graphql_client import graphql_payload as _graphql_payload
 from graphql_client import post_graphql as _post_graphql
-from strawberry.relay.utils import to_base64
+from strawberry.relay.utils import from_base64, to_base64
 
-from django_strawberry_framework.testing import TestClient
+from django_strawberry_framework import DjangoConnectionField, strawberry_config
+from django_strawberry_framework.keyset import KEYSET_CURSOR_PREFIX
+from django_strawberry_framework.testing import AsyncTestClient, TestClient
+from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
+
+_CURRENT: dict[str, Any] = {"schema": None}
+
+
+def _holder_view(request):
+    schema = _CURRENT["schema"]
+    assert schema is not None
+    return DjangoGraphQLView.as_view(schema=schema)(request)
+
+
+async def _async_holder_view(request):
+    schema = _CURRENT["schema"]
+    assert schema is not None
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+
+urlpatterns = [path("graphql-test/", _holder_view), path("graphql-async/", _async_holder_view)]
+
+
+def _issue_holder_schema(resolver):
+    from apps.library.schema import IssueType
+
+    @strawberry.type
+    class Query:
+        issues = DjangoConnectionField(IssueType, resolver=resolver)
+
+    return strawberry.Schema(query=Query, config=strawberry_config())
+
+
+def _post_holder(schema, query, *, variables=None):
+    _CURRENT["schema"] = schema
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            return _graphql_payload(query, variables=variables, url="/graphql-test/")
+    finally:
+        _CURRENT["schema"] = None
+        clear_url_caches()
+
+
+async def _post_async_holder(schema, query, *, variables=None):
+    _CURRENT["schema"] = schema
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            result = await AsyncTestClient().query(
+                query,
+                variables=variables,
+                assert_no_errors=False,
+                url="/graphql-async/",
+            )
+        assert result.response.status_code == 200, result.response.content
+        return result.response.json()
+    finally:
+        _CURRENT["schema"] = None
+        clear_url_caches()
+
+
+def _seed_three_issues():
+    periodical = models.Periodical.objects.create(name="Holder Journal")
+    for number in (1, 2, 3):
+        models.Issue.objects.create(
+            periodical=periodical,
+            number=number,
+            title=f"i{number}",
+        )
 
 
 def _seed_periodicals():
@@ -89,6 +177,31 @@ def test_root_keyset_first_page_orders_by_cursor_field():
 
 
 @pytest.mark.django_db
+def test_root_keyset_total_count_only_does_not_fetch_edges():
+    """A ``totalCount``-only document counts the pre-pagination set and fetches no page rows."""
+    _seed_periodicals()
+    with CaptureQueriesContext(connection) as ctx:
+        data = _assert_graphql_success("{ allLibraryIssuesConnection { totalCount } }")
+    assert data["allLibraryIssuesConnection"] == {"totalCount": 8}
+    issue_sql = [
+        entry["sql"] for entry in ctx.captured_queries if 'FROM "library_issue"' in entry["sql"]
+    ]
+    assert issue_sql, ctx.captured_queries
+    assert all("COUNT(" in sql.upper() for sql in issue_sql), issue_sql
+    assert not any("LIMIT" in sql.upper() for sql in issue_sql), issue_sql
+
+
+@pytest.mark.django_db
+def test_root_keyset_cursors_are_deterministic():
+    """Identical values under the same order mint identical cursor bytes across requests."""
+    _seed_periodicals()
+    first = _root_page(first=1)
+    second = _root_page(first=1)
+    assert first["edges"][0]["cursor"] == second["edges"][0]["cursor"]
+    assert first["pageInfo"]["endCursor"] == second["pageInfo"]["endCursor"]
+
+
+@pytest.mark.django_db
 def test_root_keyset_round_trip_and_pre_seek_total_count():
     """``endCursor`` -> ``after:`` continues exactly; ``totalCount`` stays pre-seek."""
     _seed_periodicals()
@@ -119,16 +232,21 @@ def test_root_keyset_page_survives_inserts_and_deletes_before_cursor():
 
 
 @pytest.mark.django_db
-def test_root_keyset_rejects_tampered_and_offset_cursors():
+@pytest.mark.parametrize("kind", ["tampered", "offset"], ids=["tampered", "offset"])
+def test_root_keyset_rejects_tampered_and_offset_cursors(kind):
     """Tampered bytes and offset-vocabulary cursors both get the uniform rejection."""
     _seed_periodicals()
-    cursor = _root_page(first=1)["pageInfo"]["endCursor"]
-    for bad_cursor in (cursor[:-8] + "AAAAAAAA", to_base64("arrayconnection", 2)):
-        response = _post_graphql(ROOT_PAGE_QUERY, variables={"first": 1, "after": bad_cursor})
-        assert response.status_code == 200
-        payload = response.json()
-        assert "errors" in payload, payload
-        assert "invalid cursor" in payload["errors"][0]["message"]
+    minted = _root_page(first=1)["pageInfo"]["endCursor"]
+    bad_cursor = {
+        "tampered": minted[:-8] + "AAAAAAAA",
+        "offset": to_base64("arrayconnection", 2),
+    }[kind]
+    response = _post_graphql(ROOT_PAGE_QUERY, variables={"first": 1, "after": bad_cursor})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "invalid cursor" in payload["errors"][0]["message"]
+    assert payload["data"] is None, payload
 
 
 @pytest.mark.django_db
@@ -157,6 +275,7 @@ def test_root_keyset_cursor_survives_a_secret_key_rotation_that_keeps_the_fallba
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "invalid cursor" in payload["errors"][0]["message"], payload
 
 
@@ -322,6 +441,7 @@ def test_root_keyset_first_and_last_guard_still_applies():
     response = _post_graphql(ROOT_PAGE_QUERY, variables={"first": 1, "last": 1})
     payload = response.json()
     assert "errors" in payload
+    assert payload["data"] is None, payload
     assert "mutually exclusive" in payload["errors"][0]["message"]
 
 
@@ -357,8 +477,9 @@ def test_root_keyset_order_by_mints_order_fingerprinted_cursors():
     # Default order: the fingerprint mismatch rejects the replay.
     response = _post_graphql(ROOT_PAGE_QUERY, variables={"first": 2, "after": ordered_cursor})
     payload = response.json()
-    assert "errors" in payload
+    assert "errors" in payload, payload
     assert "invalid cursor" in payload["errors"][0]["message"]
+    assert payload["data"] is None, payload
 
 
 @pytest.mark.django_db
@@ -386,6 +507,30 @@ def test_root_keyset_order_by_literal_string_none_title_round_trips():
     titles = [e["node"]["title"] for e in data2["allLibraryIssuesConnection"]["edges"]]
     assert "None" not in titles
     assert "None2" in titles
+
+
+@pytest.mark.django_db
+def test_root_keyset_cursors_do_not_disclose_ordering_values():
+    """An ``orderBy:`` cursor's encrypted payload does not contain the ordering value."""
+    astronomy, _botany, _empty = _seed_periodicals()
+    sentinel = "cursor-secret-value"
+    models.Issue.objects.create(periodical=astronomy, number=80, title=sentinel)
+    data = _assert_graphql_success(
+        """
+        query {
+          allLibraryIssuesConnection(first: 20, orderBy: [{ title: ASC }]) {
+            edges { cursor node { title } }
+          }
+        }
+        """,
+    )
+    edge = next(
+        e for e in data["allLibraryIssuesConnection"]["edges"] if e["node"]["title"] == sentinel
+    )
+    prefix, encrypted = from_base64(edge["cursor"])
+    assert prefix == KEYSET_CURSOR_PREFIX
+    assert sentinel not in encrypted
+    assert sentinel.encode() not in base64.urlsafe_b64decode(encrypted)
 
 
 NESTED_QUERY = """
@@ -736,6 +881,34 @@ def test_root_keyset_unbounded_after_caps_at_relay_max_results():
 
 
 @pytest.mark.django_db
+def test_root_keyset_omitted_pagination_returns_the_full_set_under_the_cap():
+    """Omitting ``first`` / ``last`` / ``after`` / ``before`` serves every row under the Relay cap."""
+    _seed_periodicals()
+    data = _assert_graphql_success(
+        """
+        {
+          allLibraryIssuesConnection {
+            pageInfo { hasNextPage hasPreviousPage }
+            edges { node { title } }
+          }
+        }
+        """,
+    )
+    page = data["allLibraryIssuesConnection"]
+    assert _titles(page) == [
+        "Astro #5",
+        "Astro #4",
+        "Astro #3",
+        "Bot #3",
+        "Astro #2",
+        "Bot #2",
+        "Astro #1",
+        "Bot #1",
+    ]
+    assert page["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": False}
+
+
+@pytest.mark.django_db
 def test_nested_keyset_omitted_first_caps_at_relay_max_results():
     """Optimized nested pages apply the same default cap as the root slicer."""
     periodical = models.Periodical.objects.create(name="Large Periodical")
@@ -827,3 +1000,121 @@ def test_nested_keyset_window_keeps_embargoed_rows_for_staff():
     astro = by_name["Astronomy Weekly"]
     assert _titles(astro) == ["Embargoed #6", "Astro #5"]
     assert astro["totalCount"] == 6
+
+
+_HOLDER_PAGE_QUERY = """
+query ($first: Int, $after: String) {
+  issues(first: $first, after: $after) {
+    totalCount
+    pageInfo { hasNextPage endCursor }
+    edges { cursor node { title } }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_keyset_list_source_is_rejected_over_http():
+    """A keyset connection resolver that returns a list is refused on the wire."""
+
+    def _list_resolver(root, info):
+        return list(models.Issue.objects.all())
+
+    _seed_three_issues()
+    payload = _post_holder(
+        _issue_holder_schema(_list_resolver),
+        "{ issues(first: 1) { edges { cursor } } }",
+    )
+    assert payload["data"] is None, payload
+    assert "errors" in payload, payload
+    assert "must return a QuerySet" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_keyset_pre_sliced_source_is_rejected_over_http():
+    """A keyset connection resolver that returns an already-sliced QuerySet is refused."""
+
+    def _sliced_resolver(root, info):
+        return models.Issue.objects.all()[:5]
+
+    payload = _post_holder(
+        _issue_holder_schema(_sliced_resolver),
+        "{ issues(first: 1) { edges { cursor } } }",
+    )
+    assert payload["data"] is None, payload
+    assert "errors" in payload, payload
+    assert "already-sliced" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_keyset_first_page_slices_and_counts():
+    """An async keyset field slices the first page through the async engine and ``acount``."""
+
+    async def _async_resolver(root, info):
+        return models.Issue.objects.all()
+
+    await sync_to_async(_seed_three_issues)()
+    payload = await _post_async_holder(
+        _issue_holder_schema(_async_resolver),
+        _HOLDER_PAGE_QUERY,
+        variables={"first": 2},
+    )
+    assert payload.get("errors") is None, payload
+    page = payload["data"]["issues"]
+    assert page["totalCount"] == 3
+    assert page["pageInfo"]["hasNextPage"] is True
+    assert [edge["node"]["title"] for edge in page["edges"]] == ["i3", "i2"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_keyset_after_cursor_continues_the_page():
+    """A minted async keyset cursor round-trips on the same async field."""
+
+    async def _async_resolver(root, info):
+        return models.Issue.objects.all()
+
+    await sync_to_async(_seed_three_issues)()
+    schema = _issue_holder_schema(_async_resolver)
+    first = await _post_async_holder(schema, _HOLDER_PAGE_QUERY, variables={"first": 2})
+    assert first.get("errors") is None, first
+    cursor = first["data"]["issues"]["pageInfo"]["endCursor"]
+    second = await _post_async_holder(
+        schema,
+        _HOLDER_PAGE_QUERY,
+        variables={"first": 2, "after": cursor},
+    )
+    assert second.get("errors") is None, second
+    assert [edge["node"]["title"] for edge in second["data"]["issues"]["edges"]] == ["i1"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_keyset_total_count_only():
+    """A totalCount-only async keyset query counts via ``acount`` and fetches no edges."""
+
+    async def _async_resolver(root, info):
+        return models.Issue.objects.all()
+
+    await sync_to_async(_seed_three_issues)()
+    payload = await _post_async_holder(
+        _issue_holder_schema(_async_resolver),
+        "{ issues { totalCount } }",
+    )
+    assert payload.get("errors") is None, payload
+    assert payload["data"]["issues"] == {"totalCount": 3}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_keyset_deferred_cursor_column_is_loaded():
+    """Cursor minting on an async keyset field must not lazy-load a deferred order column."""
+
+    async def _async_resolver(root, info):
+        return models.Issue.objects.defer("number", "title")
+
+    await sync_to_async(_seed_three_issues)()
+    payload = await _post_async_holder(
+        _issue_holder_schema(_async_resolver),
+        "{ issues(first: 1) { edges { cursor } } }",
+    )
+    assert payload.get("errors") is None, payload
+    assert len(payload["data"]["issues"]["edges"]) == 1
+    assert payload["data"]["issues"]["edges"][0]["cursor"]

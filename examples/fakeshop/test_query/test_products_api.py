@@ -350,9 +350,10 @@ def test_create_category_happy_path():
     """``createCategory`` (the >=1 Category write) creates a fresh-named row end to end.
 
     Exercises a second model through the pipeline. ``Category.name`` is
-    ``unique=True``, so the name must not be one ``seed_data`` produced (Faker
-    provider names) - ``"zzz_live_cat"`` is reserved for the cascade seed helper's
-    namespace and never a provider name, so no spurious uniqueness ``FieldError``.
+    ``unique=True``, so the written name takes the ``zzz_`` namespace that
+    ``examples/fakeshop/apps/products/services.py::seed_cascade_split`` and its
+    siblings are named under - never a Faker provider name, so no spurious
+    uniqueness ``FieldError``. The row is this test's own, not a seeded one.
     """
     create_users(1)
     seed_data(1)
@@ -761,6 +762,9 @@ def test_visibility_scoped_update_delete_hidden_private_row_is_not_found():
     """
     create_users(1)
     chain = seed_cascade_split()
+    # Read from the fixture rather than spelled again: the row's name is the seed
+    # helper's to choose, and the claim here is that the refused write left it alone.
+    seeded_name = chain["item_under_private"].name
     private_gid = _global_id("products.item", chain["item_under_private"].pk)
     public_gid = _global_id("products.item", chain["item_under_public"].pk)
     client = _login_with_perm("view_item_1", "change_item", "delete_item")
@@ -777,7 +781,7 @@ def test_visibility_scoped_update_delete_hidden_private_row_is_not_found():
     assert result["node"] is None
     assert [e["field"] for e in result["errors"]] == ["id"]
     chain["item_under_private"].refresh_from_db()
-    assert chain["item_under_private"].name == "zzz_item_under_private"
+    assert chain["item_under_private"].name == seeded_name
 
     # Hidden private row: delete -> not-found FieldError on `id`, row still present.
     response = _post_graphql(_DELETE_ITEM, client=client, variables={"id": private_gid})
@@ -1759,6 +1763,7 @@ def test_products_categories_filter_by_name_denied_for_anonymous():
     )
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "staff user" in payload["errors"][0]["message"]
 
 
@@ -1780,6 +1785,7 @@ def test_products_categories_name_permission_fires_for_non_exact_lookup():
     )
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "staff user" in payload["errors"][0]["message"]
 
 
@@ -1794,6 +1800,7 @@ def test_products_items_related_category_name_permission_fires_for_anonymous():
     )
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "staff user" in payload["errors"][0]["message"]
 
 
@@ -1816,6 +1823,7 @@ def test_products_items_flat_category_name_permission_fires_for_anonymous():
     )
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "staff user" in payload["errors"][0]["message"]
 
 
@@ -1840,6 +1848,7 @@ def test_products_items_deep_flat_category_name_permission_fires_for_anonymous()
     )
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "staff user" in payload["errors"][0]["message"]
 
 
@@ -2060,6 +2069,7 @@ def test_products_categories_order_by_name_denied_for_anonymous():
     )
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "staff user" in payload["errors"][0]["message"]
 
 
@@ -2093,6 +2103,7 @@ def test_products_items_order_by_related_category_name_denied_for_anonymous():
     )
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "staff user" in payload["errors"][0]["message"]
 
 
@@ -2407,8 +2418,11 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
     Seeds a private Category with a public Item carrying a public Entry (via a
     public Property under that same private Category); an anonymous
     ``allEntries`` request returns no entry whose item's category is private -
-    the cascade reaches Entry -> Item -> Category. The fully-public control entry
-    IS returned, proving narrowing (not a blanket empty result).
+    the cascade reaches Entry -> Item -> Category. Mixed-edge entries isolate
+    each hop: a public property under the public category cannot keep an entry
+    whose item sits under the private category, and the reverse hop drops too.
+    The fully-public control entry IS returned, proving narrowing (not a
+    blanket empty result).
     """
     create_users(1)
     chain = seed_cascade_split()
@@ -2431,6 +2445,9 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
     # The cascade hides the entry whose item's category is private...
     assert chain["private_cat"].name not in category_names
     assert chain["entry_under_private"].value not in values
+    # ...and each mixed-edge hop alone is enough (the other target stays public).
+    assert chain["entry_via_private_item"].value not in values
+    assert chain["entry_via_private_property"].value not in values
     # ...but the fully-public control entry is still visible (narrowing, not empty).
     assert chain["entry_under_public"].value in values
 
@@ -2481,9 +2498,10 @@ def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
     Entry whose ``item`` (or ``property``) target is hidden from this user is
     dropped from the root rather than surfaced with an unresolvable non-null FK.
     ``entry_under_private`` (item + property both under the PRIVATE category) is
-    dropped; the fully-public ``entry_under_public`` survives and its nested
-    ``item { category { name } }`` resolves cleanly. The contract: hidden-target
-    rows are dropped, not returned as ``RelatedObjectDoesNotExist``.
+    dropped; mixed-edge entries isolate each hop the same way. The fully-public
+    ``entry_under_public`` survives and its nested ``item { category { name } }``
+    resolves cleanly. The contract: hidden-target rows are dropped, not returned
+    as ``RelatedObjectDoesNotExist``.
     """
     create_users(1)
     chain = seed_cascade_split()
@@ -2503,6 +2521,9 @@ def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
     # Entry under the private category is dropped...
     assert chain["entry_under_private"].value not in values
     assert chain["private_cat"].name not in category_names
+    # ...each mixed-edge hop alone drops too (the other target stays public)...
+    assert chain["entry_via_private_item"].value not in values
+    assert chain["entry_via_private_property"].value not in values
     # ...the fully-public entry survives with its nested item/category intact.
     assert chain["entry_under_public"].value in values
     assert chain["public_cat"].name in category_names
@@ -2638,11 +2659,11 @@ def test_cascade_query_count_fixed():
     ``item`` to the custom-hooked ``ItemType`` / ``CategoryType``, the optimizer
     downgrades the forward-FK ``select_related`` to a windowed ``Prefetch`` chain
     (the shipped ``get_queryset`` -> ``Prefetch`` rule; spec-034). The
-    anonymous request issues no auth queries, so the products query count is a
-    deterministic 3 (one entry slice + one ``item`` prefetch + one ``category``
-    prefetch), independent of how ``seed_data`` assigned row privacy. The
-    cascade's nested ``IN (SELECT`` subqueries appear in the SQL, so the test
-    cannot pass on a fall-through that skipped the cascade.
+    anonymous request issues no auth queries, so each products table is read
+    once (entry slice, item prefetch, category prefetch), independent of how
+    ``seed_data`` assigned row privacy. The cascade's nested ``IN (SELECT``
+    subqueries appear on the entry ``SELECT``, so the test cannot pass on a
+    fall-through that skipped the cascade.
     """
     create_users(1)
     seed_data(1)
@@ -2655,21 +2676,27 @@ def test_cascade_query_count_fixed():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
-    # Fixed, structurally deterministic: entry slice + item prefetch + category
+
+    # One SELECT per products table: entry slice + item prefetch + category
     # prefetch (forward-FK select_related downgraded to Prefetch by the hooks).
-    assert len(captured) == 3, [query["sql"] for query in captured]
-    all_sql = " ".join(query["sql"] for query in captured)
+    def _from(table):
+        # Outer FROM only: cascade subqueries alias the table (`FROM "t" "V0"`).
+        needle = f'FROM "{table}" WHERE'
+        return [query["sql"] for query in captured if needle in query["sql"]]
+
+    entry_sql = _from("products_entry")
+    item_sql = _from("products_item")
+    category_sql = _from("products_category")
+    assert len(entry_sql) == 1, entry_sql
+    assert len(item_sql) == 1, item_sql
+    assert len(category_sql) == 1, category_sql
     # Cascade composed its subqueries inline (zero added round-trips), not a
-    # fall-through that skipped the cascade.
-    assert "IN (SELECT" in all_sql
+    # fall-through that skipped the cascade. Pin it on the entry SELECT so a
+    # subquery that only appeared on a prefetch cannot satisfy the claim.
+    assert "IN (SELECT" in entry_sql[0]
     # The forward chain plans as a Prefetch chain, NOT a select_related JOIN
     # across products tables (the hook-presence downgrade).
-    assert not any(
-        "products_entry" in query["sql"]
-        and "products_item" in query["sql"]
-        and "JOIN" in query["sql"].upper()
-        for query in captured
-    )
+    assert " JOIN " not in entry_sql[0].upper()
 
 
 @pytest.mark.django_db
@@ -2696,6 +2723,7 @@ def test_cascade_composes_with_filter_and_order_live():
     )
     gated_payload = gated.json()
     assert "errors" in gated_payload, gated_payload
+    assert gated_payload["data"] is None, gated_payload
     assert "staff user" in gated_payload["errors"][0]["message"]
 
     # (b) anonymous filter (no gate on `id`) + order (no gate on Item.name) on top
@@ -2971,7 +2999,9 @@ def test_get_query_with_null_param_executes_like_upstream(param):
     response = client.get("/graphql/", {"query": "{ __typename }", param: "null"})
 
     assert response.status_code == 200
-    assert response.json()["data"] == {"__typename": "Query"}
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"] == {"__typename": "Query"}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -3631,6 +3661,9 @@ def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found(
     """
     create_users(1)
     chain = seed_cascade_split()
+    # Read from the fixture rather than spelled again: the row's name is the seed
+    # helper's to choose, and the claim here is that the refused write left it alone.
+    seeded_name = chain["item_under_private"].name
     private_gid = _global_id("products.item", chain["item_under_private"].pk)
     public_gid = _global_id("products.item", chain["item_under_public"].pk)
     client = _login_with_perm("view_item_1", "change_item")
@@ -3646,7 +3679,7 @@ def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found(
     assert result["node"] is None
     assert [e["field"] for e in result["errors"]] == ["id"]
     chain["item_under_private"].refresh_from_db()
-    assert chain["item_under_private"].name == "zzz_item_under_private"
+    assert chain["item_under_private"].name == seeded_name
 
     # Contrast: the SAME update succeeds for the visible public row.
     response = _post_graphql(
@@ -4868,3 +4901,43 @@ def test_renamed_serializer_scalar_validation_error_keys_to_graphql_wire_name():
     assert [e["field"] for e in result["errors"]] == ["displayName"]
     assert "not allowed" in result["errors"][0]["messages"][0]
     assert not models.Item.objects.filter(name=REJECTED_RENAMED_DISPLAY_NAME).exists()
+
+
+@pytest.mark.django_db
+def test_category_type_items_are_both_and_properties_are_connection_only():
+    """``CategoryType`` ships both relation shapes on one type over ``/graphql/``.
+
+    ``items`` is the explicit ``relation_shapes = "both"`` opt-in (list sibling
+    beside ``itemsConnection``). ``properties`` declares nothing, so the default
+    ``"connection"`` shape publishes ``propertiesConnection`` and drops the raw
+    list - selecting ``properties { id }`` is a validation error because the
+    field is absent from the SDL, not because it is merely unbounded.
+    """
+    response = _post_graphql(
+        '{ __type(name: "CategoryType") { fields { name } } }',
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    published = payload["data"]["__type"]
+    assert published is not None
+    names = {field["name"] for field in published["fields"]}
+    assert "items" in names
+    assert "itemsConnection" in names
+    assert "propertiesConnection" in names
+    assert "properties" not in names
+
+
+@pytest.mark.django_db
+def test_category_properties_list_is_not_selectable_over_http():
+    """The connection-only default leaves no ``properties`` field to select on the shipped endpoint."""
+    response = _post_graphql(
+        "{ allCategories(first: 1) { edges { node { properties { id } } } } }",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None, payload
+    assert any(
+        "Cannot query field 'properties'" in error.get("message", "")
+        for error in payload.get("errors", [])
+    ), payload

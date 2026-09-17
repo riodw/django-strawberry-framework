@@ -5,19 +5,20 @@ Covers the ``Meta.relation_shapes`` Phase-2.5 synthesis surface
 card-named two-file split). The ``Meta``-key *validation* tests sit with the
 other Meta validation in ``tests/types/test_base.py``. These stay package-side
 because they assert what a live query cannot: finalization
-``ConfigurationError``s never appear in the example schema, and the
-fast-path / windowed-prefetch tests pin SQL shape, query counts, cached-plan
-identity, and the per-parent fallback - the
-``examples/fakeshop/test_query/README.md`` live-HTTP-first rule's
-"keep when it asserts query planning / query count / construction-time
-validation" clause. The shipped live nested-connection proofs (the
-synthesized ``library`` relation connections and ``allLibraryGenresConnection``)
-run in ``examples/fakeshop/test_query/test_library_api.py``.
-
-Now that ``033`` has landed, the optimizer plans the synthesized connections
-into windowed prefetches, so the fast-path tests here pin SQL shape and query
-count; the optimizer-less behavior tests still pin rows / pagination /
-argument presence on the per-parent fallback.
+``ConfigurationError``s never appear in the example schema (explicit
+``"connection"`` / ``"both"`` over a non-Node target, generated-name collisions),
+registry teardown / partial-finalize re-entrancy, ``relation_shapes`` variants
+fakeshop does not declare (default connection-only on both M2M directions,
+explicit ``"list"``, a Node-shaped consumer-authored many-relation), reverse FK
+without ``related_name`` (every fakeshop fixture sets one), windowed-prefetch
+SQL shape and query counts, optimizer-on vs optimizer-off wire parity, planted
+``to_attr`` routing, strictness logs, and direct ``_resolve_from_window`` /
+``_consume_window`` guards. Wire pagination, sidecar args, ``totalCount``,
+nested ``pageInfo``, and shipped SDL field presence live in
+``examples/fakeshop/test_query/test_library_api.py`` and
+``examples/fakeshop/test_query/test_products_api.py``. The optimizer-less
+``1 + N`` cost lives in
+``examples/fakeshop/test_query/test_products_visibility_api.py``.
 """
 
 from types import SimpleNamespace
@@ -25,7 +26,6 @@ from types import SimpleNamespace
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, Shelf
-from apps.products import services
 from apps.products.models import Category, Item, Property
 from django.db import connection as db_connection
 from django.db import models as djmodels
@@ -47,7 +47,6 @@ from django_strawberry_framework.connection import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, filter_input_type
-from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import _register_relation_connection_teardown
 
@@ -96,18 +95,6 @@ def _schema_with_root(declaring_type, *, field_name="objs"):
     return strawberry.Schema(query=query_cls, config=strawberry_config())
 
 
-def _field_args_block(sdl, field_name):
-    """Return the SDL argument block of ``field_name``.
-
-    The Relay pagination args carry descriptions, so graphql-core prints a
-    connection field's arguments one per line - a single-line substring check
-    cannot see them. Slices from ``<field_name>(`` to the closing ``): ``.
-    """
-    _, _, rest = sdl.partition(f"{field_name}(")
-    block, _, _ = rest.partition("): ")
-    return block
-
-
 def _seed_library_books(titles, *, genre_name="fiction"):
     """Create one genre linked to one book per title (library inline-create rule)."""
     branch = Branch.objects.create(name="central")
@@ -122,56 +109,22 @@ def _seed_library_books(titles, *, genre_name="fiction"):
 
 
 # =============================================================================
-# Default "connection": the list sibling is dropped; "both" opts it back in
+# Default "connection" on M2M: fakeshop ships ``"both"`` for genres/books
 # =============================================================================
-
-
-def test_default_connection_only_drops_the_reverse_fk_list_sibling():
-    """A reverse-FK relation becomes ``<field>Connection`` ALONE under the default.
-
-    No ``relation_shapes`` key: the ``"connection"`` default (spec-047
-    Decision 5) adds ``itemsConnection`` and removes ``items: [ItemType!]!``
-    entirely, so there is no list sibling through which a client could bypass
-    the connection's page cap. The bare connection (no target ``totalCount``
-    opt-in) carries no ``totalCount`` field - the type-level counter-fixture for
-    the sidecar/totalCount test below.
-    """
-    _make_type("ItemType", Item, ("id", "name", "category"))
-    category_type = _make_type("CategoryType", Category, ("id", "name", "items"))
-
-    sdl = str(_schema_with_root(category_type))
-    assert "items: [ItemType" not in sdl
-    assert "itemsConnection(" in sdl
-    assert "totalCount" not in sdl
-
-
-def test_explicit_both_restores_the_reverse_fk_list_sibling():
-    """``relation_shapes = {"items": "both"}`` is the raw list's explicit opt-in.
-
-    The other half of Decision 5: the ``"both"`` shape still exists and still
-    emits the list beside the connection - it is now something a schema author
-    asks for, and the list it produces is row-bounded by the request policy
-    (``resource_policy.py::bounded_rows``) rather than unbounded.
-    """
-    _make_type("ItemType", Item, ("id", "name", "category"))
-    category_type = _make_type(
-        "CategoryType",
-        Category,
-        ("id", "name", "items"),
-        meta_extra={"relation_shapes": {"items": "both"}},
-    )
-
-    sdl = str(_schema_with_root(category_type))
-    assert "items: [ItemType" in sdl
-    assert "itemsConnection(" in sdl
 
 
 def test_default_connection_only_covers_both_m2m_directions():
     """Forward AND reverse M2M relations become connection-only under the default.
 
     ``Book.genres`` (forward M2M) and ``Genre.books`` (reverse M2M) both get
-    ``<field>Connection`` and lose their list form - with the reverse-FK case
-    above, all three spec-named eligible kinds are pinned.
+    ``<field>Connection`` and lose their list form when no ``relation_shapes``
+    key is declared. Fakeshop's ``BookType`` / ``GenreType`` opt into
+    ``"both"``, so this default is a construction variant the shipped schema
+    does not publish; the reverse-FK default (``CategoryType.properties``) and
+    the ``"both"`` opt-in (``CategoryType.items``, ``GenreType.books``) are
+    pinned live via ``__type`` in
+    ``examples/fakeshop/test_query/test_products_api.py`` and
+    ``examples/fakeshop/test_query/test_library_api.py``.
     """
     _make_type("BookType", Book, ("id", "title", "genres"))
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
@@ -195,6 +148,8 @@ def test_reverse_fk_without_related_name_resolves_list_and_connection():
     CI because every fakeshop fixture sets ``related_name``. Instance access
     now goes through ``utils.relations.instance_accessor``; the GraphQL field
     names stay query-name-derived (``plainbook`` / ``plainbookConnection``).
+    Stays package-side (rung 5): reaching it live would add a model whose only
+    job is the missing ``related_name``, which no fakeshop app would ship.
 
     Uses the ``managed=False`` + manual ``schema_editor`` pattern from
     ``tests/optimizer/test_relay_id_projection.py``; the app label must be an
@@ -255,39 +210,18 @@ def test_reverse_fk_without_related_name_resolves_list_and_connection():
 
 
 # =============================================================================
-# Explicit shapes: "connection" / "list" narrowing
+# Explicit shapes: "list" narrowing (``"connection"`` is live on PeriodicalType)
 # =============================================================================
 
 
-@pytest.mark.django_db
-def test_shape_connection_suppresses_list():
-    """``"connection"`` removes the list field; the connection resolves rows."""
-    services.seed_data(2)
-    _make_type("ItemType", Item, ("id", "name", "category"))
-    category_type = _make_type(
-        "CategoryType",
-        Category,
-        ("id", "name", "items"),
-        meta_extra={"relation_shapes": {"items": "connection"}},
-    )
-
-    schema = _schema_with_root(category_type)
-    sdl = str(schema)
-    assert "itemsConnection(" in sdl
-    assert "items: [" not in sdl
-
-    result = schema.execute_sync(
-        "{ objs { itemsConnection { edges { node { name } } } } }",
-    )
-    assert result.errors is None
-    total_edges = sum(
-        len(category["itemsConnection"]["edges"]) for category in result.data["objs"]
-    )
-    assert total_edges == Item.objects.count()
-
-
 def test_shape_list_suppresses_connection():
-    """``"list"`` synthesizes nothing - today's shipped shape stays as-is."""
+    """``"list"`` synthesizes nothing - a construction variant fakeshop does not declare.
+
+    Explicit ``relation_shapes = "connection"`` (list sibling dropped) is pinned
+    live on ``PeriodicalType.issues`` via ``__type`` in
+    ``examples/fakeshop/test_query/test_library_api.py``. No shipped type
+    declares ``"list"``.
+    """
     _make_type("ItemType", Item, ("id", "name", "category"))
     category_type = _make_type(
         "CategoryType",
@@ -302,27 +236,18 @@ def test_shape_list_suppresses_connection():
 
 
 # =============================================================================
-# Non-Node targets: silent list-only default vs explicit fail-loud
+# Non-Node targets: explicit fail-loud (silent list-only is live on BookType.loans)
 # =============================================================================
-
-
-def test_non_node_target_silently_list_only():
-    """A non-Node target degrades silently to list-only under the implicit default.
-
-    Decision 6: existing valid schemas (a Node-shaped declaring type over a
-    registered non-Node target) must keep building when this card lands.
-    """
-    _make_type("LoanType", Loan, ("id", "note"), node=False)
-    book_type = _make_type("BookType", Book, ("id", "title", "loans"))
-
-    sdl = str(_schema_with_root(book_type))
-    assert "loans: [LoanType" in sdl
-    assert "loansConnection" not in sdl
 
 
 @pytest.mark.parametrize("shape", ["connection", "both"])
 def test_non_node_target_explicit_raises(shape):
-    """An explicit ``"connection"`` / ``"both"`` over a non-Node target raises at finalize."""
+    """An explicit ``"connection"`` / ``"both"`` over a non-Node target raises at finalize.
+
+    Construction-time ``ConfigurationError``: the silent list-only default is
+    pinned live at
+    ``examples/fakeshop/test_query/test_library_api.py::test_book_loans_relation_stays_list_only``.
+    """
     _make_type("LoanType", Loan, ("id", "note"), node=False)
     _make_type(
         "BookType",
@@ -349,7 +274,10 @@ def test_consumer_overridden_relation_skipped():
     No ``relation_shapes`` entry for ``items``: the consumer annotation owns
     the field's shape, so the SDL carries the consumer's list field and no
     ``itemsConnection`` (an explicit entry would have raised at type
-    creation - pinned in ``tests/types/test_base.py``).
+    creation - pinned in ``tests/types/test_base.py``). Fakeshop's
+    consumer-authored ``BranchType.shelves`` is on a non-Node type, so the
+    synthesis step never considers it; a Node-shaped consumer override is a
+    construction variant the shipped schema does not declare.
     """
     item_type = _make_type("ItemType", Item, ("id", "name", "category"))
     category_type = _make_type(
@@ -402,118 +330,6 @@ def test_generated_name_graphql_camel_collision_raises():
     assert "'items_connection'" in message
     assert "'itemsConnection'" in message
     assert 'relation_shapes = {"items": "list"}' in message
-
-
-# =============================================================================
-# Target-driven sidecar arguments + totalCount; visibility; pagination
-# =============================================================================
-
-
-def test_synthesized_connection_carries_sidecar_args_and_total_count():
-    """The synthesized field carries the TARGET's sidecar args and ``totalCount`` opt-in.
-
-    Type-level target-driven contract (Decision 6): ``ItemType`` declares
-    ``filterset_class`` / ``orderset_class`` / ``connection`` so
-    ``itemsConnection`` gets ``filter:`` / ``orderBy:`` arguments and a
-    ``totalCount``-carrying connection type; ``PropertyType`` declares none,
-    so ``propertiesConnection`` carries only the four Relay pagination args
-    and no ``totalCount``.
-    """
-
-    class _ItemFilter(FilterSet):
-        class Meta:
-            model = Item
-            fields = {"name": ["exact"]}
-
-    class _ItemOrder(OrderSet):
-        class Meta:
-            model = Item
-            fields = ["name"]
-
-    _make_type(
-        "ItemType",
-        Item,
-        ("id", "name", "category"),
-        meta_extra={
-            "filterset_class": _ItemFilter,
-            "orderset_class": _ItemOrder,
-            "connection": {"total_count": True},
-        },
-    )
-    _make_type("PropertyType", Property, ("id", "name", "category"))
-    category_type = _make_type(
-        "CategoryType",
-        Category,
-        (
-            "id",
-            "name",
-            "items",
-            "properties",
-        ),
-    )
-
-    sdl = str(_schema_with_root(category_type))
-    items_args = _field_args_block(sdl, "itemsConnection")
-    assert "filter:" in items_args
-    assert "orderBy:" in items_args
-    properties_args = _field_args_block(sdl, "propertiesConnection")
-    assert "filter:" not in properties_args
-    assert "orderBy:" not in properties_args
-    # Only ItemType's connection type (the opt-in) carries totalCount.
-    assert sdl.count("totalCount") == 1
-    assert "ItemTypeConnection" in sdl
-
-
-@pytest.mark.django_db
-def test_synthesized_connection_runs_target_get_queryset():
-    """The target's ``get_queryset`` visibility hook filters inside the nested connection."""
-    _seed_library_books(["visible", "hidden"])
-
-    def get_queryset(cls, queryset, info, **kwargs):
-        return queryset.filter(title="visible")
-
-    _make_type(
-        "BookType",
-        Book,
-        ("id", "title", "genres"),
-        namespace_extra={"get_queryset": classmethod(get_queryset)},
-    )
-    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
-
-    schema = _schema_with_root(genre_type)
-    result = schema.execute_sync(
-        "{ objs { booksConnection { edges { node { title } } } } }",
-    )
-    assert result.errors is None
-    titles = [
-        edge["node"]["title"]
-        for genre in result.data["objs"]
-        for edge in genre["booksConnection"]["edges"]
-    ]
-    assert titles == ["visible"]
-
-
-@pytest.mark.django_db
-def test_synthesized_connection_paginates():
-    """``first:`` / ``pageInfo`` flow through the relation-manager-seeded pipeline.
-
-    Behavior-only assertions (rows + ``pageInfo``) per the pre-``033``
-    posture - the synthesized connection's optimizer plan is empty and no
-    SQL shape is pinned.
-    """
-    _seed_library_books(["a", "b", "c"])
-    _make_type("BookType", Book, ("id", "title", "genres"))
-    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
-
-    schema = _schema_with_root(genre_type)
-    result = schema.execute_sync(
-        "{ objs { booksConnection(first: 2) {"
-        " edges { node { title } } pageInfo { hasNextPage } } } }",
-    )
-    assert result.errors is None
-    connection = result.data["objs"][0]["booksConnection"]
-    assert [edge["node"]["title"] for edge in connection["edges"]] == ["a", "b"]
-    assert connection["pageInfo"]["hasNextPage"] is True
 
 
 # =============================================================================
@@ -753,136 +569,6 @@ def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild
 
     assert "items_connection" not in fresh_category_type.__dict__
     assert fresh_category_type.__django_strawberry_definition__.relation_connections is None
-
-
-# =============================================================================
-# spec-032 - cursor-contract conformance on the synthesized relation
-# connection (Decision 9). The live PRIMARY matrix runs against the shipped
-# root ``allLibraryGenresConnection``; this mirror exercises the same matrix
-# through the relation-manager-seeded pipeline on a reverse-FK cardinality
-# fixture (``Shelf.books``), parametrized over the keyless implicit default
-# and an explicit ``"connection"`` key. Both arms resolve to the same
-# ``"connection"`` shape, so what the pair separates is default resolution
-# from explicit lookup, not one shape from another. These schemas run
-# WITHOUT the optimizer (the per-parent pipeline baseline), so the assertions
-# are
-# behavior-only (rows, cursors, ``pageInfo``); the windowed SQL-shape pins live
-# in the ``_genres_list_schema(optimizer=True)`` fast-path tests below.
-# =============================================================================
-
-
-def _shelf_books_connection_schema(shape):
-    """Build the reverse-FK ``Shelf.books`` cardinality-fixture schema.
-
-    ``shape == "connection"`` passes an explicit ``relation_shapes`` key;
-    ``shape == "default"`` passes none, so the implicit default path is the
-    thing tested. The two resolve to the same shape - the package default
-    is ``"connection"`` - so the parametrization separates default
-    resolution from explicit lookup. Either way the nested field is
-    ``booksConnection``.
-    """
-    _make_type("BookType", Book, ("id", "title"))
-    shelf_type = _make_type(
-        "ShelfType",
-        Shelf,
-        ("id", "code", "books"),
-        meta_extra={"relation_shapes": {"books": shape}} if shape == "connection" else None,
-    )
-    return _schema_with_root(shelf_type)
-
-
-def _books_connection(schema, args, selection):
-    """Execute one nested ``booksConnection`` query; return the connection dict.
-
-    Asserts the no-error property, so every caller pins at least
-    query-succeeds; the single seeded shelf is the only root row.
-    """
-    suffix = f"({args})" if args else ""
-    result = schema.execute_sync(
-        f"{{ objs {{ booksConnection{suffix} {{ {selection} }} }} }}",
-    )
-    assert result.errors is None, result.errors
-    return result.data["objs"][0]["booksConnection"]
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["default", "connection"])
-def test_relation_connection_first_overrun(shape):
-    """``first: N`` past the remainder returns the actual remainder."""
-    _seed_library_books(["a", "b", "c"])
-    schema = _shelf_books_connection_schema(shape)
-
-    conn = _books_connection(
-        schema,
-        "first: 10",
-        "edges { node { title } } pageInfo { hasNextPage }",
-    )
-    assert [edge["node"]["title"] for edge in conn["edges"]] == ["a", "b", "c"]
-    assert conn["pageInfo"]["hasNextPage"] is False
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["default", "connection"])
-def test_relation_connection_stale_after_no_error(shape):
-    """A deleted-row ``after`` cursor does NOT error.
-
-    Pins ONLY the no-error property - offset cursors encode a position, not
-    row identity, so no skip / duplicate / next-row assertion is made.
-    """
-    _, books = _seed_library_books(
-        [
-            "a",
-            "b",
-            "c",
-            "d",
-        ],
-    )
-    schema = _shelf_books_connection_schema(shape)
-
-    page_one = _books_connection(schema, "first: 2", "pageInfo { endCursor }")
-    end_cursor = page_one["pageInfo"]["endCursor"]
-    # Delete the row the cursor position points at (second in pk order).
-    books[1].delete()
-
-    # The helper's ``result.errors is None`` assertion IS the test.
-    _books_connection(
-        schema,
-        f'first: 2, after: "{end_cursor}"',
-        "edges { node { title } }",
-    )
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["default", "connection"])
-def test_relation_connection_first_and_last_rejected(shape):
-    """``first`` + ``last`` together surface the shipped package guard error."""
-    _seed_library_books(["a", "b", "c"])
-    schema = _shelf_books_connection_schema(shape)
-
-    result = schema.execute_sync(
-        "{ objs { booksConnection(first: 1, last: 1) { edges { node { title } } } } }",
-    )
-    assert result.errors is not None
-    assert "mutually exclusive" in str(result.errors[0])
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", ["default", "connection"])
-def test_relation_connection_has_next_page_when_edges_unrequested(shape):
-    """A nested ``pageInfo``-only selection still computes ``hasNextPage``.
-
-    The observable inverse of an unrequested field - a windowed page
-    reports true, an exact page reports false, with no ``edges``
-    selection in either query.
-    """
-    _seed_library_books(["a", "b", "c"])
-    schema = _shelf_books_connection_schema(shape)
-
-    windowed = _books_connection(schema, "first: 2", "pageInfo { hasNextPage }")
-    assert windowed["pageInfo"]["hasNextPage"] is True
-
-    exact = _books_connection(schema, "first: 3", "pageInfo { hasNextPage }")
-    assert exact["pageInfo"]["hasNextPage"] is False
 
 
 # =============================================================================
@@ -2146,17 +1832,6 @@ def test_fallback_when_annotations_missing():
     assert result.errors is None, result.errors
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["a", "b"]
-
-
-@pytest.mark.django_db
-def test_fallback_when_no_optimizer_installed():
-    """No optimizer -> no window planned -> per-parent pipeline, byte-identical results."""
-    _seed_library_books(["a", "b", "c"])
-    query = "{ objs { booksConnection(first: 2) { edges { node { title } } pageInfo { hasNextPage } } } }"
-    no_opt = _exec(_genres_list_schema(optimizer=False), query)
-    conn = no_opt.data["objs"][0]["booksConnection"]
-    assert [e["node"]["title"] for e in conn["edges"]] == ["a", "b"]
-    assert conn["pageInfo"]["hasNextPage"] is True
 
 
 @pytest.mark.django_db

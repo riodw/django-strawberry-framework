@@ -3,7 +3,9 @@
 Covers the exception-containment invariant for the connection surface:
 malformed pagination arguments (negative ``first``/``last``, over-cap ``first``,
 malformed ``after``/``before`` cursors) must surface as ``GraphQLError``
-entries, never as raw ``ValueError``/``TypeError`` tracebacks. Exercised
+entries, never as raw ``ValueError``/``TypeError`` tracebacks. Offset and
+keyset connections each pin negative ``first`` and over-cap ``first``: the
+keyset slicer cannot reuse ``SliceMetadata.from_arguments``. Exercised
 through the live ``/graphql/`` HTTP endpoint (``django.test.Client``) so the
 full Strawberry ``ConnectionExtension`` stack is involved - the
 through-schema mandate for connections.
@@ -14,7 +16,9 @@ shapes it produces: the products connections declare no ``connection`` key, so
 ``GenreType.Meta.connection`` opts in and its connection both declares and
 resolves one. The generated non-opted connection type's inherited SDL
 description is read from the same endpoint, since that description is the only
-part of the bare shape a client can observe.
+part of the bare shape a client can observe. Sidecar argument presence follows
+the node type: ``allLibraryGenresConnection`` publishes ``filter:`` and
+``orderBy:``; ``allLibraryIssuesConnection`` publishes ``orderBy:`` only.
 """
 
 import pytest
@@ -29,12 +33,12 @@ def test_live_negative_first_is_graphql_error():
     seed_data(1)
     payload = graphql_payload("{ allItems(first: -1) { edges { node { id } } } }")
     assert "errors" in payload
+    assert payload["data"] is None, payload
     assert any("non-negative" in str(e.get("message", "")).lower() for e in payload["errors"])
-    # Ensure the error is not a raw ValueError traceback leaking
-    for err in payload["errors"]:
-        # GraphQLError entries have message, not Python traceback
-        assert "ValueError" not in str(err.get("message", ""))
-        assert "Traceback" not in str(err.get("message", ""))
+    # GraphQLError entries carry a message, never a Python traceback
+    messages = [str(e.get("message", "")) for e in payload["errors"]]
+    assert not any("ValueError" in message for message in messages), messages
+    assert not any("Traceback" in message for message in messages), messages
 
 
 @pytest.mark.django_db
@@ -44,6 +48,7 @@ def test_live_over_cap_first_is_graphql_error():
     # Default relay_max_results is 100 (strawberry default)
     payload = graphql_payload("{ allItems(first: 101) { edges { node { id } } } }")
     assert "errors" in payload
+    assert payload["data"] is None, payload
     assert any("cannot be higher than" in str(e.get("message", "")) for e in payload["errors"])
 
 
@@ -55,13 +60,13 @@ def test_live_malformed_after_cursor_is_graphql_error():
         '{ allItems(first: 1, after: "not-a-cursor") { edges { node { id } } } }',
     )
     assert "errors" in payload
+    assert payload["data"] is None, payload
     # The error should mention cursor / pagination, not leak Python types
     assert len(payload["errors"]) >= 1
-    for err in payload["errors"]:
-        msg = str(err.get("message", ""))
-        # Should not leak raw ValueError/TypeError class names
-        assert "ValueError" not in msg
-        assert "TypeError" not in msg
+    # The envelope must not leak raw ValueError / TypeError class names
+    messages = [str(e.get("message", "")) for e in payload["errors"]]
+    assert not any("ValueError" in message for message in messages), messages
+    assert not any("TypeError" in message for message in messages), messages
 
 
 @pytest.mark.django_db
@@ -72,6 +77,7 @@ def test_live_malformed_before_cursor_is_graphql_error():
         '{ allItems(last: 1, before: "bad-base64!") { edges { node { id } } } }',
     )
     assert "errors" in payload
+    assert payload["data"] is None, payload
     assert len(payload["errors"]) >= 1
 
 
@@ -81,6 +87,7 @@ def test_live_first_and_last_together_is_graphql_error():
     seed_data(1)
     payload = graphql_payload("{ allItems(first: 1, last: 1) { edges { node { id } } } }")
     assert "errors" in payload
+    assert payload["data"] is None, payload
     assert any("mutually exclusive" in str(e.get("message", "")) for e in payload["errors"])
 
 
@@ -99,7 +106,23 @@ def test_live_keyset_negative_first_is_graphql_error():
         "{ allLibraryIssuesConnection(first: -5) { edges { node { id } } } }",
     )
     assert "errors" in payload
+    assert payload["data"] is None, payload
     assert any("non-negative" in str(e.get("message", "")).lower() for e in payload["errors"])
+
+
+@pytest.mark.django_db
+def test_live_keyset_over_cap_first_is_graphql_error():
+    """Keyset ``first: 101`` is a GraphQLError on the declared-cursor connection too.
+
+    Offset over-cap is pinned on ``allItems``. The keyset slicer re-spells the
+    same bound because a value cursor cannot pass through ``SliceMetadata``.
+    """
+    payload = graphql_payload(
+        "{ allLibraryIssuesConnection(first: 101) { edges { node { id } } } }",
+    )
+    assert "errors" in payload
+    assert payload["data"] is None, payload
+    assert any("cannot be higher than" in str(e.get("message", "")) for e in payload["errors"])
 
 
 @pytest.mark.django_db
@@ -123,7 +146,7 @@ def test_total_count_is_a_field_only_on_the_connection_that_opted_in():
         "Cannot query field 'totalCount'" in str(error.get("message", ""))
         for error in not_opted["errors"]
     ), not_opted
-    assert not_opted.get("data") is None, not_opted
+    assert not_opted["data"] is None, not_opted
 
     opted = assert_graphql_success(
         "{ allLibraryGenresConnection(first: 1) { edges { node { name } } totalCount } }",
@@ -146,3 +169,55 @@ def test_the_non_opted_connection_type_keeps_the_inherited_sdl_description():
     data = assert_graphql_success('{ __type(name: "ItemTypeConnection") { description } }')
 
     assert data["__type"]["description"] == "A connection to a list of items."
+
+
+_QUERY_FIELD_ARGS = """
+query {
+  __type(name: "Query") {
+    fields {
+      name
+      args { name }
+    }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("field_name", "required", "forbidden"),
+    [
+        (
+            "allLibraryGenresConnection",
+            (
+                "filter",
+                "orderBy",
+                "first",
+                "last",
+                "before",
+                "after",
+            ),
+            (),
+        ),
+        (
+            "allLibraryIssuesConnection",
+            (
+                "orderBy",
+                "first",
+                "last",
+                "before",
+                "after",
+            ),
+            ("filter",),
+        ),
+    ],
+    ids=["genres-both-sidecars", "issues-order-only"],
+)
+def test_root_connection_arguments_follow_declared_sidecars(field_name, required, forbidden):
+    """``filter:`` / ``orderBy:`` are published exactly when the node type declared those sidecars."""
+    data = assert_graphql_success(_QUERY_FIELD_ARGS)
+    fields = {field["name"]: field for field in data["__type"]["fields"]}
+    assert field_name in fields, sorted(fields)
+    names = {arg["name"] for arg in fields[field_name]["args"]}
+    assert set(required) <= names, names
+    assert names.isdisjoint(forbidden), names

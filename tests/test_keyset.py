@@ -2,13 +2,28 @@
 
 The live keyset acceptance surface runs in
 ``examples/fakeshop/test_query/test_keyset_api.py`` (round-trips, stability,
-uniform value-position, permission-aware decode - the README live-HTTP-first
-rule). These stay package-side because they assert what a live query cannot:
-construction/finalization ``ConfigurationError`` branches, the codec's
-rejection matrix (a live request only ever shows the uniform error), the
-shared bounds contract's error arms, SQL shape of the two window renderings,
-the lateral seek's raw-SQL forms plus its fetch-time structural recognition,
-and the defensive fallback arms no planned query produces.
+uniform value-position, tamper / offset / fingerprint rejection, literal
+``"None"`` title seek, opaque deterministic cursors, permission-aware decode).
+These stay package-side because they assert what a live query cannot:
+
+- construction/finalization ``ConfigurationError`` (``split_order_ref``,
+  ``validate_cursor_field_columns``);
+- codec internals a response cannot uniquely show: decoded value tuples,
+  AES-SIV cache identity, soft-dep ``cryptography`` absence, the per-encoding
+  forged-payload rejection matrix (a live request only ever shows the uniform
+  ``invalid cursor`` error), ``SECRET_KEY_FALLBACKS`` attribute-absent getattr,
+  NULL serialize/mint refusals;
+- shared bounds-contract helper arms (``UnwindowableConnection``, ``ValueError``
+  page-size, ``resolve_relay_max_results`` wrapper precedence) - GraphQLError
+  wrapping of negative ``first`` is live in
+  ``examples/fakeshop/test_query/test_connection_pagination_api.py``;
+- SQL shape of the two window renderings and ORM annotation attributes
+  (``WINDOW_*``) the live nested pages pin only as ``totalCount`` / one batched
+  query / no ``FILTER``;
+- the lateral seek's raw-SQL forms plus fetch-time structural recognition
+  (SQLite never emits LATERAL);
+- defensive fallbacks no planned query produces (reversed keyset
+  ``OptimizerError``, lateral arity downgrade).
 """
 
 import base64
@@ -17,7 +32,7 @@ import pytest
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
 from graphql import GraphQLError
-from strawberry.relay.utils import from_base64, to_base64
+from strawberry.relay.utils import to_base64
 
 import django_strawberry_framework as framework
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
@@ -118,6 +133,12 @@ def test_validate_cursor_field_accepts_declared_shape():
         (("number", "-number", "id"), "more than once"),
         ((), "must contain at least one order string"),
     ],
+    ids=[
+        "bare-double-dash",
+        "relation-path",
+        "duplicate-column",
+        "empty",
+    ],
 )
 def test_validate_cursor_field_references_match_declaration_rules(cursor_field, expected):
     """Finalization applies the same entry syntax and duplicate rules as class creation."""
@@ -169,31 +190,13 @@ def test_cursor_round_trip_preserves_values():
     assert decoded.values == (7, issue.pk)
 
 
-def test_cursor_payload_is_deterministic_and_confidential():
-    sentinel = "cursor-secret-value"
-    columns = cursor_columns_for(Patron, ("name",))
-    row = Patron(name=sentinel)
-    cursor = encode_keyset_cursor(
-        columns,
-        row,
-        fingerprint=order_fingerprint(("name",)),
-    )
-    assert cursor == encode_keyset_cursor(
-        columns,
-        row,
-        fingerprint=order_fingerprint(("name",)),
-    )
-    prefix, encrypted = from_base64(cursor)
-    assert prefix == KEYSET_CURSOR_PREFIX
-    assert sentinel not in encrypted
-    assert sentinel.encode() not in base64.urlsafe_b64decode(encrypted)
-
-
-def test_decrypt_cursor_payload_normalizes_token_and_json_errors():
-    from django.conf import settings as django_settings
-
+def test_decrypt_cursor_payload_rejects_non_ascii_token():
     with pytest.raises(GraphQLError, match="invalid cursor"):
         _decrypt_cursor_payload("\u00e9", "after")
+
+
+def test_decrypt_cursor_payload_rejects_non_json_plaintext():
+    from django.conf import settings as django_settings
 
     invalid_json = base64.urlsafe_b64encode(
         _cursor_aessiv(django_settings.SECRET_KEY).encrypt(
@@ -238,47 +241,6 @@ def test_decode_rejects_non_base64():
             "!!not-base64!!",
             _issue_columns(),
             fingerprint=_fingerprint(),
-            argument="after",
-        )
-
-
-def test_decode_rejects_foreign_prefix():
-    with pytest.raises(GraphQLError, match="invalid cursor"):
-        decode_keyset_cursor(
-            to_base64("arrayconnection", 3),
-            _issue_columns(),
-            fingerprint=_fingerprint(),
-            argument="after",
-        )
-
-
-@pytest.mark.django_db
-def test_decode_rejects_tampered_ciphertext():
-    periodical = Periodical.objects.create(name="P")
-    issue = Issue.objects.create(periodical=periodical, number=1, title="one")
-    cursor = _mint(issue)
-    prefix, encrypted = from_base64(cursor)
-    assert prefix == KEYSET_CURSOR_PREFIX
-    tampered = to_base64(KEYSET_CURSOR_PREFIX, encrypted[:-2] + "xx")
-    with pytest.raises(GraphQLError, match="invalid cursor"):
-        decode_keyset_cursor(
-            tampered,
-            _issue_columns(),
-            fingerprint=_fingerprint(),
-            argument="after",
-        )
-
-
-@pytest.mark.django_db
-def test_decode_rejects_fingerprint_mismatch():
-    periodical = Periodical.objects.create(name="P")
-    issue = Issue.objects.create(periodical=periodical, number=1, title="one")
-    cursor = _mint(issue)
-    with pytest.raises(GraphQLError, match="invalid cursor"):
-        decode_keyset_cursor(
-            cursor,
-            _issue_columns(),
-            fingerprint="title,id",
             argument="after",
         )
 
@@ -384,25 +346,6 @@ def test_encode_keyset_cursor_rejects_null_ordering_value():
             _Shim(),
             fingerprint=order_fingerprint(("title", "id")),
         )
-
-
-def test_encode_keyset_cursor_preserves_literal_string_none():
-    """A real Char/Text value equal to ``\"None\"`` is still a valid cursor payload."""
-    columns = cursor_columns_for(Issue, ("title", "id"))
-    fingerprint = order_fingerprint(("title", "id"))
-
-    class _Shim:
-        title = "None"
-        id = 1
-
-    cursor = encode_keyset_cursor(columns, _Shim(), fingerprint=fingerprint)
-    decoded = decode_keyset_cursor(
-        cursor,
-        columns,
-        fingerprint=fingerprint,
-        argument="after",
-    )
-    assert decoded.values == ("None", 1)
 
 
 # ---------------------------------------------------------------------------

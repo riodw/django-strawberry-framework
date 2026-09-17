@@ -1,22 +1,35 @@
-"""Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface."""
+"""Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface.
+
+Async ``node`` / ``nodes`` rows on ``/graphql-async/`` are exempt from
+``graphql_client.py`` (sync-only) and use ``AsyncTestClient`` with
+``django_db(transaction=True)``. Typed ``DjangoNodesField`` rows ride a
+holder at ``/graphql-test/`` because the shipped query exposes typed
+``genre(id:)`` only.
+"""
 
 import base64
 import sys
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import pytest
+import strawberry
 from apps.library import models
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.db.models import QuerySet
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.urls import path
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 
-from django_strawberry_framework.testing import TestClient
+from django_strawberry_framework import DjangoNodesField, strawberry_config
+from django_strawberry_framework.permissions import apply_cascade_permissions
+from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 #: Settings that open the spec-048 error policy's pass-through gate for ONE live
 #: request. ``settings.DEBUG`` is the gate, and on this tier it is the only
@@ -653,6 +666,12 @@ def _library_sql(captured: CaptureQueriesContext) -> list[str]:
     return [entry["sql"] for entry in captured.captured_queries if "library_" in entry["sql"]]
 
 
+def _sql_from_table(captured: CaptureQueriesContext, table: str) -> list[str]:
+    """Return captured SQL whose ``FROM`` is exactly ``table`` (not a prefix match)."""
+    needle = f'FROM "{table}"'
+    return [entry["sql"] for entry in captured.captured_queries if needle in entry["sql"]]
+
+
 @pytest.mark.django_db
 def test_library_optimizer_plan_cache_is_reused_across_http_requests():
     """The shipped optimizer plans one document once and reuses that plan next request.
@@ -737,10 +756,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
     Pins the end-to-end contract (spec-016 Decision 4,
     spec-016 #"live HTTP test in `examples/fakeshop/test_query/test_library_api.py` covers"):
     URL routing + view + schema execution + JSON serialization + optimizer
-    cooperation through the real Django + Strawberry HTTP stack. The package-
-    internal return-shape contract is pinned separately by
-    ``tests/test_list_field.py::test_djangolistfield_at_root_position_is_optimized``
-    (spec-016 #"Pinned by `test_djangolistfield_at_root_position_is_optimized`").
+    cooperation through the real Django + Strawberry HTTP stack.
 
     Query count derivation (spec-016 #"pin the assertion to exact query count" - exact ``assertNumQueries(N)``):
       * 1 SELECT for the ``Branch`` root queryset (the ``DjangoListField``
@@ -1233,6 +1249,7 @@ def test_library_genres_filter_by_relay_own_pk_global_id_in_rejects_wrong_type()
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert "GlobalID type mismatch" in payload["errors"][0]["message"]
 
 
@@ -1264,6 +1281,7 @@ def test_library_genres_filter_malformed_own_pk_global_id_raises_globalid_invali
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
     assert "Invalid GlobalID" in error["message"], payload
@@ -1297,6 +1315,7 @@ def test_library_genres_filter_typed_global_id_with_invalid_pk_raises_globalid_i
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
     assert "not a valid Genre primary-key value" in error["message"], payload
@@ -1324,6 +1343,7 @@ def test_library_genres_filter_malformed_own_pk_global_id_in_names_index():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
     assert "at index 0" in error["message"], payload
@@ -1693,6 +1713,7 @@ def test_apply_raises_graphqlerror_on_invalid_filter_input():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert error["message"] == "Invalid filter input"
     extensions = error["extensions"]
@@ -1717,6 +1738,7 @@ def test_apply_passes_graphql_enum_coercion_before_form_validation():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     # GraphQL parser-level enum-coercion error names the offending value and
     # the enum type; the message wording is set by graphql-core and may
@@ -1794,6 +1816,7 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
     assert wrong_response.status_code == 200
     wrong_payload = wrong_response.json()
     assert "errors" in wrong_payload, wrong_payload
+    assert wrong_payload["data"] is None, wrong_payload
     message = wrong_payload["errors"][0]["message"]
     # Under the 0.0.9 model-label default the mismatch message reports the model
     # labels (``library.genre`` expected, ``library.loan`` received), not the
@@ -1887,6 +1910,7 @@ def test_relay_global_id_filter_multihop_leaf_validates_against_the_terminal_mod
     assert rejected.status_code == 200
     rejected_payload = rejected.json()
     assert "errors" in rejected_payload, rejected_payload
+    assert rejected_payload["data"] is None, rejected_payload
     message = rejected_payload["errors"][0]["message"]
     assert "GlobalID type mismatch" in message
     # ``library.book`` expected (the terminal), ``library.genre`` received (the
@@ -2517,6 +2541,7 @@ def test_order_check_permission_denies_for_active_field():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     assert payload["errors"][0]["extensions"]["code"] == "ORDER_PERMISSION_DENIED"
 
 
@@ -2573,6 +2598,7 @@ def test_order_check_permission_denies_active_related_branch():
     assert denial_response.status_code == 200
     denial_payload = denial_response.json()
     assert "errors" in denial_payload, denial_payload
+    assert denial_payload["data"] is None, denial_payload
     assert denial_payload["errors"][0]["extensions"]["code"] == "ORDER_PERMISSION_DENIED"
 
     quiet_response = _post_graphql(
@@ -2883,6 +2909,7 @@ def test_public_patron_exclude_deny_list_shapes_type_and_resolves():
     )
     excluded_payload = excluded_response.json()
     assert "errors" in excluded_payload, excluded_payload
+    assert excluded_payload["data"] is None, excluded_payload
     assert "lifetimeFinesCents" in str(excluded_payload["errors"])
 
 
@@ -2994,6 +3021,45 @@ def test_genre_connection_full_round_trip():
     assert set(names_two).isdisjoint(set(names_one))
     assert conn_two["pageInfo"]["hasNextPage"] is False
     assert conn_two["totalCount"] == 4
+
+
+_GENRE_CONNECTION_COMPOSITION_QUERY = """
+query {
+  allLibraryGenresConnection(
+    first: 1
+    filter: { name: { iContains: "a" } }
+    orderBy: [{ name: ASC }]
+  ) {
+    edges { node { name } }
+    totalCount
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("as_staff", [False, True], ids=["anonymous", "staff"])
+def test_genre_connection_filter_order_and_slice_compose(as_staff):
+    """Filter then order then slice: one edge, ``totalCount`` is the post-filter set.
+
+    Insert order is Gamma, Alpha, Echo. ``iContains: "a"`` drops Echo (``totalCount``
+    2, not 3); name-ASC over the survivors is Alpha then Gamma, so ``first: 1`` is
+    Alpha only when order ran. ``GenreType`` has no ``get_queryset``, so staff and
+    anonymous see the same page; the staff arm pins that a logged-in viewer still
+    runs filter / order / count rather than skipping a sidecar.
+    """
+    _seed_genres("Gamma", "Alpha", "Echo")
+    response = (
+        _post_graphql_as_staff(_GENRE_CONNECTION_COMPOSITION_QUERY)
+        if as_staff
+        else _post_graphql(_GENRE_CONNECTION_COMPOSITION_QUERY)
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+    assert [edge["node"]["name"] for edge in conn["edges"]] == ["Alpha"]
+    assert conn["totalCount"] == 2
 
 
 @pytest.mark.django_db
@@ -3515,6 +3581,7 @@ def test_genre_connection_first_and_last_rejected():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     messages = " ".join(error["message"] for error in payload["errors"])
     assert "mutually exclusive" in messages
 
@@ -4121,6 +4188,135 @@ def _post_node(global_id: str, selection: str = "__typename") -> dict:
     return response.json()
 
 
+def _nodes_query(ids: tuple[str, ...]) -> str:
+    """Bare ``nodes(ids:)`` selecting GenreType.name / BookType.title in input order."""
+    id_literals = ", ".join(f'"{gid}"' for gid in ids)
+    return f"""
+        query {{
+          nodes(ids: [{id_literals}]) {{
+            __typename
+            ... on GenreType {{ name }}
+            ... on BookType {{ title }}
+          }}
+        }}
+        """
+
+
+_CURRENT: dict[str, Any] = {"schema": None}
+
+
+def _holder_graphql_view(request):
+    schema = _CURRENT["schema"]
+    assert schema is not None
+    return DjangoGraphQLView.as_view(schema=schema)(request)
+
+
+async def _async_shipped_graphql_view(request):
+    from config.schema import schema
+
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+
+urlpatterns = [
+    path("graphql-test/", _holder_graphql_view),
+    path("graphql-async/", _async_shipped_graphql_view),
+]
+
+
+def _post_holder(schema, query, *, variables=None):
+    """POST ``query`` against a holder schema mounted at ``/graphql-test/``."""
+    _CURRENT["schema"] = schema
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            return _post_graphql(query, variables=variables, url="/graphql-test/")
+    finally:
+        _CURRENT["schema"] = None
+
+
+async def _post_async_shipped(query: str, *, variables=None) -> dict:
+    """POST ``query`` against the shipped schema over ``/graphql-async/``."""
+    with override_settings(ROOT_URLCONF=__name__):
+        result = await AsyncTestClient().query(
+            query,
+            variables=variables,
+            assert_no_errors=False,
+            url="/graphql-async/",
+        )
+    assert result.response.status_code == 200
+    return result.response.json()
+
+
+class _HostileBookQuerySet(QuerySet):
+    """Would leak if dispatched: ``filter`` drops the predicate; terminals synthesize rows."""
+
+    def filter(self, *args, **kwargs):
+        return models.Book.objects.all()
+
+    def first(self):
+        return models.Book(title="secret-from-first")
+
+    def get(self, *args, **kwargs):
+        return models.Book(title="secret-from-get")
+
+    async def afirst(self):
+        return models.Book(title="secret-from-afirst")
+
+    async def aget(self, *args, **kwargs):
+        return models.Book(title="secret-from-aget")
+
+    async def __aiter__(self):
+        yield models.Book(title="secret-from-aiter")
+
+
+def _hostile_book_hook(cls, queryset, info, **kwargs):
+    """Seed the real repair-exclusion through unbound ``QuerySet.filter``."""
+    return QuerySet.filter(_HostileBookQuerySet(model=models.Book)).exclude(
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+
+
+def _typed_genre_nodes_schema():
+    """Holder schema whose only root field is typed ``DjangoNodesField(GenreType)``."""
+    from apps.library.schema import GenreType
+
+    @strawberry.type
+    class Query:
+        genres: list[GenreType | None] = DjangoNodesField(GenreType)
+
+    return strawberry.Schema(query=Query, config=strawberry_config())
+
+
+def _patch_book_cascade(monkeypatch) -> None:
+    """Compose ``BookType.get_queryset`` with ``apply_cascade_permissions`` (shelf visibility)."""
+    from apps.library.schema import BookType
+
+    original = BookType.get_queryset.__func__
+
+    def _cascading(cls, queryset, info, **kwargs):
+        del kwargs
+        return apply_cascade_permissions(cls, original(cls, queryset, info), info)
+
+    monkeypatch.setattr(BookType, "get_queryset", classmethod(_cascading))
+
+
+def _seed_cascade_visible_and_hidden_books() -> tuple[models.Book, models.Book]:
+    """One book on a public shelf and one on a ``topic="secret"`` shelf."""
+    branch = models.Branch.objects.create(name="Cascade", city="Boston")
+    public_shelf = models.Shelf.objects.create(
+        code="C-pub",
+        topic="Fiction",
+        branch=branch,
+    )
+    secret_shelf = models.Shelf.objects.create(
+        code="C-sec",
+        topic="secret",
+        branch=branch,
+    )
+    visible = models.Book.objects.create(title="Kindred", shelf=public_shelf)
+    hidden = models.Book.objects.create(title="Hidden", shelf=secret_shelf)
+    return visible, hidden
+
+
 @pytest.mark.django_db
 def test_node_refetch_genre():
     """The bare ``node(id:)`` refetches an emitted Genre GlobalID round-trip.
@@ -4182,46 +4378,60 @@ def test_typed_node_field_mismatch_live():
 
 
 @pytest.mark.django_db
-def test_node_malformed_id_live():
-    """A malformed id surfaces ``GLOBALID_INVALID`` in-band, never a 500.
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "not-base64!!!",
+        str(relay.GlobalID("nosuchapp.nosuchmodel", "1")),
+        str(relay.GlobalID("GenreType", "1")),
+    ],
+    ids=["malformed-base64", "unknown-model-label", "type-name-at-model-strategy"],
+)
+def test_node_malformed_id_live(bad_id):
+    """Each malformed/forbidden id surfaces ``GLOBALID_INVALID`` in-band, with ``node: null``.
 
-    The package-owned conversion (Decision 5) - reachable because the field
-    argument is ``strawberry.ID``, so the raw string gets past Strawberry's
-    argument conversion to ``decode_global_id`` (Revision 7 P1).
+    Reachable because the field argument is ``strawberry.ID`` (Decision 5): a
+    ``relay.GlobalID`` argument would be parsed upstream and never reach the
+    package conversion. The three shapes are malformed base64, an unresolvable
+    model label, and a type-name payload at a model-strategy type (``GenreType``).
     """
-    payload = _post_node("not-base64!!!")
+    payload = _post_node(bad_id)
     assert "errors" in payload, payload
     error = payload["errors"][0]
     assert error["extensions"]["code"] == "GLOBALID_INVALID"
     assert error["message"].startswith("Invalid GlobalID:")
+    assert payload["data"] == {"node": None}
 
 
 @pytest.mark.django_db
 def test_node_uncoercible_pk_live():
-    """A well-formed payload with an uncoercible pk resolves to ``null``.
+    """A well-formed payload with an uncoercible pk resolves to ``null`` and reads no row.
 
     ``library.genre:abc`` decodes cleanly but ``abc`` is not an integer pk -
-    the existence-family ``null``, with no errors entry and no 500 leaking
-    Django's ``ValueError`` (Revision 7 P2).
+    the existence-family ``null``, with no errors entry, no 500 leaking
+    Django's ``ValueError``, and no ``library_genre`` query.
     """
-    gid = base64.b64encode(b"library.genre:abc").decode()
-    payload = _post_node(gid)
+    gid = str(relay.GlobalID("library.genre", "abc"))
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_node(gid)
     assert "errors" not in payload, payload
     assert payload["data"]["node"] is None
+    assert _sql_from_table(captured, "library_genre") == []
 
 
 @pytest.mark.django_db
 def test_nodes_batch_mixed_types_order_and_null():
-    """``nodes(ids:)`` holds input order across types, with holes for missing AND hidden rows.
+    """``nodes(ids:)`` holds input order across types, with holes for missing, uncoercible, AND hidden rows.
 
-    Four ids interleaved: a genre, a WELL-FORMED missing-pk genre id, a visible
-    book, and a book in ``repair`` circulation that ``BookType.get_queryset``
-    hides from anonymous callers. Anonymously both holes are positional
-    ``null``s. Re-posting the SAME document as staff fills the last one and
-    leaves the missing-pk hole empty, which is what separates the two: a hidden
-    row reads as absent only to a caller who cannot see it, and a batch must
-    never leak that distinction by shifting positions. (A malformed id mid-batch
-    fails the whole field - pinned package-side in tests/test_relay_node_field.py.)
+    Five ids interleaved: a genre, a WELL-FORMED missing-pk genre id, an
+    uncoercible ``library.genre:abc`` literal, a visible book, and a book in
+    ``repair`` circulation that ``BookType.get_queryset`` hides from anonymous
+    callers. Anonymously the last four holes are positional ``null``s. Re-posting
+    the SAME document as staff fills only the last one and leaves the missing-pk
+    and uncoercible holes empty, which is what separates them: a hidden row reads
+    as absent only to a caller who cannot see it, and a batch must never leak
+    that distinction by shifting positions. The uncoercible literal never poisons
+    the batch ``pk__in``.
     """
     from apps.library.schema import BookType, GenreType
 
@@ -4236,19 +4446,11 @@ def test_nodes_batch_mixed_types_order_and_null():
     ids = (
         global_id_for(GenreType, genre.pk),
         global_id_for(GenreType, 999999),
+        str(relay.GlobalID("library.genre", "abc")),
         global_id_for(BookType, book.pk),
         global_id_for(BookType, hidden_book.pk),
     )
-    id_literals = ", ".join(f'"{gid}"' for gid in ids)
-    document = f"""
-        query {{
-          nodes(ids: [{id_literals}]) {{
-            __typename
-            ... on GenreType {{ name }}
-            ... on BookType {{ title }}
-          }}
-        }}
-        """
+    document = _nodes_query(ids)
 
     response = _post_graphql(document)
     assert response.status_code == 200
@@ -4256,6 +4458,7 @@ def test_nodes_batch_mixed_types_order_and_null():
     assert "errors" not in payload, payload
     assert payload["data"]["nodes"] == [
         {"__typename": "GenreType", "name": "Speculative"},
+        None,
         None,
         {"__typename": "BookType", "title": "Kindred"},
         None,
@@ -4267,6 +4470,7 @@ def test_nodes_batch_mixed_types_order_and_null():
     assert "errors" not in staff_payload, staff_payload
     assert staff_payload["data"]["nodes"] == [
         {"__typename": "GenreType", "name": "Speculative"},
+        None,
         None,
         {"__typename": "BookType", "title": "Kindred"},
         {"__typename": "BookType", "title": "Dune"},
@@ -4302,6 +4506,200 @@ def test_nodes_duplicates_and_empty_live():
     assert empty_payload["data"]["nodes"] == []
     assert not any("library_genre" in entry["sql"] for entry in captured.captured_queries), [
         entry["sql"] for entry in captured.captured_queries
+    ]
+
+
+@pytest.mark.django_db
+def test_nodes_malformed_id_mid_batch_live():
+    """A malformed id among well-formed ones fails the whole ``nodes`` field.
+
+    ``GLOBALID_INVALID`` is not absorbed into a positional ``null`` hole; the
+    non-null list nulls the enclosing ``data``.
+    """
+    from apps.library.schema import GenreType
+
+    genre = models.Genre.objects.create(name="Speculative")
+    gid = global_id_for(GenreType, genre.pk)
+    response = _post_graphql(
+        "query ($ids: [ID!]!) { nodes(ids: $ids) { __typename } }",
+        variables={"ids": [gid, "this-is-not-base64"]},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID"
+    assert error["message"].startswith("Invalid GlobalID:")
+    assert payload["data"] is None
+
+
+@pytest.mark.django_db
+def test_nodes_batches_per_type_live():
+    """Ids spanning GenreType and BookType issue exactly one query per table.
+
+    Two genre ids around one book id still produce one ``library_genre`` fetch
+    and one ``library_book`` fetch - the per-decoded-type batch, not per id.
+    """
+    from apps.library.schema import BookType, GenreType
+
+    shelf = _seed_shelf()
+    first = models.Genre.objects.create(name="Alpha")
+    second = models.Genre.objects.create(name="Beta")
+    book = models.Book.objects.create(title="Kindred", shelf=shelf)
+    document = _nodes_query(
+        (
+            global_id_for(GenreType, first.pk),
+            global_id_for(BookType, book.pk),
+            global_id_for(GenreType, second.pk),
+        ),
+    )
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(document)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["nodes"] == [
+        {"__typename": "GenreType", "name": "Alpha"},
+        {"__typename": "BookType", "title": "Kindred"},
+        {"__typename": "GenreType", "name": "Beta"},
+    ]
+    assert len(_sql_from_table(captured, "library_genre")) == 1
+    assert len(_sql_from_table(captured, "library_book")) == 1
+
+
+@pytest.mark.django_db
+def test_nodes_hidden_and_missing_issue_equal_per_table_queries():
+    """A hidden book id and a missing book id cost the same per-table queries.
+
+    Existence must not leak as an extra lookup on the missing path. A visible
+    genre rides along so a zero-query miss cannot pass by accident. Both
+    requests issue exactly one ``library_genre`` query and one ``library_book``
+    query, and both payloads are ``[genre, null]``.
+    """
+    from apps.library.schema import BookType, GenreType
+
+    shelf = _seed_shelf()
+    genre = models.Genre.objects.create(name="Speculative")
+    hidden = models.Book.objects.create(
+        title="Dune",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+    genre_gid = global_id_for(GenreType, genre.pk)
+    hidden_doc = _nodes_query((genre_gid, global_id_for(BookType, hidden.pk)))
+    missing_doc = _nodes_query((genre_gid, global_id_for(BookType, 999999)))
+
+    with CaptureQueriesContext(connection) as hidden_captured:
+        hidden_response = _post_graphql(hidden_doc)
+    with CaptureQueriesContext(connection) as missing_captured:
+        missing_response = _post_graphql(missing_doc)
+
+    assert hidden_response.status_code == 200
+    assert missing_response.status_code == 200
+    hidden_payload = hidden_response.json()
+    missing_payload = missing_response.json()
+    assert "errors" not in hidden_payload, hidden_payload
+    assert "errors" not in missing_payload, missing_payload
+    expected = [{"__typename": "GenreType", "name": "Speculative"}, None]
+    assert hidden_payload["data"]["nodes"] == expected
+    assert missing_payload["data"]["nodes"] == expected
+
+    hidden_genre = _sql_from_table(hidden_captured, "library_genre")
+    missing_genre = _sql_from_table(missing_captured, "library_genre")
+    hidden_book = _sql_from_table(hidden_captured, "library_book")
+    missing_book = _sql_from_table(missing_captured, "library_book")
+    assert len(hidden_genre) == len(missing_genre) == 1
+    assert len(hidden_book) == len(missing_book) == 1
+
+
+@pytest.mark.django_db
+def test_typed_nodes_field_resolves_targets_live():
+    """Typed ``DjangoNodesField(GenreType)`` resolves matching ids in input order.
+
+    The shipped query exposes typed ``genre(id:)`` only, so this rides the
+    ``/graphql-test/`` holder.
+    """
+    from apps.library.schema import GenreType
+
+    first = models.Genre.objects.create(name="Alpha")
+    second = models.Genre.objects.create(name="Beta")
+    response = _post_holder(
+        _typed_genre_nodes_schema(),
+        "query ($ids: [ID!]!) { genres(ids: $ids) { name } }",
+        variables={
+            "ids": [global_id_for(GenreType, second.pk), global_id_for(GenreType, first.pk)],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["genres"] == [{"name": "Beta"}, {"name": "Alpha"}]
+
+
+@pytest.mark.django_db
+def test_typed_nodes_field_mismatch_live():
+    """One BookType id mid-batch fails the whole typed ``genres(ids:)`` field.
+
+    The expected/received-types ``GraphQLError`` (Decision 4): a wrong-type
+    id is a client bug surfaced loudly, never a per-position ``null``. The
+    error carries no ``extensions`` code, and the non-null list nulls ``data``.
+    """
+    from apps.library.schema import BookType, GenreType
+
+    genre = models.Genre.objects.create(name="Speculative")
+    book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
+    response = _post_holder(
+        _typed_genre_nodes_schema(),
+        "query ($ids: [ID!]!) { genres(ids: $ids) { name } }",
+        variables={
+            "ids": [global_id_for(GenreType, genre.pk), global_id_for(BookType, book.pk)],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    messages = " ".join(error["message"] for error in payload["errors"])
+    assert "Wrong node type: expected a GenreType id, received a BookType id." in messages
+    assert [error.get("extensions", {}).get("code") for error in payload["errors"]] == [None]
+    assert payload["data"] is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_node_refetch_genre_async():
+    """The shipped ``node(id:)`` refetches a Genre GlobalID over ``/graphql-async/``."""
+    from apps.library.schema import GenreType
+
+    genre = await models.Genre.objects.acreate(name="Speculative")
+    gid = global_id_for(GenreType, genre.pk)
+    payload = await _post_async_shipped(
+        f'query {{ node(id: "{gid}") {{ __typename ... on GenreType {{ name }} }} }}',
+    )
+    assert "errors" not in payload, payload
+    assert payload["data"]["node"] == {"__typename": "GenreType", "name": "Speculative"}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_nodes_batch_mixed_types_async():
+    """``nodes(ids:)`` over ``/graphql-async/`` preserves order across GenreType and BookType."""
+    from apps.library.schema import BookType, GenreType
+
+    branch = await models.Branch.objects.acreate(name="Relay", city="Boston")
+    shelf = await models.Shelf.objects.acreate(
+        code="R-async",
+        topic="Relay fixtures",
+        branch=branch,
+    )
+    genre = await models.Genre.objects.acreate(name="Speculative")
+    book = await models.Book.objects.acreate(title="Kindred", shelf=shelf)
+    document = _nodes_query(
+        (global_id_for(BookType, book.pk), global_id_for(GenreType, genre.pk)),
+    )
+    payload = await _post_async_shipped(document)
+    assert "errors" not in payload, payload
+    assert payload["data"]["nodes"] == [
+        {"__typename": "BookType", "title": "Kindred"},
+        {"__typename": "GenreType", "name": "Speculative"},
     ]
 
 
@@ -5486,6 +5884,157 @@ def test_node_hidden_row_null_live():
     assert staff_payload["data"]["node"] == {"title": "Withdrawn"}
 
 
+@pytest.mark.django_db
+def test_node_hostile_subclass_hook_is_sealed_sync(monkeypatch):
+    """Sync ``node(id:)`` of a hostile-subclass hook serves only the visible book.
+
+    A repair (hidden) pk refetches null and a public pk resolves - the
+    predicate-erasing ``.filter()`` and synthetic ``.first()`` / ``.get()``
+    overrides never dispatch on the sealed plain queryset.
+    """
+    from apps.library.schema import BookType
+
+    monkeypatch.setattr(BookType, "get_queryset", classmethod(_hostile_book_hook))
+    shelf = _seed_shelf()
+    public = models.Book.objects.create(title="Kindred", shelf=shelf)
+    private = models.Book.objects.create(
+        title="Dune",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+
+    hidden = _post_node(global_id_for(BookType, private.pk), "... on BookType { title }")
+    assert "errors" not in hidden, hidden
+    assert hidden["data"]["node"] is None
+
+    visible = _post_node(global_id_for(BookType, public.pk), "... on BookType { title }")
+    assert "errors" not in visible, visible
+    assert visible["data"]["node"] == {"title": "Kindred"}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_node_hostile_subclass_hook_is_sealed_async(monkeypatch):
+    """Async single-node refetch over ``/graphql-async/`` ignores synthetic ``.afirst()``."""
+    from apps.library.schema import BookType
+
+    monkeypatch.setattr(BookType, "get_queryset", classmethod(_hostile_book_hook))
+    branch = await models.Branch.objects.acreate(name="Relay", city="Boston")
+    shelf = await models.Shelf.objects.acreate(
+        code="R-h",
+        topic="Relay fixtures",
+        branch=branch,
+    )
+    public = await models.Book.objects.acreate(title="Kindred", shelf=shelf)
+    private = await models.Book.objects.acreate(
+        title="Dune",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+
+    hidden = await _post_async_shipped(
+        f'query {{ node(id: "{global_id_for(BookType, private.pk)}") {{ ... on BookType {{ title }} }} }}',
+    )
+    assert "errors" not in hidden, hidden
+    assert hidden["data"]["node"] is None
+
+    visible = await _post_async_shipped(
+        f'query {{ node(id: "{global_id_for(BookType, public.pk)}") {{ ... on BookType {{ title }} }} }}',
+    )
+    assert "errors" not in visible, visible
+    assert visible["data"]["node"] == {"title": "Kindred"}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_nodes_hostile_subclass_hook_is_sealed_async_aiter(monkeypatch):
+    """Async ``nodes(ids:)`` ignores the synthetic ``.__aiter__()`` override.
+
+    The hidden pk becomes a positional ``null`` hole and the visible pk
+    resolves - never the ``secret-from-aiter`` synthetic row.
+    """
+    from apps.library.schema import BookType
+
+    monkeypatch.setattr(BookType, "get_queryset", classmethod(_hostile_book_hook))
+    branch = await models.Branch.objects.acreate(name="Relay", city="Boston")
+    shelf = await models.Shelf.objects.acreate(
+        code="R-ha",
+        topic="Relay fixtures",
+        branch=branch,
+    )
+    public = await models.Book.objects.acreate(title="Kindred", shelf=shelf)
+    private = await models.Book.objects.acreate(
+        title="Dune",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+    document = _nodes_query(
+        (global_id_for(BookType, private.pk), global_id_for(BookType, public.pk)),
+    )
+    payload = await _post_async_shipped(document)
+    assert "errors" not in payload, payload
+    assert payload["data"]["nodes"] == [None, {"__typename": "BookType", "title": "Kindred"}]
+
+
+@pytest.mark.django_db
+def test_node_refetch_of_cascade_hidden_row_returns_null(monkeypatch):
+    """``node(id:)`` of a book on a secret shelf is ``null`` once cascade is composed.
+
+    ``BookType.get_queryset`` is wrapped with ``apply_cascade_permissions`` so
+    ``ShelfType``'s ``topic="secret"`` filter applies across the FK. Anonymous
+    callers see ``null`` with no error; staff sees the row.
+    """
+    from apps.library.schema import BookType
+
+    _patch_book_cascade(monkeypatch)
+    visible, hidden = _seed_cascade_visible_and_hidden_books()
+
+    anonymous = _post_node(global_id_for(BookType, hidden.pk), "... on BookType { title }")
+    assert "errors" not in anonymous, anonymous
+    assert anonymous["data"]["node"] is None
+
+    control = _post_node(global_id_for(BookType, visible.pk), "... on BookType { title }")
+    assert "errors" not in control, control
+    assert control["data"]["node"] == {"title": "Kindred"}
+
+    staff = _post_graphql_as_staff(
+        f'query {{ node(id: "{global_id_for(BookType, hidden.pk)}") {{ ... on BookType {{ title }} }} }}',
+    )
+    assert staff.status_code == 200
+    staff_payload = staff.json()
+    assert "errors" not in staff_payload, staff_payload
+    assert staff_payload["data"]["node"] == {"title": "Hidden"}
+
+
+@pytest.mark.django_db
+def test_nodes_batch_holes_for_cascade_hidden_rows(monkeypatch):
+    """``nodes(ids:)`` leaves a positional ``null`` for a cascade-hidden book.
+
+    Staff filling that hole on the same document proves the null is visibility,
+    not absence.
+    """
+    from apps.library.schema import BookType
+
+    _patch_book_cascade(monkeypatch)
+    visible, hidden = _seed_cascade_visible_and_hidden_books()
+    document = _nodes_query(
+        (global_id_for(BookType, hidden.pk), global_id_for(BookType, visible.pk)),
+    )
+
+    response = _post_graphql(document)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["nodes"] == [None, {"__typename": "BookType", "title": "Kindred"}]
+
+    staff_response = _post_graphql_as_staff(document)
+    assert staff_response.status_code == 200
+    staff_payload = staff_response.json()
+    assert "errors" not in staff_payload, staff_payload
+    assert staff_payload["data"]["nodes"] == [
+        {"__typename": "BookType", "title": "Hidden"},
+        {"__typename": "BookType", "title": "Kindred"},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Live nested-connection SQL-shape coverage (spec-033).
 #
@@ -5608,13 +6157,14 @@ def test_nested_books_connection_has_next_page_without_edges():
     windowed nested path spec-033 introduces - the root-field live twin
     (``test_has_next_page_correct_when_edges_unrequested``) and the package window
     pins cover the other paths. Each genre carries 3 books; ``first: 2`` with no
-    ``edges`` selected still reports ``hasNextPage`` True - this is the plain
-    first-page probe shape (``hasNextPage`` selected, ``totalCount`` not), so it
-    is served count-free by the n+1 overfetch sentinel, NOT a ``_dst_total_count``
-    annotation, in the same ABSOLUTE two-query window (root genres-connection +
-    one ``booksConnection`` prefetch) at the seeded 3 parent genres. One
-    cardinality, so the count is the distinguishing measurement here; the
-    two-cardinality form of the parent-count property lives at
+    ``edges`` selected still reports ``hasNextPage`` True, and ``first: 3`` (an
+    exact page) reports False - the flag is not hard-wired. The windowed query is
+    the plain first-page probe shape (``hasNextPage`` selected, ``totalCount``
+    not), so it is served count-free by the n+1 overfetch sentinel, NOT a
+    ``_dst_total_count`` annotation, in the same ABSOLUTE two-query window (root
+    genres-connection + one ``booksConnection`` prefetch) at the seeded 3 parent
+    genres. One cardinality, so the count is the distinguishing measurement
+    here; the two-cardinality form of the parent-count property lives at
     ``::test_nested_books_connection_fixed_query_count``.
     """
     query = """
@@ -5623,6 +6173,19 @@ def test_nested_books_connection_has_next_page_without_edges():
         edges {
           node {
             booksConnection(first: 2) {
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+      }
+    }
+    """
+    exact_query = """
+    query {
+      allLibraryGenresConnection {
+        edges {
+          node {
+            booksConnection(first: 3) {
               pageInfo { hasNextPage }
             }
           }
@@ -5655,6 +6218,13 @@ def test_nested_books_connection_has_next_page_without_edges():
     window_sql = captured[1]["sql"]
     assert "_dst_total_count" not in window_sql
     assert "COUNT(" not in window_sql.upper()
+
+    exact = _post_graphql(exact_query)
+    assert exact.status_code == 200
+    exact_payload = exact.json()
+    assert "errors" not in exact_payload, exact_payload
+    for edge in exact_payload["data"]["allLibraryGenresConnection"]["edges"]:
+        assert edge["node"]["booksConnection"]["pageInfo"]["hasNextPage"] is False
 
 
 @pytest.mark.django_db
@@ -6351,6 +6921,36 @@ def test_mixed_relay_and_non_relay_no_interface_bleed_live():
     assert _field_type(shelf_type, "id")["ofType"]["name"] != "ID"
 
 
+@pytest.mark.django_db
+def test_periodical_type_issues_are_connection_only_live():
+    """``PeriodicalType.issues`` is explicit ``"connection"``: nested ``issuesConnection``, no list sibling.
+
+    ``Meta.relation_shapes = {"issues": "connection"}`` is the narrowing that
+    drops the generated list form. The keyset suite already pages
+    ``issuesConnection``; this row is the SDL half - ``issues`` is absent from
+    introspection, so a client cannot bypass the connection's page cap through a
+    raw list.
+    """
+    names = {field["name"] for field in _introspect_type("PeriodicalType")["fields"]}
+    assert "issuesConnection" in names
+    assert "issues" not in names
+
+
+@pytest.mark.django_db
+def test_periodical_issues_list_is_not_selectable_live():
+    """Explicit ``"connection"`` removes the list: selecting ``issues`` is a validation error."""
+    response = _post_graphql(
+        "{ allLibraryPeriodicalsConnection(first: 1) { edges { node { issues { title } } } } }",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("data") is None, payload
+    assert any(
+        "Cannot query field 'issues'" in error.get("message", "")
+        for error in payload.get("errors", [])
+    ), payload
+
+
 # ---------------------------------------------------------------------------
 # DjangoListField default resolver visibility over live /graphql/.
 # ``BranchType.get_queryset``
@@ -6496,6 +7096,7 @@ def test_malformed_nested_branch_form_raises_filter_invalid_live():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" in payload, payload
+    assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert error["message"] == "Invalid filter input"
     extensions = error["extensions"]

@@ -3,14 +3,14 @@
 The private ``auth/sessions.py`` transport boundary. These are pure-unit tests over
 fabricated request / scope shapes (no ``create_users`` / ``seed_data`` seeding is
 needed -- no user rows are touched): they pin the ``isinstance``-first
-classification, the actionable missing-session error, the per-scope
-``asyncio.Lock`` acquisition helper (including the immutable-scope rejection a
-real ASGI ``dict`` scope can never reach), the signed-cookie session-engine
-detection, and the login/logout capability answers the later stages gate on. The
-channels-absent classification path is proved with the shared ``sys.modules``
-None-sentinel discipline (``tests/_soft_dependency.py``), mirroring the router
-soft-dependency suite, and a subprocess proves importing the auth submodule stays
-channels-free.
+classification, the per-scope ``asyncio.Lock`` acquisition helper (including the
+immutable-scope rejection a real ASGI ``dict`` scope can never reach), the
+signed-cookie session-engine detection, and the login/logout capability answers
+the later stages gate on. Missing Django ``SessionMiddleware`` over HTTP is
+earned live in ``examples/fakeshop/test_query/test_auth_api.py`` (sessionless
+login/logout). The channels-absent classification path is proved with the
+shared ``sys.modules`` None-sentinel discipline (``tests/_soft_dependency.py``),
+and a subprocess proves importing the auth submodule stays channels-free.
 """
 
 from __future__ import annotations
@@ -72,7 +72,11 @@ def test_classify_channels_websocket_scope():
     assert classify_transport(_adapter({"type": "websocket"})) is Transport.CHANNELS_WEBSOCKET
 
 
-@pytest.mark.parametrize("scope_type", [None, "lifespan", "sse"])
+@pytest.mark.parametrize(
+    "scope_type",
+    [None, "lifespan", "sse"],
+    ids=["none", "lifespan", "sse"],
+)
 def test_classify_rejects_missing_or_unknown_scope_type(scope_type):
     scope = {} if scope_type is None else {"type": scope_type}
     with pytest.raises(ConfigurationError, match="unsupported `type`"):
@@ -145,13 +149,6 @@ def test_require_session_returns_the_present_django_session():
     request = RequestFactory().post("/graphql/")
     SessionMiddleware(lambda _r: None).process_request(request)
     assert require_session(request, Transport.DJANGO_HTTP) is request.session
-
-
-def test_require_session_missing_django_middleware_raises_with_the_session_substring():
-    request = RequestFactory().post("/graphql/")  # no SessionMiddleware ran
-    with pytest.raises(ConfigurationError, match="session") as exc_info:
-        require_session(request, Transport.DJANGO_HTTP)
-    assert "session" in str(exc_info.value).lower()
 
 
 def test_require_session_none_channels_session_raises():

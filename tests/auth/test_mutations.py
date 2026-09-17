@@ -5,14 +5,15 @@ here (the AGENTS.md placement rule; the live consumer surface is
 ``examples/fakeshop/test_query/test_auth_api.py``): the declaration-ledger
 lifecycle (survive-the-pre-bind-reset / ``registry.clear()`` drain /
 reload-idempotence / the conflicting-``permission_classes`` raise), the
-surface-keyed bind validation arms, the post-finalize factory reject, the async
-resolver paths, the async-permission ``SyncMisuseError``,
-the register rider internals (``derive_register_fields``, the exclusion seam's
-provided-marker contract, plaintext-never-persisted on BOTH resolver paths,
-hash-before-``full_clean`` ordering), and the permission-gate variants - the
-gated fixed-payload fields cannot coexist with the aggregate fakeshop default
-surface under the one-declaration-per-process rule, so their exact denial
-strings are pinned here on isolated throwaway schemas.
+surface-keyed bind validation arms, the post-finalize factory reject, the
+sync/async dispatch spies, the async-permission ``SyncMisuseError``, the
+register rider internals (``derive_register_fields``, the exclusion seam's
+provided-marker contract, decode/write defense-in-depth), permission-gate
+variants (gated fixed-payload fields cannot coexist with the aggregate
+fakeshop AllowAny default under the one-declaration-per-process rule),
+session-store failure injection a ``django.test.Client`` cannot carry,
+``request.session.modified`` (the cookie consequence is live), and the
+Channels/WebSocket transport (fakeshop has no ``config/asgi.py``).
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ import contextlib
 import inspect
 import itertools
 import json
-import logging
 import subprocess
 import sys
 import threading
@@ -49,7 +49,6 @@ from django.contrib.sessions.backends.base import UpdateError
 from django.contrib.sessions.backends.db import SessionStore as DBSessionStore
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.contrib.sessions.models import Session
-from django.core.exceptions import PermissionDenied
 from django.db import models as djmodels
 from django.test import RequestFactory, override_settings
 from django.utils.functional import SimpleLazyObject
@@ -73,7 +72,6 @@ from django_strawberry_framework.auth.mutations import (
 )
 from django_strawberry_framework.auth.sessions import _SCOPE_LOCK_KEY
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.mutations import inputs as mutation_inputs
 from django_strawberry_framework.mutations.inputs import _materialized_names
 from django_strawberry_framework.mutations.resolvers import _model_decode_step
 from django_strawberry_framework.mutations.sets import _mutation_registry
@@ -568,26 +566,22 @@ def test_logout_only_schema_binds_with_no_user_type_and_no_orphan_payloads():
 
 
 @pytest.mark.django_db
-def test_logout_without_auth_middleware_is_anonymous_and_flushes_the_session():
-    """A session-only request has no actor but still receives Django's teardown."""
+def test_logout_with_lazy_none_or_modeless_actor_is_anonymous():
+    """Hostile actor shapes with no ``is_authenticated`` collapse logout to anonymous ``ok: false``.
+
+    A live ``/graphql/`` request always carries ``AuthenticationMiddleware``'s
+    ``AnonymousUser`` or a real user; these shapes (a ``SimpleLazyObject``
+    resolving to ``None``, a bare ``object()``) have no HTTP equivalent. The
+    session-only-no-auth-middleware arm lives in
+    ``examples/fakeshop/test_query/test_auth_api.py``.
+    """
 
     @strawberry.type
     class Mutation:
         logout = logout_mutation()
 
     schema = _finalize_schema(Mutation)
-    request = RequestFactory().post("/graphql/")
-    SessionMiddleware(lambda _request: None).process_request(request)
-    request.session["logout_residue"] = "must be flushed"
-    request.session.save()
 
-    result = schema.execute_sync(_LOGOUT_Q, context_value=request)
-
-    assert result.errors is None, result.errors
-    assert result.data["logout"] == {"ok": False, "errors": []}
-    assert "logout_residue" not in request.session
-
-    # SimpleLazyObject returning None
     lazy_req = RequestFactory().post("/graphql/")
     SessionMiddleware(lambda _request: None).process_request(lazy_req)
     lazy_req.user = SimpleLazyObject(lambda: None)
@@ -595,7 +589,6 @@ def test_logout_without_auth_middleware_is_anonymous_and_flushes_the_session():
     assert lazy_res.errors is None, lazy_res.errors
     assert lazy_res.data["logout"] == {"ok": False, "errors": []}
 
-    # Custom actor object without is_authenticated
     custom_req = RequestFactory().post("/graphql/")
     SessionMiddleware(lambda _request: None).process_request(custom_req)
     custom_req.user = object()
@@ -642,6 +635,13 @@ class _HostileValueUser:
         AttributeError,
         KeyError,
         IndexError,
+    ],
+    ids=[
+        "type",
+        "value",
+        "attribute",
+        "key",
+        "index",
     ],
 )
 def test_hostile_is_authenticated_value_truthiness_collapses_to_anonymous(raised):
@@ -859,64 +859,9 @@ async def test_async_logout_dispatch_awaits_the_native_async_body_exactly_once(_
     assert len(_sync_boundary_spy) == 1
 
 
-def test_auth_field_sdl_signatures_are_unchanged_by_the_dispatch_split():
-    """The public SDL for the auth fields/payloads is byte-stable across the seam."""
-    schema = _login_logout_schema()
-    sdl = str(schema)
-    assert "login(username: String!, password: String!): LoginPayload!" in sdl
-    assert "logout: LogoutPayload!" in sdl
-    assert "type LoginPayload {" in sdl
-    assert "type LogoutPayload {" in sdl
-
-
 # ---------------------------------------------------------------------------
 # Session resolvers: async paths, sessionless edge, async-permission misuse
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_async_login_and_logout_run_in_one_sync_boundary():
-    """The async twins work end to end (gate + session work inside one worker)."""
-    schema = _login_logout_schema()
-    user_model = get_user_model()
-    await user_model.objects.acreate_user(username="probe", password="pw-9x-strong")
-
-    request = _session_request()
-    res = await schema.execute(
-        _LOGIN_Q,
-        variable_values={"p": "pw-9x-strong"},
-        context_value=request,
-    )
-    assert res.errors is None, res.errors
-    assert res.data["login"] == {"node": {"username": "probe"}, "errors": []}
-    assert request.user.is_authenticated
-
-    res = await schema.execute(_LOGOUT_Q, context_value=request)
-    assert res.errors is None, res.errors
-    assert res.data["logout"] == {"ok": True, "errors": []}
-    assert not request.user.is_authenticated
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_async_register_never_persists_the_plaintext():
-    """The async register override (a separate seam) also stores only the hash."""
-    _declare_user_type()
-
-    @strawberry.type
-    class Mutation:
-        register = register_mutation()
-
-    schema = _finalize_schema(Mutation)
-    res = await schema.execute(
-        'mutation{ register(data: {username: "async_reg", password: "pw-9x-strong"}){ '
-        "node{ username } errors{ field } } }",
-        context_value=_session_request(),
-    )
-    assert res.errors is None, res.errors
-    assert res.data["register"]["node"] == {"username": "async_reg"}
-    stored = await get_user_model().objects.aget(username="async_reg")
-    assert "pw-9x-strong" not in stored.password
-    assert stored.check_password("pw-9x-strong")
 
 
 @pytest.mark.django_db
@@ -1291,54 +1236,6 @@ def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple():
     assert len(decoded) == 3
 
 
-@pytest.mark.django_db
-def test_sync_register_never_persists_the_plaintext_and_hashes_before_full_clean():
-    """The sync path stores only the hash; hashing precedes ``full_clean``.
-
-    The ordering proof: a >128-char password would fail the ``password`` column's
-    ``max_length`` validation if the RAW value were assigned before
-    ``full_clean()``; because ``set_password`` runs first, the column validates
-    against the (fixed-width) hash and the register succeeds.
-    """
-    _declare_user_type()
-
-    @strawberry.type
-    class Mutation:
-        register = register_mutation()
-
-    schema = _finalize_schema(Mutation)
-    long_password = "x9-" + "long-strong-" * 12  # 147 chars > the 128-char column
-    assert len(long_password) > 128
-    res = schema.execute_sync(
-        'mutation($p: String!){ register(data: {username: "sync_reg", password: $p}){ '
-        "node{ username } errors{ field messages } } }",
-        variable_values={"p": long_password},
-        context_value=_session_request(),
-    )
-    assert res.errors is None, res.errors
-    assert res.data["register"] == {"node": {"username": "sync_reg"}, "errors": []}
-    stored = get_user_model().objects.get(username="sync_reg")
-    assert long_password not in stored.password
-    assert stored.check_password(long_password)
-
-
-def test_register_input_name_is_pinned_and_payload_derives_from_the_rider_name():
-    """``RegisterInput`` via the name seams; ``RegisterPayload`` from ``__name__`` alone."""
-    _declare_user_type()
-
-    @strawberry.type
-    class Mutation:
-        register = register_mutation()
-
-    schema = _finalize_schema(Mutation)
-    sdl = str(schema)
-    assert "input RegisterInput" in sdl
-    assert "type RegisterPayload" in sdl
-    # The deterministic shape-derived name never leaks into the schema.
-    assert "UserEmailPasswordUsernameInput" not in sdl
-    assert mutation_inputs.RegisterPayload.__name__ == "RegisterPayload"
-
-
 def test_register_with_explicit_none_password_returns_null_field_error():
     """An explicit null password on register is rejected with field-keyed null error."""
     from django_strawberry_framework.auth.mutations import _register_decode_step
@@ -1454,6 +1351,15 @@ def test_register_decode_step_with_unset_password_returns_none_password():
         {"pass": "word"},
         object(),
     ],
+    ids=[
+        "int",
+        "float",
+        "true",
+        "false",
+        "list",
+        "dict",
+        "object",
+    ],
 )
 def test_register_write_step_non_str_password_defense_in_depth(bad_password):
     """_register_write_step safely rejects non-string password with an invalid field error."""
@@ -1478,14 +1384,13 @@ def test_register_write_step_non_str_password_defense_in_depth(bad_password):
 # ===========================================================================
 #
 # These package tests own the login rows a live fakeshop `/graphql/` request
-# cannot drive: the backend matrix (custom AUTHENTICATION_BACKENDS cannot be
-# swapped on the shared aggregate schema mid-request), the post-authentication /
-# pre-persistence failure-injection rows (Stage 0 induction mechanisms - real
-# raising signal receivers and real SessionStore subclasses whose create / save /
-# delete raise; the one justified mock is payload construction), the WebSocket
-# login rejection, and the real Channels HTTP round trip + rotation branches.
-# The four Django HTTP rotation branches live in the live
-# `examples/fakeshop/test_query/test_auth_api.py` per the live-first mandate.
+# cannot drive: session-store failure injection (a ``django.test.Client`` binds
+# ``SESSION_ENGINE`` for its own cookie handling), the one justified payload-
+# construction mock, ``user.backend`` stripping, the WebSocket login rejection,
+# and the real Channels HTTP round trip + rotation branches. Backend order,
+# inactive-via-custom-backend, crash-propagates, weird credentials, password
+# leak, Django-HTTP signal compensation, and the four Django HTTP rotation
+# branches live in ``examples/fakeshop/test_query/test_auth_api.py``.
 
 _BACKEND_MODULE = "tests.auth.test_mutations"
 _MODEL_BACKEND = "django.contrib.auth.backends.ModelBackend"
@@ -1496,19 +1401,6 @@ _LOGIN_VAR_Q = (
 )
 
 
-class _RecordingBackend:
-    """Records every ``(username, password)`` seen; authenticates no one (reach probe)."""
-
-    seen: list = []
-
-    def authenticate(self, request, username=None, password=None, **kwargs):
-        type(self).seen.append((username, password))
-        return None
-
-    def get_user(self, user_id):
-        return None
-
-
 class _CountingModelBackend(ModelBackend):
     """A real ``ModelBackend`` that counts its ``authenticate`` calls (WS-reject probe)."""
 
@@ -1517,26 +1409,6 @@ class _CountingModelBackend(ModelBackend):
     def authenticate(self, request, username=None, password=None, **kwargs):
         type(self).calls += 1
         return super().authenticate(request, username=username, password=password, **kwargs)
-
-
-class _PermissionDeniedBackend:
-    """A backend that raises ``PermissionDenied`` (stops backend iteration upstream)."""
-
-    def authenticate(self, request, username=None, password=None, **kwargs):
-        raise PermissionDenied
-
-    def get_user(self, user_id):
-        return None
-
-
-class _CrashingBackend:
-    """A backend whose ``authenticate`` raises a non-``PermissionDenied`` error."""
-
-    def authenticate(self, request, username=None, password=None, **kwargs):
-        raise RuntimeError("backend boom")
-
-    def get_user(self, user_id):
-        return None
 
 
 class _AllowInactiveBackend:
@@ -1665,18 +1537,6 @@ def test_login_payload_construction_failure_is_execution_error_session_untouched
     _assert_login_fully_compensated(request)
 
 
-@override_settings(AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._CrashingBackend"])
-@pytest.mark.django_db
-def test_login_backend_crash_propagates_and_leaves_session_untouched():
-    """Row 4: a backend raising a non-``PermissionDenied`` error propagates, session untouched."""
-    create_users(1)
-    schema = _login_logout_schema()
-    request = _request_with_store(DBSessionStore())
-    res = _login_exec(schema, request)
-    assert res.errors is not None
-    _assert_login_fully_compensated(request)
-
-
 @override_settings(
     AUTHENTICATION_BACKENDS=[_MODEL_BACKEND, f"{_BACKEND_MODULE}._AllowInactiveBackend"],
 )
@@ -1722,22 +1582,6 @@ def test_login_session_cycle_failure_keeps_actor_anonymous_and_surfaces_original
 
 
 @pytest.mark.django_db
-def test_login_signal_failure_compensates_in_memory_and_durable():
-    """Row 8: a raising ``user_logged_in`` receiver -> compensation clears keys AND deletes the durable row.
-
-    The receiver fires AFTER the auth keys are written in memory and after the
-    durable rotated/empty row exists (Stage 0). Compensation must undo BOTH.
-    """
-    create_users(1)
-    schema = _login_logout_schema()
-    request = _request_with_store(DBSessionStore())
-    with _raising_login_receiver():
-        res = _login_exec(schema, request)
-    assert res.errors is not None
-    _assert_login_fully_compensated(request)
-
-
-@pytest.mark.django_db
 def test_login_explicit_save_failure_compensates():
     """Row 9: the explicit in-resolver ``save`` failing -> compensation, no candidate actor remains."""
     create_users(1)
@@ -1778,116 +1622,6 @@ def test_login_cleanup_cancellation_retains_primary_and_chains_cleanup():
     assert "login-signal boom" in str(primary)
     assert isinstance(primary.__context__, asyncio.CancelledError)
     assert "delete cancelled" in str(primary.__context__)
-
-
-# --- Backend matrix (Django HTTP) ---------------------------------------------
-
-
-@override_settings(
-    AUTHENTICATION_BACKENDS=[_MODEL_BACKEND, f"{_BACKEND_MODULE}._AllowInactiveBackend"],
-)
-@pytest.mark.django_db
-def test_backend_order_first_success_wins_model_backend_first():
-    """The first compatible backend wins; ``BACKEND_SESSION_KEY`` is that exact backend."""
-    create_users(1)
-    schema = _login_logout_schema()
-    request = _session_request()
-    res = _login_exec(schema, request)
-    assert res.errors is None, res.errors
-    assert res.data["login"]["node"] == {"username": "staff_1"}
-    assert request.session[BACKEND_SESSION_KEY] == _MODEL_BACKEND
-
-
-@override_settings(
-    AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._AllowInactiveBackend", _MODEL_BACKEND],
-)
-@pytest.mark.django_db
-def test_backend_order_first_success_wins_custom_backend_first():
-    """Reversing the order changes the persisted backend to the custom one."""
-    create_users(1)
-    schema = _login_logout_schema()
-    request = _session_request()
-    res = _login_exec(schema, request)
-    assert res.errors is None, res.errors
-    assert request.session[BACKEND_SESSION_KEY] == f"{_BACKEND_MODULE}._AllowInactiveBackend"
-
-
-@override_settings(
-    AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._PermissionDeniedBackend", _MODEL_BACKEND],
-)
-@pytest.mark.django_db
-def test_permission_denied_stops_iteration_and_is_the_standard_envelope():
-    """``PermissionDenied`` stops backend iteration -> the byte-identical failed-login envelope."""
-    create_users(1)
-    schema = _login_logout_schema()
-    request = _session_request()
-    res = _login_exec(schema, request)
-    assert res.errors is None, res.errors
-    assert res.data["login"] == {
-        "node": None,
-        "errors": [{"field": "__all__", "messages": ["Incorrect username/password"]}],
-    }
-
-
-@override_settings(AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._AllowInactiveBackend"])
-@pytest.mark.django_db
-def test_custom_backend_authenticating_inactive_user_is_honored():
-    """A custom backend may authenticate an inactive user; the framework adds no ``is_active`` rule."""
-    create_users(1)
-    user = get_user_model().objects.get(username="staff_1")
-    user.is_active = False
-    user.save()
-    schema = _login_logout_schema()
-    request = _session_request()
-    res = _login_exec(schema, request)
-    assert res.errors is None, res.errors
-    assert res.data["login"]["node"] == {"username": "staff_1"}
-
-
-# --- Malformed-credential posture (Django HTTP) -------------------------------
-
-
-@override_settings(AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._RecordingBackend"])
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    "weird",
-    [
-        "",
-        "  spaced  ",
-        "with\x00nul",
-        "x" * 500,
-        "naive-Unicode-\u00fc\u00e9",
-    ],
-)
-def test_storable_weird_credentials_reach_the_backend_unchanged(weird):
-    """Storable weird strings are passed to ``authenticate`` verbatim (no trim/normalize/truncate)."""
-    create_users(1)
-    _RecordingBackend.seen = []
-    schema = _login_logout_schema()
-    schema.execute_sync(
-        _LOGIN_VAR_Q,
-        variable_values={"u": weird, "p": weird},
-        context_value=_session_request(),
-    )
-    assert _RecordingBackend.seen == [(weird, weird)]
-
-
-@pytest.mark.django_db
-def test_login_password_never_appears_in_logs_or_error_text(caplog):
-    """The password never leaks into captured logs or exception/repr text (a wrong-password attempt)."""
-    create_users(1)
-    schema = _login_logout_schema()
-    secret = "sup3r-secret-verboten-42"
-    with caplog.at_level(logging.DEBUG):
-        res = schema.execute_sync(
-            _LOGIN_VAR_Q,
-            variable_values={"u": "staff_1", "p": secret},
-            context_value=_session_request(),
-        )
-    assert res.data["login"]["node"] is None
-    assert secret not in caplog.text
-    for error in res.errors or []:
-        assert secret not in str(error)
 
 
 # --- WebSocket login rejection (before authenticate) --------------------------
@@ -2143,64 +1877,6 @@ async def test_channels_http_relogin_same_user_mismatched_hash_flushes_and_repla
     assert _cookie_key(_set_cookie(r2)) != key_a
 
 
-# --- Post-login last_login exposure (security invariant 3) --------------------
-
-
-def _login_schema_with_last_login():
-    """Declare the ``last_login``-exposing UserT + a login/logout Mutation; finalize."""
-    return _login_logout_schema(
-        declare=lambda: _declare_user_type(fields=("id", "username", "last_login")),
-    )
-
-
-_LOGIN_LAST_LOGIN_Q = (
-    "mutation($u: String!, $p: String!){ login(username: $u, password: $p){ "
-    "node{ username lastLogin } errors{ field } } }"
-)
-
-
-@pytest.mark.django_db
-def test_sync_login_payload_exposes_the_post_login_last_login():
-    """Invariant 3: the prebuilt payload holds the user OBJECT, so ``lastLogin`` reflects the signal.
-
-    A user seeded with ``last_login=None`` (never logged in) whose login response's
-    nested ``lastLogin`` resolves non-null pins that the payload container exposes the
-    POST-login user mutated by Django's ``user_logged_in`` receiver
-    (``update_last_login``), not a pre-login scalar snapshot.
-    """
-    create_users(1)
-    User.objects.filter(username="staff_1").update(last_login=None)
-    schema = _login_schema_with_last_login()
-    request = _session_request()
-    res = schema.execute_sync(
-        _LOGIN_LAST_LOGIN_Q,
-        variable_values={"u": "staff_1", "p": TEST_USER_PASSWORD},
-        context_value=request,
-    )
-    assert res.errors is None, res.errors
-    node = res.data["login"]["node"]
-    assert node["username"] == "staff_1"
-    assert node["lastLogin"] is not None  # advanced by the post-login signal
-
-
-@pytest.mark.django_db
-async def test_async_login_payload_exposes_the_post_login_last_login():
-    """The async twin: the Django HTTP async body bridges to the sync body, same guarantee."""
-    await _acreate_users(1)
-    await database_sync_to_async(User.objects.filter(username="staff_1").update)(last_login=None)
-    schema = _login_schema_with_last_login()
-    request = _session_request()
-    res = await schema.execute(
-        _LOGIN_LAST_LOGIN_Q,
-        variable_values={"u": "staff_1", "p": TEST_USER_PASSWORD},
-        context_value=request,
-    )
-    assert res.errors is None, res.errors
-    node = res.data["login"]["node"]
-    assert node["username"] == "staff_1"
-    assert node["lastLogin"] is not None
-
-
 # --- SyncGraphQLHTTPConsumer sync bridge (the async_to_sync arm) --------------
 
 
@@ -2367,11 +2043,11 @@ async def test_async_channels_http_wrong_password_is_failed_login_envelope_sessi
 
 @pytest.mark.django_db
 def test_sync_django_http_login_leaves_session_modified_for_the_cookie():
-    """Transport contract: a successful Django HTTP login leaves ``session.modified`` set.
+    """``session.modified`` stays true after the resolver's explicit ``save``.
 
-    The middleware-still-emits-the-rotated-cookie observable - the resolver's explicit
-    ``save()`` does NOT clear the flag, so ``SessionMiddleware`` saves again and sends
-    the cookie transition that makes the durable session usable by the client.
+    The cookie consequence (``sessionid`` on the client) is live in
+    ``examples/fakeshop/test_query/test_auth_api.py``; the flag itself is not a
+    wire field.
     """
     create_users(1)
     schema = _login_logout_schema()
@@ -2389,11 +2065,11 @@ def test_sync_django_http_login_leaves_session_modified_for_the_cookie():
 # These package tests own the logout rows a live fakeshop `/graphql/` request
 # cannot drive: the Channels HTTP round trip + anonymous residue flush (real
 # HttpCommunicator), the real WebSocket server-side logout + reconnect-with-old-cookie
-# invalidation, the signed-cookie WebSocket rejection before mutation, and the
-# post-capture failure-injection rows (Stage 0 induction mechanisms - a real raising
-# `user_logged_out` receiver and a real SessionStore subclass whose `delete` raises)
-# on BOTH the Django HTTP and Channels paths. The Django HTTP authenticated/anonymous
-# round trip lives in the live `examples/fakeshop/test_query/test_auth_api.py`.
+# invalidation, the signed-cookie WebSocket rejection before mutation, and
+# SessionStore ``delete`` failure injection a ``django.test.Client`` cannot carry.
+# The Django HTTP authenticated/anonymous round trip and a raising
+# ``user_logged_out`` receiver live in
+# ``examples/fakeshop/test_query/test_auth_api.py``.
 #
 # The logout document these rows send is `_LOGOUT_Q`, the same one the Django HTTP
 # rows send: the transports differ, the document does not.
@@ -2439,27 +2115,6 @@ def _establish_authenticated_django_session(user, store):
 
 
 # --- Django HTTP failure injection (fail closed) ------------------------------
-
-
-@pytest.mark.django_db
-def test_django_logout_signal_failure_no_ok_and_actor_anonymized():
-    """Logout row: a raising ``user_logged_out`` receiver -> no ok, actor anonymous.
-
-    The receiver fires BEFORE ``flush`` (Stage 0), so the durable row is NOT
-    invalidated - and the resolver never falsely claims it was (no ok payload; the
-    error propagates as a top-level GraphQL error).
-    """
-    create_users(1)
-    schema = _login_logout_schema()
-    user = get_user_model().objects.get(username="staff_1")
-    request = _establish_authenticated_django_session(user, DBSessionStore())
-    key = request.session.session_key
-    assert _session_row_exists(key)
-    with _raising_logout_receiver():
-        res = schema.execute_sync(_LOGOUT_Q, context_value=request)
-    assert res.errors is not None
-    assert not request.user.is_authenticated  # local actor made anonymous
-    assert _session_row_exists(key)  # signal preceded flush; no false invalidation
 
 
 @pytest.mark.django_db

@@ -2,12 +2,13 @@
 
 The ``current_user`` residue a live fakeshop request cannot drive: the
 ``CurrentUserAlias`` namespace lifecycle (the ``make_input_namespace`` trio +
-its pre-bind ``register_subsystem_clear`` row), the injected-signature return
-typing resolving to the concrete user type, the surface-keyed
+its pre-bind ``register_subsystem_clear`` row), the surface-keyed
 current-user-only bind (its no-``UserType`` arm + no orphan payloads), the
-gated-anonymous ``GraphQLError`` and its exact denial string, and the async
-lazy-user forcing inside the one ``sync_to_async`` boundary. The live ``me``
-behavior (authenticated / anonymous over ``/graphql/``) is earned in
+gated-anonymous ``GraphQLError`` and its exact denial string, hostile
+``is_authenticated`` containment, and the async lazy-user forcing inside the
+one ``sync_to_async`` boundary. The live ``me`` behavior (authenticated /
+anonymous / no-``AuthenticationMiddleware`` / hide-everyone ``get_queryset``
+skip / ``me: UserType`` SDL) is earned in
 ``examples/fakeshop/test_query/test_auth_api.py``.
 """
 
@@ -25,7 +26,7 @@ from django.utils.functional import SimpleLazyObject
 from strawberry import relay
 
 from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
-from django_strawberry_framework.auth import current_user, login_mutation
+from django_strawberry_framework.auth import current_user
 from django_strawberry_framework.auth import queries as auth_queries
 from django_strawberry_framework.auth.queries import (
     CURRENT_USER_ALIAS_NAME,
@@ -181,12 +182,6 @@ def test_alias_namespace_rides_make_input_namespace_and_the_pre_bind_row():
     assert _current_user_alias_names == {CURRENT_USER_ALIAS_NAME: user_type}
 
 
-def test_injected_return_annotation_resolves_to_the_concrete_user_type():
-    """The dispatcher's lazy return ref lands in the SDL as ``me: UserT`` (nullable)."""
-    schema = _me_schema()
-    assert "me: UserT" in str(schema)
-
-
 def test_current_user_only_bind_emits_no_login_logout_payloads():
     """The surface-keyed bind: a me-only schema materializes the alias and nothing else."""
     _me_schema()
@@ -256,13 +251,10 @@ def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
     ``request.user`` is ``None`` for a Strawberry-Channels
     ``ChannelsRequestAdapter`` whose scope carries no
     ``AuthMiddlewareStack``-populated user (spec-041's supported adapter shape;
-    ``tests/utils/test_permissions.py`` pins ``.user`` -> ``None`` there), and
-    absent entirely for a bare request wired without ``AuthenticationMiddleware``.
-    Both must resolve ``me`` to ``null`` under the AllowAny default - the
-    nullable-return contract is "not authenticated -> null", matching
-    ``DjangoModelPermission.has_permission``'s ``getattr(request, "user", None)``
-    / ``user is None`` guard. Pre-fix each path raised a top-level
-    ``'NoneType' object has no attribute 'is_authenticated'``.
+    ``tests/utils/test_permissions.py`` pins ``.user`` -> ``None`` there).
+    The no-``AuthenticationMiddleware`` Django HTTP arm lives in
+    ``examples/fakeshop/test_query/test_auth_api.py``. Remaining arms here are
+    the Channels adapter plus hostile actor shapes a live request cannot mint.
     """
     schema = _me_schema()
 
@@ -274,12 +266,6 @@ def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
     )
     assert channels.errors is None, channels.errors
     assert channels.data["me"] is None
-
-    # A bare request that never had ``request.user`` set (no AuthenticationMiddleware).
-    bare = RequestFactory().post("/graphql/")
-    bare_res = schema.execute_sync(_ME_Q, context_value=bare)
-    assert bare_res.errors is None, bare_res.errors
-    assert bare_res.data["me"] is None
 
     # A SimpleLazyObject returning None (lazy unauthenticated user resolving to None).
     lazy_none = RequestFactory().post("/graphql/")
@@ -469,6 +455,13 @@ def test_legacy_callable_is_authenticated_returning_false_is_anonymous():
         KeyError,
         IndexError,
     ],
+    ids=[
+        "type",
+        "value",
+        "attribute",
+        "key",
+        "index",
+    ],
 )
 def test_legacy_callable_is_authenticated_raising_collapses_to_anonymous_null(raised):
     """A legacy ``is_authenticated()`` raising any of the five shapes collapses to ``null``.
@@ -597,57 +590,6 @@ async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary(
     assert seen["operation"] == "current_user"
     assert seen["data"] is None
     assert seen["instance"] == user
-
-
-@pytest.mark.django_db
-def test_me_composes_with_login_in_one_schema_without_visibility_rerun():
-    """``me`` returns the actor even under a hide-everyone ``get_queryset`` (D-N1).
-
-    A directory-shaped visibility hook that hides every row must not make ``me``
-    (or the login node) return ``null`` for the logged-in actor - the two
-    actor-returning surfaces deliberately skip the ``get_queryset`` re-run.
-    """
-
-    def _hide_everyone(cls, queryset, info, **kwargs):
-        return queryset.none()
-
-    type(
-        "UserT",
-        (DjangoType, relay.Node),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {"model": User, "fields": ("id", "username", "email"), "primary": True},
-            ),
-            "get_queryset": classmethod(_hide_everyone),
-        },
-    )
-
-    @strawberry.type
-    class Query:
-        me = current_user()
-
-    @strawberry.type
-    class Mutation:
-        login = login_mutation()
-
-    finalize_django_types()
-    schema = DjangoSchema(query=Query, mutation=Mutation)
-
-    User.objects.create_user(username="hidden_actor", password="pw-9x-strong")
-    request = _session_request()
-    login_res = schema.execute_sync(
-        'mutation{ login(username: "hidden_actor", password: "pw-9x-strong"){ '
-        "node{ username } errors{ field } } }",
-        context_value=request,
-    )
-    assert login_res.errors is None, login_res.errors
-    assert login_res.data["login"] == {"node": {"username": "hidden_actor"}, "errors": []}
-
-    me_res = schema.execute_sync(_ME_Q, context_value=request)
-    assert me_res.errors is None, me_res.errors
-    assert me_res.data["me"] == {"username": "hidden_actor"}
 
 
 @pytest.mark.django_db

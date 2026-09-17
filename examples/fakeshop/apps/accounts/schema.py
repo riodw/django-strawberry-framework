@@ -11,6 +11,7 @@ return, so it selects explicitly - never ``fields = "__all__"`` - and keeps
 """
 
 import strawberry
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from strawberry import relay
 
@@ -24,11 +25,26 @@ from django_strawberry_framework.auth import (
 
 
 class UserType(DjangoType):
-    """The authenticated read surface for ``login`` / ``register`` / ``me``."""
+    """The authenticated read surface for ``login`` / ``register`` / ``me``.
+
+    Default-OFF acceptance flag ``FAKESHOP_TEST_USER_LAST_LOGIN`` (the
+    ``FAKESHOP_TEST_LOAN_CONNECTION`` idiom): when set, ``last_login`` joins
+    the selected columns so a live login can observe the post-login value the
+    ``user_logged_in`` signal writes. Read in the ``Meta`` body so a
+    project-schema reload under ``override_settings`` re-executes it; when the
+    flag is absent the type stays the shipped identity trio.
+    """
 
     class Meta:
         model = get_user_model()
         fields = ("id", "username", "email")
+        if getattr(settings, "FAKESHOP_TEST_USER_LAST_LOGIN", False):
+            fields = (
+                "id",
+                "username",
+                "email",
+                "last_login",
+            )
         interfaces = (relay.Node,)
 
 

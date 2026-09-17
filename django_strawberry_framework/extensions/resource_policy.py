@@ -110,6 +110,7 @@ from ..resource_policy import (
     ResourcePolicy,
     _operation_policy,
     admission_rejection,
+    adopt_budget_binding,
     armed_resource_policy,
     begin_resource_budget,
     budget_resume_binding,
@@ -1139,13 +1140,13 @@ class _AcceptedPolicy:
 
 #: What each constructed extension settled, held here and by nothing else.
 #:
-#: An instance entry is accepted as itself, so it stays reachable through
-#: ``info.schema.extensions`` for as long as the schema lives, and what it holds
-#: is what bounds the NEXT operation. An attribute holding that is a name a
-#: resolver writes once - or deletes once, which selects the schema's policy or
-#: the package defaults instead, and those may be wider than the policy this
-#: extension was configured with. A policy is ints and a float, so holding one
-#: here retains nothing but the policy; see
+#: On a plain ``strawberry.Schema`` an instance entry is accepted as itself, so
+#: it stays reachable through ``info.schema.extensions`` for as long as the
+#: schema lives, and what it holds is what bounds the NEXT operation. An
+#: attribute holding that is a name a resolver writes once - or deletes once,
+#: which selects the schema's policy or the package defaults instead, and those
+#: may be wider than the policy this extension was configured with. A policy is
+#: ints and a float, so holding one here retains nothing but the policy; see
 #: ``utils/private_state.py::PrivateAuthority``.
 _EXPLICIT_POLICY: PrivateAuthority[_AcceptedPolicy] = PrivateAuthority()
 
@@ -1187,6 +1188,16 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
     construction, falling back to the package defaults for a schema that carries
     none. There is no configuration under which the extension is installed and
     enforces nothing.
+
+    **On a ``DjangoSchema`` this is not a consumer entry at all.** The schema
+    builds its own on every operation from the configuration it was accepted
+    with, so an entry that IS this class, or an exact instance of it, is read
+    once as a declaration of the schema's bound and does not travel into the
+    chain - which is also why no resolver finds one in
+    ``info.schema.extensions`` to write through. A subclass is refused at
+    construction and a factory resolving to one refuses the operation: both
+    would decide enforcement from consumer code on a request already running.
+    Configure the bound with ``DjangoSchema(resource_policy=...)``.
     """
 
     _reconstruction_refusal = (
@@ -1226,12 +1237,15 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
     def _policy(self) -> ResourcePolicy | None:
         """The explicit policy this extension was configured with, as a copy.
 
-        An extension instance passed to ``extensions=[...]`` is accepted as the
-        entry itself, so it stays reachable through ``info.schema.extensions``
-        for the life of the schema - and what it holds is the authority the NEXT
-        operation is bounded by. An ordinary attribute is therefore a seam a
-        resolver widens every later request through, by rebinding it, deleting
-        it, or writing a bound on the object it answers with. The configuration
+        An extension instance passed to a plain ``strawberry.Schema``'s
+        ``extensions=[...]`` is accepted as the entry itself, so it stays
+        reachable through ``info.schema.extensions`` for the life of the schema
+        - and what it holds is the authority the NEXT operation is bounded by.
+        An ordinary attribute is therefore a seam a resolver widens every later
+        request through, by rebinding it, deleting it, or writing a bound on the
+        object it answers with. ``DjangoSchema`` reads a direct instance entry
+        once and keeps the bound as its own canonical state instead, and this
+        property is how it reads it. The configuration
         is held as ``utils/private_state.py::PrivateAuthority`` instead, which
         no name on this object answers with, and each read hands out a
         duplicate. ``None`` here means this extension was given no policy to
@@ -1294,8 +1308,8 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
         with restored_context_keys(context, DST_RESOURCE_POLICY, DST_RESOURCE_DEADLINE):
             scope = begin_resource_budget(context, policy)
             state = self._operation_state()
-            if state is not None:
-                state.rebind_on_resume(*budget_resume_binding(scope))
+            if state is not None and state.rebind_on_resume(*budget_resume_binding(scope)):
+                adopt_budget_binding(scope)
             try:
                 # The ARMED snapshot, not the object it was resolved from: the
                 # scan and the seams that run under it must charge one policy.

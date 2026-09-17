@@ -38,10 +38,9 @@ Row groups, in the order a request meets them:
   across two requests because the write and the request it would widen are
   different requests, together with the two things that authority is identified
   and taken by - the schema's own identity and a private copy of the policy the
-  deployment supplied, and the policy an accepted extension instance holds -
-  a factory-supplied extension's own ``max_list_rows`` as the resolve-time bound
-  (the automatic copy appended beside a factory is dropped, or the package
-  defaults would arm last), alongside the boundary the value budget sits on -
+  deployment supplied - and the ``max_list_rows`` an extension ENTRY declared,
+  which the schema reads once and bounds the request with while the entry itself
+  never reaches the chain, alongside the boundary the value budget sits on -
   the raw argument the request carried, charged before a custom scalar converts
   it, whichever of the three places a request can carry one it came from - and
   the largest configurable bound executing as a real ``LIMIT``; and
@@ -336,27 +335,22 @@ def _authority_view(request, *args, **kwargs):
 _authority_view.csrf_exempt = True
 
 
-def _narrow_list_factory():
-    """A factory the schema cannot identify at construction, so the auto append is dropped at resolve."""
-    return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
-
-
 @cache
-def _factory_rows_schema() -> DjangoSchema:
-    """Schema whose only narrow bound is the factory's ``max_list_rows``, not ``resource_policy=``."""
+def _entry_rows_schema() -> DjangoSchema:
+    """Schema whose narrow bound is declared by an ENTRY rather than by ``resource_policy=``."""
     return DjangoSchema(
         query=_AuthorityQuery,
         config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
-        extensions=[_narrow_list_factory],
+        extensions=[DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))],
     )
 
 
-def _factory_rows_view(request, *args, **kwargs):
-    built = DjangoGraphQLView.as_view(schema=_factory_rows_schema())
+def _entry_rows_view(request, *args, **kwargs):
+    built = DjangoGraphQLView.as_view(schema=_entry_rows_schema())
     return built(request, *args, **kwargs)
 
 
-_factory_rows_view.csrf_exempt = True
+_entry_rows_view.csrf_exempt = True
 
 
 class _EqualSchema(DjangoSchema):
@@ -400,8 +394,10 @@ class _AcceptedInstanceQuery:
 
     @strawberry.field
     def rebind(self, info: strawberry.Info) -> str:
-        """Point the accepted entry's policy at a wider one."""
+        """Point the entry that bounds this schema at a wider policy."""
         entry = _accepted_resource_entry(info)
+        if entry is None:
+            return "unreachable"
         try:
             entry._policy = ResourcePolicy(max_list_rows=999)
         except AttributeError as exc:
@@ -410,14 +406,20 @@ class _AcceptedInstanceQuery:
 
     @strawberry.field
     def overwrite(self, info: strawberry.Info) -> str:
-        """Write a wider bound onto the policy object the accepted entry answers with."""
-        _accepted_resource_entry(info)._policy.__dict__["max_list_rows"] = 999
+        """Write a wider bound onto the policy object that entry answers with."""
+        entry = _accepted_resource_entry(info)
+        if entry is None:
+            return "unreachable"
+        entry._policy.__dict__["max_list_rows"] = 999
         return "written"
 
     @strawberry.field
     def empty_the_entry(self, info: strawberry.Info) -> list[str]:
-        """Delete everything the accepted entry carries, bar the context it is mid-request on."""
-        held = _accepted_resource_entry(info).__dict__
+        """Delete everything that entry carries, bar the context it is mid-request on."""
+        entry = _accepted_resource_entry(info)
+        if entry is None:
+            return []
+        held = entry.__dict__
         dropped = sorted(name for name in held if name != "execution_context")
         for name in dropped:
             del held[name]
@@ -425,17 +427,22 @@ class _AcceptedInstanceQuery:
 
     @strawberry.field
     def reachable_authorities(self, info: strawberry.Info) -> list[str]:
-        """Every name on the accepted entry answering with a policy, asked by content."""
+        """Every name on a reachable entry answering with a policy, asked by content."""
         entry = _accepted_resource_entry(info)
+        if entry is None:
+            return []
         return sorted(
             name for name, value in vars(entry).items() if isinstance(value, ResourcePolicy)
         )
 
     @strawberry.field
     def reconfigure(self, info: strawberry.Info) -> str:
-        """Run the accepted entry's own constructor again, with a wider policy."""
+        """Run that entry's own constructor again, with a wider policy."""
+        entry = _accepted_resource_entry(info)
+        if entry is None:
+            return "unreachable"
         try:
-            _accepted_resource_entry(info).__init__(policy=ResourcePolicy(max_list_rows=999))
+            entry.__init__(policy=ResourcePolicy(max_list_rows=999))
         except Exception as exc:
             return type(exc).__name__
         return "reconfigured"
@@ -446,11 +453,21 @@ class _AcceptedInstanceQuery:
 
 
 def _accepted_resource_entry(info):
-    """The resource extension a resolver reaches through ``info.schema.extensions``."""
+    """The resource extension a resolver reaches through ``info.schema.extensions``.
+
+    ``None`` is the ordinary answer: the extension that bounds an operation is
+    built per operation from the schema's own record and is not an entry, so a
+    directly supplied one is read as a declaration and does not travel. The
+    resolver-facing fields report that as ``unreachable`` rather than raising,
+    because "there is nothing here to write" is the outcome these rows are about.
+    """
     return next(
-        entry
-        for entry in info.schema.extensions
-        if isinstance(entry, DjangoResourcePolicyExtension)
+        (
+            entry
+            for entry in info.schema.extensions
+            if isinstance(entry, DjangoResourcePolicyExtension)
+        ),
+        None,
     )
 
 
@@ -526,12 +543,14 @@ def _widening_factory():
 class _MembershipQuery:
     """A bounded list beside the writes that aim at WHICH extensions run it.
 
-    The schema behind this query declared no extensions of its own, so the
-    entries it accepted are the package's two classes - objects their modules
-    name, which no write to the schema can take away. What each row here changes
-    is therefore the membership and nothing else, which is the question these
-    rows exist to ask: whether a later operation runs the extensions that were
-    accepted or the ones that were written where the accepted ones are held.
+    The schema behind this query declared no extensions of its own, so its
+    accepted configuration is empty and the two extensions that bound and mask
+    its operations are built per operation from its own record. What each row
+    here changes is therefore the membership and nothing else, which is the
+    question these rows exist to ask: whether a later operation runs the
+    extensions that were accepted - and is enforced as the deployment
+    configured it - or the ones that were written where the accepted ones are
+    held.
     """
 
     @strawberry.field
@@ -601,12 +620,16 @@ def _membership_view(mount: str):
 
 
 #: Every extension this mount's factory has built, one per operation it served.
-_FACTORY_BUILDS: list[DjangoResourcePolicyExtension] = []
+_FACTORY_BUILDS: list[SchemaExtension] = []
+
+
+class _CountedExtension(SchemaExtension):
+    """A consumer extension the mount's factory builds fresh for every operation."""
 
 
 def _narrow_extension_factory():
-    """A fresh extension per operation, configured the way a consumer's own would be."""
-    built = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+    """A fresh extension per operation, the way a consumer's own factory builds one."""
+    built = _CountedExtension()
     _FACTORY_BUILDS.append(built)
     return built
 
@@ -627,7 +650,11 @@ class _FactoryQuery:
 
 @cache
 def _factory_schema() -> DjangoSchema:
-    return DjangoSchema(query=_FactoryQuery, extensions=[_narrow_extension_factory])
+    return DjangoSchema(
+        query=_FactoryQuery,
+        resource_policy=ResourcePolicy(max_list_rows=1),
+        extensions=[_narrow_extension_factory],
+    )
 
 
 def _factory_view(request, *args, **kwargs):
@@ -733,31 +760,28 @@ class _ExecutionWitness(SchemaExtension):
         yield
 
 
+class _CacheNeighbour(SchemaExtension):
+    """A consumer entry with no behavior, so the cache has a position to take."""
+
+
 @cache
 def _witness_schema(order: str) -> DjangoSchema:
-    """One witnessed schema per position the validation cache can take.
+    """One witnessed schema per position the validation cache takes among the consumer entries.
 
-    The witness is listed ahead of everything the package appends, so its hook
-    is the first thing the executing stage would enter. Both orders are needed:
-    with the cache FIRST the enforcing entry's own hook is still behind it and
-    can restate the verdict itself, and with the cache LAST nothing but the
-    guard appended behind every consumer entry is.
+    The package's own enforcing entry is behind every consumer entry whatever
+    the consumer wrote, and the guard is behind that - so what varies here is
+    where the cache sits relative to the witness, and the verdict must not.
     """
     if order == "cache-first":
         return DjangoSchema(
             query=_WitnessQuery,
             resource_policy={"max_aliases": CACHE_ALIASES},
-            extensions=[_ExecutionWitness, ValidationCache],
+            extensions=[ValidationCache, _ExecutionWitness],
         )
     return DjangoSchema(
         query=_WitnessQuery,
-        extensions=[
-            _ExecutionWitness,
-            lambda: DjangoResourcePolicyExtension(
-                policy=ResourcePolicy(max_aliases=CACHE_ALIASES),
-            ),
-            ValidationCache,
-        ],
+        resource_policy={"max_aliases": CACHE_ALIASES},
+        extensions=[_ExecutionWitness, ValidationCache],
     )
 
 
@@ -794,9 +818,10 @@ def _cache_schema(order: str) -> DjangoSchema:
 
     ``ValidationCache`` is an ordinary supported extension that runs the
     validation pass itself and assigns the result over the operation's
-    pre-execution errors. Where it sits relative to the package's own entry is
-    the consumer's choice, and both choices are configurations this package
-    accepts, so both are mounted.
+    pre-execution errors. Where it sits among the consumer's own entries is the
+    consumer's choice, and both choices are configurations this package accepts,
+    so both are mounted; the package's enforcing entry is behind all of them
+    either way, and the guard is behind that.
     """
     policy = ResourcePolicy(
         max_aliases=CACHE_ALIASES,
@@ -810,12 +835,13 @@ def _cache_schema(order: str) -> DjangoSchema:
             query=_AuthorityQuery,
             config=config,
             resource_policy=policy,
-            extensions=[ValidationCache],
+            extensions=[ValidationCache, _CacheNeighbour],
         )
     return DjangoSchema(
         query=_AuthorityQuery,
         config=config,
-        extensions=[lambda: DjangoResourcePolicyExtension(policy=policy), ValidationCache],
+        resource_policy=policy,
+        extensions=[_CacheNeighbour, ValidationCache],
     )
 
 
@@ -863,11 +889,11 @@ _retained_view.csrf_exempt = True
 #: nothing but the alias the bound is about.
 ENTRY_ALIASES = 1
 
-#: The four spellings Strawberry accepts for an extension entry, and what each one
-#: resolves to per operation. Two of them resolve to the SAME object every time -
-#: an instance is passed through unchanged and a factory returning a singleton
-#: returns it again - which is what makes the shared-entry rows different in kind
-#: from their fresh controls rather than a repetition of them.
+#: The four spellings Strawberry accepts for a consumer extension entry, and what
+#: each one resolves to per operation. Two of them resolve to the SAME object
+#: every time - an instance is passed through unchanged and a factory returning a
+#: singleton returns it again - which is what makes the shared-entry rows
+#: different in kind from their fresh controls rather than a repetition of them.
 ENTRY_SPELLINGS = (
     "class",
     "fresh-factory",
@@ -902,20 +928,22 @@ class _OverlapCoordinator(SchemaExtension):
         yield
 
 
+class _SharedEntryExtension(SchemaExtension):
+    """A consumer extension, so two of the four spellings share ONE object per mount."""
+
+
 @cache
-def _entry_extension(spelling: str) -> DjangoResourcePolicyExtension:
+def _entry_extension(spelling: str) -> _SharedEntryExtension:
     """The ONE extension object a shared-entry mount hands every operation."""
-    return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=ENTRY_ALIASES))
+    return _SharedEntryExtension()
 
 
 def _entry_entry(spelling: str):
     """The ``extensions=[...]`` entry that spells ``spelling``."""
     if spelling == "class":
-        return DjangoResourcePolicyExtension
+        return _SharedEntryExtension
     if spelling == "fresh-factory":
-        return lambda: DjangoResourcePolicyExtension(
-            policy=ResourcePolicy(max_aliases=ENTRY_ALIASES),
-        )
+        return lambda: _SharedEntryExtension()
     if spelling == "instance":
         return _entry_extension(spelling)
     return lambda: _entry_extension(spelling)
@@ -925,10 +953,12 @@ def _entry_entry(spelling: str):
 def _entry_schema(spelling: str) -> DjangoSchema:
     """One schema per entry spelling, built once so the mount is the same object.
 
-    The class spelling reads its bound off the schema, because a bare class entry
-    is constructed with no arguments; the other three carry the same bound on the
-    entry itself. Every mount therefore refuses the same document for the same
-    reason, which is what makes the four rows comparable.
+    Every mount is bounded by the same ``resource_policy=``, because the
+    extension that spends it is the schema's own either way; what the spelling
+    decides is whether the CONSUMER entry beside it is a new object per
+    operation or one object every operation shares. Every mount therefore
+    refuses the same document for the same reason, which is what makes the four
+    rows comparable.
 
     Strawberry's deprecation warning for the instance spelling is suppressed here
     rather than at each row: the mount is built inside a request, where a raised
@@ -987,7 +1017,7 @@ urlpatterns = [
         path(mount.lstrip("/"), (_entry_view if color == "sync" else _entry_async_view)(spelling))
         for (spelling, color), mount in ENTRY_MOUNTS.items()
     ),
-    path("rp-factory-rows/", _factory_rows_view),
+    path("rp-entry-rows/", _entry_rows_view),
     path("rp-equal-narrow/", _equal_view(1)),
     path("rp-equal-wide/", _equal_view(3)),
     path("rp-retained/", _retained_view),
@@ -2226,16 +2256,15 @@ def test_an_unarmed_deadline_never_rejects():
 # ---------------------------------------------------------------------------
 
 
-def test_a_factory_configured_bound_is_the_one_a_request_is_held_to():
-    """A factory-produced resource extension is the operation's one armed budget.
+def test_a_bound_declared_by_an_entry_is_the_one_a_request_is_held_to():
+    """An entry carrying a policy is a declaration, and the declaration is what bounds.
 
-    A factory cannot be identified at construction, so the automatic entry is
-    appended beside it and dropped when the operation resolves extensions.
-    Left in, it would arm last and answer every resolve-time bound with the
-    package defaults while the consumer's own policy went on charging the
-    document.
+    Read once where it is accepted and folded into the schema's own record, so
+    the operation is bounded by it while the object that declared it never
+    reaches the chain - and the package defaults, which would pass all three
+    rows, never answer a bound the deployment did configure.
     """
-    payload = _post("/rp-factory-rows/", "{ rows }")
+    payload = _post("/rp-entry-rows/", "{ rows }")
     _no_rejection(payload)
     assert payload["data"] == {"rows": ["a"]}
 
@@ -2441,35 +2470,38 @@ def test_no_name_on_an_accepted_extension_answers_with_the_policy_it_enforces(mo
 
 
 @pytest.mark.parametrize(
-    ("mount", "field"),
+    ("mount", "field", "reported"),
     [
-        ("/rp-authority/", "reconfigure"),
-        ("/rp-accepted-instance/", "reconfigure"),
-        ("/rp-inherited-instance/", "reconfigure"),
+        ("/rp-authority/", "reconfigure", "ConfigurationError"),
+        ("/rp-accepted-instance/", "reconfigure", "unreachable"),
+        ("/rp-inherited-instance/", "reconfigure", "unreachable"),
     ],
     ids=["schema", "accepted-extension", "accepted-extension-inheriting"],
 )
-def test_rerunning_a_constructor_over_the_wire_does_not_widen_a_later_request(mount, field):
+def test_rerunning_a_constructor_over_the_wire_does_not_widen_a_later_request(
+    mount,
+    field,
+    reported,
+):
     """An object a resolver reaches is one whose ``__init__`` a resolver can call.
 
     A second construction would settle a new ceiling for every later request the
-    process serves, which is the widening no attribute write achieves. It is
-    refused where it is made, and what the deployment configured is what still
+    process serves, which is the widening no attribute write achieves. The
+    schema is refused where the call is made; the extension that spends its
+    policy is not an entry at all, so there is nothing for the resolver to
+    reach and call. Either way the deployment's configuration is what still
     bounds the next request.
 
-    The initial configuration is varied because it is what the refusal has to
-    read the construction from. An extension built with no override of its own
-    is configured - it enforces the policy its schema resolves - so an object
-    that took the policy for the record would leave exactly that configuration
-    open to being handed a ceiling after the deployment accepted it, while the
-    row that carries a policy passed.
+    The initial configuration is varied because an extension built with no
+    override of its own is configured too - it enforces the policy its schema
+    resolved - and both spellings have to answer the same way.
     """
     first = _post(mount, "{ rows }")
     _no_rejection(first)
     assert first["data"]["rows"] == ["a"]
 
     attacked = _post(mount, "{ %s }" % field)
-    assert attacked["data"] == {field: "ConfigurationError"}, attacked
+    assert attacked["data"] == {field: reported}, attacked
 
     second = _post(mount, "{ rows }")
     _no_rejection(second)
@@ -2521,9 +2553,9 @@ def test_writing_the_accepted_extensions_does_not_choose_what_runs_the_next_requ
 def test_an_extension_factory_still_builds_one_per_operation():
     """Refusing a SECOND construction of one instance is not refusing construction.
 
-    A factory entry is how a consumer configures an extension per operation, and
-    it is called once per operation by design. Each request must still get an
-    instance of its own that accepts the policy the factory hands it.
+    A factory entry is how a consumer gets an extension per operation, and it is
+    called once per operation by design. Each request must still get an instance
+    of its own while the schema's own bound goes on holding it.
     """
     before = _post("/rp-factory-entry/", "{ builds }")
     _no_rejection(before)
@@ -2567,21 +2599,18 @@ def test_losing_the_accepted_extensions_refuses_the_next_request(mount, field):
 
 @pytest.mark.parametrize(
     ("field", "reported"),
-    [("rebind", "AttributeError"), ("overwrite", "written"), ("emptyTheEntry", [])],
+    [("rebind", "unreachable"), ("overwrite", "unreachable"), ("emptyTheEntry", [])],
     ids=["rebind", "overwrite", "empty-the-instance-dictionary"],
 )
 def test_an_accepted_extension_instance_cannot_widen_a_later_request(field, reported):
-    """An instance entry stays reachable, so what it holds bounds the NEXT request.
+    """A declaration is read once and does not travel, so there is nothing left to write.
 
-    Strawberry hands back an accepted instance unchanged, and
-    ``info.schema.extensions`` puts it in front of every resolver. The policy it
-    arms each operation with is therefore held where no name on it answers with
-    it: rebinding is refused where it is made, the object it does hand out is a
-    duplicate so a bound written onto that changes only the writer's copy, and
-    emptying the instance finds nothing to delete - which is the difference
-    between detecting the write and preserving the configuration, since an
-    entry that fell back when its own policy went missing would answer the
-    deletion with the schema's wider one.
+    Strawberry hands back an accepted instance unchanged and
+    ``info.schema.extensions`` puts it in front of every resolver, which is
+    exactly why an entry of this kind is read as a policy declaration at
+    construction and folded into the schema's own record. Every write spelling
+    these rows aim at the object therefore finds no object to aim at, and the
+    bound the deployment declared is what the next request is held to.
     """
     first = _post("/rp-accepted-instance/", "{ rows }")
     _no_rejection(first)
@@ -2695,11 +2724,7 @@ def test_an_argument_within_the_bound_still_executes_beside_a_validation_extensi
 @pytest.mark.parametrize(
     "mount",
     ["/rp-witness-cache-first/", "/rp-witness-cache-last/", "/rp-witness-cache-last-async/"],
-    ids=[
-        "cache-before-the-enforcing-entry",
-        "cache-after-the-enforcing-entry",
-        "cache-after-the-enforcing-entry-async",
-    ],
+    ids=["cache-before-the-witness", "cache-after-the-witness", "cache-after-the-witness-async"],
 )
 @pytest.mark.parametrize("verdict", ["rejected", "admitted"])
 def test_a_rejected_operation_never_enters_the_executing_stage(mount, verdict):
@@ -2748,7 +2773,7 @@ def test_ordinary_validation_still_answers_beside_the_admission_stage(order):
 @pytest.mark.parametrize(
     ("order", "mount"),
     [("cache-first", "/rp-cache-first-async/"), ("cache-last", "/rp-cache-last-async/")],
-    ids=["cache-before-the-automatic-entry", "explicit-entry-before-the-cache"],
+    ids=["cache-before-its-neighbour", "cache-after-its-neighbour"],
 )
 def test_the_composed_admission_stage_answers_the_same_on_the_async_transport(order, mount):
     """One verdict per request, whichever transport carried it."""
@@ -2852,15 +2877,15 @@ def _entry_request(entry, query):
     ids=ENTRY_IDS,
 )
 def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling, color):
-    """Whichever object the entry resolves to, the charge lands on its own document.
+    """Whichever object a consumer entry resolves to, the charge lands on its own document.
 
     Strawberry resolves a class and a fresh factory into a new extension per
     operation, and passes an instance and a singleton-returning factory through
     as ONE object every operation shares. The engine assigns
     ``execution_context`` on whatever it resolved, so for the shared pair a
     second request's assignment is a write onto the object the first request is
-    still being charged through - and the document the enforcing hook reads
-    would be the second request's benign one.
+    still running through - and an enforcing hook reading its request off a
+    shared entry would read the second request's benign document.
 
     The oversized request is held open between its parse hooks, the benign one
     runs to completion, and only then is the first released. The rejection has

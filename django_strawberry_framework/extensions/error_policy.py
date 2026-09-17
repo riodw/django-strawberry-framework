@@ -329,10 +329,14 @@ def _replacement_for(error: Any, policy: ErrorPolicy) -> Any:
 class DjangoErrorPolicyExtension(_OperationBoundExtension):
     """Replace unexpected exception messages with a stable message plus a correlation id.
 
-    Installed on every ``DjangoSchema`` unless the consumer supplied their own
-    entry. The policy object is resolved once at schema construction and read
-    from ``schema.error_policy``; this extension holds no configuration of its
-    own, so a bare class entry and a factory entry behave identically.
+    ``DjangoSchema`` installs one of these on every operation and is the only
+    thing that can: the policy object is resolved once at schema construction
+    and read from ``schema.error_policy``, and an entry that resolves to one of
+    these on a request already running is refused rather than admitted. A
+    ``DjangoSchema(extensions=[...])`` entry that IS this class, or an exact
+    instance of it, is read as a declaration of the schema's own masker and
+    does not travel into the chain; a subclass is refused at construction, and a
+    factory resolving to either refuses the operation.
 
     **Which result is masked is per-operation state, not an attribute.** The
     teardown reads the completed result off the operation's engine context, and

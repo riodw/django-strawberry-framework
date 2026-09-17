@@ -13,8 +13,7 @@ rather than as another figure beside the one above:
 
 - the policy-authority remediation - the object every bound is read from is no longer
   reachable from any consumer-visible name, a policy subclass is canonicalized at schema
-  construction, the resource-policy extension deduplicates a consumer factory, and the two
-  pre-parse document bounds are stated as request-level;
+  construction, and the two pre-parse document bounds are stated as request-level;
 - the accepted-configuration work - a schema's extension entries are authenticated per entry
   rather than by the carrier holding them, and an entry no weak reference can be taken of is
   answered through an interpreter-owned immutable binding;
@@ -24,9 +23,22 @@ rather than as another figure beside the one above:
 - the revocable-lease work - every operation-lifetime value a copied context can hold (the
   runner scope, the armed resource budget, the optimizer's execution frame) is reached
   through a lease its scope closes, so a task that outlived its request reads none of them;
-- the resolved-chain admission - factory invocation, member typing and enforcement
-  cardinality are one transaction, and an invalid or ambiguous population fails closed on the
-  wire with the stable schema-configuration code.
+- the resolved-chain admission - factory invocation and member typing are one transaction,
+  and an invalid population fails closed on the wire with the stable schema-configuration
+  code;
+- the enforcement-authority ownership - the resource-policy and error-policy extensions are
+  built per operation from the schema's construction record rather than resolved out of the
+  extension entries, a direct entry of either kind is a declaration folded into that record,
+  a subclass of either is refused at construction and a factory resolving to either refuses
+  the operation;
+- the refusal boundary - a refused configuration is published before the parse stage and the
+  parse is answered with a package document and a package operation selector, so a malformed
+  request and an `operationName` no document can carry both get the same stable code on the
+  synchronous, awaited and streamed paths, and the refused chain keeps the package's resource
+  extension so its pre-parse token and depth scan still bounds what the schema is sent;
+- the resume-scoped budget binding - an operation's budget stays armed for the operation and
+  bound only while a task is driving it, so between two streamed frames the driving task
+  answers from its enclosing operation or from nothing.
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).

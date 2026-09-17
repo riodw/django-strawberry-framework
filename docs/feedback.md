@@ -1,456 +1,252 @@
-# Adversarial review — copied context and resolved-chain authority
+# Adversarial review — refusal dispatch and contract migration
 
-Date: 2026-09-16
+Date: 2026-09-17
 
-**Verdict: not release-ready.** The four findings from the preceding review are
-substantially fixed: non-weak-referenceable entries are now answered through an
-interpreter-owned immutable binding; the unowned assignment queue is gone; the
-extension's execution-context carrier no longer strongly owns its operation
-state; and nested execution from ordinary teardown/result collection no longer
-overwrites the outer optimizer publication.
+**Verdict: not release-ready yet.** The five findings from the preceding review are fixed on
+their reported shapes. Enforcement now comes from the schema's canonical policy record rather
+than from the consumer extension graph; direct subclasses and hybrids are refused; a refused
+chain retains the resource boundary; hostile factory-exception rendering stays contained; and
+the resume registrar restores the caller's exact prior budget after a streamed frame.
 
-The new pass found two release blockers beyond those repairs:
+I independently reproduced those closures with focused `uv run python` probes. In particular,
+the hybrid fails at construction, an authority-producing factory and a malformed document both
+return `SCHEMA_CONFIGURATION_UNAVAILABLE`, a hostile `__repr__` / `__str__` exception cannot
+escape the refusal, and two frames driven in one task leave `armed_resource_policy()` as `None`
+after each frame and after close.
 
-1. The weak operation-state carrier is only one of several operation-lifetime
-   `ContextVar` values. A child task copies the runner nesting marker, the armed
-   resource budget, and the optimizer's mutable stores. Parent token reset does
-   not alter that copy. The child therefore retains and reads a completed
-   request's state, and a later independent operation in that child is
-   misclassified as nested.
-2. `DjangoSchema` authenticates the accepted extension *entries* but does not
-   validate the resolved chain as one enforcement authority. Two opaque resource
-   factories leave two resource extensions active; the last hook to arm wins.
-   An invalid factory result escapes as a raw `AttributeError` before the runner
-   or masking policy exists.
+The new pass found two release blockers beyond those rows:
 
-There are two additional lifecycle defects: a streamed result cannot be closed
-from a different task because the runner carries raw `ContextVar` tokens across
-`yield`, and a resolver can still retain an arbitrary graph by assigning a
-non-`DjangoSchema`-shaped value to a shared extension's compatibility setter.
+1. A refused request with an invalid, empty, Unicode, or non-string `operation_name` still
+   escapes the configuration-refusal boundary. Sync execution raises
+   `CannotGetOperationTypeError`; the real sync and async HTTP mounts return `400 text/plain`
+   with `Unknown operation named ...`; streaming emits that lookup error instead of the stable
+   configuration code.
+2. The new authority-factory contract was not migrated through the existing live error-policy
+   suite. Production now correctly refuses those factories, while at least nine existing live
+   test nodes still require them to mask normally. The same obsolete contract remains in
+   module documentation and the live-test catalog.
 
-This review follows [AGENTS.md][agents], including its root-cause and live-test
-placement rules. I inspected the complete [spec][spec-050], [build record][build-050],
-current implementation, [upstream Strawberry lifecycle][upstream-schema], and the affected tests. I
-used focused `uv run python` probes against the working tree. I did not run pytest
-or coverage.
+There is also one lower-severity proof/documentation defect: the refusal path still invokes
+graphql-core's parser once per refused request to parse a package constant, while its test spies
+on a different module binding and its prose says the parser is never invoked. The dangerous
+claim—attacker text is not parsed—is now true; the broader claim is not.
 
-## What the latest implementation fixed
+This review follows [AGENTS.md][agents], including its root-cause, live-test placement, and
+same-change test rules. I read the current [spec][spec-050], [build record][build-050], changed
+implementation, current live suites, and the relevant upstream execution path. I did not run
+pytest, coverage, the sharded suite, or the declared floor matrix.
 
-The previous findings should not be reopened in their old form:
+## Confirmed foundation
 
-- [`PrivateMembership`][private-state] now boxes a non-weak-referenceable member
-  in a `types.MethodType`. Its `__self__` descriptor resists assignment,
-  `object.__setattr__`, deletion, a shadow `__dict__` value, and reinitialization.
-  Recall authenticates the box by weak identity and reads the member from that
-  same immutable binding.
-- The `_Assignment` / `_PENDING_ASSIGNMENTS` protocol has been deleted. A
-  `DjangoSchema` engine assignment retains no context before runner creation.
-- The per-extension carrier contains a weak reference to `OperationState`, so a
-  child task released after the whole request completes no longer keeps the
-  `ExecutionContext` alive through that carrier.
-- A runner scope now covers result collection, and the optimizer uses the
-  runner's nesting answer. Nested execute from `on_operation` teardown preserves
-  the outer published plan in the ordinary same-task path.
+Do not revert the new ownership model:
 
-Those changes are the correct direction. The findings below concern state that
-still bypasses that ownership model.
+- [`_SchemaEnforcement`][schema] owns only canonical resource and error policies plus settlement
+  state. [`DjangoSchema.get_extensions`][schema] constructs fresh exact package authorities
+  around consumer extensions per operation.
+- [`_consumer_extension_entries`][schema] treats direct exact enforcement entries as
+  construction-time declarations, and [`_declared_authority`][schema] refuses subclasses and
+  both multiple-inheritance base orders before the schema is built.
+- A factory is resolved once. If its result claims either package authority, is not a
+  `SchemaExtension`, or its call raises, the operation receives a refused chain rather than
+  letting consumer behavior decide enforcement.
+- [`_refused_chain`][schema] retains both exact package authorities. The raw document still
+  meets the resource extension's token/depth scan before the parse stage, while the refused
+  operation executes no consumer hook or resolver.
+- [`OperationState.rebind_on_resume`][operation-state] transfers a budget token to the active
+  resume registrar when the budget is first armed during a frame. Later resumes bind the live
+  lease and every resume restores its own caller context. The operation teardown remains the
+  sole owner of lease closure.
 
-## P1-1 — copied task contexts still carry completed enforcement and optimizer state
+Those are the correct roots. The remaining work is at the dispatch boundary and in completing
+the contract migration around them.
 
-### Evidence
-
-[`DjangoExtensionsRunner`][operation-state] weakens only the value stored in each
-extension-specific carrier. The other operation-lifetime variables remain strong
-values copied verbatim into a child task:
-
-- `_RUNNER_SCOPES` stores `_RunnerScope` directly. It has no weak owner and no
-  terminal/closed state.
-- [`_active_budget`][resource-policy] stores `_RequestBudget` directly, including the policy,
-  deadline, and admission verdict.
-- [`_operation_stashes`][optimizer-context] stores `_OperationStore`, which strongly owns the
-  optimizer state's `stashes` dictionary.
-- `_cache_key_parts_cache`, `_execution_plan_cache`,
-  `converted_selections_cache`, `_scoped_relations`, and `_active_strictness`
-  likewise store per-execution values directly. The execution-plan memo is
-  explicitly allowed to hold request-scoped querysets.
-
-`ContextVar.reset(token)` changes only the context in which the token was
-created. It cannot rewrite a context copied into `asyncio.create_task()` before
-that reset. Three direct probes reproduce the consequences.
-
-First, a resolver spawned a child, the outer request completed, and the child
-then started a new operation on the same schema. The extension state itself was
-gone, but the runner marker was not:
-
-```text
-outer operation nesting answers     [False]
-independent child operation          True
-child after its operation            False
-```
-
-The final `False` only says the child restored its predecessor. The predecessor
-is the stale outer marker, so the next operation in that child will again be
-classified as nested. The existing regression named
-`test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_bound`
-asserts only `shared.execution_context is None`; it never asks
-`operation_is_nested()` and therefore passes over this defect.
-
-Second, an optimizer operation stashed a unique object, spawned a child, and
-finished. The parent read no active optimizer value; the child still read the
-exact old object before and after running another operation:
-
-```text
-parent optimizer value after execute  None
-child reads completed operation       True
-child after independent execute        True
-```
-
-The child also kept a weak-referenceable sentinel alive solely through the
-copied optimizer store. Thus the operation-state carrier no longer owns the
-request, but the optimizer store can still own request-scoped plans, converted
-selections, cache-key values, and querysets for the lifetime of a background
-task.
-
-Third, the same shape reaches spec-050's bound directly. The outer schema armed
-`max_list_rows=1`; after it completed, the child called `policy_from_info` with a
-new context publishing `max_list_rows=7`:
-
-```text
-parent armed policy after execute     None
-child armed policy                     1
-child policy_from_info(new context)    1
-```
-
-The child is outside the request that armed `1`, yet the stale private budget
-outranks the context actually passed to the helper. Any later direct
-`bounded_rows` / `DjangoListField` work in that child therefore answers from the
-completed request, contrary to the [spec's definition of done][spec-050-dod] and
-the module's own fallback contract.
-
-There is a narrower gap in the newly weak carrier too. A child copy holds a weak
-reference, but the runner owns the state through result collection. If that child
-runs while async result collection is awaiting, the weak reference still
-resolves even though the operation binding in the parent has already unwound.
-Weak lifetime is necessary for collection, but it is not proof that this copied
-binding is still active.
-
-### Root fix
-
-Token reset cannot be the revocation mechanism. Introduce one package-owned,
-revocable operation lease abstraction and make every copied context hold the
-lease, not a raw state/store/budget.
-
-The required properties are:
-
-1. A lease has an explicit terminal state. `close()` atomically marks it closed
-   and drops every request-owned payload. Every read first verifies the lease is
-   open. A child context copied earlier holds the same lease object and therefore
-   observes closure immediately. The terminal `_NormalizationLedger.close()` in
-   [`orders/sets.py`][orders-sets] is already the repository's correct precedent.
-2. The per-extension carrier stores a lease containing a weak reference to the
-   runner-owned state, rather than storing that weak reference directly. Closing
-   the binding lease makes an old child copy inert even while the runner still
-   owns the state for result collection.
-3. The runner-scope value is likewise a lease. `operation_is_nested()` treats a
-   missing **or closed** lease as no outer operation. Nesting must be determined
-   from the active live lease when the runner binding begins, not merely from
-   `_RUNNER_SCOPES.get() is not None` when the runner object is constructed.
-4. The resource budget is closed before its token is reset. `armed_resource_policy`,
-   `admission_rejection`, `policy_from_info`, and `check_deadline` treat a closed
-   budget exactly as absent. Closing drops the policy/deadline/verdict references.
-5. Consolidate optimizer execution scratch behind one revocable frame instead of
-   seven independently reset variables. The frame owns stashes, plan memos,
-   converted selections, scoped relations, and strictness; its `close()` clears
-   all mutable stores before token reset. Optimizer accessors treat a stale copied
-   frame as inactive and fall back exactly as they do when no optimizer operation
-   is running.
-6. Token reset remains useful for normal nesting, but it restores only live
-   predecessors. It is cleanup, not authority. No accessor may infer activity
-   from a non-`None` copied `ContextVar` value alone.
-
-Do not fix only `_RUNNER_SCOPES`: that would make the child's later operation
-look top-level while leaving its direct resource and optimizer reads stale. Do
-not merely weak-reference optimizer dictionaries: the runner may intentionally
-stay alive through result collection, and a closed binding must stop answering
-before owner collection.
-
-### Required regressions
-
-- Extend [`tests/extensions/test_operation_state.py`][test-operation-state] so a
-  surviving child asserts `operation_is_nested() is False` before its own
-  operation, records `False` inside it, and remains `False` afterwards.
-- While async result collection is deliberately paused, release a resolver child
-  and prove the child's copied operation lease is already closed even though the
-  runner still owns states for `get_results`.
-- In [`tests/test_resource_policy.py`][test-resource-policy], prove a child reads
-  no armed policy after owner teardown and that `policy_from_info` honors the new
-  context passed to it. Cover an admission verdict and a deadline as well as
-  `max_list_rows`.
-- In [`tests/optimizer/test_extension.py`][test-optimizer], put unique weakrefable
-  sentinels in the stash, execution-plan memo, converted-selection cache, and
-  cache-key memo. After teardown, a surviving child must read no stale value and
-  every sentinel must be collectible.
-- Start a complete second resource/optimizer operation in that child. It must
-  publish as a top-level operation, clear its own reused context, and restore to
-  no operation afterwards.
-- Put the consumer-visible `max_list_rows` and optimizer-publication cases through
-  the async live fakeshop surface, following the [live-test rules][live-readme].
-  Package tests own only lease mechanics and collectability.
-
-## P1-2 — the resolved extension chain is neither type-checked nor single-authority
+## P1-1 — invalid `operationName` escapes a refused schema
 
 ### Evidence
 
-[`DjangoSchema.extensions`][schema] now authenticates the exact entries accepted
-at construction. That does not authenticate what a callable entry returns on an
-operation. `super().get_extensions()` calls every opaque factory and returns the
-results; current code then removes at most one automatic policy by position and
-passes the rest to Strawberry without validating the resolved population.
+[`_refusal_document`][schema] copies `execution_context.operation_name` into its substitute
+document only when it matches GraphQL's `Name` grammar. For any other value it creates an
+anonymous substitute but leaves the original `execution_context.operation_name` untouched.
+Upstream subsequently asks for the operation type by looking that original name up in the
+substitute document. The lookup cannot succeed, so it replaces the already-published refusal.
 
-Two accepted resource factories demonstrate the authority split. One returns a
-policy with `max_aliases=1`, the other `max_aliases=999`. Both resolved resource
-extensions survive after the automatic entry is dropped:
+Focused direct results on one schema whose accepted factory resolves to `7`:
 
 ```text
-entry order     resolved resource extensions   two-alias request
-narrow, wide                 2                  accepted, no errors
-wide, narrow                 2                  RESOURCE_LIMIT_EXCEEDED (limit 1)
+operation_name       execute_sync                                      stream
+None                  SCHEMA_CONFIGURATION_UNAVAILABLE                  same code
+"missing"             SCHEMA_CONFIGURATION_UNAVAILABLE                  same code
+"bad-name"            raises CannotGetOperationTypeError                Unknown operation
+""                    raises CannotGetOperationTypeError                Unknown operation
+"🔥"                   raises CannotGetOperationTypeError                Unknown operation
+0 / object()          raises CannotGetOperationTypeError                not a stable refusal
 ```
 
-This is not the intersection of two declared bounds. Each `on_operation` opens
-an `_active_budget` scope, so the last resource hook to arm is the budget every
-`on_parse` hook and every resolve-time field seam reads. Reordering unrelated
-extension configuration therefore selects which policy controls spec-050's
-`limit`, `offset`, and returned-row ceilings. It directly contradicts the
-[spec requirement][spec-050-dod] that a consumer factory leave exactly one armed
-budget.
+The issue is wire-reachable. Against the real `/iso-chain/` and `/iso-chain-async/` Django
+mounts, `operationName` values `"bad-name"`, `""`, and `"🔥"` each returned `400 text/plain`
+and echoed the submitted name. The valid-but-absent name control returned HTTP 200 with the
+documented configuration code.
 
-The malformed-member case fails earlier and more abruptly. These are accepted at
-schema construction because they are callable:
-
-```python
-extensions=[lambda: 7]
-extensions=[lambda: object()]
-```
-
-Both later escape `execute_sync` as a raw `AttributeError` when Strawberry tries
-to assign `execution_context`. That assignment loop runs before runner creation
-and outside Strawberry's operation error handling, so the automatic error policy
-cannot mask it and `_RefusedConfiguration` never runs.
-
-A factory that raises is earlier still: `RuntimeError("factory sentinel")`
-escapes directly from `get_extensions`, before there is even a resolved member
-to validate. Factory invocation, result typing, and enforcement cardinality are
-therefore one admission transaction; handling only the latter two leaves the
-same pre-runner disclosure path open.
-
-The constructor message says a factory must return a `SchemaExtension`, but
-`_is_resolvable_extension_entry` proves only that the entry is callable. The
-missing half is necessarily a resolve-time check; construction cannot safely call
-a per-operation factory.
+This contradicts the new guarantee that a schema whose chain cannot be admitted refuses every
+request on one stable, parser-independent path. It also means sync, async, and stream no longer
+have the same result shape precisely on hostile request metadata.
 
 ### Root fix
 
-Make `DjangoSchema.get_extensions` an atomic resolved-chain admission boundary:
+The substitute document and the lookup selector must be changed as one operation:
 
-1. Resolve accepted entries once through upstream inside a containment boundary.
-   If factory invocation raises, convert that into the same fail-closed
-   configuration refusal. Do not call a factory a second time to inspect it.
-2. Before returning any member to Strawberry's assignment loop, require every
-   resolved member to be an actual `SchemaExtension` instance using the existing
-   exact-type/subclass discipline. A class returned by a factory is not an
-   instance and is invalid too.
-3. Identify and remove the package-added automatic resource/error entries, then
-   require **exactly one** resolved `DjangoResourcePolicyExtension` and exactly
-   one resolved `DjangoErrorPolicyExtension`. Multiple consumer entries are an
-   ambiguous configuration, not a request-time ordering rule and not policies to
-   compose implicitly.
-4. Reject known direct duplicates at schema construction for earlier feedback,
-   but keep the resolve-time cardinality gate because opaque factories cannot be
-   classified before they run.
-5. A resolve-time refusal cannot be raised out of `get_extensions`: upstream calls
-   it before the protected operation block. Generalize the existing fail-closed
-   refusal chain so an invalid member or ambiguous policy population returns only
-   the package masking extension plus a configuration-refusal extension. No
-   consumer hook and no resolver runs. The response should carry the stable
-   schema-configuration code without exposing the bad object's representation or
-   exception text.
-6. Keep the reason server-side for diagnostics. The wire contract needs one safe
-   configuration error, not a serialization of arbitrary factory output.
+1. When `_RefusedConfiguration.on_parse` installs a package-owned document, also replace
+   `execution_context.operation_name` with package-owned lookup state. The simplest honest
+   state is `None` plus one anonymous substitute operation. Nothing consumer-supplied should
+   remain authoritative for selecting a document the package itself supplied.
+2. Continue choosing the substitute operation type from `allowed_operations`, because
+   upstream's next check must still see a type that transport allows.
+3. Do not sanitize and interpolate the requested name. Even a valid name has no semantic role
+   after the consumer document has been discarded, and retaining two coupled dynamic values is
+   the source of this defect.
+4. Preserve the original query text and operation name only as inert request diagnostics if a
+   transport needs them. They must not participate in parsing, operation selection, validation,
+   or execution once configuration refusal has taken ownership.
 
-Do not choose “first wins” or “last wins.” That leaves extension order as an
-undocumented policy-widening surface. Do not catch the later assignment error:
-by then an invalid member is already inside a chain the package claimed it had
-accepted.
+Required regressions belong in both tiers mandated by [AGENTS.md][agents]:
 
-### Required regressions
+- Package tests: `None`, a valid absent name, invalid punctuation, empty string, Unicode, and a
+  non-string direct-API value over `execute_sync`, `execute`, and `stream`. Each row receives one
+  stable configuration error and never raises out of the API.
+- Live tests: sync and async JSON POST rows for valid absent, invalid punctuation, empty, and
+  Unicode `operationName`, each with its own parametrized node ID. All return the same JSON
+  envelope and code; none return `text/plain` or echo the operation name.
+- Retain an over-token/depth control: the resource rejection still outranks configuration
+  refusal before operation selection is normalized.
 
-- Direct duplicate resource classes/instances and two opaque factories are all
-  rejected. Parametrize both orders with independent IDs; neither request may
-  execute.
-- Add the equivalent duplicate error-policy rows so masking authority also has
-  one owner.
-- Factories raising an exception, or returning an integer, plain object,
-  extension class, and a value whose `__class__` lies, all produce the stable
-  configuration refusal rather than a raw exception.
-- A valid slotted factory, bound method, fresh factory, and singleton factory
-  remain accepted controls.
-- Put the resource cardinality and safe wire refusal in
-  [`test_resource_policy_api.py`][live-resource-policy] or the dedicated
-  [live isolation module][live-isolation]. The exact resolved-member census stays
-  in [`tests/test_schema.py`][test-schema].
-
-## P2-1 — a stream cannot migrate or close across tasks
+## P1-2 — the authority-factory migration leaves the live suite red
 
 ### Evidence
 
-`_BoundScope.__aenter__` stores raw `ContextVar` tokens and keeps them until the
-upstream async operation context exits. Strawberry's `_stream` holds that context
-across every yielded frame. Python async iterators may be advanced or closed by a
-different task after a yield; the token then belongs to the first task's context
-and cannot be reset from the second.
+The production contract now intentionally refuses a factory whose resolved member is
+`DjangoErrorPolicyExtension`. The existing [live error-policy suite][live-error] still asserts
+the opposite:
 
-A direct query-stream probe fetched the first frame in a child task and called
-`aclose()` from its parent:
+- `_error_policy_factory` powers `/ep-factory/`, and
+  `test_a_factory_policy_entry_masks_once_so_the_client_id_is_the_logged_id` requires the
+  response to be a normally masked resolver failure.
+- `ENTRY_SPELLINGS` includes `fresh-factory` and `singleton-factory`.
+  `test_a_nested_operation_does_not_unmask_the_outer_failure` and
+  `test_an_overlapping_request_does_not_unmask_a_failing_one` each run both spellings over sync
+  and async mounts and require the resolver to execute and be masked.
+
+Focused live requests prove the mismatch without invoking pytest:
 
 ```text
-first frame   {'hello': 'hi'}, no errors
-aclose        ValueError: Token ... was created in a different Context
+/ep-factory/                         SCHEMA_CONFIGURATION_UNAVAILABLE
+/ep-entry-fresh-factory-sync/        SCHEMA_CONFIGURATION_UNAVAILABLE
+/ep-entry-singleton-factory-sync/    SCHEMA_CONFIGURATION_UNAVAILABLE
+/ep-entry-class-sync/                resolver runs; unexpected error is masked
+/ep-entry-instance-sync/             resolver runs; unexpected error is masked
 ```
 
-The failure is not limited to runner scope. `DjangoResourcePolicyExtension` and
-the optimizer also hold tokens across the operation/execution generator hooks.
-Moreover, a second `anext()` in another task resumes extension and resolver code
-without the bindings created in the first task, so catching the final reset error
-would not make migration correct.
-
-The package's ordinary HTTP/WebSocket drivers currently tend to drive and cancel
-one stream in one task, which keeps this below the two blockers above. The public
-`DjangoSchema.stream` / `subscribe` result is still an async iterator, and the
-package must either preserve upstream's task-portable iterator behavior or state
-and safely enforce a task-affinity contract. A raw `ValueError` during cleanup is
-neither.
+That is at least nine deterministic stale live nodes: the dedicated factory test plus four
+factory rows in each of the two spelling/color matrices. It violates the repository rule that
+tests change with production behavior and means the unrun default gate cannot be green on this
+tree.
 
 ### Root fix
 
-After the revocable lease work in P1-1, make runner binding resume-scoped for
-streams:
+Complete the migration; do not weaken the production admission rule to satisfy old tests:
 
-- Wrap the iterator at the narrow `_stream` seam that already receives the exact
-  `DjangoExtensionsRunner`. Each `__anext__`, `athrow`, and `aclose` binds a fresh
-  lease in the *calling task* before delegating and closes/resets it before
-  returning.
-- The long-lived upstream `operation()` manager must detect that the resume scope
-  owns the binding and must not leave a raw token spanning a `yield`.
-- Resource and optimizer operation data must live in the revocable runner/frame
-  state from P1-1, not in independent tokens created on the first resume. Package
-  extension teardowns then see the correct state in whichever task performs the
-  close.
-- Preserve upstream hook order and one `on_operation` enter/exit per stream. The
-  wrapper changes where task-local access is bound, not how often hooks run.
+1. Keep class and direct exact-instance declaration rows where they prove normalization to one
+   package-owned masker.
+2. Move fresh-factory and singleton-factory isolation controls to an unrelated consumer
+   extension. Let the schema's automatic exact error authority perform masking. That preserves
+   the intended nested/overlap isolation coverage without making consumer code an authority.
+3. Repurpose `/ep-factory/` as the live refusal proof, or remove it if the dedicated isolation
+   suite already owns the identical sync/async claim. If retained, assert the stable
+   configuration code, no resolver execution, no correlation-id mint, and no consumer hook.
+4. Sweep all four test trees for the old “factory policy entry suppresses/replaces/deduplicates
+   the automatic authority” contract. The package tests have largely moved; the live
+   error-policy file has not.
+5. Keep one plain `strawberry.Schema` control for the documented standalone factory use. The
+   stricter admission rule belongs to `DjangoSchema`; it must not accidentally redefine
+   Strawberry's own supported surface.
 
-If task migration is intentionally unsupported, enforce that decision at the
-iterator boundary with a package error **and still make cross-task cancellation
-and close release every resource without a token error**. Merely documenting
-“same task” does not make disconnect cleanup safe.
-
-Required tests: first-frame/second-frame migration, cross-task `aclose`, closing
-while a source is paused, cancellation from another task, and every error path.
-Assert resource budget, runner state, optimizer stores, and debug cursor flags are
-all terminal afterwards. The direct iterator mechanics belong in package tests;
-add a live WebSocket/streaming row only if an actual transport path migrates or
-closes the iterator from another task.
-
-## P2-2 — the compatibility setter still accepts resolver-authored state
+## P2-1 — the parser proof spies on the wrong binding
 
 ### Evidence
 
-The pending handoff was correctly removed for a value whose `.schema` is a
-`DjangoSchema`. The setter still treats every other value as a raw-Strawberry
-compatibility assignment and writes a strong `_compatibility_state` on the shared
-extension.
+[`_refusal_document`][schema] imports `parse` into `django_strawberry_framework.schema` and
+calls it for every refused request. The new
+`test_a_refused_schema_never_reaches_the_real_parser` patches
+`strawberry.schema.schema.parse`, which is upstream's separate binding. Its `parsed == []`
+assertion therefore proves only that Strawberry does not parse the original request after the
+hook; it does not prove the test's broader wording that the parser was never invoked.
 
-A resolver assigned a new plain object to a singleton extension during a normal
-`DjangoSchema` operation. The bound runner state protected the active request,
-but after it ended:
-
-```text
-request errors                         None
-shared.execution_context outside op    forged object
-forged object collectible              False
-```
-
-Thus a resolver may retain an arbitrary graph for the process lifetime and make
-direct readers outside an operation answer with it. The current tamper rows cover
-`None` and a forged context naming the real schema; those are precisely the two
-values that do *not* take this compatibility branch.
+The security boundary is materially improved: the package parses only its small constant and
+never attacker-controlled document text. But current prose in `_refusal_document`, the test,
+and the glossary conflates those statements, and reparsing the same three constant documents
+on every refused request is avoidable failure-path overhead.
 
 ### Root fix
 
-Record, in private identity authority, that an extension has been admitted to a
-`DjangoSchema` the first time the engine assigns that schema's context (or when
-the package runner resolves it). Once marked package-managed, its setter ignores
-**every** later assignment; the runner argument is its only operation-state
-authority. This includes `None`, arbitrary objects, raw-schema-shaped forgeries,
-and assignments made by surviving child tasks.
+Prefer pre-parsed package documents:
 
-Keep instance-local compatibility state only for an extension that has never
-been managed by `DjangoSchema`. The documented raw-`strawberry.Schema` spellings
-are a class or a factory that creates a fresh instance, so marking a shared object
-package-managed does not remove a supported raw-schema path; sharing that same
-instance with a raw schema was already outside the guarantee.
+1. Parse one anonymous `query`, `mutation`, and `subscription` refusal document at module load,
+   or construct equivalent immutable AST constants once.
+2. Select one by allowed operation type and assign it directly in `on_parse`; pair this with
+   P1-1's `operation_name = None` normalization.
+3. Test the actual local seam. Assert that a refused request never sends its untrusted source
+   to a parser. If documents are pre-parsed, patching either runtime parser should observe no
+   call at all.
+4. If per-request parsing is deliberately retained, narrow every claim and test name to “the
+   consumer document is never parsed,” and spy on `django_strawberry_framework.schema.parse`
+   to assert that only the fixed package source is accepted. Do not leave a stronger claim than
+   the implementation proves.
 
-Add arbitrary object, raising `.schema` property, raw-schema context, and
-post-request child-task assignments. Each sentinel must be collectible and the
-extension must answer `None` outside the package runner.
+## Documentation and cleanup required by the new model
 
-## Test, specification, and build-record corrections
+The implementation's foundation changed more broadly than its prose sweep:
 
-1. The [spec][spec-050] is right to keep its status “in flight” and its definition
-   of done unchecked. Its “exactly one armed budget” requirement currently fails
-   for two consumer factories, and its operation-started policy guarantee fails
-   in a copied child context.
-2. The [build record][build-050] cannot be treated as a delivery gate. Its recorded
-   green tree is `207c7328`; current `HEAD` is a later isolation implementation
-   and the relevant source/test changes are still uncommitted. The record already
-   says later policy work was ungated, but it does not yet name the runner,
-   membership, copied-context, or resolved-chain changes now under review. Once
-   the findings are fixed, replace the status/gate narrative with one same-tree
-   full, sharded, and declared-floor run. Do not append another superseded green
-   count beside it.
-3. [`Per-operation extension isolation`][glossary-isolation] currently promises
-   that a copied child binding reads nothing after the operation. Narrowly true
-   for `execution_context` after runner collection, it is false for runner scope,
-   resource budget, and optimizer stores. Update it only after the common lease
-   exists.
-4. Resource-policy and optimizer module docs say token reset prevents leakage to
-   the next operation. State explicitly that closure/tombstoning, not reset, is
-   what invalidates copied contexts; reset restores nesting in the owner context.
-5. Keep live tests focused on wire behavior and one case per parametrized node ID.
-   Do not move task/GC mechanics into the live suite, and do not leave a
-   consumer-visible bound, masking, or optimizer-publication claim package-only.
+- [`DjangoErrorPolicyExtension`][error-extension] still says a consumer-supplied policy entry
+  replaces the automatic extension and that a bare class and factory entry behave identically.
+  Under `DjangoSchema`, a factory now refuses the operation.
+- [`DjangoResourcePolicyExtension`][resource-extension] still says an accepted instance remains
+  reachable through `info.schema.extensions` and decides the next operation. A direct exact
+  instance is now folded into canonical schema state and removed from that graph.
+- The module header, helpers, and comments in [the live error-policy suite][live-error] still
+  teach factory-owned masking and automatic-entry suppression.
+- The header and historical coverage prose in [the live resource-policy suite][live-resource]
+  still refer to a factory-supplied bound and dropping the automatic append.
+- The [live-test catalog][live-readme] still advertises `/ep-factory/` one-mask behavior and a
+  factory-supplied resource bound as current coverage.
+- [`Execution resource policy`][glossary-resource] still says the policy an accepted extension
+  instance carries remains reachable and governs the next operation. That is the retired
+  architecture.
+- [`DjangoSchema`][schema] contains the duplicated sentence “schema built through this class is
+  therefore bounded with no opt-in.” Remove the duplicate during the documentation sweep.
+
+Use symbol-path references in all standing documentation. Keep the old design only where a
+historical build record explicitly describes a historical tree; current package docs and live
+suite catalogs must describe the current contract.
 
 ## Release conditions
 
-Do not mark spec-050 done until all of these hold on one gated tree:
+Do not mark spec-050 done until all of these hold on one identified tree:
 
-- Every operation-lifetime value copied into a child task becomes terminal when
-  its owner scope ends. A later independent operation is top-level, publishes its
-  own optimizer state, and reads its own resource policy.
-- Closing a stream from another task cannot produce a raw token error, retain an
-  operation, or leave a debug/resource/optimizer scope active.
-- The resolved extension chain contains actual `SchemaExtension` instances and
-  exactly one resource and one error authority before Strawberry's assignment
-  loop sees it. Invalid or ambiguous factory output fails closed on the wire.
-- A package-managed extension cannot acquire compatibility state from resolver or
-  background-task assignments of any shape.
-- The required package mechanics and live outcomes are covered in the test tiers
-  mandated by [AGENTS.md][agents], with no loop-bundled live cases.
-- Standing docs describe leases and resolved-chain admission rather than claiming
-  that token reset alone invalidates copied contexts.
-- After implementation edits, run the mandated formatter and lint fixer. Run
-  pytest/coverage only when explicitly authorized, and record full/default,
-  sharded, and floor evidence against the same final tree.
+- The five preceding attacks remain closed under their original probes.
+- Every refused request normalizes both the substitute document and its operation selector;
+  hostile `operationName` values cannot escape, change media type/status, or replace the stable
+  code on sync, async, or stream paths.
+- Existing live error-policy tests are migrated to the package-owned-authority model, and the
+  old authority-factory contract has no surviving current-doc or current-test claim.
+- The parser proof observes the binding actually used and states exactly whether no parser runs
+  or only no attacker text is parsed.
+- Package mechanics stay in `tests/`; all HTTP-reachable outcomes are covered in
+  `examples/fakeshop/test_query/` with explicit IDs and no loop-bundled matrices.
+- Standing docs and the build record describe the final authority, refusal, and resumed-stream
+  model consistently.
+- Formatting, structural scripts, the full default suite with 100% package coverage, the
+  sharded suite, and the declared floor matrix all run against that same tree. The current
+  build narrative still names an older gated commit, so the present uncommitted tree has no
+  release gate yet.
 
 <!-- LINK DEFINITIONS -->
 
@@ -458,9 +254,8 @@ Do not mark spec-050 done until all of these hold on one gated tree:
 [agents]: ../AGENTS.md
 
 <!-- docs/ -->
-[glossary-isolation]: GLOSSARY.md#per-operation-extension-isolation
+[glossary-resource]: GLOSSARY.md#execution-resource-policy
 [spec-050]: spec-050-list_field_arguments-0_0_15.md
-[spec-050-dod]: spec-050-list_field_arguments-0_0_15.md#definition-of-done
 
 <!-- docs/SPECS/ -->
 
@@ -468,27 +263,20 @@ Do not mark spec-050 done until all of these hold on one gated tree:
 [build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
+[error-extension]: ../django_strawberry_framework/extensions/error_policy.py
 [operation-state]: ../django_strawberry_framework/extensions/operation_state.py
-[optimizer-context]: ../django_strawberry_framework/optimizer/_context.py
-[orders-sets]: ../django_strawberry_framework/orders/sets.py
-[private-state]: ../django_strawberry_framework/utils/private_state.py
-[resource-policy]: ../django_strawberry_framework/resource_policy.py
+[resource-extension]: ../django_strawberry_framework/extensions/resource_policy.py
 [schema]: ../django_strawberry_framework/schema.py
 
 <!-- tests/ -->
-[test-operation-state]: ../tests/extensions/test_operation_state.py
-[test-optimizer]: ../tests/optimizer/test_extension.py
-[test-resource-policy]: ../tests/test_resource_policy.py
-[test-schema]: ../tests/test_schema.py
 
 <!-- examples/ -->
-[live-isolation]: ../examples/fakeshop/test_query/test_extension_isolation_api.py
+[live-error]: ../examples/fakeshop/test_query/test_error_policy_api.py
 [live-readme]: ../examples/fakeshop/test_query/README.md
-[live-resource-policy]: ../examples/fakeshop/test_query/test_resource_policy_api.py
+[live-resource]: ../examples/fakeshop/test_query/test_resource_policy_api.py
 
 <!-- scripts/ -->
 
 <!-- .venv/ -->
-[upstream-schema]: ../.venv/lib/python3.14/site-packages/strawberry/schema/schema.py
 
 <!-- External -->

@@ -30,9 +30,9 @@ masked error, the id reaching the server log with the original traceback, the
 retained ``path``, sync/async parity, the two ways out (``DEBUG=True`` and
 ``error_policy={"enabled": False}``), a ``DEBUG`` value that is set but is not
 the boolean ``True`` (still masked), a resolver that writes
-``info.schema.error_policy`` (still masked: the attribute is a copy), and a
-factory-supplied policy that still masks once (the client's id is the logged
-id, not a second mint from an automatic copy left beside the factory).
+``info.schema.error_policy`` (still masked: the attribute is a copy), and an
+extension entry that resolves to the masking authority (the request is refused
+with the configuration code rather than masked by consumer code).
 
 The scaffolding is one probe-schema factory over fakeshop's own ``Query`` /
 ``Mutation``, extended with resolvers that raise on demand - a real schema
@@ -42,9 +42,9 @@ because the acceptance tier reloads ``config.schema`` before every test.
 
 ``tests/test_error_policy.py`` holds what no request can express: the policy
 object's validation and precedence ladder, the correlation-id format sampled
-from the generator, the extension's install position and consumer-supplied
-suppression, the standalone-schema fallback, teardown no-ops, and fail-closed
-degrades over objects no engine builds.
+from the generator, the extension's install position and what a directly
+supplied entry of its own kind declares, the standalone-schema fallback,
+teardown no-ops, and fail-closed degrades over objects no engine builds.
 """
 
 from __future__ import annotations
@@ -54,7 +54,6 @@ import json
 import logging
 import re
 import threading
-import warnings
 from functools import cache
 
 import pytest
@@ -74,6 +73,7 @@ from strawberry.extensions.base_extension import SchemaExtension
 
 from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
+    SCHEMA_CONFIGURATION_ERROR_CODE,
     DjangoErrorPolicyExtension,
     DjangoSchema,
     strawberry_config,
@@ -226,12 +226,34 @@ _MAX_TOKENS = 4
 
 
 def _error_policy_factory():
-    """A factory the schema cannot identify at construction, so the auto prepend is dropped at resolve."""
+    """A factory resolving to the masking authority, which is not a thing an entry can be."""
     return DjangoErrorPolicyExtension()
 
 
+class _FactoryHookWitness(SchemaExtension):
+    """Record every hook a consumer entry gets to run on the factory mount."""
+
+    ran: list[str] = []
+
+    def on_operation(self):
+        """Note the operation seam, on both sides of the request."""
+        _FactoryHookWitness.ran.append("operation")
+        yield
+        _FactoryHookWitness.ran.append("operation-done")
+
+    def on_parse(self):
+        """Note the parse seam, which a refused request still passes through."""
+        _FactoryHookWitness.ran.append("parse")
+        yield
+
+    def on_execute(self):
+        """Note execution, which a refused request must never reach."""
+        _FactoryHookWitness.ran.append("execute")
+        yield
+
+
 #: The four spellings Strawberry accepts for an extension entry. A class and a
-#: fresh factory resolve to a new extension per operation; an instance and a
+#: fresh entry resolve to a new extension per operation; an instance and a
 #: factory returning a singleton resolve to ONE object every operation shares,
 #: which is what makes the masking question different for them.
 ENTRY_SPELLINGS = (
@@ -298,10 +320,37 @@ class _SharedEntryCoordinator(SchemaExtension):
         yield
 
 
+class _SharedEntryConsumer(SchemaExtension):
+    """An ordinary consumer extension: present in the chain, enforcing nothing.
+
+    It carries the factory spellings. A factory is opaque until it is called, so
+    nothing it returns can be the schema's masker; what a factory spelling is
+    still needed for is the object-lifetime axis - one extension per operation
+    against one shared between all of them - and an unrelated extension puts
+    exactly that axis under test without asking consumer code to enforce
+    anything.
+    """
+
+    def on_operation(self):
+        """Occupy the operation seam and change nothing about the result."""
+        yield
+
+
 @cache
 def _shared_error_extension() -> DjangoErrorPolicyExtension:
-    """The ONE error-policy object the shared spellings hand every operation."""
+    """The error-policy object the instance spelling declares the schema's policy with."""
     return DjangoErrorPolicyExtension()
+
+
+@cache
+def _shared_consumer_extension() -> _SharedEntryConsumer:
+    """The ONE consumer extension the singleton-factory spelling hands every operation."""
+    return _SharedEntryConsumer()
+
+
+def _fresh_consumer_extension() -> _SharedEntryConsumer:
+    """A NEW consumer extension per operation, the other half of the lifetime axis."""
+    return _SharedEntryConsumer()
 
 
 def _shared_entry_entry(spelling: str):
@@ -309,34 +358,39 @@ def _shared_entry_entry(spelling: str):
 
     Strawberry resolves an entry as ``ext if isinstance(ext, SchemaExtension)
     else ext()`` once per operation, so a class and a factory take the same
-    branch and differ only in what the call returns. The fresh-factory spelling
-    is therefore a real callable rather than the class a second time: handing
-    back the class would make that row the class row under another id, and the
-    pair would be counted twice while only one of them was ever built.
+    branch and differ only in what the call returns. The fresh spelling is
+    therefore a real callable rather than the class a second time: handing back
+    the class would make that row the class row under another id, and the pair
+    would be counted twice while only one of them was ever built.
+
+    The class and instance spellings are the policy's own type, which
+    ``DjangoSchema`` reads as a declaration and folds into the schema's own
+    configuration; the factory spellings are an unrelated consumer extension.
+    Either way the masker is the schema's own authority, built fresh per
+    operation - so all four rows ask the same question about the same masker and
+    differ only in what else the consumer put in the chain.
     """
     if spelling == "class":
         return DjangoErrorPolicyExtension
     if spelling == "fresh-factory":
-        return lambda: DjangoErrorPolicyExtension()
+        return _fresh_consumer_extension
     if spelling == "instance":
         return _shared_error_extension()
-    return _shared_error_extension
+    return _shared_consumer_extension
 
 
 @cache
 def _shared_entry_schema(spelling: str) -> DjangoSchema:
     """One cached schema per entry spelling.
 
-    A consumer entry of the policy's own kind suppresses the automatic prepend,
-    so the entry under test is the only masker on the schema and the row cannot
-    be answered by a second one the constructor added.
+    Whatever the consumer spelled, the masker is the one the schema installs
+    around the chain, so the row cannot be answered by a second masker arriving
+    from somewhere else.
     """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return DjangoSchema(
-            query=_SharedEntryQuery,
-            extensions=[_shared_entry_entry(spelling), _SharedEntryCoordinator],
-        )
+    return DjangoSchema(
+        query=_SharedEntryQuery,
+        extensions=[_shared_entry_entry(spelling), _SharedEntryCoordinator],
+    )
 
 
 def _shared_entry_view(spelling: str):
@@ -395,7 +449,10 @@ urlpatterns = [
         ),
     ),
     path("ep-limits/", _probe_view(resource_policy={"max_document_tokens": _MAX_TOKENS})),
-    path("ep-factory/", _probe_view(extensions=[_error_policy_factory])),
+    path(
+        "ep-factory/",
+        _probe_view(extensions=[_error_policy_factory, _FactoryHookWitness]),
+    ),
 ]
 
 
@@ -527,25 +584,38 @@ def test_the_correlation_id_reaches_the_server_log_with_the_original_exception(c
 
 
 @pytest.mark.django_db
-def test_a_factory_policy_entry_masks_once_so_the_client_id_is_the_logged_id(caplog):
-    """A factory-produced policy is the operation's one mask: one error, one id, that id in the log.
+def test_a_factory_resolving_to_the_masker_refuses_the_request_instead_of_masking(caplog):
+    """A factory cannot become the schema's masker; the schema refuses the operation.
 
-    A factory cannot be identified at construction, so the automatic entry is
-    prepended beside it and dropped when the operation resolves extensions.
-    Two copies would each mint a correlation id; the client would quote one
-    that is not the id in the log that carries the traceback.
+    The masker is the schema's own, built per operation from the configuration
+    the schema was accepted with. A factory is opaque until it is called, so a
+    factory that resolves to one is a second masker arriving from consumer code
+    on a request that is already running - and what it would mask is exactly
+    what could not be established. The whole request is refused instead: the
+    stable configuration code, no resolver, no correlation id minted, and no
+    consumer hook past the seams the refusal itself passes through.
     """
     caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
+    _FactoryHookWitness.ran.clear()
+
     _, payload = _post("/ep-factory/", "{ boom }")
-    correlation_id = _masked_error(payload)["extensions"]["correlationId"]
+
+    assert payload["data"] is None, payload
+    assert [error["extensions"]["code"] for error in payload["errors"]] == [
+        SCHEMA_CONFIGURATION_ERROR_CODE,
+    ]
+    assert _SENSITIVE not in json.dumps(payload)
+    assert "correlationId" not in json.dumps(payload)
+    assert "execute" not in _FactoryHookWitness.ran, _FactoryHookWitness.ran
 
     records = [
         record
         for record in caplog.records
         if record.name == _PACKAGE_LOGGER and record.levelno == logging.ERROR
     ]
-    assert len(records) == 1, caplog.records
-    assert correlation_id in records[0].getMessage()
+    # The refusal names the cause for the operator. A mask would instead log the
+    # correlation id the client was handed, with the original traceback attached.
+    assert [record.exc_info for record in records] == [None] * len(records), caplog.records
 
 
 @pytest.mark.django_db

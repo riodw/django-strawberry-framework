@@ -2355,8 +2355,11 @@ structural checks, and link/kanban verification prescribed by
       `__dict__` write on any of them, which a frozen dataclass admits, changes only the
       writer's own duplicate and nothing a later request reads. A `ResourcePolicy` or
       `ErrorPolicy` SUBCLASS is read out once at schema construction and replaced by an exact
-      instance, and a consumer factory installing the resource extension leaves exactly one
-      armed budget.
+      instance. The extension that arms the budget is the schema's own, built per operation
+      from that construction record: an enforcement authority is never an extension ENTRY, so
+      no factory, closure, singleton selector or subclass a resolver can reach through
+      `info.schema` decides what a later request is bounded by, and an entry that resolves
+      into one refuses the operation instead.
 - [ ] A bound stored on a `ResourcePolicy`, and a field's declared `max_rows`, is an exact
       built-in `int` (or `float` for the deadline); every numeric subclass is refused with a
       typed `ConfigurationError` before any comparison, arithmetic or formatting runs, so no

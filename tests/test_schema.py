@@ -19,15 +19,18 @@ import pytest
 import strawberry
 from apps.library.models import Branch
 from django.db import connection
-from graphql import ExecutionContext, GraphQLError
+from graphql import ExecutionContext, GraphQLError, print_ast
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.runner import SchemaExtensionsRunner
+from strawberry.types import ExecutionContext as StrawberryExecutionContext
+from strawberry.types.graphql import OperationType
 
 from django_strawberry_framework.error_policy import ErrorPolicy
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.error_policy import DjangoErrorPolicyExtension
 from django_strawberry_framework.extensions.operation_state import _ResumedStream
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
+from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.resource_policy import ResourcePolicy, bounded_rows
 from django_strawberry_framework.schema import (
     _SCHEMA_ENFORCEMENT,
@@ -37,20 +40,63 @@ from django_strawberry_framework.schema import (
     DjangoSchema,
     _async_mutation_lock,
     _AsyncAliasLock,
+    _consumer_extension_entries,
+    _entry_type,
     _extension_entry_matches,
     _is_extension,
-    _with_error_policy_extension,
-    _with_resource_policy_extension,
+    _refuse_operation_document,
 )
 from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 
 
 class CustomErrorPolicyExtension(DjangoErrorPolicyExtension):
-    pass
+    """A consumer subclass of the masking authority, which is not one."""
 
 
 class CustomResourcePolicyExtension(DjangoResourcePolicyExtension):
-    pass
+    """A consumer subclass of the bounding authority, which is not one."""
+
+
+class HybridPolicyExtension(DjangoResourcePolicyExtension, DjangoErrorPolicyExtension):
+    """One class answering to both authorities, of which it can dispatch one."""
+
+
+class ReversedHybridPolicyExtension(DjangoErrorPolicyExtension, DjangoResourcePolicyExtension):
+    """The same class with its bases the other way round, which picks the other hook."""
+
+
+#: Every marker extension that ran, in order, since a test last cleared it.
+_MARKS: list[str] = []
+
+
+class _MarkerExtension(SchemaExtension):
+    """A consumer extension that records itself when its operation begins.
+
+    What the membership rows ask is which extensions RUN the next operation, and
+    a consumer extension is the honest subject for that question now that
+    neither enforcement authority is an entry. The mark is the observation.
+    """
+
+    mark = "accepted"
+
+    def on_operation(self):
+        """Record that this entry ran the operation."""
+        _MARKS.append(self.mark)
+        yield
+
+
+class _ForgedMarkerExtension(_MarkerExtension):
+    """The entry a resolver would rather the schema resolved."""
+
+    mark = "forged"
+
+
+@pytest.fixture(autouse=True)
+def _clear_marks():
+    """Start every test with no marks recorded."""
+    _MARKS.clear()
+    yield
+    _MARKS.clear()
 
 
 @strawberry.type
@@ -76,22 +122,16 @@ class DummyMutation:
 
 def test_schema_init_with_none_and_iterable_extensions():
     schema_none = DjangoSchema(query=DummyQuery, extensions=None)
-    assert len(schema_none.extensions) >= 2
+    assert schema_none.extensions == ()
 
-    schema_tuple = DjangoSchema(query=DummyQuery, extensions=(CustomErrorPolicyExtension,))
-    assert any(
-        isinstance(ext, type) and issubclass(ext, CustomErrorPolicyExtension)
-        for ext in schema_tuple.extensions
-    )
+    schema_tuple = DjangoSchema(query=DummyQuery, extensions=(_MarkerExtension,))
+    assert schema_tuple.extensions == (_MarkerExtension,)
 
     def ext_gen():
-        yield CustomErrorPolicyExtension
+        yield _MarkerExtension
 
     schema_gen = DjangoSchema(query=DummyQuery, extensions=ext_gen())
-    assert any(
-        isinstance(ext, type) and issubclass(ext, CustomErrorPolicyExtension)
-        for ext in schema_gen.extensions
-    )
+    assert schema_gen.extensions == (_MarkerExtension,)
 
 
 def test_schema_init_with_none_execution_context_class_falls_back():
@@ -99,28 +139,38 @@ def test_schema_init_with_none_execution_context_class_falls_back():
     assert schema.execution_context_class is DjangoMutationExecutionContext
 
 
-def test_with_resource_policy_extension_shapes():
-    """The append and its flag: the flag says whether the automatic entry was added."""
-    assert _with_resource_policy_extension([]) == ([DjangoResourcePolicyExtension], True)
-    assert _with_resource_policy_extension(None) == ([DjangoResourcePolicyExtension], True)
-    assert _with_resource_policy_extension([DjangoResourcePolicyExtension]) == (
-        [DjangoResourcePolicyExtension],
-        False,
+def test_consumer_extension_entries_shapes():
+    """What travels as configuration, and what is read once and folded into the record."""
+    assert _consumer_extension_entries(None) == ([], None)
+    assert _consumer_extension_entries([]) == ([], None)
+    assert _consumer_extension_entries([_MarkerExtension]) == ([_MarkerExtension], None)
+    assert _consumer_extension_entries([DjangoResourcePolicyExtension]) == ([], None)
+    assert _consumer_extension_entries([DjangoErrorPolicyExtension]) == ([], None)
+    assert _consumer_extension_entries([DjangoErrorPolicyExtension()]) == ([], None)
+
+    entries, declared = _consumer_extension_entries(
+        [_MarkerExtension, DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=4))],
     )
-    assert _with_resource_policy_extension([CustomResourcePolicyExtension]) == (
-        [CustomResourcePolicyExtension],
-        False,
-    )
+    assert entries == [_MarkerExtension]
+    assert declared == ResourcePolicy(max_list_rows=4)
 
 
-def test_with_error_policy_extension_shapes():
-    assert _with_error_policy_extension([]) == [DjangoErrorPolicyExtension]
-    assert _with_error_policy_extension([DjangoErrorPolicyExtension]) == [
-        DjangoErrorPolicyExtension,
-    ]
-    assert _with_error_policy_extension([CustomErrorPolicyExtension]) == [
-        CustomErrorPolicyExtension,
-    ]
+def test_an_entry_whose_class_cannot_be_read_is_classified_as_no_authority():
+    """A consumer object decides what ``isinstance`` sees, and may make it raise.
+
+    The read is contained so an entry nobody can classify is simply an entry the
+    package does not treat as a declaration - refused later for being
+    unresolvable, rather than raising out of schema construction from the check
+    that was trying to describe it.
+    """
+
+    class _HostileClass:
+        @property
+        def __class__(self):
+            raise TypeError("hostile __class__")
+
+    assert _entry_type(_HostileClass()) is None
+    assert _entry_type(DjangoResourcePolicyExtension) is DjangoResourcePolicyExtension
 
 
 def test_extension_entry_matches_adversarial():
@@ -145,12 +195,36 @@ def test_extension_entry_matches_adversarial():
     assert not _extension_entry_matches(DjangoErrorPolicyExtension(), BrokenClass)
 
 
-def test_get_extensions_when_explicitly_passed_class():
-    schema = DjangoSchema(query=DummyQuery, extensions=[CustomErrorPolicyExtension])
-    exts = schema.get_extensions(sync=True)
-    error_exts = [e for e in exts if isinstance(e, DjangoErrorPolicyExtension)]
-    assert len(error_exts) == 1
-    assert isinstance(error_exts[0], CustomErrorPolicyExtension)
+@pytest.mark.parametrize(
+    "entry",
+    [
+        CustomErrorPolicyExtension,
+        CustomResourcePolicyExtension,
+        CustomResourcePolicyExtension(),
+        HybridPolicyExtension,
+        ReversedHybridPolicyExtension,
+        HybridPolicyExtension(),
+    ],
+    ids=[
+        "error-subclass-class",
+        "resource-subclass-class",
+        "resource-subclass-instance",
+        "hybrid-class",
+        "hybrid-class-reversed-bases",
+        "hybrid-instance",
+    ],
+)
+def test_a_subclass_of_an_enforcement_extension_is_refused_at_construction(entry):
+    """Inheriting an authority is not being one, and the census cannot tell them apart.
+
+    A subclass overriding the single hook that charges a document or masks a
+    result answers every ``issubclass`` question correctly while enforcing
+    nothing, and one class inheriting BOTH answers for two authorities of which
+    ordinary method resolution runs exactly one. Neither is distinguishable from
+    the real thing by anything but exact type, so neither is admitted as one.
+    """
+    with pytest.raises(ConfigurationError, match="subclasses the package"):
+        DjangoSchema(query=DummyQuery, extensions=[entry])
 
 
 def test_marked_mutation_class_safe_on_none_parent_and_malformed_nodes():
@@ -413,47 +487,48 @@ async def test_execute_mutation_field_async_exception_rolls_back():
         await ctx.execute_field(ctx.schema.mutation_type, None, [MagicMock()], None)
 
 
-def test_get_extensions_with_a_custom_resource_factory_dedups():
-    """A factory-produced resource extension is the operation's one armed budget.
+def test_get_extensions_refuses_a_factory_that_resolves_to_an_authority():
+    """A factory cannot be classified at construction, so its product is typed here.
 
-    A factory cannot be identified at construction without calling it, so the
-    automatic entry is appended beside it and dropped here. Left in, it would arm
-    last and answer every resolve-time bound with the package defaults while the
-    consumer's own policy went on charging the document.
+    The entry is accepted - a callable is a callable - and what it returns is
+    the question. An extension of either enforcement kind is a second authority
+    whichever object produced it, and the one thing acceptance cannot certify is
+    what the same callable will hand back next request.
     """
 
     def resource_factory():
         return CustomResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
 
     schema = DjangoSchema(query=DummyQuery, extensions=[resource_factory])
-    resolved = schema.get_extensions(sync=True)
-    resource_exts = [e for e in resolved if isinstance(e, DjangoResourcePolicyExtension)]
 
-    assert len(resource_exts) == 1
-    assert isinstance(resource_exts[0], CustomResourcePolicyExtension)
+    _assert_configuration_refusal(schema.execute_sync("{ hello }"))
 
 
-def test_get_extensions_leaves_an_unrelated_factory_its_automatic_resource_extension():
-    """The control: a factory producing something else still gets the package's own entry."""
+def test_get_extensions_gives_an_unrelated_factory_both_package_authorities():
+    """The control: an ordinary consumer factory runs between the two authorities."""
 
     def unrelated_factory():
-        return DjangoErrorPolicyExtension()
+        return _MarkerExtension()
 
     schema = DjangoSchema(query=DummyQuery, extensions=[unrelated_factory])
     resolved = schema.get_extensions(sync=True)
-    resource_exts = [e for e in resolved if isinstance(e, DjangoResourcePolicyExtension)]
 
-    assert len(resource_exts) == 1
+    assert [type(entry).__name__ for entry in resolved] == [
+        "DjangoErrorPolicyExtension",
+        "_MarkerExtension",
+        "DjangoResourcePolicyExtension",
+        "_AdmissionGuard",
+    ]
 
 
-def test_get_extensions_keeps_an_explicit_resource_class_alone():
-    """A class entry suppresses the append at construction, so nothing is dropped here."""
-    schema = DjangoSchema(query=DummyQuery, extensions=[CustomResourcePolicyExtension])
+def test_get_extensions_resolves_one_authority_of_each_kind_for_a_bare_class_entry():
+    """A bare class entry declares the automatic extension, so it is not a second one."""
+    schema = DjangoSchema(query=DummyQuery, extensions=[DjangoResourcePolicyExtension])
     resolved = schema.get_extensions(sync=True)
-    resource_exts = [e for e in resolved if isinstance(e, DjangoResourcePolicyExtension)]
 
-    assert len(resource_exts) == 1
-    assert isinstance(resource_exts[0], CustomResourcePolicyExtension)
+    assert schema.extensions == ()
+    assert sum(_is_extension(e, DjangoResourcePolicyExtension) for e in resolved) == 1
+    assert sum(_is_extension(e, DjangoErrorPolicyExtension) for e in resolved) == 1
 
 
 @pytest.mark.parametrize(
@@ -524,26 +599,25 @@ class _BoundedRowQuery:
 
 
 def _assert_entry_survives_a_replacement_attempt(schema):
-    """One accepted configuration keeps enforcing, and keeps exactly one entry."""
+    """One accepted configuration keeps running, and keeps bounding, afterwards."""
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted"]
 
     with pytest.raises(ConfigurationError):
         schema.extensions = []
 
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted", "accepted"]
     resolved = schema.get_extensions(sync=True)
     assert sum(isinstance(e, DjangoResourcePolicyExtension) for e in resolved) == 1
 
 
 @pytest.mark.parametrize(
     "entry",
-    [
-        DjangoResourcePolicyExtension,
-        lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1)),
-    ],
+    [_MarkerExtension, lambda: _MarkerExtension()],
     ids=["class", "factory"],
 )
-def test_an_accepted_extension_entry_still_enforces_after_a_replacement_attempt(entry):
+def test_an_accepted_extension_entry_still_runs_after_a_replacement_attempt(entry):
     """Two configuration spellings, one thing to protect.
 
     A class and a factory are different things to resolve - one is constructed
@@ -559,20 +633,60 @@ def test_an_accepted_extension_entry_still_enforces_after_a_replacement_attempt(
     _assert_entry_survives_a_replacement_attempt(schema)
 
 
-def test_an_accepted_extension_instance_still_enforces_after_a_replacement_attempt():
+def test_an_accepted_extension_instance_still_runs_after_a_replacement_attempt():
     """The third configuration spelling, which Strawberry itself deprecates.
 
-    An instance entry shares one set of counters across every request, so
-    Strawberry warns on it; the package still accepts it as configuration, and
-    accepted configuration is what enforces.
+    An instance entry shares one object across every request, so Strawberry
+    warns on it; the package still accepts it as configuration, and accepted
+    configuration is what runs.
     """
     with pytest.warns(DeprecationWarning):
         schema = DjangoSchema(
             query=_BoundedRowQuery,
-            extensions=[DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))],
+            extensions=[_MarkerExtension()],
             resource_policy=ResourcePolicy(max_list_rows=1),
         )
     _assert_entry_survives_a_replacement_attempt(schema)
+
+
+def test_a_policy_declared_by_an_entry_and_by_the_argument_is_refused():
+    """Two declarations of one ceiling are a configuration with two answers."""
+    with pytest.raises(ConfigurationError, match="declared twice"):
+        DjangoSchema(
+            query=DummyQuery,
+            extensions=[DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=5))],
+            resource_policy=ResourcePolicy(max_list_rows=3),
+        )
+
+
+def test_two_entries_declaring_a_policy_of_their_own_are_refused():
+    """Two entries carrying a policy are the same two answers, spelled differently."""
+    with pytest.raises(ConfigurationError, match="two resource-policy"):
+        DjangoSchema(
+            query=DummyQuery,
+            extensions=[
+                DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=5)),
+                DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=3)),
+            ],
+        )
+
+
+def test_a_policy_declared_by_an_entry_becomes_the_schemas_own():
+    """An entry declaring a policy is read once, where it is accepted, and folded in.
+
+    Keeping the entry would leave the object a resolver reaches through
+    ``info.schema.extensions`` deciding what the next request is bounded by;
+    dropping what it declared would answer the deployment with a ceiling it did
+    not choose. The record takes the declaration and the entry does not travel.
+    """
+    schema = DjangoSchema(
+        query=_BoundedRowQuery,
+        extensions=[DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))],
+    )
+
+    assert schema.extensions == ()
+    assert schema.resource_policy.max_list_rows == 1
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
 
 
 def test_a_schema_with_no_enforcement_record_is_bounded_by_the_package_defaults():
@@ -645,8 +759,8 @@ class _FactorySchema(DjangoSchema):
     """A schema configured with a BOUND METHOD, which is the non-deprecated factory."""
 
     def make_extension(self):
-        """Build this schema's resource-policy extension, fresh per operation."""
-        return DjangoResourcePolicyExtension()
+        """Build this schema's consumer extension, fresh per operation."""
+        return _MarkerExtension()
 
     def __init__(self, **kwargs):
         super().__init__(extensions=[self.make_extension], **kwargs)
@@ -698,7 +812,7 @@ def test_an_accepted_extension_instance_does_not_outlive_its_schema():
     """The instance spelling, whose extension holds the execution context it ran under."""
     with pytest.warns(DeprecationWarning):
         alive = _reachability_after_dropping(
-            lambda: DjangoSchema(query=DummyQuery, extensions=[DjangoResourcePolicyExtension()]),
+            lambda: DjangoSchema(query=DummyQuery, extensions=[_MarkerExtension()]),
             execute=True,
         )
     assert alive == (None, None, None)
@@ -777,23 +891,23 @@ def _schema_holding_an_unnamed_entry(rows=1):
     ``extensions=[...]`` argument is named by nothing else, so a write that
     drops it is a write that ENDS it - which is the configuration loss the
     refusal answers, and the one a consumer's own entry is most exposed to. It
-    is also the entry whose policy this package never sees: the factory is
+    is also the entry the package can say least about in advance: a factory is
     called once per operation, and what it returns is the consumer's.
     """
 
-    def narrow_extension():
-        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=rows))
+    def marking_extension():
+        return _MarkerExtension()
 
     return DjangoSchema(
         query=DummyQuery,
         resource_policy=ResourcePolicy(max_list_rows=rows),
-        extensions=[narrow_extension],
+        extensions=[marking_extension],
     )
 
 
 def _widening_factory():
     """An extension entry a resolver would rather the next operation resolved."""
-    return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=999))
+    return _ForgedMarkerExtension()
 
 
 @pytest.mark.parametrize(
@@ -815,13 +929,18 @@ def test_the_accepted_extensions_are_answered_for_entry_by_entry(attack):
     attribute is one no construction accepted - it does not become this schema's
     configuration by being put where the configuration is held.
     """
-    schema = DjangoSchema(query=_RowQuery, resource_policy=ResourcePolicy(max_list_rows=1))
+    schema = DjangoSchema(
+        query=_RowQuery,
+        resource_policy=ResourcePolicy(max_list_rows=1),
+        extensions=[_MarkerExtension],
+    )
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
 
     attack(schema)
 
-    assert schema.extensions == (DjangoErrorPolicyExtension, DjangoResourcePolicyExtension)
+    assert schema.extensions == (_MarkerExtension,)
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted", "accepted"]
     resolved = schema.get_extensions(sync=True)
     assert any(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved)
     assert any(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved)
@@ -836,12 +955,12 @@ def test_the_accepted_extensions_are_answered_for_entry_by_entry(attack):
     ids=["forge-the-configuration", "delete-the-configuration"],
 )
 def test_an_operation_is_refused_when_the_accepted_extensions_cannot_be_read_back(attack):
-    """The accepted entries are the only record of what a consumer entry declared.
+    """The accepted entries are the only record of what the consumer asked to run.
 
-    A factory's policy was never seen by this package at all, so there is
-    nothing to fall back to that is not wider than what the deployment chose.
-    The operation is refused, and the refusal is published rather than raised so
-    every transport renders it.
+    A factory's extension is built per operation and named by nothing else, so
+    once the entries are gone there is nothing to fall back to that is not
+    wider than what the deployment chose. The operation is refused, and the
+    refusal is published rather than raised so every transport renders it.
     """
     schema = _schema_holding_an_unnamed_entry()
     assert schema.execute_sync("{ hello }").errors is None
@@ -855,15 +974,19 @@ def test_an_operation_is_refused_when_the_accepted_extensions_cannot_be_read_bac
     assert result.errors[0].extensions == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
 
     resolved = schema.get_extensions(sync=True)
-    assert isinstance(resolved[0], DjangoErrorPolicyExtension)
-    assert not any(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved)
+    assert [type(entry).__name__ for entry in resolved] == [
+        "DjangoErrorPolicyExtension",
+        "_RefusedConfiguration",
+        "DjangoResourcePolicyExtension",
+    ]
+    assert _MARKS == ["accepted"]
 
 
 def test_a_refused_schema_does_not_begin_executing_either():
     """The refusal is restated where execution starts, for a path that got that far."""
     schema = _schema_holding_an_unnamed_entry()
     schema.__dict__.pop("_django_extensions")
-    refusal = schema.get_extensions(sync=True)[-1]
+    refusal = schema.get_extensions(sync=True)[1]
 
     with pytest.raises(GraphQLError, match="could not be read back"):
         refusal.on_execute()
@@ -891,23 +1014,18 @@ class _SlottedFactory:
     __slots__ = ()
 
     def __call__(self):
-        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+        return _MarkerExtension()
 
 
 class _InertExtension(SchemaExtension):
-    """A module-level entry that enforces nothing and is weak-referenceable.
-
-    The mixed-entry rows need one entry of each memory layout without a second
-    enforcement authority in the list, which is a configuration this schema
-    refuses on its own terms.
-    """
+    """A module-level entry that runs nothing and is weak-referenceable."""
 
 
 class _WeakReferenceableFactory:
     """The control: the same factory, with the layout a weak reference can be taken of."""
 
     def __call__(self):
-        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
+        return _MarkerExtension()
 
 
 class _WideningSlottedFactory:
@@ -916,7 +1034,7 @@ class _WideningSlottedFactory:
     __slots__ = ()
 
     def __call__(self):
-        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=999))
+        return _ForgedMarkerExtension()
 
 
 @pytest.mark.parametrize(
@@ -924,23 +1042,22 @@ class _WideningSlottedFactory:
     [_SlottedFactory, _WeakReferenceableFactory],
     ids=["slotted-callable", "weak-referenceable-control"],
 )
-def test_a_slotted_callable_factory_is_accepted_and_enforces(factory):
+def test_a_slotted_callable_factory_is_accepted_and_runs(factory):
     """A callable factory works whatever its object layout is.
 
     Strawberry accepts either one, so a schema that refused the slotted form
     would be refusing a configuration for a reason that has nothing to do with
     what runs the operation. Both build the extension per operation and both
-    enforce the bound they carry.
+    run it.
     """
     schema = DjangoSchema(
         query=_RowQuery,
-        resource_policy=ResourcePolicy(max_list_rows=3),
+        resource_policy=ResourcePolicy(max_list_rows=1),
         extensions=[factory()],
     )
 
-    # The schema's own policy would pass all three rows; the entry's narrower
-    # one is what the operation is actually bounded by.
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted"]
 
 
 def test_a_slotted_entry_does_not_root_the_schema_that_holds_it():
@@ -968,9 +1085,7 @@ def test_a_mixed_entry_list_answers_each_entry_from_its_own_evidence():
     original is what the next operation runs. The slotted entry is answered from
     the box the schema holds it in, which that same write replaced - and the only
     record of what it declared is gone, so the operation is refused rather than
-    resolved against whatever was put there. It is also the entry carrying this
-    schema's resource bound: the other one enforces nothing, so the list has one
-    authority the way an accepted configuration has to.
+    resolved against whatever was put there.
     """
     schema = DjangoSchema(
         query=_RowQuery,
@@ -978,6 +1093,7 @@ def test_a_mixed_entry_list_answers_each_entry_from_its_own_evidence():
         extensions=[_InertExtension, _SlottedFactory()],
     )
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted"]
 
     schema.__dict__.update(_django_extensions=(_widening_factory,))
     gc.collect()
@@ -998,15 +1114,16 @@ def test_a_weak_only_entry_list_survives_the_same_write():
     schema = DjangoSchema(
         query=_RowQuery,
         resource_policy=ResourcePolicy(max_list_rows=1),
-        extensions=[DjangoResourcePolicyExtension],
+        extensions=[_MarkerExtension],
     )
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
 
     schema.__dict__.update(_django_extensions=(_widening_factory,))
     gc.collect()
 
-    assert schema.extensions == (DjangoErrorPolicyExtension, DjangoResourcePolicyExtension)
+    assert schema.extensions == (_MarkerExtension,)
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted", "accepted"]
 
 
 @pytest.mark.parametrize(
@@ -1029,15 +1146,15 @@ def test_the_box_a_slotted_entry_is_answered_through_cannot_be_rebound(tamper):
     the interpreter's own binding, and the spellings here are the ways there are
     to aim at it.
 
-    What the row reads is the bound: the accepted factory declared one row, the
-    replacement would pass three, and the schema's own policy would pass three
-    as well - so an admitted replacement is visible in the data.
+    What the row reads is the mark: the accepted factory records ``accepted``
+    and the replacement records ``forged``, so an admitted replacement is
+    visible in what ran.
     """
     accepted = _SlottedFactory()
     replacement = _WideningSlottedFactory()
     schema = DjangoSchema(
         query=_RowQuery,
-        resource_policy=ResourcePolicy(max_list_rows=3),
+        resource_policy=ResourcePolicy(max_list_rows=1),
         extensions=[accepted],
     )
     box = next(
@@ -1051,6 +1168,7 @@ def test_the_box_a_slotted_entry_is_answered_through_cannot_be_rebound(tamper):
 
     assert box.__self__ is accepted
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted"]
 
 
 def test_rebuilding_the_box_a_slotted_entry_is_answered_through_changes_nothing():
@@ -1062,7 +1180,7 @@ def test_rebuilding_the_box_a_slotted_entry_is_answered_through_changes_nothing(
     accepted = _SlottedFactory()
     schema = DjangoSchema(
         query=_RowQuery,
-        resource_policy=ResourcePolicy(max_list_rows=3),
+        resource_policy=ResourcePolicy(max_list_rows=1),
         extensions=[accepted],
     )
     box = next(
@@ -1075,6 +1193,7 @@ def test_rebuilding_the_box_a_slotted_entry_is_answered_through_changes_nothing(
 
     assert box.__self__ is accepted
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+    assert _MARKS == ["accepted"]
 
 
 @pytest.mark.parametrize(
@@ -1195,13 +1314,86 @@ class _LyingExtension:
         return DjangoErrorPolicyExtension
 
 
-class _SlottedErrorFactory:
-    """A valid error-policy factory in the layout that takes no weak reference."""
+class _SlottedConsumerFactory:
+    """A valid consumer-extension factory in the layout that takes no weak reference."""
 
     __slots__ = ()
 
     def __call__(self):
-        return DjangoErrorPolicyExtension()
+        return _MarkerExtension()
+
+
+class _MutableResourceFactory:
+    """A stateful factory whose returned bound is decided after it was accepted."""
+
+    def __init__(self, rows=1):
+        self.rows = rows
+
+    def __call__(self):
+        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=self.rows))
+
+
+class _SelectingErrorFactory:
+    """A factory choosing between two masking extensions, after it was accepted."""
+
+    def __init__(self):
+        self.chosen = DjangoErrorPolicyExtension()
+
+    def __call__(self):
+        return self.chosen
+
+
+class _BoundMethodResourceFactory:
+    """A bound method, which is a factory whose owner decides what it returns."""
+
+    def __init__(self):
+        self.rows = 1
+
+    def build(self):
+        """Build the resource extension this owner currently wants."""
+        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=self.rows))
+
+
+class _CountingAuthorityFactory:
+    """A factory that records how many times the package called it."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        return DjangoResourcePolicyExtension()
+
+
+class _HybridFactory:
+    """A factory returning one object that answers to both authorities."""
+
+    def __init__(self, hybrid_type):
+        self._hybrid_type = hybrid_type
+
+    def __call__(self):
+        return self._hybrid_type()
+
+
+class _SingletonHybridFactory:
+    """The same, handing back one shared object every time."""
+
+    def __init__(self, hybrid_type):
+        self._hybrid = hybrid_type()
+
+    def __call__(self):
+        return self._hybrid
+
+
+def _closure_resource_factory():
+    """A closure over a mutable cell, which is the same defect without an attribute."""
+    cell = {"rows": 1}
+
+    def factory():
+        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=cell["rows"]))
+
+    factory.cell = cell
+    return factory
 
 
 def _narrow_resource_factory():
@@ -1216,20 +1408,43 @@ def _wide_resource_factory():
 
 _SHARED_ERROR_EXTENSION = DjangoErrorPolicyExtension()
 
+_SHARED_MARKER_EXTENSION = _MarkerExtension()
+
 
 def _first_error_factory():
     """A factory producing a masking extension for the operation."""
     return DjangoErrorPolicyExtension()
 
 
-def _second_error_factory():
-    """A second one, so two masking authorities resolve from opaque entries."""
-    return DjangoErrorPolicyExtension()
-
-
 def _singleton_error_factory():
-    """The documented shared-instance spelling: one object, returned every time."""
+    """One masking extension, returned every time."""
     return _SHARED_ERROR_EXTENSION
+
+
+def _fresh_marker_factory():
+    """The supported consumer spelling: a new extension per operation."""
+    return _MarkerExtension()
+
+
+def _singleton_marker_factory():
+    """The documented shared-instance spelling: one object, returned every time."""
+    return _SHARED_MARKER_EXTENSION
+
+
+class _BoundMethodMarkerFactory:
+    """The bound-method spelling, for an extension that is not an authority."""
+
+    def build(self):
+        """Build this owner's consumer extension, fresh per operation."""
+        return _MarkerExtension()
+
+
+_SHARED_OPTIMIZER_EXTENSION = DjangoOptimizerExtension()
+
+
+def _optimizer_singleton_factory():
+    """The optimizer's own documented spelling, whose cache is deliberately shared."""
+    return _SHARED_OPTIMIZER_EXTENSION
 
 
 def _assert_configuration_refusal(result):
@@ -1241,61 +1456,111 @@ def _assert_configuration_refusal(result):
 
 
 @pytest.mark.parametrize(
-    "entries",
+    "entry",
     [
-        [DjangoResourcePolicyExtension, CustomResourcePolicyExtension],
-        [CustomResourcePolicyExtension, DjangoResourcePolicyExtension],
-        [DjangoResourcePolicyExtension, CustomResourcePolicyExtension()],
-        [DjangoErrorPolicyExtension, DjangoErrorPolicyExtension],
-        [DjangoErrorPolicyExtension(), DjangoErrorPolicyExtension],
+        _narrow_resource_factory,
+        _wide_resource_factory,
+        _first_error_factory,
+        _singleton_error_factory,
+        _MutableResourceFactory(),
+        _SelectingErrorFactory(),
+        _closure_resource_factory(),
+        _BoundMethodResourceFactory().build,
+        _HybridFactory(HybridPolicyExtension),
+        _HybridFactory(ReversedHybridPolicyExtension),
+        _SingletonHybridFactory(HybridPolicyExtension),
+        _SingletonHybridFactory(ReversedHybridPolicyExtension),
     ],
     ids=[
-        "resource-classes",
-        "resource-classes-reversed",
-        "resource-class-and-instance",
-        "error-classes",
-        "error-instance-and-class",
+        "narrow-resource-factory",
+        "wide-resource-factory",
+        "fresh-error-factory",
+        "singleton-error-factory",
+        "mutable-resource-factory",
+        "selecting-error-factory",
+        "closure-resource-factory",
+        "bound-method-resource-factory",
+        "hybrid-fresh-factory",
+        "hybrid-fresh-factory-reversed-bases",
+        "hybrid-singleton-factory",
+        "hybrid-singleton-factory-reversed-bases",
     ],
 )
-def test_two_entries_of_one_enforcement_kind_are_refused_at_construction(entries):
-    """An entry that names its type is one the deployment can be told about at startup.
+def test_a_factory_producing_an_enforcement_authority_refuses_the_operation(entry):
+    """A factory is opaque until it runs, so what it produces is typed at resolution.
 
-    Two of a kind is not a duplicate to tidy: each arms its own scope over the
-    whole operation and the last one armed answers every bound, mask and
-    deadline check, so the order they were listed in would decide what the
-    request is held to. Neither first nor last is a rule anyone can have meant,
-    so the schema is refused rather than served.
+    Accepting the callable proves which object this schema was configured with,
+    and that is all it proves: the object is consumer code, ``info.schema``
+    hands it to every resolver, and the extension it returns NEXT request is
+    decided after this one. A stateful factory, a closure over a mutable cell
+    and a singleton selector are the same fact spelled three ways, and none of
+    them can be an enforcement authority.
     """
-    with pytest.raises(ConfigurationError):
-        DjangoSchema(query=DummyQuery, extensions=entries)
-
-
-@pytest.mark.parametrize(
-    "entries",
-    [
-        [_narrow_resource_factory, _wide_resource_factory],
-        [_wide_resource_factory, _narrow_resource_factory],
-        [_first_error_factory, _second_error_factory],
-        [_second_error_factory, _first_error_factory],
-    ],
-    ids=[
-        "resource-narrow-then-wide",
-        "resource-wide-then-narrow",
-        "error-first-then-second",
-        "error-second-then-first",
-    ],
-)
-def test_two_opaque_factories_of_one_kind_refuse_the_operation(entries):
-    """A factory is opaque until it runs, so the same refusal has to be made later.
-
-    Construction cannot classify these without calling them, which is the one
-    thing a per-operation factory must not have done to it. Resolution is where
-    both become visible, and both orders refuse identically - the alternative is
-    a schema whose enforcement is selected by list position.
-    """
-    schema = DjangoSchema(query=DummyQuery, extensions=entries)
+    schema = DjangoSchema(query=DummyQuery, extensions=[entry])
 
     _assert_configuration_refusal(schema.execute_sync("{ hello }"))
+
+
+def test_a_refused_factory_is_called_once_and_never_inspected_again():
+    """Resolution calls the entries once, and every check reads what came back.
+
+    Calling a factory a second time to find out what it is would run consumer
+    code twice for one operation, and the second answer need not be the first.
+    """
+    factory = _CountingAuthorityFactory()
+    schema = DjangoSchema(query=DummyQuery, extensions=[factory])
+
+    _assert_configuration_refusal(schema.execute_sync("{ hello }"))
+
+    assert factory.calls == 1
+
+
+def test_a_refusal_carries_no_representation_of_the_member_that_caused_it():
+    """The wire gets the stable code; the object stays in the deployment's own log."""
+    schema = DjangoSchema(query=DummyQuery, extensions=[_HybridFactory(HybridPolicyExtension)])
+
+    result = schema.execute_sync("{ hello }")
+
+    assert result.errors[0].extensions == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
+    for fragment in (
+        "HybridPolicyExtension",
+        "ResourcePolicy",
+        "max_list_rows",
+        "object at 0x",
+    ):
+        assert fragment not in result.errors[0].message
+
+
+def test_a_resolver_cannot_widen_a_later_request_through_an_accepted_factory():
+    """The attack the refusal exists for, made from inside a resolver.
+
+    The factory is reachable through ``info.schema.extensions`` and its
+    membership evidence never changes, so identity proves nothing about the
+    ceiling the next operation gets. The schema is refused from its first
+    operation rather than served until someone widens it.
+    """
+    factory = _MutableResourceFactory()
+
+    @strawberry.type
+    class WideningQuery:
+        @strawberry.field
+        def widen(self, info: strawberry.Info) -> bool:
+            """Reach the accepted factory the way any resolver can, and widen it."""
+            for entry in info.schema.extensions:
+                if entry is factory:
+                    entry.rows = 999
+                    return True
+            return False
+
+    schema = DjangoSchema(
+        query=WideningQuery,
+        extensions=[factory],
+        resource_policy=ResourcePolicy(max_list_rows=1),
+    )
+
+    _assert_configuration_refusal(schema.execute_sync("{ widen }"))
+    assert factory.rows == 1
+    assert schema.resource_policy.max_list_rows == 1
 
 
 @pytest.mark.parametrize(
@@ -1333,25 +1598,30 @@ def test_a_factory_that_does_not_produce_an_extension_refuses_the_operation(entr
 @pytest.mark.parametrize(
     "entry",
     [
-        _SlottedErrorFactory(),
-        DjangoErrorPolicyExtension,
-        _first_error_factory,
-        _singleton_error_factory,
+        _SlottedConsumerFactory(),
+        _MarkerExtension,
+        _fresh_marker_factory,
+        _singleton_marker_factory,
+        _BoundMethodMarkerFactory().build,
+        _optimizer_singleton_factory,
     ],
     ids=[
         "slotted-factory",
-        "bound-method",
+        "class",
         "fresh-factory",
         "singleton-factory",
+        "bound-method",
+        "optimizer-singleton-factory",
     ],
 )
 def test_every_supported_entry_spelling_still_resolves_into_one_chain(entry):
-    """The controls that keep the refusals honest: all four spellings still run.
+    """The controls that keep the refusals honest: every consumer spelling still runs.
 
     A memory layout that takes no weak reference, a class, a module-level
-    function and a factory handing back one shared object are configurations
-    rather than defects, and each resolves into exactly one masking authority
-    beside the package's own resource extension.
+    function, a factory handing back one shared object and the optimizer's own
+    documented singleton-in-a-factory are configurations rather than defects.
+    Each resolves between exactly one masking authority and exactly one resource
+    authority, both of which are the schema's.
     """
     schema = DjangoSchema(query=DummyQuery, extensions=[entry])
     resolved = schema.get_extensions(sync=True)
@@ -1359,6 +1629,346 @@ def test_every_supported_entry_spelling_still_resolves_into_one_chain(entry):
     assert schema.execute_sync("{ hello }").data == {"hello": "world"}
     assert sum(_is_extension(e, DjangoErrorPolicyExtension) for e in resolved) == 1
     assert sum(_is_extension(e, DjangoResourcePolicyExtension) for e in resolved) == 1
+    assert len(resolved) == 4
+
+
+@pytest.mark.parametrize(
+    ("document", "code"),
+    [
+        ("{", SCHEMA_CONFIGURATION_ERROR_CODE),
+        ("{ hello }", SCHEMA_CONFIGURATION_ERROR_CODE),
+        ("query Named { hello }", SCHEMA_CONFIGURATION_ERROR_CODE),
+        ("mutation { plainMutation }", SCHEMA_CONFIGURATION_ERROR_CODE),
+    ],
+    ids=[
+        "malformed",
+        "valid",
+        "named-operation",
+        "mutation",
+    ],
+)
+def test_a_refused_schema_answers_every_document_with_the_configuration_code(document, code):
+    """Refusing every operation includes the ones that would not have parsed.
+
+    Publishing after the parse would make the claim true only of well-formed
+    documents: a syntax error is raised out of the parse itself and upstream
+    answers with it before any statement after the hook's ``yield`` runs. The
+    refusal is published first and the parse stage is handed a document of the
+    package's own, so the client is told the same thing whatever it sent.
+    """
+    schema = DjangoSchema(query=DummyQuery, mutation=DummyMutation, extensions=[lambda: 7])
+
+    result = schema.execute_sync(document)
+
+    assert result.data is None
+    assert [error.extensions for error in result.errors] == [{"code": code}]
+
+
+def test_a_refused_schema_still_bounds_the_document_it_is_refusing():
+    """A broken configuration must not be the one shape with no parsing ceiling.
+
+    The refusal chain keeps the package's own resource extension, reading this
+    schema's private policy, so the pre-parse token and depth scan still runs.
+    Without it a deployment with one bad factory would have traded "every
+    operation fails closed" for an endpoint that lexes and nests whatever it is
+    sent before saying no.
+    """
+    schema = DjangoSchema(
+        query=DummyQuery,
+        extensions=[lambda: 7],
+        resource_policy=ResourcePolicy(max_document_tokens=1),
+    )
+
+    assert [type(entry).__name__ for entry in schema.get_extensions(sync=True)] == [
+        "DjangoErrorPolicyExtension",
+        "_RefusedConfiguration",
+        "DjangoResourcePolicyExtension",
+    ]
+    over_budget = schema.execute_sync("{ a: hello b: hello }")
+    assert [error.extensions["code"] for error in over_budget.errors] == [
+        "RESOURCE_LIMIT_EXCEEDED",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("document", "code"),
+    [
+        ("{ hello }", SCHEMA_CONFIGURATION_ERROR_CODE),
+        ("{ a: hello b: hello }", "RESOURCE_LIMIT_EXCEEDED"),
+    ],
+    ids=["refused", "over-budget"],
+)
+def test_a_refused_request_runs_no_parser_at_all(document, code):
+    """Neither answer a refused schema gives is one a parser had to produce.
+
+    The refusal is published at a pre-parse seam and the over-budget rejection
+    is raised by the token scan before the parse stage runs at all, so the
+    document a broken deployment is sent is never handed to graphql-core's
+    recursive parser. The refusal's own substitute documents are parsed once at
+    import, so the claim is the whole one - no parser runs on a refused request -
+    rather than only the dangerous half.
+
+    Both bindings are patched. The package calls ``parse`` through its own
+    module and upstream calls it through ``strawberry.schema.schema``; watching
+    one of them proves nothing about the other, and it is the package's own
+    binding that a per-request parse would go through.
+    """
+    schema = DjangoSchema(
+        query=DummyQuery,
+        extensions=[lambda: 7],
+        resource_policy=ResourcePolicy(max_document_tokens=3),
+    )
+    parsed: list[str] = []
+
+    def _record(source, **kwargs):
+        parsed.append(str(source))
+        raise AssertionError("a refused configuration must not reach a parser")
+
+    with (
+        patch("strawberry.schema.schema.parse", _record),
+        patch("django_strawberry_framework.schema.parse", _record),
+    ):
+        result = schema.execute_sync(document)
+
+    assert result.data is None
+    assert [error.extensions["code"] for error in result.errors] == [code]
+    assert parsed == []
+
+
+#: Every operation name a request can arrive with, including the ones no
+#: document can carry. A refused schema has discarded the document the name was
+#: written against, so each has to reach the same stable answer.
+_REFUSED_OPERATION_NAMES = [
+    None,
+    "Absent",
+    "bad-name",
+    "",
+    "\N{FIRE}",
+    0,
+]
+
+_REFUSED_OPERATION_NAME_IDS = [
+    "none",
+    "valid-but-absent",
+    "invalid-punctuation",
+    "empty",
+    "unicode",
+    "not-a-string",
+]
+
+
+@pytest.mark.parametrize(
+    "operation_name",
+    _REFUSED_OPERATION_NAMES,
+    ids=_REFUSED_OPERATION_NAME_IDS,
+)
+def test_a_refused_schema_answers_every_operation_name_the_same_way(operation_name):
+    """The name a request asked for selects nothing once the document is the package's.
+
+    Upstream picks the operation to run by looking the requested name up in
+    whatever document the parse stage left behind. A refused request's document
+    is the package's own, so a name that survived into the selector is a lookup
+    that cannot succeed - and upstream raises that failure out of the API,
+    over a refusal already published. The name is normalized with the document.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    result = schema.execute_sync("{ hello }", operation_name=operation_name)
+
+    assert result.data is None
+    assert [error.extensions for error in result.errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation_name",
+    _REFUSED_OPERATION_NAMES,
+    ids=_REFUSED_OPERATION_NAME_IDS,
+)
+async def test_a_refused_schema_answers_an_awaited_operation_name_the_same_way(operation_name):
+    """The asynchronous API refuses the same names, and raises out of none of them."""
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    result = await schema.execute("{ hello }", operation_name=operation_name)
+
+    assert result.data is None
+    assert [error.extensions for error in result.errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation_name",
+    _REFUSED_OPERATION_NAMES,
+    ids=_REFUSED_OPERATION_NAME_IDS,
+)
+async def test_a_refused_schema_streams_one_refusal_for_every_operation_name(operation_name):
+    """A stream owes a FRAME for each of these, not an exception and not a lookup error.
+
+    The stream is the path where the escaped lookup was quietest: upstream
+    renders its own "unknown operation" into the first frame, so a transport
+    saw a well-formed error frame carrying a different story than the sync API
+    told about the same request.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    stream = await schema.stream("{ hello }", operation_name=operation_name)
+    frames = [frame async for frame in stream]
+
+    assert len(frames) == 1
+    assert frames[0].data is None
+    assert [error.extensions for error in frames[0].errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+def test_a_refused_request_keeps_the_text_it_arrived_with_and_selects_by_nothing():
+    """What arrived stays readable; what upstream reads is the package's own.
+
+    A transport that logs the document it received still has it. The pair
+    upstream parses and selects an operation from is replaced wholesale, so
+    neither the request's text nor the name it asked for can reach the parser,
+    the selector, validation, or execution again.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+    context = StrawberryExecutionContext(
+        query="{ hello }",
+        schema=schema,
+        allowed_operations=(OperationType.QUERY,),
+        provided_operation_name="bad-name",
+    )
+
+    _refuse_operation_document(context)
+
+    assert context.query == "{ hello }"
+    assert context.operation_name is None
+    assert print_ast(context.graphql_document) == "{\n  __typename\n}"
+
+
+@pytest.mark.parametrize(
+    ("allowed", "expected"),
+    [
+        ((OperationType.QUERY,), "{\n  __typename\n}"),
+        ((OperationType.MUTATION,), "mutation {\n  __typename\n}"),
+        ((OperationType.SUBSCRIPTION,), "subscription {\n  __typename\n}"),
+        ((), "{\n  __typename\n}"),
+    ],
+    ids=[
+        "query",
+        "mutation",
+        "subscription",
+        "nothing-allowed",
+    ],
+)
+def test_the_substitute_document_is_of_a_type_the_transport_allows(allowed, expected):
+    """Upstream refuses a type the caller did not allow before it can read the refusal.
+
+    A subscription transport allows exactly one type, so a refusal answered with
+    a query would be replaced by an "operation type not allowed" error that says
+    nothing about the configuration. The documents are the package's own
+    constants, so the substitution costs no parse.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+    context = StrawberryExecutionContext(
+        query="{ hello }",
+        schema=schema,
+        allowed_operations=allowed,
+    )
+
+    _refuse_operation_document(context)
+
+    assert print_ast(context.graphql_document) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_refused_schema_answers_a_streamed_operation_with_one_frame():
+    """The streaming transport gets the refusal as a frame, not as an exception.
+
+    An exception out of a hook leaves a streamed operation with no frame at all,
+    which is why the refusal is published rather than raised - and the stream's
+    own resume wrapper has to carry it the same way every other frame is
+    carried.
+    """
+    schema = DjangoSchema(query=DummyQuery, extensions=[lambda: 7])
+
+    stream = await schema.stream("{ hello }")
+    frames = [frame async for frame in stream]
+
+    assert len(frames) == 1
+    assert frames[0].data is None
+    assert [error.extensions for error in frames[0].errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+class _HostileReprError(Exception):
+    """A consumer exception whose display is as much consumer code as the factory."""
+
+    def __repr__(self):
+        """Raise while the containment result is being built."""
+        raise RuntimeError("repr bomb")
+
+    def __str__(self):
+        """Raise on the other rendering path too."""
+        raise RuntimeError("str bomb")
+
+
+class _HostileArg:
+    """An exception argument whose own representation raises."""
+
+    def __repr__(self):
+        """Raise while the exception carrying this is being rendered."""
+        raise RuntimeError("arg bomb")
+
+
+class _HostileTypeError(Exception):
+    """A consumer exception whose type metadata cannot be read either."""
+
+
+class _HostileTypeMeta(type):
+    @property
+    def __name__(cls):
+        """Raise when the safe renderer asks the type for its name."""
+        raise RuntimeError("name bomb")
+
+
+class _HostileNameError(Exception, metaclass=_HostileTypeMeta):
+    """A consumer exception whose class name raises while it is being rendered."""
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        RuntimeError("factory sentinel"),
+        _HostileReprError("secret"),
+        _HostileTypeError(_HostileArg()),
+        _HostileNameError("secret"),
+    ],
+    ids=[
+        "ordinary-exception",
+        "raising-repr-and-str",
+        "raising-argument-representation",
+        "raising-type-name",
+    ],
+)
+def test_a_factory_exception_cannot_escape_while_the_refusal_is_being_built(raised):
+    """The diagnostic is assembled from a consumer exception, so it is rendered safely.
+
+    Interpolating the exception into the private reason runs its ``__repr__``
+    while the containment result is being built - and that is consumer code,
+    which may raise and replace the refusal with the very exception the refusal
+    exists to keep off the wire. The wire message is the constant either way.
+    """
+
+    def factory():
+        raise raised
+
+    schema = DjangoSchema(query=DummyQuery, extensions=[factory])
+
+    _assert_configuration_refusal(schema.execute_sync("{ hello }"))
 
 
 def test_a_refused_chain_runs_no_consumer_hook_and_no_resolver():

@@ -3,10 +3,14 @@
 Two claims a package-only schema cannot make, both reached from a resolver
 holding ``info.schema`` in a real request and read back off the wire:
 
-- the accepted extension configuration is the one the NEXT request is enforced
-  by, whatever a resolver writes at the objects the schema holds it in - so the
-  bound a slotted factory declared still bounds, and the masking an accepted
-  error policy declared still masks;
+- what enforces the NEXT request is the schema's own configuration, and nothing
+  a resolver can reach through ``info.schema`` - not the accepted entries, not
+  the objects the schema holds them in, and not the state a stateful factory
+  answers from - so the bound still bounds and the masking still masks;
+- a schema whose entries resolve into a second enforcement authority refuses
+  every request on the wire, including the ones that would not have parsed and
+  the ones asking for an operation name no document can carry, and still bounds
+  the document it is refusing;
 - the optimizer entry every deployment is documented to write - one module-level
   singleton behind a factory - keeps its published plan on the request it
   belongs to when a consumer extension runs an operation of its own.
@@ -26,7 +30,7 @@ import pytest
 import strawberry
 from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
-from django.test import AsyncClient
+from django.test import AsyncClient, Client
 from django.urls import include, path
 from strawberry.extensions.base_extension import SchemaExtension
 
@@ -38,7 +42,6 @@ from django_strawberry_framework import (
     strawberry_config,
 )
 from django_strawberry_framework.extensions import (
-    DjangoErrorPolicyExtension,
     DjangoResourcePolicyExtension,
 )
 from django_strawberry_framework.optimizer._context import (
@@ -55,21 +58,50 @@ from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 
-async def _post_async(client, document):
-    """Post one document to the async mount and return the decoded payload."""
+async def _post_async(client, document, mount="/iso-survivor/", **body):
+    """Post one document to an async mount and return the decoded payload."""
     response = await client.post(
-        "/iso-survivor/",
-        data=json.dumps({"query": document}),
+        mount,
+        data=json.dumps({"query": document, **body}),
         content_type="application/json",
     )
     assert response.status_code == 200, response.content
     return json.loads(response.content)
 
 
+def _post_sync(client, document, mount, **body):
+    """Post one document to a sync mount and return ``(response, decoded payload)``."""
+    response = client.post(
+        mount,
+        data=json.dumps({"query": document, **body}),
+        content_type="application/json",
+    )
+    return response, response.content
+
+
 pytestmark = pytest.mark.urls(__name__)
 
 #: The exception message an unmasked error policy would put on the wire.
 SENTINEL = "the-resolver-said-this-out-loud"
+
+
+class _ConsumerExtension(SchemaExtension):
+    """An ordinary consumer extension: the thing an entry is still allowed to be."""
+
+
+class _MutableConsumerFactory:
+    """A stateful accepted factory, whose returned object is chosen after acceptance.
+
+    The shape the attack needs: a resolver reaches this through
+    ``info.schema.extensions`` and writes it, so if an entry decided enforcement
+    the ceiling for every later request would be a resolver's to choose.
+    """
+
+    def __init__(self):
+        self.widened = False
+
+    def __call__(self):
+        return _ConsumerExtension()
 
 
 class _NarrowResourceFactory:
@@ -95,35 +127,22 @@ class _WideResourceFactory:
         return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=999))
 
 
-class _SilentErrorPolicy(DjangoErrorPolicyExtension):
-    """An error-policy extension that masks nothing, which is the point of it.
-
-    An accepted error entry suppresses the automatic one, so what a replacement
-    has to do to unmask a later response is simply be an error policy extension
-    that does not mask.
-    """
-
-    def on_operation(self):
-        """Leave the completed result exactly as the resolvers produced it."""
-        yield
-
-
-class _MaskingErrorFactory:
-    """The accepted entry: the masking every later response is owed."""
+class _AcceptedConsumerFactory:
+    """The accepted entry, in the layout that takes no weak reference."""
 
     __slots__ = ()
 
     def __call__(self):
-        return DjangoErrorPolicyExtension()
+        return _ConsumerExtension()
 
 
-class _DisabledErrorFactory:
-    """The entry a resolver would rather masked nothing."""
+class _ReplacementConsumerFactory:
+    """The entry a resolver would rather the schema resolved, in the same layout."""
 
     __slots__ = ()
 
     def __call__(self):
-        return _SilentErrorPolicy()
+        return _ConsumerExtension()
 
 
 #: Every way there is to aim at the binding inside the box the schema holds. A
@@ -171,22 +190,38 @@ def _swap(
 
 
 @strawberry.type
+class _Nested:
+    """One level of nesting, so a depth bound has something to charge."""
+
+    @strawberry.field
+    def hello(self) -> str:
+        return "hi"
+
+
+@strawberry.type
 class _ResourceQuery:
-    """One scalar to charge aliases against, and the write that would widen them."""
+    """One scalar to charge aliases against, and every write that would widen them."""
 
     @strawberry.field
     def hello(self) -> str:
         return "hi"
 
     @strawberry.field
+    def nested(self) -> _Nested:
+        return _Nested()
+
+    @strawberry.field
     def widen(self, info: strawberry.Info, tamper: str) -> str:
-        """Try to make the next request resolve a wider resource entry."""
-        return _swap(info.schema, tamper, _NarrowResourceFactory, _WideResourceFactory())
+        """Try to make the next request resolve a wider configuration."""
+        for entry in info.schema.extensions:
+            if isinstance(entry, _MutableConsumerFactory):
+                entry.widened = True
+        return _swap(info.schema, tamper, _AcceptedConsumerFactory, _ReplacementConsumerFactory())
 
 
 @strawberry.type
 class _ErrorQuery:
-    """One raising field, and the write that would stop its message being masked."""
+    """One raising field, and every write that would stop its message being masked."""
 
     @strawberry.field
     def boom(self) -> str:
@@ -194,8 +229,11 @@ class _ErrorQuery:
 
     @strawberry.field
     def unmask(self, info: strawberry.Info, tamper: str) -> str:
-        """Try to make the next request resolve a disabled error entry."""
-        return _swap(info.schema, tamper, _MaskingErrorFactory, _DisabledErrorFactory())
+        """Try to make the next request resolve a configuration that masks nothing."""
+        for entry in info.schema.extensions:
+            if isinstance(entry, _MutableConsumerFactory):
+                entry.widened = True
+        return _swap(info.schema, tamper, _AcceptedConsumerFactory, _ReplacementConsumerFactory())
 
 
 class _Nester(SchemaExtension):
@@ -243,17 +281,20 @@ def _published(context) -> dict:
 
 
 def _resource_schema():
-    """The schema mounted behind ``/iso-resource/``, built once per process."""
+    """The schema mounted behind the resource mounts, built once per process."""
     return DjangoSchema(
         query=_ResourceQuery,
-        resource_policy=ResourcePolicy(max_aliases=99),
-        extensions=[_NarrowResourceFactory()],
+        resource_policy=ResourcePolicy(max_aliases=1),
+        extensions=[_AcceptedConsumerFactory(), _MutableConsumerFactory()],
     )
 
 
 def _error_schema():
-    """The schema mounted behind ``/iso-error/``, built once per process."""
-    return DjangoSchema(query=_ErrorQuery, extensions=[_MaskingErrorFactory()])
+    """The schema mounted behind the error mounts, built once per process."""
+    return DjangoSchema(
+        query=_ErrorQuery,
+        extensions=[_AcceptedConsumerFactory(), _MutableConsumerFactory()],
+    )
 
 
 _HELD: dict[str, object] = {}
@@ -334,10 +375,16 @@ class _SurvivorReport:
 
 
 def _ambiguous_schema():
-    """Two opaque factories of one kind: a configuration with two answers."""
+    """An opaque factory resolving to an enforcement authority the schema owns.
+
+    Bounded narrowly on purpose: the refusal chain keeps the package's own
+    resource extension, so what a refused schema does to an oversized or deeply
+    nested document is part of what this mount answers.
+    """
     return DjangoSchema(
         query=_ResourceQuery,
-        extensions=[_NarrowResourceFactory(), _WideResourceFactory()],
+        resource_policy=ResourcePolicy(max_document_tokens=10, max_depth=1),
+        extensions=[_NarrowResourceFactory()],
     )
 
 
@@ -404,12 +451,26 @@ def _async_view(build):
     return view
 
 
+def _held_async_view(name, build):
+    """Mount the asynchronous view over one held schema."""
+
+    async def view(request, *args, **kwargs):
+        built = AsyncDjangoGraphQLView.as_view(schema=_held(name, build))
+        return await built(request, *args, **kwargs)
+
+    view.csrf_exempt = True
+    return view
+
+
 urlpatterns = [
     path("", include("config.urls")),
     path("iso-resource/", _view("resource", _resource_schema)),
+    path("iso-resource-async/", _held_async_view("resource", _resource_schema)),
     path("iso-error/", _view("error", _error_schema)),
+    path("iso-error-async/", _held_async_view("error", _error_schema)),
     path("iso-nesting/", _fresh_view(_nesting_schema)),
     path("iso-chain/", _view("chain", _ambiguous_schema)),
+    path("iso-chain-async/", _held_async_view("chain", _ambiguous_schema)),
     path("iso-survivor/", _async_view(_survivor_schema)),
 ]
 
@@ -429,12 +490,13 @@ TAMPER_OUTCOMES = {
 
 @pytest.mark.parametrize("tamper", sorted(TAMPER_OUTCOMES), ids=sorted(TAMPER_OUTCOMES))
 def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_entry(tamper):
-    """The bound a slotted factory declared is the bound the NEXT request is held to.
+    """The bound the SCHEMA was configured with is the bound the next request is held to.
 
-    The schema's own policy would admit both aliases; the accepted entry admits
-    one. A resolver that could reach the entry through the object the schema
-    holds it in would widen every later request on the process, which is why the
-    row reads a SECOND request rather than the one that wrote.
+    The resolver does everything a resolver can do to the configuration it can
+    reach: it writes the accepted stateful factory's own state and it aims one
+    write at the box holding the accepted slotted entry. The next request is
+    bounded exactly as the deployment configured it, because what enforces it is
+    the schema's record and not an object in that graph.
 
     Parametrized over each write spelling with one node id apiece, because which
     of them the binding survives is the whole claim.
@@ -450,13 +512,30 @@ def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_en
     assert client.query("{ hello }").data == {"hello": "hi"}
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_a_resolver_cannot_widen_the_next_requests_bound_on_the_async_view():
+    """The same claim over the asynchronous view, which is a different request path."""
+    client = AsyncClient()
+
+    wrote = await _post_async(
+        client,
+        '{ widen(tamper: "assign-the-binding") }',
+        mount="/iso-resource-async/",
+    )
+    assert wrote["data"] == {"widen": "refused"}
+
+    refused = await _post_async(client, "{ a: hello b: hello }", mount="/iso-resource-async/")
+    assert refused["data"] is None
+    assert refused["errors"][0]["extensions"]["code"] == RESOURCE_LIMIT_ERROR_CODE
+
+
 @pytest.mark.parametrize("tamper", sorted(TAMPER_OUTCOMES), ids=sorted(TAMPER_OUTCOMES))
 def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_entry(tamper):
-    """Masking is the amplifier: an accepted error entry suppresses the automatic one.
+    """Masking is the amplifier: an unmasked response carries whatever was raised.
 
-    An entry that resolved to a DISABLED policy would therefore leave the
-    operation with no masking at all, and the next unexpected exception would
-    reach the client carrying whatever the resolver raised.
+    The masking extension is built per operation from the schema's own error
+    policy, so no entry a resolver can reach decides whether the next unexpected
+    exception reaches the client with its own message on it.
     """
     client = TestClient(path="/iso-error/")
 
@@ -467,6 +546,23 @@ def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_
     assert masked.errors is not None
     assert SENTINEL not in masked.errors[0]["message"]
     assert "correlationId" in masked.errors[0]["extensions"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_resolver_cannot_unmask_the_next_requests_errors_on_the_async_view():
+    """The same claim over the asynchronous view."""
+    client = AsyncClient()
+
+    wrote = await _post_async(
+        client,
+        '{ unmask(tamper: "assign-the-binding") }',
+        mount="/iso-error-async/",
+    )
+    assert wrote["data"] == {"unmask": "refused"}
+
+    masked = await _post_async(client, "{ boom }", mount="/iso-error-async/")
+    assert SENTINEL not in masked["errors"][0]["message"]
+    assert "correlationId" in masked["errors"][0]["extensions"]
 
 
 @pytest.mark.django_db
@@ -497,18 +593,17 @@ def test_an_operation_a_consumer_extension_starts_leaves_the_request_its_optimiz
 
 @pytest.mark.parametrize(
     "document",
-    ["{ hello }", "{ a: hello b: hello }"],
-    ids=["one-alias", "two-aliases"],
+    ["{ hello }", "{ a: hello }", "{"],
+    ids=["valid", "aliased", "malformed"],
 )
-def test_a_schema_with_two_resource_authorities_refuses_every_request(document):
-    """Which of two policies bounds the request cannot be decided by list order.
+def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(document):
+    """A factory cannot be an enforcement authority, and the wire says so identically.
 
-    Both factories are opaque until they run, so both resolve into the
-    operation's chain and each arms its own budget over it - and the last one
-    armed is what every bound reads. The document here is the difference between
-    them: one alias is inside both bounds, two are inside only the wide one. The
-    wire says the same thing for both, because the configuration is what is
-    refused rather than the request.
+    The factory is opaque until it runs, so what it produces is typed at
+    resolution - and an extension of an enforcement kind is a second authority
+    whichever object made it. The malformed row is the one that says "every"
+    literally: the refusal is published before the parse stage, so a document
+    that would not have parsed is answered with the same stable code.
     """
     client = TestClient(path="/iso-chain/")
 
@@ -519,6 +614,136 @@ def test_a_schema_with_two_resource_authorities_refuses_every_request(document):
     assert refused.errors[0]["extensions"] == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
     assert "ResourcePolicy" not in refused.errors[0]["message"]
     assert "max_aliases" not in refused.errors[0]["message"]
+
+
+@pytest.mark.parametrize(
+    "document",
+    ["{ a: hello b: hello c: hello }", "{ nested { hello } }"],
+    ids=["over-token-budget", "over-depth-budget"],
+)
+def test_a_refused_schema_still_bounds_the_document_it_refuses(document):
+    """A broken configuration is not the one shape with no parsing ceiling.
+
+    The refusal chain keeps the package's own resource extension, reading the
+    schema's private policy, so the pre-parse token and depth scan still runs.
+    Without it one bad factory would turn "every operation fails closed" into an
+    endpoint that lexes and nests whatever it is sent before saying no.
+    """
+    client = TestClient(path="/iso-chain/")
+
+    rejected = client.query(document, assert_no_errors=False)
+
+    assert rejected.data is None
+    assert rejected.errors[0]["extensions"]["code"] == RESOURCE_LIMIT_ERROR_CODE
+
+
+#: Every ``operationName`` a client can put in a request body, including the
+#: ones no document can carry. A refused schema discarded the document the name
+#: was written against, so the name selects nothing and every one of these has
+#: to come back in the same envelope.
+_REFUSED_OPERATION_NAMES = {
+    "empty": "",
+    "invalid-punctuation": "bad-name",
+    "unicode": "\N{FIRE}",
+    "valid-but-absent": "Absent",
+}
+
+_REFUSED_NAME_IDS = sorted(_REFUSED_OPERATION_NAMES)
+
+
+def _assert_refused_envelope(response, body):
+    """One JSON envelope carrying the configuration code, and nothing about the request."""
+    assert response.status_code == 200, body
+    assert response.headers["Content-Type"].startswith("application/json"), response.headers
+    payload = json.loads(body)
+    assert payload["data"] is None, payload
+    assert [error["extensions"] for error in payload["errors"]] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+    return payload
+
+
+@pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
+def test_a_refused_schema_answers_every_operation_name_the_same_way(name):
+    """A name no document can carry is refused like every other request.
+
+    Upstream selects the operation to run by looking the requested name up in
+    whatever document the parse stage left behind, and a refused request's
+    document is the package's own - so a name still belonging to the request is
+    a lookup that cannot succeed, raised over a refusal already published. What
+    a client saw instead was a plain-text 400 quoting its own operation name
+    back at it, from the one configuration that is supposed to answer
+    everything the same way.
+    """
+    requested = _REFUSED_OPERATION_NAMES[name]
+
+    response, body = _post_sync(Client(), "{ hello }", "/iso-chain/", operationName=requested)
+
+    payload = _assert_refused_envelope(response, body)
+    assert "Unknown operation" not in json.dumps(payload), payload
+
+
+@pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
+def test_a_refused_schema_still_bounds_a_document_sent_under_any_operation_name(name):
+    """The ceiling is charged before the name is looked at, and still outranks the refusal.
+
+    Normalizing the selector must not move the pre-parse scan: an oversized
+    document is rejected on its size whatever the request called the operation
+    it wanted.
+    """
+    requested = _REFUSED_OPERATION_NAMES[name]
+
+    response, body = _post_sync(
+        Client(),
+        "{ a: hello b: hello c: hello }",
+        "/iso-chain/",
+        operationName=requested,
+    )
+
+    assert response.status_code == 200, body
+    payload = json.loads(body)
+    assert payload["errors"][0]["extensions"]["code"] == RESOURCE_LIMIT_ERROR_CODE
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
+async def test_a_refused_schema_answers_every_operation_name_asynchronously_too(name):
+    """The asynchronous view answers hostile request metadata identically.
+
+    Sync and async are separate code paths through the same schema, and the
+    escaped lookup raised out of both - so parity here is the claim, not a
+    restatement of the row above.
+    """
+    requested = _REFUSED_OPERATION_NAMES[name]
+
+    payload = await _post_async(
+        AsyncClient(),
+        "{ hello }",
+        mount="/iso-chain-async/",
+        operationName=requested,
+    )
+
+    assert payload["data"] is None, payload
+    assert [error["extensions"] for error in payload["errors"]] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_refused_schema_answers_the_async_view_the_same_way():
+    """The refusal and its ceiling are the same over the asynchronous view."""
+    client = AsyncClient()
+
+    refused = await _post_async(client, "{ hello }", mount="/iso-chain-async/")
+    assert refused["data"] is None
+    assert refused["errors"][0]["extensions"] == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
+
+    rejected = await _post_async(
+        client,
+        "{ a: hello b: hello c: hello }",
+        mount="/iso-chain-async/",
+    )
+    assert rejected["errors"][0]["extensions"]["code"] == RESOURCE_LIMIT_ERROR_CODE
 
 
 @pytest.mark.django_db(transaction=True)

@@ -150,7 +150,12 @@ class OperationState:
         self.execution_context = execution_context
         self._resumed_bindings: list[tuple[ContextVar[Any], Any]] = []
 
-    def rebind_on_resume(self, variable: ContextVar[Any], value: Any) -> None:
+    def rebind_on_resume(
+        self,
+        variable: ContextVar[Any],
+        value: Any,
+        token: Token[Any],
+    ) -> bool:
         """Have the runner bind ``variable`` to ``value`` again on every resume.
 
         For the task-local state an extension arms for the WHOLE operation
@@ -163,8 +168,23 @@ class OperationState:
         Registered on the state rather than on the runner, because the state is
         what an extension has a handle on, and because a registration is then
         scoped to exactly one operation by construction.
+
+        ``token`` is the one that armed the value, and the registration hands it
+        to the resume this arming is happening inside. Whole-operation state is
+        armed DURING a frame rather than before one, so a resume that only bound
+        what was registered before it started would leave this value set in the
+        task that drove the frame, with no token to take it back: the caller
+        would go on answering with a paused operation's budget while no operation
+        of its own was running. Resume lifetime and operation lifetime are
+        different things, and this is the point they are told apart at - the
+        value stays armed for the operation, and stays bound only while some
+        task is driving it.
+
+        What comes back says whether a resume took the binding over, which is
+        the caller's answer to who ends it.
         """
         self._resumed_bindings.append((variable, value))
+        return _register_resumed_binding(variable, token)
 
     def resumed_bindings(self) -> tuple[tuple[ContextVar[Any], Any], ...]:
         """The variables an extension asked the runner to bind again on resume."""
@@ -233,6 +253,35 @@ _RUNNER_SCOPES: ContextVar[OperationLease[_RunnerScope] | None] = ContextVar(
     "django_strawberry_framework_runner_scope",
     default=None,
 )
+
+#: The bindings the resume running in this task is accountable for, or ``None``
+#: when no resume is driving anything here.
+#:
+#: A resume binds what the operation registered BEFORE it started, and an
+#: operation registers its whole-operation state during its first frame - so the
+#: first resume of every streamed operation ends with one binding it never made.
+#: The registrar is how it finds out: an extension arming such a value while
+#: this is set hands over the token, and the resume takes the value back on its
+#: way out along with everything it bound itself.
+_RESUME_REGISTRARS: ContextVar[list[_Binding] | None] = ContextVar(
+    "django_strawberry_framework_resume_registrar",
+    default=None,
+)
+
+
+def _register_resumed_binding(variable: ContextVar[Any], token: Token[Any]) -> bool:
+    """Hand ``token`` to the resume driving this task, if one is; say whether it took it.
+
+    Nothing to hand it to on the ordinary operation path, where the scope that
+    armed the value is also the scope that ends it, in the task that made the
+    token. A plain ``strawberry.Schema`` has no runner and reaches this the same
+    way.
+    """
+    registrar = _RESUME_REGISTRARS.get()
+    if registrar is None:
+        return False
+    registrar.append(_Binding(variable, token, None, adopted=True))
+    return True
 
 
 def _live_scope() -> _RunnerScope | None:
@@ -475,14 +524,26 @@ class _Binding(NamedTuple):
     ``lease`` is the one the scope minted and is therefore the one it closes;
     ``None`` marks a value the scope only re-bound, whose lease belongs to the
     scope that armed it and outlives this one.
+
+    ``adopted`` marks a binding some other scope made inside this one and handed
+    over (:func:`_register_resumed_binding`). Undoing it is the same statement -
+    the token is reset in the task that made it, which is this one - but the
+    scope that armed it may have reset it already, and that is not this scope's
+    bookkeeping gone wrong.
     """
 
     variable: ContextVar[Any]
     token: Token[Any]
     lease: OperationLease[Any] | None
+    adopted: bool = False
 
 
-def _bind(scope: _RunnerScope, states: tuple[tuple[Any, OperationState], ...]) -> list[_Binding]:
+def _bind(
+    scope: _RunnerScope,
+    states: tuple[tuple[Any, OperationState], ...],
+    *,
+    registrar: bool = False,
+) -> list[_Binding]:
     """Bind the runner scope and every state, unwinding what bound if one fails.
 
     Nothing is bound when ``scope`` is already the live scope here, which is the
@@ -492,6 +553,11 @@ def _bind(scope: _RunnerScope, states: tuple[tuple[Any, OperationState], ...]) -
     would leave are not, because the inner scope's exit can run in a task that
     cannot reset them - and every one of those cases is a scope that spans a
     ``yield``.
+
+    ``registrar`` opens this scope to bindings made inside it and handed over,
+    which only a resume needs: it is the one scope whose body arms
+    whole-operation state the scope did not bind itself. It is set last, so the
+    handed-over bindings sit after everything bound here and come off first.
     """
     if _already_bound(scope):
         return []
@@ -505,6 +571,10 @@ def _bind(scope: _RunnerScope, states: tuple[tuple[Any, OperationState], ...]) -
             bindings.append(_Binding(carrier, carrier.set(binding), binding))
             for variable, value in state.resumed_bindings():
                 bindings.append(_Binding(variable, variable.set(value), None))
+        if registrar:
+            bindings.append(
+                _Binding(_RESUME_REGISTRARS, _RESUME_REGISTRARS.set(bindings), None),
+            )
     except BaseException:
         _unbind(bindings)
         raise
@@ -547,13 +617,39 @@ def _unbind(bindings: list[_Binding]) -> None:
     for binding in reversed(bindings):
         if binding.lease is not None:
             binding.lease.close()
-        _reset_binding(binding.variable, binding.token)
+        if binding.adopted:
+            _reset_adopted_binding(binding.variable, binding.token)
+        else:
+            _reset_binding(binding.variable, binding.token)
+
+
+def _reset_adopted_binding(variable: ContextVar[Any], token: Token[Any]) -> None:
+    """Take back a binding this scope adopted, restoring its exact predecessor.
+
+    The token was made in this task, so the reset belongs here and restores
+    whatever the caller had - the enclosing operation's value for a stream
+    driven inside another operation, and nothing bound for an ordinary caller.
+
+    Already used is the one tolerated answer, and it means the scope that armed
+    the value also ENDED it inside this same resume: a streamed operation whose
+    whole life fits in one frame arms and disarms between the same pair of
+    ``yield``s. The variable is already back at the value this reset would put
+    there, so there is nothing left to do and nothing wrong.
+    """
+    # RuntimeError: the arming scope ended inside this one and reset it already.
+    with contextlib.suppress(RuntimeError):
+        variable.reset(token)
 
 
 @contextlib.contextmanager
-def _bound(scope: _RunnerScope, states: tuple[tuple[Any, OperationState], ...]) -> Iterator[None]:
+def _bound(
+    scope: _RunnerScope,
+    states: tuple[tuple[Any, OperationState], ...],
+    *,
+    registrar: bool = False,
+) -> Iterator[None]:
     """Hold ``scope`` and ``states`` bound for the body."""
-    bindings = _bind(scope, states)
+    bindings = _bind(scope, states, registrar=registrar)
     try:
         yield
     finally:
@@ -739,7 +835,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         stream, or closes it is the transport's, and every binding the previous
         frame made lives in a context that task does not have.
         """
-        with _bound(self._scope(), self._operation_states):
+        with _bound(self._scope(), self._operation_states, registrar=True):
             yield
 
     def resumed_stream(self, source: Any) -> _ResumedStream:

@@ -51,7 +51,11 @@ from django_strawberry_framework.extensions.operation_state import (
 )
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.optimizer._context import active_optimizer, optimizer_value
-from django_strawberry_framework.resource_policy import armed_resource_policy
+from django_strawberry_framework.resource_policy import (
+    ResourcePolicy,
+    armed_resource_policy,
+    policy_from_info,
+)
 
 
 @strawberry.type
@@ -977,7 +981,12 @@ def test_a_nested_runner_knows_it_is_inside_another_operation():
 _STREAM_OPTIMIZER = DjangoOptimizerExtension()
 
 
-def _ticking_schema(seen, frames=3, extensions=()):
+def _ticking_schema(
+    seen,
+    frames=3,
+    extensions=(),
+    rows=None,
+):
     """A subscription whose resolver records what each frame is bound to."""
 
     @strawberry.type
@@ -1003,6 +1012,7 @@ def _ticking_schema(seen, frames=3, extensions=()):
         query=_Query,
         subscription=TickingSubscription,
         extensions=list(extensions),
+        **({} if rows is None else {"resource_policy": ResourcePolicy(max_list_rows=rows)}),
     )
 
 
@@ -1159,6 +1169,124 @@ async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operati
     assert seen["closed"] is True
     assert read["armed"] is None
     assert read["nested_scope"].held() is None
+
+
+def _armed_rows():
+    """The ``max_list_rows`` armed in this task right now, or ``None``."""
+    armed = armed_resource_policy()
+    return None if armed is None else armed.max_list_rows
+
+
+@pytest.mark.asyncio
+async def test_a_paused_stream_leaves_no_binding_in_the_task_that_drove_it():
+    """A frame is handed over, and the operation is not.
+
+    The budget is armed DURING the first frame, so a resume that bound only what
+    was registered before it started would have no token for it and would leave
+    it set in the driving task. Between frames that task is not driving any
+    operation, and an unrelated call made there has to be answered by the
+    context it was handed rather than by a paused stream's ceiling.
+    """
+    seen: dict = {"rows": []}
+    schema = _ticking_schema(seen, rows=7)
+    stream = await schema.subscribe("subscription { ticks }")
+    strict = SimpleNamespace(context={})
+
+    assert _armed_rows() is None
+    first = await stream.__anext__()
+    assert first.data == {"ticks": "tick-0"}
+    assert _armed_rows() is None
+    assert operation_is_nested() is False
+    assert policy_from_info(strict).max_list_rows == ResourcePolicy().max_list_rows
+
+    second = await stream.__anext__()
+    assert second.data == {"ticks": "tick-1"}
+    assert _armed_rows() is None
+    assert seen["rows"] == [(False, True, True), (False, True, True)]
+
+    await stream.aclose()
+    assert _armed_rows() is None
+
+
+@pytest.mark.asyncio
+async def test_two_streams_interleaved_in_one_task_each_keep_their_own_budget():
+    """Frames from two operations alternate in one task, and neither leaks into it.
+
+    Each resolver has to see its own ceiling, the caller has to see none between
+    any two frames, and closing one stream must not change what the other's next
+    frame is bounded by.
+    """
+    narrow: dict = {"rows": []}
+    wide: dict = {"rows": []}
+    narrow_stream = await _ticking_schema(narrow, rows=3).subscribe("subscription { ticks }")
+    wide_stream = await _ticking_schema(wide, rows=9).subscribe("subscription { ticks }")
+
+    await narrow_stream.__anext__()
+    assert _armed_rows() is None
+    await wide_stream.__anext__()
+    assert _armed_rows() is None
+    await narrow_stream.__anext__()
+    assert _armed_rows() is None
+
+    await wide_stream.aclose()
+    third = await narrow_stream.__anext__()
+
+    assert third.data == {"ticks": "tick-2"}
+    assert _armed_rows() is None
+    await narrow_stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_driven_inside_an_operation_restores_the_outer_budget():
+    """Between inner frames the caller gets its enclosing operation back, not nothing.
+
+    Clearing the variable on the way out of a resume would lose the outer
+    operation's budget for the rest of the outer request; leaving the inner
+    one bound would answer the outer request with the inner ceiling. The resume
+    restores the exact predecessor in the task it is running in.
+    """
+    inner: dict = {"rows": []}
+    inner_schema = _ticking_schema(inner, rows=7)
+    between: list = []
+
+    @strawberry.type
+    class DrivingQuery:
+        @strawberry.field
+        async def drive(self) -> str:
+            """Drive an inner stream and record what this task reads between frames."""
+            stream = await inner_schema.subscribe("subscription { ticks }")
+            for _ in range(2):
+                await stream.__anext__()
+                between.append(_armed_rows())
+            await stream.aclose()
+            between.append(_armed_rows())
+            return "driven"
+
+    outer = DjangoSchema(query=DrivingQuery, resource_policy=ResourcePolicy(max_list_rows=9))
+    result = await outer.execute("{ drive }")
+
+    assert result.errors is None
+    assert between == [9, 9, 9]
+
+
+@pytest.mark.asyncio
+async def test_a_child_started_after_a_frame_was_yielded_copies_no_live_budget():
+    """Transport code between frames is where a background job is started from.
+
+    Its context is a copy of the driving task's, so anything the resume left
+    bound there travels with it - and a job that outlived nothing at all would
+    be bounded by a request still in flight.
+    """
+    seen: dict = {"rows": []}
+    schema = _ticking_schema(seen, rows=7)
+    stream = await schema.subscribe("subscription { ticks }")
+
+    await stream.__anext__()
+    copied = contextvars.copy_context()
+
+    assert copied.run(_armed_rows) is None
+    assert copied.run(operation_is_nested) is False
+    await stream.aclose()
 
 
 # ---------------------------------------------------------------------------

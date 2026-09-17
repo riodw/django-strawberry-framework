@@ -99,7 +99,7 @@ from django_strawberry_framework.resource_policy import (
     validate_collection_bound,
     validate_trusted_flag,
 )
-from django_strawberry_framework.schema import _with_resource_policy_extension
+from django_strawberry_framework.schema import _consumer_extension_entries
 
 # ---------------------------------------------------------------------------
 # Construction and validation
@@ -2795,11 +2795,8 @@ async def test_the_streaming_path_carries_the_same_admission_verdict(extensions,
     schema = DjangoSchema(
         query=_StreamedQuery,
         subscription=_StreamedSubscription,
-        extensions=[
-            _StreamWitness,
-            lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=1)),
-            *extensions,
-        ],
+        resource_policy=ResourcePolicy(max_aliases=1),
+        extensions=[_StreamWitness, *extensions],
     )
     query = (
         "subscription { a: ticks b: ticks }"
@@ -3043,12 +3040,12 @@ def test_a_refused_reconstruction_leaves_an_inheriting_extension_inheriting():
     assert extension._resolved_policy().max_list_rows == 2
 
 
-def test_a_factory_entry_is_constructed_fresh_and_configured_for_every_operation():
-    """Refusing a SECOND call on one instance is not refusing construction.
+def test_a_class_entry_is_constructed_fresh_and_bounded_for_every_operation():
+    """A schema builds its own resource extension per operation, from its own record.
 
-    A factory entry is how a consumer configures an extension per operation, so
-    each operation must still get an instance of its own that accepts the policy
-    it was handed.
+    The entry is the supported spelling that declares the automatic extension,
+    and every operation still gets an instance of its own: one shared object
+    would share one set of charge counters between concurrent requests.
     """
 
     @strawberry.type
@@ -3057,20 +3054,21 @@ def test_a_factory_entry_is_constructed_fresh_and_configured_for_every_operation
         def rows(self, info: Info) -> list[str]:
             return list(bounded_rows(["a", "b", "c"], info, None))
 
-    built = []
-
-    def factory():
-        extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
-        built.append(extension)
-        return extension
-
-    schema = DjangoSchema(query=_Query, extensions=[factory])
+    schema = DjangoSchema(
+        query=_Query,
+        extensions=[DjangoResourcePolicyExtension],
+        resource_policy=ResourcePolicy(max_list_rows=1),
+    )
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
     assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
 
+    built = [
+        entry
+        for entry in schema.get_extensions(sync=True) + schema.get_extensions(sync=True)
+        if isinstance(entry, DjangoResourcePolicyExtension)
+    ]
     assert len(built) == 2
     assert built[0] is not built[1]
-    assert all(extension._policy.max_list_rows == 1 for extension in built)
 
 
 @pytest.mark.parametrize(
@@ -3078,35 +3076,34 @@ def test_a_factory_entry_is_constructed_fresh_and_configured_for_every_operation
     [DjangoResourcePolicyExtension, DjangoResourcePolicyExtension()],
     ids=["class", "instance"],
 )
-def test_a_consumer_supplied_extension_suppresses_the_automatic_one(supplied):
-    """Two copies would charge every bound twice against the same budget."""
-    assert _with_resource_policy_extension([supplied]) == ([supplied], False)
+def test_a_directly_supplied_extension_does_not_travel_as_an_entry(supplied):
+    """The schema installs its own of each kind, so keeping this one would be two."""
+    assert _consumer_extension_entries([supplied]) == ([], None)
 
 
-def test_the_extension_is_appended_as_a_class_when_absent():
-    """A class (not an instance) is what gives each request its own charge counters."""
-    assert _with_resource_policy_extension(None) == ([DjangoResourcePolicyExtension], True)
+def test_an_entry_declaring_a_policy_is_read_into_the_record():
+    """An instance built with a policy declares it; the record is where it lands."""
+    entries, declared = _consumer_extension_entries(
+        [DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=2))],
+    )
+    assert entries == []
+    assert declared == ResourcePolicy(max_list_rows=2)
 
 
-def test_extension_installation_does_not_call_consumer_iterable_truthiness():
-    """A stateful list subclass cannot suppress or break automatic installation."""
+def test_entry_normalization_does_not_call_consumer_iterable_truthiness():
+    """A stateful list subclass cannot suppress or break the read of the entries."""
 
     class _HostileTruthiness(list):
         def __bool__(self):
             raise RuntimeError("bool exploded")
 
     marker = object()
-    installed, appended = _with_resource_policy_extension(_HostileTruthiness([marker]))
-    assert installed == [marker, DjangoResourcePolicyExtension]
-    assert appended is True
+    assert _consumer_extension_entries(_HostileTruthiness([marker])) == ([marker], None)
 
 
-def test_an_unrelated_extension_is_preserved_alongside_the_appended_one():
+def test_an_unrelated_extension_is_preserved_as_an_entry():
     marker = object()
-    assert _with_resource_policy_extension([marker]) == (
-        [marker, DjangoResourcePolicyExtension],
-        True,
-    )
+    assert _consumer_extension_entries([marker]) == ([marker], None)
 
 
 def test_a_resource_rejection_is_catchable_as_a_graphql_error():

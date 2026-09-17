@@ -66,7 +66,7 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, replace
 from itertools import islice
-from typing import Any, NamedTuple
+from typing import Any
 
 from django.db.models import QuerySet
 from graphql import GraphQLError
@@ -546,19 +546,33 @@ _active_budget: ContextVar[OperationLease[_RequestBudget] | None] = ContextVar(
 )
 
 
-class _BudgetScope(NamedTuple):
-    """One armed budget's lease and the token that restores the enclosing one.
+class _BudgetScope:
+    """One armed budget's lease, the token that restores the enclosing one, and who owns it.
 
-    Both, because they answer different questions. The lease is what every
-    context holding it - this one and every copy taken from it - reads through,
-    so closing it ends the budget everywhere at once. The token is what gives
-    THIS context back whatever an enclosing operation had armed, and only this
+    The first two answer different questions. The lease is what every context
+    holding it - this one and every copy taken from it - reads through, so
+    closing it ends the budget everywhere at once. The token is what gives THIS
+    context back whatever an enclosing operation had armed, and only this
     context: a task that closes a streamed operation from elsewhere has nothing
     of its own to restore.
+
+    ``adopted`` records that something else took the token over. A streamed
+    operation arms its budget inside its first frame, and the resume driving
+    that frame takes the binding back when the frame is handed over - so the
+    binding ends there, while the budget stays armed for the frames still to
+    come. Once that has happened this scope no longer has a binding of its own
+    to end, and ending it again would be a used token rather than a restore.
+
+    ``__slots__`` and not a ``NamedTuple``: ownership is settled after the scope
+    is built, by whoever adopts it.
     """
 
-    lease: OperationLease[_RequestBudget]
-    token: Any
+    __slots__ = ("adopted", "lease", "token")
+
+    def __init__(self, lease: OperationLease[_RequestBudget], token: Any) -> None:
+        self.lease = lease
+        self.token = token
+        self.adopted = False
 
 
 def _armed_budget() -> _RequestBudget | None:
@@ -650,18 +664,36 @@ def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:
     return _BudgetScope(lease, _active_budget.set(lease))
 
 
-def budget_resume_binding(scope: Any) -> tuple[ContextVar[Any], Any]:
-    """The variable and value a streamed operation has to bind again on resume.
+def budget_resume_binding(scope: Any) -> tuple[ContextVar[Any], Any, Any]:
+    """What a streamed operation has to bind again on resume, and what armed it here.
 
     An operation's budget is armed once, in the task that started it, and a
     streamed operation's later frames run in whatever task drives them. The
-    runner re-binds this pair around every resumption
+    runner re-binds the variable and the lease around every resumption
     (``extensions/operation_state.py::OperationState.rebind_on_resume``), so a
     frame produced in a second task is bounded by the policy the request was
     admitted under rather than by the fallback. It is the same lease, so the
     close that ends the operation ends it for every task that ever bound it.
+
+    The token goes with them because the arming happens INSIDE the first frame:
+    the resume driving that frame has no binding of its own to take back, so
+    without this the budget would stay armed in the driving task after the frame
+    was handed over - an unrelated call in that task would then be answered by a
+    paused operation's ceiling rather than by its own context. The lease is the
+    operation's lifetime and the token is one task's binding of it; the resume
+    ends the second without touching the first.
     """
-    return _active_budget, scope.lease
+    return _active_budget, scope.lease, scope.token
+
+
+def adopt_budget_binding(scope: Any) -> None:
+    """Record that a resume took this scope's binding over.
+
+    Called only when a registrar actually accepted it, so an ordinary operation
+    - and a plain ``strawberry.Schema``, which has no runner at all - still ends
+    its own binding in :func:`end_resource_budget`.
+    """
+    scope.adopted = True
 
 
 def armed_resource_policy() -> ResourcePolicy | None:
@@ -730,8 +762,14 @@ def end_resource_budget(scope: Any) -> None:
     by another variable, which is this module's bookkeeping gone wrong rather
     than a fact about where teardown ran, so it is re-raised; a reused token is
     ``RuntimeError`` and is not caught at all.
+
+    An adopted scope has no local half left to do: the resume that took the
+    binding over ended it when it handed its frame back
+    (:func:`adopt_budget_binding`), and the close is the whole of what remains.
     """
     scope.lease.close()
+    if scope.adopted:
+        return
     try:
         _active_budget.reset(scope.token)
     except ValueError:

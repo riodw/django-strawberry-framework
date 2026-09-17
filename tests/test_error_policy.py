@@ -70,7 +70,6 @@ from django_strawberry_framework.extensions.error_policy import (
     schema_error_policy,
 )
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
-from django_strawberry_framework.schema import _with_error_policy_extension
 
 _SENSITIVE = "standalone schema secret /srv/private/standalone.key"
 
@@ -265,24 +264,31 @@ def test_an_invalid_policy_fails_the_deployment_at_schema_construction():
         DjangoSchema(query=_Query, error_policy={"nope": 1})
 
 
-def test_the_error_policy_extension_is_installed_at_index_zero():
+def test_the_error_policy_extension_runs_first_in_every_chain():
     """Position is the contract, not a detail (spec-048 Decision 10).
 
     ``on_operation`` teardowns unwind LIFO, so the FIRST-listed extension tears
     down LAST - and masking must be last, after every extension that reads
-    ``original_error`` has had its turn. The resource policy's append is asserted
-    alongside it, because the two directions are what make the rule ("put the
-    extension where its own half of the lifecycle runs last") legible: a future
-    refactor that tidies them into a symmetric append fails here rather than
-    silently emptying the debug payload's exception rows.
+    ``original_error`` has had its turn. The resource policy's position is
+    asserted alongside it, because the two directions are what make the rule
+    ("put the extension where its own half of the lifecycle runs last")
+    legible: a future refactor that tidies them into a symmetric append fails
+    here rather than silently emptying the debug payload's exception rows.
     """
     schema = DjangoSchema(query=_Query)
-    assert schema.extensions[0] is DjangoErrorPolicyExtension
-    assert schema.extensions[-1] is DjangoResourcePolicyExtension
+    resolved = schema.get_extensions(sync=True)
+    assert isinstance(resolved[0], DjangoErrorPolicyExtension)
+    assert isinstance(resolved[-2], DjangoResourcePolicyExtension)
 
 
-def test_a_callable_policy_entry_suppresses_the_auto_policy_at_runtime():
-    """A factory-produced policy is the consumer's one explicit policy entry."""
+def test_a_callable_policy_entry_cannot_become_the_masking_authority():
+    """What a factory returns next request is decided after the entry was accepted.
+
+    A mutable factory can hand back the real extension for one operation and a
+    subclass whose ``on_operation`` does nothing for the next; both answer every
+    inheritance check and only one masks. The schema installs its own masking
+    extension per operation and refuses a resolved member claiming that role.
+    """
 
     class _FactoryPolicy(DjangoErrorPolicyExtension):
         pass
@@ -291,13 +297,12 @@ def test_a_callable_policy_entry_suppresses_the_auto_policy_at_runtime():
         return _FactoryPolicy()
 
     schema = DjangoSchema(query=_Query, extensions=[factory])
-    resolved = schema.get_extensions(sync=True)
-    policies = [
-        extension for extension in resolved if isinstance(extension, DjangoErrorPolicyExtension)
-    ]
+    result = schema.execute_sync("{ ok }")
 
-    assert len(policies) == 1
-    assert isinstance(policies[0], _FactoryPolicy)
+    assert result.data is None
+    assert [error.extensions for error in result.errors] == [
+        {"code": "SCHEMA_CONFIGURATION_UNAVAILABLE"},
+    ]
 
 
 def test_callable_policy_and_debug_entries_preserve_debug_exception_capture():
@@ -322,48 +327,33 @@ def test_a_consumer_extension_is_prepended_behind_the_policy_not_in_front_of_it(
         """A consumer extension with no behavior, present only to hold a position."""
 
     schema = DjangoSchema(query=_Query, extensions=[_ConsumerExtension])
-    assert list(schema.extensions) == [
-        DjangoErrorPolicyExtension,
-        _ConsumerExtension,
-        DjangoResourcePolicyExtension,
+    assert list(schema.extensions) == [_ConsumerExtension]
+    assert [type(entry).__name__ for entry in schema.get_extensions(sync=True)] == [
+        "DjangoErrorPolicyExtension",
+        "_ConsumerExtension",
+        "DjangoResourcePolicyExtension",
+        "_AdmissionGuard",
     ]
 
 
-def test_a_consumer_supplied_policy_entry_suppresses_the_prepend_and_keeps_its_position():
-    """A consumer who placed the extension themselves gets exactly their entry.
+def test_a_consumer_supplied_policy_entry_declares_the_automatic_one():
+    """A consumer who names the extension gets it, and gets exactly one of it.
 
     A second copy would mask an already-masked error and mint a SECOND
     correlation id for it, so the client's id would not be the one in the log
-    that carries the traceback. The consumer's chosen index survives, which is
-    the whole reason they supplied the entry.
+    that carries the traceback. The entry declares the extension the schema
+    installs anyway rather than adding another, and the consumer's own
+    neighbours keep their order.
     """
-
-    class _ConsumerPolicyExtension(DjangoErrorPolicyExtension):
-        """A consumer subclass, so the suppression check is by class not identity."""
 
     class _Other(strawberry.extensions.SchemaExtension):
         """A neighbour, so "kept its position" is a real claim."""
 
-    schema = DjangoSchema(query=_Query, extensions=[_Other, _ConsumerPolicyExtension])
-    assert list(schema.extensions) == [
-        _Other,
-        _ConsumerPolicyExtension,
-        DjangoResourcePolicyExtension,
-    ]
+    schema = DjangoSchema(query=_Query, extensions=[_Other, DjangoErrorPolicyExtension])
+    assert list(schema.extensions) == [_Other]
     resolved = schema.get_extensions(sync=True)
     assert sum(isinstance(item, DjangoErrorPolicyExtension) for item in resolved) == 1
-
-
-def test_an_instance_entry_also_suppresses_the_prepend():
-    """The suppression check reads an INSTANCE entry, not only a class entry.
-
-    Called against ``_with_error_policy_extension`` directly rather than through
-    ``DjangoSchema``: Strawberry deprecates instance entries in ``extensions=[...]``
-    and this suite runs warnings as errors, so no schema can be built with one.
-    The install helper is what decides suppression either way.
-    """
-    installed = DjangoErrorPolicyExtension()
-    assert _with_error_policy_extension([installed]) == [installed]
+    assert isinstance(resolved[1], _Other)
 
 
 # ---------------------------------------------------------------------------

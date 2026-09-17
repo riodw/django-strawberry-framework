@@ -54,9 +54,10 @@ from typing import Any
 
 import strawberry
 from django.db import transaction
-from graphql import GraphQLError
+from graphql import GraphQLError, parse
 from graphql.execution.execute import ExecutionContext
 from strawberry.extensions.base_extension import SchemaExtension
+from strawberry.types.graphql import OperationType
 from strawberry.utils.inspect import in_async_context
 
 from . import logger
@@ -378,17 +379,23 @@ SCHEMA_CONFIGURATION_ERROR_CODE = "SCHEMA_CONFIGURATION_UNAVAILABLE"
 class _SchemaEnforcement:
     """What one ``DjangoSchema`` construction settled, held where no name on it reaches.
 
-    The two resolved policies, the record of which enforcement extensions this
-    constructor had to install itself, and whether the base constructor has
-    settled the extension configuration yet. Every field is a policy of
-    primitives or a flag, so the record points at nothing: it can be held for
-    the schema without keeping the schema alive.
+    The two resolved policies - which is the whole of what enforces an
+    operation on this schema - and whether the base constructor has settled the
+    extension configuration yet. Every field is a policy of primitives or a
+    flag, so the record points at nothing: it can be held for the schema
+    without keeping the schema alive.
+
+    **The enforcement extensions are built from this record and from nothing
+    else.** They are not entries in the configuration a consumer supplies, so
+    no object a consumer can still reach decides what the next operation is
+    bounded by or whether its unexpected exceptions are masked. Accepting an
+    entry proves which object a schema was configured with; it cannot prove
+    what that object will DO on the operation after this one, and a factory is
+    consumer code that may answer differently every time it is called.
     """
 
     resource_policy: ResourcePolicy
     error_policy: ErrorPolicy
-    auto_resource_extension: bool
-    auto_error_extension: bool
     extensions_settled: bool = False
 
 
@@ -446,15 +453,12 @@ _SCHEMA_EXTENSIONS: PrivateMembership[Any] = PrivateMembership("_django_extensio
 #: The record answered for a schema that never completed ``DjangoSchema.__init__``
 #: - a subclass that skipped ``super().__init__``, or an object whose
 #: construction raised. Such a schema declared nothing, so the package defaults
-#: bound its requests and the masking error policy applies, and both extensions
-#: count as automatic so a consumer entry still wins the deduplication. This is
-#: not a fallback for a configuration that was tampered with: a settled record
-#: cannot go missing while its schema is alive.
+#: bound its requests and the masking error policy applies. This is not a
+#: fallback for a configuration that was tampered with: a settled record cannot
+#: go missing while its schema is alive.
 _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
     resource_policy=DEFAULT_RESOURCE_POLICY,
     error_policy=DEFAULT_ERROR_POLICY,
-    auto_resource_extension=True,
-    auto_error_extension=True,
 )
 
 
@@ -479,33 +483,99 @@ _UNRESOLVED_CHAIN = (
 )
 
 
+#: The document a refused operation is given in place of the one that arrived,
+#: one per operation type. Each is anonymous and parsed once, at import: the
+#: refusal runs no parser on a request, and an operation type the caller did not
+#: allow is refused by upstream before it can read the refusal, so the type is
+#: chosen from what the transport allows - a subscription transport allows
+#: exactly one. Nothing validates or executes them, so one object answers every
+#: refused request of its type.
+_REFUSAL_DOCUMENTS = {
+    OperationType.QUERY: parse("query { __typename }"),
+    OperationType.MUTATION: parse("mutation { __typename }"),
+    OperationType.SUBSCRIPTION: parse("subscription { __typename }"),
+}
+
+
+def _refuse_operation_document(execution_context: Any) -> None:
+    """Give the parse stage the package's own document, selected by nothing.
+
+    A refused schema runs nothing, and that has to include the parser: a
+    document is arbitrary-length consumer input and graphql-core parses it
+    recursively, so a deployment whose extension configuration broke would
+    otherwise answer every request with a refusal while still lexing and
+    nesting whatever was sent to it - the one shape where a broken deployment
+    would be more exposed than a working one.
+
+    The document and the operation selector are replaced together. Upstream
+    picks the operation to run by looking the REQUESTED name up in whatever
+    document the parse stage left behind, and raises when it cannot find it, so
+    a substitute document reached by a name still belonging to the request is a
+    second error over the published refusal - raised out of the synchronous API,
+    and in place of the refusal frame on a stream. Once the request's document
+    has been discarded its operation name selects nothing: the substitute
+    carries a single anonymous operation, and the selector is the package's own
+    ``None``.
+
+    The request's own text and name stay on the execution context as request
+    diagnostics for whatever transport wants to log them. Neither takes part in
+    parsing, selection, validation or execution again.
+    """
+    allowed = getattr(execution_context, "allowed_operations", ()) or ()
+    execution_context.graphql_document = next(
+        (
+            document
+            for operation_type, document in _REFUSAL_DOCUMENTS.items()
+            if operation_type in allowed
+        ),
+        _REFUSAL_DOCUMENTS[OperationType.QUERY],
+    )
+    # ``ExecutionContext.operation_name`` is a read-only property over the name
+    # the request provided, falling back to the first operation in the document
+    # once there is one. Clearing the provided name is what makes the fallback -
+    # the package's own anonymous operation - the answer.
+    execution_context._provided_operation_name = None
+
+
 class _RefusedConfiguration(SchemaExtension):
     """Refuse every operation on a schema that cannot produce its accepted chain.
 
-    Installed in place of the extension chain in two cases. The configuration a
+    Installed in place of the consumer chain in two cases. The configuration a
     schema was constructed with was replaced or deleted behind the attribute
     holding it; or the accepted entries no longer resolve into that
-    configuration - a factory raised, returned something that is not a
-    ``SchemaExtension`` instance, or the resolved population carries two of an
-    enforcement authority that admits exactly one. Running the operation anyway
-    would mean enforcing something other than what the deployment accepted, and
-    in the first case the entries that are missing are the only record of what
-    they declared.
+    configuration - a factory raised, or returned something that is not a
+    ``SchemaExtension`` instance or that claims an enforcement authority the
+    package owns. Running the operation anyway would mean enforcing something
+    other than what the deployment accepted, and in the first case the entries
+    that are missing are the only record of what they declared.
 
     The refusal is PUBLISHED as this request's pre-execution error and restated
     where execution would begin, which is the pair of seams every transport
     renders - the same shape a resource rejection uses, for the same reason: an
     exception out of a hook leaves a streaming operation with no frame at all.
+
+    It is published BEFORE the document is parsed, and the parse stage is given
+    a document of the package's own so the document that arrived never reaches a
+    parser (:func:`_refuse_operation_document`). Publishing after the parse
+    would make the refusal true only of documents that happen to be well formed:
+    a syntax error is raised out of the parse itself, and upstream answers with
+    it before any statement after this hook's ``yield`` has run. It is restated
+    after the ``yield`` as well, so a consumer parse hook the package still
+    cannot see cannot leave something else published.
     """
 
     def __init__(self, message: str) -> None:
         self._message = message
 
     def on_parse(self) -> Iterator[None]:
-        """Publish the refusal once the document exists, before anything validates it."""
+        """Answer the parse stage with the refusal instead of the document sent."""
+        execution_context = self.execution_context
+        _refuse_operation_document(execution_context)
+        execution_context.validation_rules = ()
+        execution_context.pre_execution_errors = [self._refusal()]
         yield
-        self.execution_context.validation_rules = ()
-        self.execution_context.pre_execution_errors = [self._refusal()]
+        execution_context.validation_rules = ()
+        execution_context.pre_execution_errors = [self._refusal()]
 
     def on_validate(self) -> Iterator[None]:
         """Restate the refusal, before the check upstream makes inside this stage."""
@@ -525,13 +595,27 @@ class _RefusedConfiguration(SchemaExtension):
 
 
 def _refused_chain(message: str, reason: str) -> list[Any]:
-    """The only chain a refused configuration runs: mask, then refuse.
+    """The only chain a refused configuration runs: mask, refuse, and still bound.
 
-    The masking extension is kept because the refusal still travels as an
-    ordinary response and an unexpected exception from anything upstream of it
-    must not reach the client raw. Nothing else runs - no consumer hook, no
-    resolver - because what a consumer entry would enforce is exactly what could
-    not be established.
+    Both package authorities are kept. The masking extension is kept because the
+    refusal still travels as an ordinary response and an unexpected exception
+    from anything upstream of it must not reach the client raw. The resource
+    extension is kept because a refusal published at the parse stage is a
+    statement about a document that already arrived: its pre-parse token and
+    depth scan is the only thing standing between an unauthenticated caller and
+    graphql-core's recursive parser, and a deployment whose extension
+    configuration broke would otherwise have traded "every operation fails
+    closed" for an endpoint with no ceiling on what it accepts. Both are built
+    from this schema's own record (:class:`_SchemaEnforcement`), which is the
+    one configuration still known to be the accepted one.
+
+    Nothing else runs - no consumer hook, no resolver - because what a consumer
+    entry would enforce is exactly what could not be established.
+
+    The refusal sits between them so that the parse stage's LAST word is the
+    configuration code: hooks tear down in reverse, so a document charge that
+    rejects the package's own substitute document cannot answer for a request
+    the schema is refusing outright.
 
     ``reason`` names the object or the population that failed, for the
     deployment's own logs. It never reaches ``message``: a factory's exception
@@ -539,7 +623,11 @@ def _refused_chain(message: str, reason: str) -> list[Any]:
     the wire gets the stable code instead.
     """
     logger.error("Refusing every operation on this schema: %s", reason)
-    return [DjangoErrorPolicyExtension(), _RefusedConfiguration(message)]
+    return [
+        DjangoErrorPolicyExtension(),
+        _RefusedConfiguration(message),
+        DjangoResourcePolicyExtension(),
+    ]
 
 
 class DjangoSchema(strawberry.Schema):
@@ -558,24 +646,36 @@ class DjangoSchema(strawberry.Schema):
     package defaults apply. The resolved object is validated at construction - an
     invalid bound fails the deployment at startup, not on a request - is exposed
     as ``schema.resource_policy``, and is enforced by
-    ``extensions/resource_policy.py::DjangoResourcePolicyExtension``, which this
-    constructor appends unless the consumer already supplied one. A schema built
-    through this class is therefore bounded with no opt-in boilerplate, which is
-    the whole point: an endpoint whose only limiter is one a consumer remembered
-    to install is an endpoint with no limiter.
+    ``extensions/resource_policy.py::DjangoResourcePolicyExtension``, which every
+    operation's chain begins and ends with whatever the consumer configured. A
+    schema built through this class is therefore bounded with no opt-in
+    boilerplate, which is the whole point: an endpoint whose only limiter is one
+    a consumer remembered to install is an endpoint with no limiter.
 
     **The production error policy is resolved here too, and by the same rule.**
     ``error_policy=`` accepts an ``ErrorPolicy`` or a mapping of option names to
     values; omitted, the ``DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]`` setting
     and then the package defaults apply. It is validated at construction, exposed
     as ``schema.error_policy``, and enforced by
-    ``extensions/error_policy.py::DjangoErrorPolicyExtension``, which this
-    constructor PREPENDS unless the consumer already supplied one - the position
-    is load-bearing, see ``_with_error_policy_extension``. Under
-    ``settings.DEBUG = False`` an unexpected resolver or hook exception therefore
-    reaches the client as a stable message plus a correlation identifier rather
-    than as whatever the exception happened to say. Opting out is explicit:
-    ``DjangoSchema(error_policy={"enabled": False})``.
+    ``extensions/error_policy.py::DjangoErrorPolicyExtension``, which is FIRST in
+    every operation's chain - the position is load-bearing, see
+    ``_admitted_chain``. Under ``settings.DEBUG = False`` an unexpected resolver
+    or hook exception therefore reaches the client as a stable message plus a
+    correlation identifier rather than as whatever the exception happened to say.
+    Opting out is explicit: ``DjangoSchema(error_policy={"enabled": False})``.
+
+    **Both authorities are the schema's, not entries in ``extensions=``.** They
+    are built per operation from the record this constructor settles, so
+    ``extensions=`` carries the consumer's own extensions and nothing else, and
+    the two arguments above are the only way to configure what enforces a
+    request. Supplying ``DjangoResourcePolicyExtension(policy=...)`` as an entry
+    still works and is read as a declaration of that policy - the entry is
+    folded into the record rather than kept - and declaring the same policy
+    twice, or subclassing either enforcement extension to supply it, is refused
+    here. An entry that would decide enforcement later, rather than at the
+    construction that accepted it, is refused when the operation resolves it
+    (:meth:`get_extensions`): a factory is consumer code, and what it returns
+    next request is not something accepting it this request can answer for.
     """
 
     def __init__(
@@ -585,16 +685,22 @@ class DjangoSchema(strawberry.Schema):
         error_policy: ErrorPolicy | Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        resolved_resource = resolve_resource_policy(resource_policy)
+        entries, declared_resource = _consumer_extension_entries(kwargs.get("extensions"))
+        if declared_resource is not None and resource_policy is not None:
+            raise ConfigurationError(
+                "A schema's resource policy is declared once. This one is declared "
+                "twice - by DjangoSchema(resource_policy=...) and by a "
+                "DjangoResourcePolicyExtension(policy=...) entry - and the two "
+                "declarations are not composable into one ceiling. Keep the "
+                "resource_policy= argument.",
+            )
+        resolved_resource = resolve_resource_policy(
+            resource_policy if declared_resource is None else declared_resource,
+        )
         resolved_error = resolve_error_policy(error_policy)
         if kwargs.get("execution_context_class") is None:
             kwargs["execution_context_class"] = DjangoMutationExecutionContext
-        extensions, auto_resource = _with_resource_policy_extension(kwargs.get("extensions"))
-        auto_error = not any(
-            _extension_entry_matches(extension, DjangoErrorPolicyExtension)
-            for extension in extensions
-        )
-        kwargs["extensions"] = _with_error_policy_extension(extensions)
+        kwargs["extensions"] = entries
         if _SCHEMA_ENFORCEMENT.settled(self):
             # A constructed schema is reachable from every resolver it serves,
             # and so is its ``__init__``. Running it again would replace the
@@ -615,27 +721,26 @@ class DjangoSchema(strawberry.Schema):
             _SchemaEnforcement(
                 resource_policy=resolved_resource,
                 error_policy=resolved_error,
-                auto_resource_extension=auto_resource,
-                auto_error_extension=auto_error,
             ),
         )
         super().__init__(*args, **kwargs)
 
     @property
     def extensions(self) -> tuple[Any, ...]:
-        """The extension configuration this schema was accepted with.
+        """The CONSUMER extension configuration this schema was accepted with.
 
-        Not read from an instance attribute, and for the reason the policies
-        are not read from one either. ``strawberry.Schema.get_extensions`` builds every operation's
-        extension list out of this, and ``info.schema`` puts it in reach of
-        every resolver: as an ordinary attribute it is the seam that decides
-        what enforces the NEXT request. Assigning a list carrying a
-        ``DjangoResourcePolicyExtension`` with a wider policy of its own
-        nominates a new enforcement authority, and assigning an empty one leaves
-        a bounded schema running with no budget and no masking at all - either
-        one for the life of the process, not for the operation that did it.
-        Deduplication and presence checks cannot tell those lists apart from a
-        configured one, because by then they are the configuration.
+        The package's own enforcement extensions are not in it and never were
+        an entry: they are built per operation from the accepted record
+        (:func:`_admitted_chain`), so an operation is bounded and masked whatever
+        this answers with.
+
+        What it does decide is which consumer extensions run, and it is not read
+        from an instance attribute for the reason the policies are not read from
+        one either. ``strawberry.Schema.get_extensions`` builds every operation's
+        extension list out of this, and ``info.schema`` puts it in reach of every
+        resolver: as an ordinary attribute it is the seam that decides what runs
+        in the NEXT request, and a write to it is for the life of the process
+        rather than for the operation that did it.
 
         Reading is unchanged, and answers with the entries construction
         accepted rather than with whatever the attribute holding them carries
@@ -689,30 +794,6 @@ class DjangoSchema(strawberry.Schema):
                     "SchemaExtension subclass, an instance of one, or a callable that "
                     f"returns one. {describe_value(entry)} is none of those.",
                 )
-        # Two entries of one enforcement kind are refused HERE when they can be
-        # told apart without running anything - a class or an instance names its
-        # type. Each arms its own scope over the whole operation and the last one
-        # to arm is what every seam reads, so which of two policies bounds the
-        # request would be decided by the order they were listed in. That is a
-        # configuration with two answers rather than a preference, and the
-        # deployment is told at the construction that supplied it. An opaque
-        # factory cannot be classified without calling it, which is what
-        # :meth:`DjangoSchema.get_extensions` is for.
-        for extension_type, kind in (
-            (DjangoResourcePolicyExtension, "resource-policy"),
-            (DjangoErrorPolicyExtension, "error-policy"),
-        ):
-            supplied = [
-                entry for entry in value if _extension_entry_matches(entry, extension_type)
-            ]
-            if len(supplied) > 1:
-                raise ConfigurationError(
-                    f"DjangoSchema(extensions=[...]) carries {len(supplied)} "
-                    f"{kind} extensions, and an operation can be enforced by one. "
-                    "Pass a single entry, and configure it with "
-                    f"{extension_type.__name__}(policy=...) or with the schema's own "
-                    "resource_policy= / error_policy= argument.",
-                )
         # The flag goes where no attribute answers with it, so that deleting the
         # accepted entries cannot make a schema look unconstructed and admit a
         # replacement list as its first settlement.
@@ -755,60 +836,39 @@ class DjangoSchema(strawberry.Schema):
     def get_extensions(self, sync: bool = False) -> list[Any]:
         """Resolve the accepted entries into this operation's chain, or refuse it.
 
-        Strawberry accepts classes, instances, and zero-argument factories. A
-        factory cannot be identified by type without calling it, and calling it
-        during schema construction would violate its fresh-per-operation
-        lifecycle. When the constructor had to add an automatic policy class
-        because the consumer supplied only opaque entries, runtime resolution is
-        the first safe point to see whether one of those entries produced an
-        explicit policy extension of that kind. If so, the automatic entry is
-        removed and every consumer entry keeps its place and its order.
+        The chain is this schema's two enforcement authorities with the
+        consumer's resolved extensions between them. Both authorities are built
+        here, from the private record this schema was constructed with
+        (:class:`_SchemaEnforcement`), and neither is an entry a consumer
+        supplied: the error policy tears down last, so it is first, and the
+        resource policy sets up last, so it is last but for the guard behind it.
 
-        BOTH policies are deduplicated here, on the same terms. A second
-        resource-policy extension is not a cosmetic duplicate: each one arms its
-        own budget over the whole operation, the last one armed is what
-        ``resource_policy.py::policy_from_info`` and ``check_deadline`` answer
-        with, and the automatic entry is appended AFTER the consumer's, so a
-        consumer who configured a narrow policy through a factory would get the
-        package defaults enforced at every resolve-time bound while their own
-        policy still charged the document - a split authority whose looser half
-        wins exactly where the rows are.
+        **An enforcement authority is not something an extension entry can
+        claim.** An accepted entry proves which object this schema was
+        configured with, and for an inert extension that is the whole question.
+        For the two authorities it is not: a factory is consumer code, it is
+        handed back to every resolver through ``info.schema.extensions``, and
+        what it returns on the NEXT operation is decided after this one. A
+        stateful factory widened by a resolver, a closure over a mutable cell, a
+        singleton selector that changes which object it hands out, and a
+        subclass overriding the one hook that masks or charges are all the same
+        defect, and identity evidence about the entry answers none of them. So
+        the configuration seams are ``resource_policy=`` and ``error_policy=``,
+        which canonicalize into a record of primitives at construction, and a
+        resolved member claiming either role is refused rather than admitted.
 
-        Which resolved instance is the automatic one follows from where the
-        constructor put it: the error-policy entry is PREPENDED, so it is the
-        first of its kind, and the resource-policy entry is APPENDED, so it is
-        the last.
+        Strawberry accepts classes, instances, and zero-argument factories, and
+        every one of those remains supported for an ordinary consumer extension
+        - the optimizer's documented singleton-in-a-factory included. A factory
+        cannot be identified by type without calling it, and calling it during
+        schema construction would violate its fresh-per-operation lifecycle, so
+        what a factory PRODUCES can only be admitted here.
 
-        What comes back always ENFORCES, and nothing here has to put an
-        enforcement entry back to make that true: the entries resolved are the
-        ones :attr:`extensions` settled at construction, and the constructor put
-        both of the package's own into that configuration. Deduplication decides
-        only which of two policy extensions of a kind survives.
-
-        The list ends with a package-owned guard rather than with a consumer
-        entry. Upstream decides whether to execute from inside the validation
-        stage, so the operation's published rejection has to survive the last
-        validation hook to set up; appending answers for every consumer entry
-        without moving any of them, which is what keeps a supported validation
-        cache working wherever the consumer put it.
-
-        A schema that DID settle a configuration and can no longer answer with
-        it is the one case nothing is resolved for. An accepted entry is the
-        only record of what that extension declared - a factory's policy was
-        never seen by this package at all - so an entry that no longer exists
-        leaves nothing to resolve in its place: falling back to this schema's
-        own policy would answer a lost entry with a budget the deployment never
-        chose, and the entries that replaced it are ones no construction
-        accepted. The operation is refused instead.
-
-        **Resolution is the admission boundary for what the entries PRODUCE**,
-        and it is one transaction: calling the factories, typing what they
-        returned, and counting the enforcement authorities among them all
-        happen here, before any of it reaches Strawberry. Construction can
-        answer for the entries themselves and nothing more - a factory is opaque
-        until it runs, and running one at construction is the one thing a
-        per-operation factory must not have done to it - so this is where the
-        other half is settled:
+        **Resolution is that admission boundary**, and it is one transaction:
+        calling the factories, typing what they returned, and checking what
+        those members claim all happen here, before any of it reaches
+        Strawberry. Construction can answer for the entries themselves and
+        nothing more, so this is where the other half is settled:
 
         - A factory that RAISES is refused rather than allowed to escape. It
           escapes from here, which is outside the block upstream converts into a
@@ -819,16 +879,23 @@ class DjangoSchema(strawberry.Schema):
           ``execution_context`` on whatever came back, so an integer, a bare
           object or a class produces an ``AttributeError`` deep in the engine,
           again outside every seam this package masks or refuses at.
-        - Two resolved extensions of one enforcement kind are refused. Each arms
-          its own scope over the whole operation and the last one armed is what
-          every bound, every mask and every deadline check reads, so the order
-          two entries were listed in would decide which policy the request is
-          held to. Neither first nor last is a rule a deployment can have meant;
-          an ambiguous authority is a configuration error, and composing them
-          implicitly would invent a policy nobody wrote.
+        - A member of either enforcement kind is refused, subclasses included.
+          One class can inherit from both, in which case ordinary method
+          resolution runs one of two colliding hooks and the other authority is
+          present in name only; and a single-role subclass can override the hook
+          that does the work while answering every inheritance check correctly.
+          Neither is a configuration a deployment can have meant, and neither is
+          distinguishable from the real thing by anything but exact type.
 
-        Nothing is resolved twice to establish any of it: the factories run once,
-        through upstream, and every check reads the members that came back.
+        A schema that DID settle a configuration and can no longer answer with
+        it is the one case nothing is resolved for. An accepted entry is the
+        only record of what that extension declared, so an entry that no longer
+        exists leaves nothing to resolve in its place and the operation is
+        refused instead.
+
+        Nothing is resolved twice to establish any of it: the factories run
+        once, through upstream, and every check reads the members that came
+        back.
         """
         enforcement = _enforcement(self)
         if enforcement.extensions_settled and _SCHEMA_EXTENSIONS.recall(self) is None:
@@ -839,9 +906,15 @@ class DjangoSchema(strawberry.Schema):
         try:
             resolved = super().get_extensions(sync=sync)
         except Exception as exc:
+            # ``describe_value`` and not ``{exc!r}``: the object being rendered
+            # is a consumer exception raised by a consumer factory, and its
+            # ``__repr__`` is as much consumer code as the factory was. An
+            # f-string here would let it raise while the containment result is
+            # being built, replacing the refusal with the very exception the
+            # refusal exists to keep off the wire.
             return _refused_chain(
                 _UNRESOLVED_CHAIN,
-                f"resolving the accepted extension entries raised {exc!r}",
+                f"resolving the accepted extension entries raised {describe_value(exc)}",
             )
         for member in resolved:
             if not _is_extension(member, SchemaExtension):
@@ -850,22 +923,14 @@ class DjangoSchema(strawberry.Schema):
                     f"a resolved extension entry is {describe_value(member)}, "
                     "which is not a SchemaExtension instance",
                 )
-        if enforcement.auto_error_extension:
-            resolved = _without_automatic_policy(
-                resolved,
-                DjangoErrorPolicyExtension,
-                automatic=0,
-            )
-        if enforcement.auto_resource_extension:
-            resolved = _without_automatic_policy(
-                resolved,
-                DjangoResourcePolicyExtension,
-                automatic=-1,
-            )
-        ambiguous = _ambiguous_authority(resolved)
-        if ambiguous is not None:
-            return _refused_chain(_UNRESOLVED_CHAIN, ambiguous)
-        return [*resolved, _AdmissionGuard()]
+            claimed = _claimed_authority(member)
+            if claimed is not None:
+                return _refused_chain(
+                    _UNRESOLVED_CHAIN,
+                    f"a resolved extension entry is {describe_value(member)}, "
+                    f"which claims the {claimed} authority this schema owns",
+                )
+        return _admitted_chain(resolved)
 
     def create_extensions_runner(
         self,
@@ -938,131 +1003,176 @@ def _is_extension(extension: Any, extension_type: type) -> bool:
     """Whether a RESOLVED entry is of ``extension_type``, by its type alone.
 
     ``isinstance`` consults ``__class__``, which a consumer object answers with
-    whatever it likes - and this predicate decides which of two entries of a
-    kind survives deduplication, so an object that merely claims to be one is an
-    object that can take the surviving place from the entry actually enforcing
-    the request. ``type()`` cannot be answered.
+    whatever it likes - and this predicate decides whether a resolved member is
+    refused as a second enforcement authority, so an object that merely claims
+    not to be one would be admitted beside the authority actually enforcing the
+    request. ``type()`` cannot be answered.
     """
     return issubclass(type(extension), extension_type)
 
 
-def _without_automatic_policy(
-    resolved: list[Any],
-    extension_type: type,
-    *,
-    automatic: int,
-) -> list[Any]:
-    """Drop the automatic ``extension_type`` entry when a consumer entry resolved beside it.
+def _claimed_authority(member: Any) -> str | None:
+    """Name the enforcement role a RESOLVED member claims, or ``None`` for an ordinary one.
 
-    ``automatic`` is the position the constructor put its own entry at among the
-    resolved extensions of this type - ``0`` for a prepended one, ``-1`` for an
-    appended one - which is the only thing that distinguishes it from the
-    consumer's, both being ordinary instances by the time Strawberry has called
-    every factory. With one or none of a kind there is nothing to choose between
-    and the list is returned untouched.
-    """
-    indexes = [
-        index
-        for index, extension in enumerate(resolved)
-        if _is_extension(extension, extension_type)
-    ]
-    if len(indexes) <= 1:
-        return resolved
-    dropped = indexes[automatic]
-    return [extension for index, extension in enumerate(resolved) if index != dropped]
-
-
-def _ambiguous_authority(resolved: list[Any]) -> str | None:
-    """Say which enforcement kind the resolved chain does not have exactly one of.
-
-    ``None`` when both authorities have exactly one owner, which is what the
-    constructor guarantees for the entries it can classify: it installs its own
-    of each kind unless a consumer entry names one, and
-    :func:`_without_automatic_policy` has already dropped the automatic entry
-    where an opaque factory turned out to produce one too.
-
-    Zero is refused for the same reason two are. A schema that reaches this with
-    no resource or no error extension resolved is one whose accepted
-    configuration was never the configuration this class installs - a subclass
-    that skipped its constructor, an object whose construction raised - and its
-    operations would run unbounded or unmasked while the package's own record
-    said otherwise.
+    Both roles are checked and the first match is named, so one class inheriting
+    from both is reported rather than counted twice. What is refused is the
+    claim itself: this schema builds its own authority of each kind, so a
+    resolved member of either kind is a second one whichever way it got there.
     """
     for extension_type, kind in (
         (DjangoResourcePolicyExtension, "resource-policy"),
         (DjangoErrorPolicyExtension, "error-policy"),
     ):
-        count = sum(1 for extension in resolved if _is_extension(extension, extension_type))
-        if count != 1:
-            return (
-                f"the resolved extensions carry {count} {kind} extensions, "
-                "and an operation is enforced by one"
-            )
+        if _is_extension(member, extension_type):
+            return kind
     return None
 
 
-def _with_resource_policy_extension(extensions: Any) -> tuple[list[Any], bool]:
-    """Return ``extensions`` with the resource-policy extension appended if absent.
+def _admitted_chain(resolved: list[Any]) -> list[Any]:
+    """This schema's authorities around ``resolved``, and the guard behind them.
 
-    The extension is appended as a CLASS, which is what Strawberry wants: it
-    constructs one instance per request, so a class (or factory) is what gives
-    each operation its own charge counters. Passing an instance would share one
-    set of counters across every concurrent request on the process.
+    The error policy is FIRST and the resource policy LAST, and both positions
+    are the contract (spec-048 Decision 10). Strawberry's ``on_operation``
+    teardowns unwind LIFO, so the first-listed extension tears down last - and
+    masking must be last, after every extension that reads
+    ``GraphQLError.original_error`` has had its turn.
+    ``extensions/debug.py::DjangoDebugExtension`` is exactly such an extension
+    and is documented to be listed after any masking extension. The resource
+    policy is last for the mirror-image reason: it gates BEFORE execution, so it
+    wants to set up last, with its own budget armed around every consumer hook.
 
-    A consumer-supplied entry - class or instance - suppresses the append, so a
-    consumer who installed the extension with a policy of their own keeps exactly
-    that entry rather than getting a second copy whose charges would double-count
-    against the same bounds. A consumer who wants a different policy without
-    touching ``extensions`` passes ``DjangoSchema(resource_policy=...)``, which is
-    the supported spelling.
+    The guard goes behind every consumer entry because upstream decides whether
+    to execute from inside the validation stage, so the operation's published
+    rejection has to survive the last validation hook to set up; appending
+    answers for every consumer entry without moving any of them, which is what
+    keeps a supported validation cache working wherever the consumer put it.
 
-    A bare factory callable (``lambda: DjangoResourcePolicyExtension(...)``) is
-    opaque to this check by construction - identifying it would mean calling it
-    at schema construction, which is the one thing a per-operation factory must
-    not have done to it - so the append happens and the second flag this returns
-    says so. ``DjangoSchema.get_extensions`` is where that is settled, at the
-    first point a resolved instance can be seen.
+    Both authorities are constructed fresh per operation and read their
+    configuration from this schema, which answers from the private record. An
+    instance shared across operations would share one set of charge counters
+    between concurrent requests.
+    """
+    return [
+        DjangoErrorPolicyExtension(),
+        *resolved,
+        DjangoResourcePolicyExtension(),
+        _AdmissionGuard(),
+    ]
+
+
+def _consumer_extension_entries(extensions: Any) -> tuple[list[Any], ResourcePolicy | None]:
+    """Split ``extensions`` into the consumer's entries and the policy one of them declared.
+
+    An enforcement extension supplied directly is a CONFIGURATION statement
+    rather than a chain member: the schema installs its own of each kind on
+    every operation, so keeping the entry too would put two of a kind in the
+    chain, and keeping it INSTEAD would make the object a resolver can reach
+    through ``info.schema.extensions`` the authority for every later request.
+    So a directly supplied entry is read once, here, where it is being accepted,
+    and what it declared is folded into the schema's record; the entry itself
+    does not travel.
+
+    Only an EXACT entry can be read that way. A subclass is refused, and refused
+    at construction where it is actionable: its overrides are consumer code on
+    the one hook that charges a document or masks a result, and an override that
+    does nothing passes every check an inheritance census can make. Policy
+    customization has a seam that is not behavior -
+    ``DjangoSchema(resource_policy=...)`` and ``error_policy=`` - while an
+    unrelated consumer extension remains free to implement any hook it likes.
+
+    A bare class entry declares nothing beyond the automatic one and is simply
+    dropped; an instance declares whatever policy it was constructed with.
+    ``None`` comes back when no entry declared one, which is the ordinary case.
     """
     # Do not use truthiness to normalize the consumer's iterable.  A list
     # subclass can override ``__bool__`` (or be stateful), and extension
     # installation must not invoke that arbitrary hook before Strawberry sees
     # the actual entries.  ``None`` is the only omitted-value spelling.
-    installed = [] if extensions is None else list(extensions)
-    for extension in installed:
-        if _extension_entry_matches(extension, DjangoResourcePolicyExtension):
-            return installed, False
-    installed.append(DjangoResourcePolicyExtension)
-    return installed, True
+    supplied = [] if extensions is None else list(extensions)
+    entries: list[Any] = []
+    declared: ResourcePolicy | None = None
+    for entry in supplied:
+        role = _declared_authority(entry)
+        if role is None:
+            entries.append(entry)
+            continue
+        if role is not DjangoResourcePolicyExtension:
+            continue
+        policy = _entry_resource_policy(entry)
+        if policy is None:
+            continue
+        if declared is not None:
+            raise ConfigurationError(
+                "DjangoSchema(extensions=[...]) carries two resource-policy "
+                "extensions declaring a policy of their own, and an operation is "
+                "bounded by one. Declare it once, with "
+                "DjangoSchema(resource_policy=...).",
+            )
+        declared = policy
+    return entries, declared
 
 
-def _with_error_policy_extension(extensions: list[Any]) -> list[Any]:
-    """Return ``extensions`` with the error-policy extension PREPENDED if absent.
+def _declared_authority(entry: Any) -> type | None:
+    """The enforcement kind ``entry`` declares directly, or ``None`` for any other entry.
 
-    Prepended, not appended, and the position is the contract (spec-048
-    Decision 10). Strawberry's ``on_operation`` teardowns unwind LIFO, so the
-    first-listed extension tears down LAST - and masking must be last, after
-    every extension that reads ``GraphQLError.original_error`` has had its turn.
-    ``extensions/debug.py::DjangoDebugExtension`` is exactly such an extension
-    and is documented to be listed after any masking extension; appending here
-    would silently empty its ``exceptions`` list on any schema that installs
-    both. The resource-policy extension appends for the mirror-image reason: it
-    gates BEFORE execution, so it wants to set up last.
-
-    A consumer-supplied entry - class or instance - suppresses the prepend, so a
-    consumer who installed the extension at a position of their own keeps
-    exactly that entry rather than getting a second copy that would mask an
-    already-masked error and mint a second correlation id for it.
+    A class or an instance names its type without anything being run, which is
+    what makes this answerable at construction; a factory is opaque until it is
+    called and is left for :meth:`DjangoSchema.get_extensions`. A subclass of
+    either kind never comes back as a declaration - it is refused here.
     """
-    for extension in extensions:
-        if _extension_entry_matches(extension, DjangoErrorPolicyExtension):
-            return extensions
-    return [DjangoErrorPolicyExtension, *extensions]
+    for extension_type, kind in (
+        (DjangoResourcePolicyExtension, "resource-policy"),
+        (DjangoErrorPolicyExtension, "error-policy"),
+    ):
+        if _entry_type(entry) is extension_type:
+            return extension_type
+        if _extension_entry_matches(entry, extension_type):
+            raise ConfigurationError(
+                f"{describe_value(entry)} subclasses the package's {kind} "
+                "extension, and a schema's enforcement authority is not something "
+                "an extension entry can be. A subclass can override the hook that "
+                "does the enforcing while still answering every check for it. "
+                "Configure the policy with DjangoSchema(resource_policy=...) or "
+                "error_policy=, and give an unrelated extension its own hooks.",
+            )
+    return None
+
+
+def _entry_resource_policy(entry: Any) -> ResourcePolicy | None:
+    """The explicit policy a directly supplied resource-policy INSTANCE was built with.
+
+    ``None`` for a class entry, which was never constructed and therefore
+    declares nothing, and for an instance built without an override, which
+    declares that it inherits its schema's policy. What comes back is the
+    extension's own canonical copy, read through the private record that holds
+    it rather than off the object.
+    """
+    if isinstance(entry, type):
+        return None
+    policy = entry._policy
+    return policy if type(policy) is ResourcePolicy else None
+
+
+def _entry_type(entry: Any) -> type | None:
+    """The class an entry names - itself, or the type of the instance it is.
+
+    ``None`` when the read itself fails, which a consumer object can arrange:
+    everything downstream then treats the entry as one the package cannot
+    classify rather than letting an ``isinstance`` on consumer data raise out of
+    schema construction.
+    """
+    try:
+        return entry if isinstance(entry, type) else type(entry)
+    except Exception:
+        return None
 
 
 def _extension_entry_matches(extension: Any, extension_type: type) -> bool:
     """Match a class or instance entry without invoking opaque factories."""
+    candidate = _entry_type(extension)
+    if candidate is None:
+        return False
     try:
-        candidate = extension if isinstance(extension, type) else type(extension)
         return issubclass(candidate, extension_type)
     except Exception:
         return False

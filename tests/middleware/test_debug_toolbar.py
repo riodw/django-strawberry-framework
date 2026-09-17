@@ -1,43 +1,23 @@
-"""DebugToolbarMiddleware tests for import guards, payload injection, response rewriting, and templates.
+"""Package tests for DebugToolbarMiddleware import guards, unreachable postprocess bails, and the GraphiQL bridge template source.
 
-Placement (spec-042 Decision 9, honoring the ``test_query/README.md`` coverage
-rule): since ``0.0.14`` fakeshop's shipped settings wire the toolbar (the
-``debug_toolbar`` app, the package middleware, ``INTERNAL_IPS`` and
-``debug_toolbar_urls()``), so the toolbar-PRESENT tests that drive a real
-``/graphql/`` request now live in the live tier at
-``examples/fakeshop/test_query/test_debug_toolbar_api.py`` - the live-first
-mandate's home once a package line is reachable through the example's shipped
-configuration. THIS file keeps only what no live ``/graphql/`` request can reach:
-the soft-dependency absence matrix (a missing dependency is never a live path) and
-the coverage-only ``_postprocess`` / ``_get_payload`` branch units (streaming
-early-out, the non-object-JSON bail, the non-class ``view_class`` guard, the
-header-present ``Content-Length`` refreshes, and the untagged-JSON passthrough leak
-guard, plus malformed/undecodable declared-JSON response bails) that the real toolbar
-lifecycle does not naturally expose - driven directly against fake toolbar /
-middleware objects.
-
-The toolbar-absent path simulates absence with the importlib-compatible
-``sys.modules["debug_toolbar"] = None`` sentinel, NOT the router/DRF
-``builtins.__import__`` block (spec-042 Revision 5): ``require_debug_toolbar()``
-is a ``require_optional_module`` wrapper, i.e. an ``importlib.import_module``
-call that never consults ``builtins.__import__``, so a ``__import__`` block
-would re-import the still-installed toolbar and the raise would come from a
-later hintless statement-import. The eviction + two-sided restore discipline
-(modules AND the parent-package attribute) is unchanged from
-``tests/rest_framework/test_soft_dependency.py``.
-
-debug-toolbar 7.0.0's ``middleware`` import chain defines a Django model
-(``HistoryEntry``), so the FIRST leaf import in a process must happen while
-``"debug_toolbar"`` is in ``INSTALLED_APPS`` - the ``toolbar_leaf`` fixture
-owns that, keeping the targeted units and absence tests order-independent
-under pytest-xdist.
+Happy-path GraphiQL HTML, named JSON panel payloads (including ``has_content``-false
+``title: null`` on RedirectsPanel, callable panel title/subtitle, and the
+TemplatesPanel skip), Content-Length refresh after CommonMiddleware, introspection
+skip, panel-route JSON leak guard, and ``Content-Encoding`` early-out live in
+``examples/fakeshop/test_query/test_debug_toolbar_api.py``. What stays here has no
+wire shape: the soft-dependency absence matrix (a missing ``debug_toolbar`` is
+never a live path); ``_get_payload`` bails the real toolbar never takes (no
+``request_id``, a non-object JSON body, undecodable declared-JSON); streaming
+responses (fakeshop's GraphQL view never streams); the non-class ``view_class``
+guard (stock RequestPanel still ``AttributeError``s on a string ``view_class``
+before a 200 can land); and the copied bridge template's source forms, which no
+JS runtime in this suite executes.
 """
 
 from __future__ import annotations
 
 import contextlib
 import importlib
-import json
 import re
 import sys
 from pathlib import Path
@@ -71,19 +51,6 @@ _PARENT = "django_strawberry_framework.middleware"
 # restatement that separates the name from the constraint with a backtick or a
 # space does not match it.
 _HINT_SUBSTRING = "django-debug-toolbar>=7.0.0"
-
-# A distinctive substring of the package's appended bridge asset: present only
-# when the middleware's HTML branch fired, never in stock toolbar markup.
-_TEMPLATE_MARKER = "Response.prototype.json"
-
-
-# ---------------------------------------------------------------------------
-# Fixtures shared by the absence tests and the targeted units. The leaf's first
-# import in a process defines the ``HistoryEntry`` model, so it must happen with
-# ``"debug_toolbar"`` in ``INSTALLED_APPS`` (fakeshop ships the app, but this
-# file's tests do not assume that suite state) - the ``toolbar_leaf`` fixture
-# owns it, keeping these order-independent under pytest-xdist.
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -268,22 +235,6 @@ def test_install_hint_floor_matches_the_pyproject_dev_group_row(toolbar_leaf):
 # ---------------------------------------------------------------------------
 
 
-class _FakePanel:
-    """A minimal stand-in for a stock panel in the ``_get_payload`` units."""
-
-    def __init__(
-        self,
-        panel_id,
-        has_content,
-        title,
-        nav_subtitle,
-    ):
-        self.panel_id = panel_id
-        self.has_content = has_content
-        self.title = title
-        self.nav_subtitle = nav_subtitle
-
-
 class _FakeToolbar:
     """A protocol-complete fake toolbar for the stock ``_postprocess``.
 
@@ -306,9 +257,9 @@ def test_streaming_response_gets_no_package_mutation(middleware):
 
     Not "returns untouched" in the absolute sense: the stock postprocess runs
     first and may legitimately generate stats and headers before
-    ``response.streaming`` sends the package branch home. No real-request test
-    returns a streaming response, so this branch is unreachable through the live
-    suite.
+    ``response.streaming`` sends the package branch home. Fakeshop's GraphQL
+    view never streams, so this branch has no live sibling in
+    ``examples/fakeshop/test_query/test_debug_toolbar_api.py``.
     """
     request = RequestFactory().post("/graphql/")
     request._is_graphiql = True
@@ -319,148 +270,17 @@ def test_streaming_response_gets_no_package_mutation(middleware):
     assert b"".join(result.streaming_content) == b'{"data": 1}'
 
 
-def _html_was_appended(body):
-    """The GraphiQL HTML branch fired: the bridge asset is in the body."""
-    return _TEMPLATE_MARKER.encode() in body
-
-
-def _payload_was_injected(body):
-    """The tagged-JSON branch fired: the payload key is in the body."""
-    return b"debugToolbar" in body
-
-
-@pytest.mark.parametrize("encoding", ["gzip", "br"])
-@pytest.mark.parametrize(
-    (
-        "request_factory",
-        "content",
-        "content_type",
-        "was_mutated",
-    ),
-    [
-        (
-            lambda: RequestFactory().get("/graphql/"),
-            b"<html><body>ide</body></html>",
-            "text/html",
-            _html_was_appended,
-        ),
-        (
-            lambda: RequestFactory().post(
-                "/graphql/",
-                data='{"query": "query Q { x }"}',
-                content_type="application/json",
-            ),
-            b'{"data": {"x": 1}}',
-            "application/json",
-            _payload_was_injected,
-        ),
-    ],
-    ids=["graphiql_html_append", "operation_json_injection"],
-)
-def test_encoded_response_gets_no_package_mutation(
-    middleware,
-    request_factory,
-    content,
-    content_type,
-    was_mutated,
-    encoding,
-):
-    """The `Content-Encoding` header is the only thing holding back each mutation site.
-
-    The encoding guard sits ahead of the GraphiQL HTML append AND the tagged
-    ``application/json`` payload re-encode, so each row carries a body its own
-    mutation path would otherwise accept - plain HTML for the append, a
-    decodable JSON object for the re-encode - and drives that body through
-    ``_postprocess`` TWICE. The first drive is the row's positive control,
-    header-free, asserting the mutation actually happens; only then does the
-    header-bearing twin assert byte-identity. Without the control a row proves
-    nothing: an undecodable body would be left alone by ``_get_payload``'s own
-    response-shape bail whether or not the encoding guard existed, so it would
-    re-prove a different guard and pass with this one deleted.
-
-    Parametrized over two encodings as well as both paths, so the guard rests on
-    the header's presence rather than on one value: writing unencoded assets or
-    an unencoded JSON dump into a compressed body corrupts the response rather
-    than merely failing to instrument it.
-    """
-    control_request = request_factory()
-    control_request._is_graphiql = True
-    control = HttpResponse(content, content_type=content_type)
-    control_result = middleware._postprocess(
-        control_request,
-        control,
-        _FakeToolbar(request_id="encoded"),
-    )
-    assert was_mutated(control_result.content), (
-        "positive control did not fire: this row cannot distinguish the encoding guard"
-    )
-
-    request = request_factory()
-    request._is_graphiql = True
-    response = HttpResponse(content, content_type=content_type)
-    response["Content-Encoding"] = encoding
-
-    result = middleware._postprocess(request, response, _FakeToolbar(request_id="encoded"))
-
-    assert result is response
-    assert result.content == content
-    assert not was_mutated(result.content)
-    assert b"debugToolbar" not in result.content
-
-
-def test_unrelated_json_view_body_is_never_mutated(middleware):
-    """An untagged JSON response passes through unmutated - the leak guard (unit).
-
-    The live counterpart in
-    ``examples/fakeshop/test_query/test_debug_toolbar_api.py`` drives fakeshop's
-    real Strawberry ``/graphql/`` traffic, but fakeshop ships no NON-Strawberry
-    JSON endpoint to prove the guard against - and an implementation injecting into
-    EVERY JSON response would still pass the live HTML negatives. Driving
-    ``_postprocess`` with an untagged response (``_is_graphiql`` False, the state
-    ``process_view`` sets for any non-``BaseView``) pins the ``not is_graphiql``
-    early return on the JSON branch: the body round-trips exactly, no
-    ``debugToolbar`` key added.
-    """
-    request = RequestFactory().get("/unrelated.json")
-    request._is_graphiql = False
-    response = HttpResponse(b'{"probe": "ok"}', content_type="application/json")
-    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))
-    assert json.loads(result.content) == {"probe": "ok"}
-    assert b"debugToolbar" not in result.content
-
-
 def test_get_payload_bails_without_request_id(toolbar_leaf):
-    """No ``request_id`` -> ``None`` (the real toolbar always assigns one)."""
+    """No ``request_id`` -> ``None`` (the real toolbar always assigns one).
+
+    Live named operations in
+    ``examples/fakeshop/test_query/test_debug_toolbar_api.py`` assert a present
+    ``requestId``; this bail is the complementary absence the live toolbar
+    never takes.
+    """
     request = RequestFactory().post("/graphql/")
     response = HttpResponse(b"{}", content_type="application/json")
     assert toolbar_leaf._get_payload(request, response, _FakeToolbar(request_id=None)) is None
-
-
-def test_get_payload_panel_title_only_when_has_content(toolbar_leaf):
-    """Sibling of the missing-``request_id`` row: ``has_content``-false -> ``title``
-    None; callables are called.
-    """
-    request = RequestFactory().post("/graphql/")
-    response = HttpResponse(b"{}", content_type="application/json")
-    toolbar = _FakeToolbar(
-        request_id="riid",
-        enabled_panels=[
-            _FakePanel("QuietPanel", has_content=False, title="Quiet", nav_subtitle="quiet sub"),
-            _FakePanel(
-                "LoudPanel",
-                has_content=True,
-                title=lambda: "Loud",
-                nav_subtitle=lambda: "loud sub",
-            ),
-            _FakePanel("TemplatesPanel", has_content=True, title="Templates", nav_subtitle="t"),
-        ],
-    )
-    payload = toolbar_leaf._get_payload(request, response, toolbar)
-    assert payload["debugToolbar"]["requestId"] == "riid"
-    panels = payload["debugToolbar"]["panels"]
-    assert panels["QuietPanel"] == {"title": None, "subtitle": "quiet sub"}
-    assert panels["LoudPanel"] == {"title": "Loud", "subtitle": "loud sub"}
-    assert "TemplatesPanel" not in panels
 
 
 def test_get_payload_bails_on_non_object_json_body(toolbar_leaf):
@@ -498,10 +318,14 @@ def test_malformed_json_body_gets_no_package_rewrite(middleware, content):
 
 
 def test_process_view_tolerates_non_class_view_class(middleware):
-    """A non-class ``view_class`` -> ``False``, no ``TypeError``.
+    """A non-class ``view_class`` -> ``False``, no ``TypeError`` from ``issubclass``.
 
-    The live tests only drive real class/function views; this guard matters
-    precisely because the middleware runs for ALL global traffic.
+    Live HTML negatives in
+    ``examples/fakeshop/test_query/test_debug_toolbar_api.py`` drive real class
+    and function views. A string ``view_class`` still 500s later inside stock
+    ``RequestPanel.generate_stats`` (``get_name_from_obj`` assumes a class), so
+    the ``isinstance(view, type)`` short-circuit has no independent 200 on the
+    wire.
     """
     request = RequestFactory().get("/")
 
@@ -511,39 +335,6 @@ def test_process_view_tolerates_non_class_view_class(middleware):
     view_func.view_class = "not-a-class"
     middleware.process_view(request, view_func)
     assert request._is_graphiql is False
-
-
-def test_html_content_length_refresh_branch(middleware):
-    """HTML: a pre-set ``Content-Length`` is refreshed after the append.
-
-    The pre-set header is the point: a real Strawberry ``HttpResponse`` may
-    reach the middleware without it (Django computes it at serialization
-    time), so the header-present branch needs it planted.
-    """
-    request = RequestFactory().get("/graphql/", HTTP_ACCEPT="text/html")
-    request._is_graphiql = True
-    response = HttpResponse(b"<html><body>ide</body></html>", content_type="text/html")
-    response["Content-Length"] = len(response.content)
-    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))
-    assert _TEMPLATE_MARKER.encode() in result.content
-    assert int(result["Content-Length"]) == len(result.content)
-
-
-def test_json_content_length_refresh_branch(middleware):
-    """JSON: a pre-set ``Content-Length`` is refreshed after the re-encode."""
-    request = RequestFactory().post(
-        "/graphql/",
-        data='{"query": "query Q { x }"}',
-        content_type="application/json",
-    )
-    request._is_graphiql = True
-    response = HttpResponse(b'{"data": {"x": 1}}', content_type="application/json")
-    response["Content-Length"] = len(response.content)
-    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))
-    payload = json.loads(result.content)
-    assert payload["data"] == {"x": 1}
-    assert payload["debugToolbar"]["requestId"] == "riid"
-    assert int(result["Content-Length"]) == len(result.content)
 
 
 # ---------------------------------------------------------------------------

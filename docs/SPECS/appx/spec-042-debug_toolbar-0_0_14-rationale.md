@@ -129,9 +129,9 @@ schema-reload paragraph), the `## Test plan` fixture paragraph, Test 8, and the
 *HEAD:* `tests/middleware/` holds `__init__.py` and `test_debug_toolbar.py` only. Fakeshop's own
 `examples/fakeshop/config/urls.py` #"urlpatterns += debug_toolbar_urls()" supplies the `djdt`
 routes, so no test URLconf is needed; the live fixture reloads `config.urls` inside its
-`DEBUG=True` override instead. The JSON-leak negative that lived in that module's probe view was
-recast as a `RequestFactory` unit,
-`tests/middleware/test_debug_toolbar.py::test_unrelated_json_view_body_is_never_mutated`.
+`DEBUG=True` override instead. The JSON-leak negative that lived in that module's probe view is now a holder
+URL on a test-local URLconf,
+`examples/fakeshop/test_query/test_debug_toolbar_api.py::TestToolbarPresent.test_unrelated_json_view_body_is_never_mutated`.
 *Cause:* commit `4015442d` (Revision 9) deleted the module in the same change that wired
 fakeshop.
 *Why it mattered:* the module was named in **both** halves of the redundancy
@@ -216,8 +216,8 @@ type)` guard and `_get_payload`'s non-object-body bail), and "No other Python be
    `django_strawberry_framework/middleware/debug_toolbar.py::DebugToolbarMiddleware._postprocess`,
    which returns a response carrying that header untouched, because appending the bridge script
    to a gzipped body — or re-encoding one as JSON — would corrupt it (commit `9c868016`), pinned by
-   `tests/middleware/test_debug_toolbar.py::test_encoded_response_gets_no_package_mutation`
-   (parametrized).
+   `examples/fakeshop/test_query/test_debug_toolbar_api.py::TestToolbarPresent.test_encoded_response_gets_no_package_mutation`
+   (parametrized over both mutation sites and two encodings, via an inner stamp middleware).
 *Cause:* two post-ship hardening commits the spec never absorbed.
 *The docstring carried the same understatement, and it was a separate write set.* The module
 docstring enumerated (1) and (2) and closed "No other Python behavior differs", which understated

@@ -1,8 +1,8 @@
 """Tests for package Django middleware integrations.
 
-Middleware-specific tests live in this package, not in
-``examples/fakeshop/test_query/``: fakeshop's shipped settings deliberately do
-not install the optional toolbar app or middleware, so no live ``/graphql/``
-request through the example's own configuration can reach these lines (the
-live-first mandate's genuinely-unreachable fallback, spec-042 Decision 9).
+Toolbar-present GraphQL / panel / pass-through rows live in
+``examples/fakeshop/test_query/test_debug_toolbar_api.py`` (fakeshop ships the
+``debug_toolbar`` app, the package middleware, ``INTERNAL_IPS``, and
+``debug_toolbar_urls()``). This package keeps import-guard, unreachable-bail,
+and template-source rows no live request can express.
 """

@@ -529,7 +529,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_imports.py           # Package tests for management-command import helpers' CommandError wrapping.
 │   └── test_inspect_django_type.py  # Package tests for inspect_django_type helpers and throwaway-type branches.
 ├── middleware/    # Tests for package Django middleware integrations.
-│   └── test_debug_toolbar.py     # DebugToolbarMiddleware tests for import guards, payload injection, response rewriting, and templates.
+│   └── test_debug_toolbar.py     # Package tests for DebugToolbarMiddleware import guards, unreachable postprocess bails, and the GraphiQL bridge template source.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
@@ -774,7 +774,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_imports.py           # Package tests for management-command import helpers' CommandError wrapping.
 │   └── test_inspect_django_type.py  # Package tests for inspect_django_type helpers and throwaway-type branches.
 ├── middleware/    # Tests for package Django middleware integrations.
-│   └── test_debug_toolbar.py     # DebugToolbarMiddleware tests for import guards, payload injection, response rewriting, and templates.
+│   └── test_debug_toolbar.py     # Package tests for DebugToolbarMiddleware import guards, unreachable postprocess bails, and the GraphiQL bridge template source.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.

@@ -10,12 +10,13 @@ sends here. These tests drive fakeshop's real ``/graphql/`` URL through
 ``ensure_csrf_cookie`` decorator) and real SQL-emitting operations (through the
 real optimizer), asserting the two injections the middleware contributes.
 
-The ONE setting still overridden is ``DEBUG``: pytest-django forces the suite to
-``DEBUG=False``, and under it both ``debug_toolbar``'s ``show_toolbar`` gate AND
-``debug_toolbar_urls()`` short-circuit - so the toolbar-present group runs under
-``override_settings(DEBUG=True)`` with an always-true ``SHOW_TOOLBAR_CALLBACK``
-and reloads ``config.urls`` INSIDE the override so its DEBUG-gated ``djdt`` routes
-populate. Everything else is fakeshop's shipped configuration, unmodified.
+pytest-django forces ``DEBUG=False``, and under it both ``debug_toolbar``'s
+``show_toolbar`` gate AND ``debug_toolbar_urls()`` short-circuit - so the
+toolbar-present group runs under ``override_settings(DEBUG=True)`` with an
+always-true ``SHOW_TOOLBAR_CALLBACK``, ``RedirectsPanel`` taken out of
+``DISABLE_PANELS`` (the live ``has_content``-false surface), and ``config.urls``
+reloaded INSIDE the override so its DEBUG-gated ``djdt`` routes populate.
+Everything else is fakeshop's shipped configuration, unmodified.
 
 The dependency-absent tests and the coverage-only ``_postprocess`` /
 ``_get_payload`` unit branches no live request can reach stay package-internal in
@@ -28,8 +29,10 @@ import json
 
 import pytest
 from apps.products.services import seed_data
+from django.conf import settings
+from django.http import HttpResponse
 from django.test import Client, override_settings
-from django.urls import reverse
+from django.urls import include, path, reverse
 
 from django_strawberry_framework.testing import TestClient
 
@@ -86,6 +89,57 @@ def _show_toolbar_always(request):
     return True
 
 
+def _assert_content_length_matches_body(response):
+    """``CommonMiddleware`` sets ``Content-Length`` before the toolbar mutates the body."""
+    assert "Content-Length" in response
+    assert int(response["Content-Length"]) == len(response.content)
+
+
+def _assert_injected_panel_payload(payload):
+    """Named JSON operations carry panels, skip Templates, and null ``has_content``-false titles."""
+    toolbar_payload = payload["debugToolbar"]
+    assert toolbar_payload["requestId"]
+    panels = toolbar_payload["panels"]
+    assert panels
+    assert "TemplatesPanel" not in panels
+    assert isinstance(panels["SQLPanel"]["title"], str)
+    assert panels["SQLPanel"]["subtitle"] is not None
+    # RedirectsPanel is enabled in ``toolbar_client`` so ``has_content``-false is
+    # a real panel, not a stub: the frontend is told not to open a content area.
+    assert panels["RedirectsPanel"]["title"] is None
+    return toolbar_payload
+
+
+class _StampGzipContentEncodingMiddleware:
+    """Inner middleware that stamps ``Content-Encoding: gzip`` without compressing.
+
+    Listed after the toolbar so the toolbar's response pass sees the header. A
+    live-module class is a valid ``MIDDLEWARE`` settings string (``test_query/``
+    is on the import path).
+    """
+
+    encoding = "gzip"
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        response["Content-Encoding"] = self.encoding
+        return response
+
+
+class _StampBrotliContentEncodingMiddleware(_StampGzipContentEncodingMiddleware):
+    """The ``br`` twin: the encoding guard keys on the header's presence, not one value."""
+
+    encoding = "br"
+
+
+def _unrelated_json_view(request):
+    """A non-Strawberry JSON view: the leak guard must leave the body untouched."""
+    return HttpResponse(b'{"probe": "ok"}', content_type="application/json")
+
+
 @contextlib.contextmanager
 def _debug_toolbar_cache_state():
     """Save / clear / restore the toolbar's process-level caches (spec-042 Decision 9 hygiene).
@@ -129,7 +183,12 @@ def toolbar_client(project_schema_override):
     """
     with override_settings(
         DEBUG=True,
-        DEBUG_TOOLBAR_CONFIG={"SHOW_TOOLBAR_CALLBACK": _show_toolbar_always},
+        DEBUG_TOOLBAR_CONFIG={
+            "SHOW_TOOLBAR_CALLBACK": _show_toolbar_always,
+            # Default DISABLE_PANELS hides RedirectsPanel; enabling it is the live
+            # ``has_content``-false surface (ProfilingPanel stays off).
+            "DISABLE_PANELS": {"debug_toolbar.panels.profiling.ProfilingPanel"},
+        },
     ):
         with _debug_toolbar_cache_state():
             project_schema_override()
@@ -146,9 +205,14 @@ def stock_client():
 class TestToolbarPresent:
     """The toolbar-present group: real ``/graphql/`` traffic under ``DEBUG=True``."""
 
-    def test_graphiql_page_carries_stock_handle_and_bridge_script(self, toolbar_client):
+    @pytest.mark.parametrize(
+        "accept",
+        ["text/html", "text/html,application/xhtml+xml", "text/html;q=1.0"],
+        ids=["html", "html-xhtml", "html-q"],
+    )
+    def test_graphiql_page_carries_stock_handle_and_bridge_script(self, toolbar_client, accept):
         """The GraphiQL HTML page gets BOTH injections."""
-        response = toolbar_client.get("/graphql/", HTTP_ACCEPT="text/html")
+        response = toolbar_client.get("/graphql/", HTTP_ACCEPT=accept)
         assert response.status_code == 200
         assert _content_type(response) == "text/html"
         body = response.content.decode()
@@ -157,8 +221,7 @@ class TestToolbarPresent:
         assert 'id="djDebug"' in body
         # The package's appended template script: proves the HTML branch fired.
         assert _TEMPLATE_MARKER in body
-        if "Content-Length" in response:
-            assert int(response["Content-Length"]) == len(response.content)
+        _assert_content_length_matches_body(response)
 
     def test_no_toolbar_baseline_under_shipped_settings(self, stock_client):
         """Fakeshop's shipped wiring is INERT under ``DEBUG=False`` (production safety).
@@ -181,7 +244,11 @@ class TestToolbarPresent:
         assert 'id="djDebug"' not in body
 
     def test_named_json_operation_gets_panel_payload(self, toolbar_client):
-        """A real SQL-emitting named operation carries the injected payload."""
+        """A real SQL-emitting named operation carries the injected payload.
+
+        Includes the TemplatesPanel skip, SQLPanel's callable title/subtitle as
+        JSON strings, and RedirectsPanel ``title: null`` (``has_content`` false).
+        """
         seed_data(1)
         response = _post_graphql(toolbar_client, _TOOLBAR_ITEMS_QUERY, "ToolbarItems")
         assert response.status_code == 200
@@ -189,18 +256,8 @@ class TestToolbarPresent:
         payload = json.loads(response.content)
         # The operation's own result is intact beside the injected key.
         assert payload["data"]["allItems"]["edges"]
-        toolbar_payload = payload["debugToolbar"]
-        assert toolbar_payload["requestId"]
-        panels = toolbar_payload["panels"]
-        assert panels
-        # The SQL the operation actually emitted (the query count subtitle).
-        assert panels["SQLPanel"]["subtitle"] is not None
-        # The TemplatesPanel skip.
-        assert "TemplatesPanel" not in panels
-        # Behavior check only - the header-present refresh BRANCHES are owned by
-        # the targeted units in tests/middleware/test_debug_toolbar.py.
-        if "Content-Length" in response:
-            assert int(response["Content-Length"]) == len(response.content)
+        _assert_injected_panel_payload(payload)
+        _assert_content_length_matches_body(response)
 
     def test_introspection_query_is_skipped(self, toolbar_client):
         """No payload for ``operationName == "IntrospectionQuery"``."""
@@ -228,7 +285,8 @@ class TestToolbarPresent:
         assert response.status_code == 200
         payload = json.loads(response.content)
         assert payload["data"]["__typename"] == "Query"
-        assert payload["debugToolbar"]["requestId"]
+        _assert_injected_panel_payload(payload)
+        _assert_content_length_matches_body(response)
 
     def test_injected_request_id_round_trips_to_stored_sql_panel_content(self, toolbar_client):
         """The injected ``requestId`` is USABLE through the real panel route.
@@ -241,7 +299,10 @@ class TestToolbarPresent:
         """
         seed_data(1)
         response = _post_graphql(toolbar_client, _TOOLBAR_ITEMS_QUERY, "ToolbarItems")
-        request_id = json.loads(response.content)["debugToolbar"]["requestId"]
+        payload = json.loads(response.content)
+        _assert_injected_panel_payload(payload)
+        _assert_content_length_matches_body(response)
+        request_id = payload["debugToolbar"]["requestId"]
 
         # Resolve through the route, staying correct under a custom prefix.
         panel_url = reverse("djdt:render_panel")
@@ -252,6 +313,9 @@ class TestToolbarPresent:
         assert panel_response.status_code == 200
         panel_payload = json.loads(panel_response.content)
         assert set(panel_payload) >= {"content", "scripts"}
+        # Panel JSON is not a Strawberry operation; the package must not add
+        # ``debugToolbar`` here even if the content-type were injectable.
+        assert "debugToolbar" not in panel_payload
         assert _PANEL_FALLBACK not in panel_payload["content"]
         # The stored SQL-panel content for THIS id: the seeded operation's SELECT
         # against the products table.
@@ -272,3 +336,65 @@ class TestToolbarPresent:
         body = response.content.decode()
         assert _TEMPLATE_MARKER not in body
         assert "debugToolbar" not in body
+
+    @pytest.mark.usefixtures("toolbar_client")
+    @pytest.mark.parametrize(
+        ("encoding_middleware", "encoding"),
+        [
+            ("test_debug_toolbar_api._StampGzipContentEncodingMiddleware", "gzip"),
+            ("test_debug_toolbar_api._StampBrotliContentEncodingMiddleware", "br"),
+        ],
+        ids=["gzip", "br"],
+    )
+    @pytest.mark.parametrize(
+        "kind",
+        ["html", "json"],
+        ids=["graphiql_html_append", "operation_json_injection"],
+    )
+    def test_encoded_response_gets_no_package_mutation(
+        self,
+        encoding_middleware,
+        encoding,
+        kind,
+    ):
+        """A ``Content-Encoding`` header skips both package mutation sites.
+
+        The stamp middleware is INNER (appended after the toolbar) so the
+        toolbar's response pass sees the header. Bodies stay uncompressed so
+        the assertion can read them; the guard keys on the header, not on
+        gzip bytes. ``Client()`` is built inside the ``MIDDLEWARE`` override
+        because the handler caches its chain on first request.
+        """
+        seed_data(1)
+        middleware = [*settings.MIDDLEWARE, encoding_middleware]
+        with override_settings(MIDDLEWARE=middleware):
+            client = Client()
+            if kind == "html":
+                response = client.get("/graphql/", HTTP_ACCEPT="text/html")
+                assert response.status_code == 200
+                assert _TEMPLATE_MARKER not in response.content.decode()
+                assert b"debugToolbar" not in response.content
+            else:
+                response = _post_graphql(client, _TOOLBAR_ITEMS_QUERY, "ToolbarItems")
+                assert response.status_code == 200
+                payload = json.loads(response.content)
+                assert payload["data"]["allItems"]["edges"]
+                assert "debugToolbar" not in payload
+            assert response["Content-Encoding"] == encoding
+
+    def test_unrelated_json_view_body_is_never_mutated(self, toolbar_client):
+        """Non-Strawberry ``application/json`` bodies are not injected into.
+
+        Fakeshop ships no JSON view of its own; the holder URL (rung 3) is
+        tagged ``_is_graphiql`` false by ``process_view``. ``djdt:render_panel``
+        is also JSON-shaped but its content-type is not the media type the
+        JSON branch sniffs, so it cannot pin this gate.
+        """
+        with override_settings(ROOT_URLCONF=__name__):
+            response = toolbar_client.get("/unrelated.json")
+        assert response.status_code == 200
+        assert json.loads(response.content) == {"probe": "ok"}
+        assert b"debugToolbar" not in response.content
+
+
+urlpatterns = [path("", include("config.urls")), path("unrelated.json", _unrelated_json_view)]

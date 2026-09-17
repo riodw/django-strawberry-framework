@@ -1,10 +1,32 @@
-"""Exception hierarchy: inheritance, GraphQL translation, hostile message args."""
+"""Exception hierarchy: inheritance, GraphQL translation, hostile message args.
+
+This file keeps exception-class internals and hostile-arg containment that a
+live ``/graphql/`` request cannot uniquely show: the inheritance lattice,
+``.args`` identity, call-time ``__str__`` / ``__repr__`` guards, pickle/copy
+fidelity, GraphQL-core ``located_error`` preserving the original exception
+type (the HTTP envelope carries only ``message``), and the ``_safe_*`` /
+``describe_value`` helpers. A client JSON body cannot distinguish a safe
+placeholder from a coincidentally similar string, cannot see
+``original_error``, and under the production error policy a resolver
+exception is masked anyway.
+
+Wire messages belong to the live suites that own the raise sites:
+``examples/fakeshop/test_query/test_error_policy_api.py`` (masked resolver
+exceptions, parse/validation pass-through, DEBUG unmasking),
+``examples/fakeshop/test_query/test_connection_pagination_api.py``
+(pagination ``GraphQLError`` containment),
+``examples/fakeshop/test_query/test_products_api.py`` (mutation
+``GraphQLError`` denials and in-band ``FieldError`` envelopes), and
+``examples/fakeshop/test_query/test_transport_api.py`` (a misconfigured body
+cap raising ``ConfigurationError`` out of ``Client.get``, not as JSON).
+"""
 
 from __future__ import annotations
 
 import copy
 import pickle
 
+import pytest
 import strawberry
 
 from django_strawberry_framework.exceptions import (
@@ -142,10 +164,13 @@ def _execute_raising(exc_factory):
 def test_inheritance_lattice():
     assert issubclass(ConfigurationError, DjangoStrawberryFrameworkError)
     assert issubclass(OptimizerError, DjangoStrawberryFrameworkError)
+    assert issubclass(PathResolutionError, ConfigurationError)
+    assert issubclass(LookupValidationError, ConfigurationError)
     assert issubclass(SyncMisuseError, ConfigurationError)
     assert issubclass(SyncMisuseError, DjangoStrawberryFrameworkError)
     assert issubclass(SyncMisuseError, RuntimeError)
     assert not issubclass(OptimizerError, ConfigurationError)
+    assert not issubclass(PathResolutionError, OptimizerError)
 
 
 def test_unprintable_arg_str_and_repr_never_raise():
@@ -234,7 +259,7 @@ def test_delayed_stateful_failure_is_handled():
     """An arg that only breaks AFTER construction still renders safely (call-time guard)."""
     arg = _Stateful()
     err = OptimizerError(arg)
-    arg.armed = True  # now str(arg) raises - the eager-probe approach could not catch this
+    arg.armed = True  # str() is the render site; construction already succeeded
     assert str(err) == "<unprintable _Stateful>"
     assert str(err) == "<unprintable _Stateful>"  # cached, still safe
 
@@ -311,13 +336,22 @@ def test_lookup_validation_error_constructor_survives_hostile_metadata_and_value
     assert "terminal _HostileMetadata" in str(err)
 
 
-def test_path_resolution_error_pickle_and_copy_fidelity():
-    """PathResolutionError roundtrips through pickle, copy, and deepcopy preserving attributes."""
+def _pickle_roundtrip(err):
+    return pickle.loads(pickle.dumps(err))
+
+
+@pytest.mark.parametrize(
+    "roundtrip",
+    [_pickle_roundtrip, copy.copy, copy.deepcopy],
+    ids=["pickle", "copy", "deepcopy"],
+)
+def test_path_resolution_error_roundtrip_preserves_attributes(roundtrip):
+    """PathResolutionError keeps constructor args and extra state across a roundtrip."""
     err = PathResolutionError(_PicklableDummyModel, "groups.permissions", "permissions")
     err.custom_tag = "custom_value"
 
-    # Pickle serialization roundtrip
-    restored = pickle.loads(pickle.dumps(err))
+    restored = roundtrip(err)
+
     assert isinstance(restored, PathResolutionError)
     assert restored.model is _PicklableDummyModel
     assert restored.field_path == "groups.permissions"
@@ -326,30 +360,20 @@ def test_path_resolution_error_pickle_and_copy_fidelity():
     assert str(restored) == str(err)
     assert repr(restored) == repr(err)
 
-    # copy and deepcopy
-    copied = copy.copy(err)
-    assert isinstance(copied, PathResolutionError)
-    assert copied.model is _PicklableDummyModel
-    assert copied.field_path == "groups.permissions"
-    assert copied.segment == "permissions"
-    assert getattr(copied, "custom_tag", None) == "custom_value"
 
-    deep_copied = copy.deepcopy(err)
-    assert isinstance(deep_copied, PathResolutionError)
-    assert deep_copied.model is _PicklableDummyModel
-    assert deep_copied.field_path == "groups.permissions"
-    assert deep_copied.segment == "permissions"
-    assert getattr(deep_copied, "custom_tag", None) == "custom_value"
-
-
-def test_lookup_validation_error_pickle_and_copy_fidelity():
-    """LookupValidationError roundtrips through pickle, copy, and deepcopy preserving attributes."""
+@pytest.mark.parametrize(
+    "roundtrip",
+    [_pickle_roundtrip, copy.copy, copy.deepcopy],
+    ids=["pickle", "copy", "deepcopy"],
+)
+def test_lookup_validation_error_roundtrip_preserves_attributes(roundtrip):
+    """LookupValidationError keeps constructor args and extra state across a roundtrip."""
     term = _PicklableDummyTerminal()
     err = LookupValidationError(term, "created_at__year__invalid", "invalid")
     err.custom_tag = "custom_value"
 
-    # Pickle serialization roundtrip
-    restored = pickle.loads(pickle.dumps(err))
+    restored = roundtrip(err)
+
     assert isinstance(restored, LookupValidationError)
     assert restored.terminal.name == "created_at"
     assert restored.lookup_expr == "created_at__year__invalid"
@@ -357,20 +381,6 @@ def test_lookup_validation_error_pickle_and_copy_fidelity():
     assert getattr(restored, "custom_tag", None) == "custom_value"
     assert str(restored) == str(err)
     assert repr(restored) == repr(err)
-
-    # copy and deepcopy
-    copied = copy.copy(err)
-    assert isinstance(copied, LookupValidationError)
-    assert copied.terminal is term
-    assert copied.lookup_expr == "created_at__year__invalid"
-    assert copied.part == "invalid"
-    assert getattr(copied, "custom_tag", None) == "custom_value"
-
-    deep_copied = copy.deepcopy(err)
-    assert isinstance(deep_copied, LookupValidationError)
-    assert deep_copied.lookup_expr == "created_at__year__invalid"
-    assert deep_copied.part == "invalid"
-    assert getattr(deep_copied, "custom_tag", None) == "custom_value"
 
 
 def test_str_subclass_with_hostile_format_is_stripped_by_helpers():
@@ -454,14 +464,16 @@ def test_safe_class_name_survives_hostile_name_metadata():
     assert _safe_class_name(_HostileNameObj()) == "<unprintable _HostileClassAndBool>"
 
 
-def test_safe_type_name_edge_cases(monkeypatch):
-    """Test empty string __name__, isinstance exceptions, and str.__str__ exceptions."""
-    # Empty string __name__ (line 48)
+def test_safe_type_name_empty_string_name_falls_back_past_the_class():
+    """An empty ``__name__`` is skipped; a class then names its metaclass."""
     empty_cls = type("", (), {})
     assert _safe_type_name(empty_cls) == "type"
     assert _safe_type_name(empty_cls()) == "object"
 
-    # isinstance(name, str) raising BaseException (lines 42-43)
+
+def test_safe_type_name_survives_isinstance_raising_base_exception():
+    """A ``__name__`` whose ``isinstance(..., str)`` raises is skipped, not propagated."""
+
     class _HostileClassDunder:
         @property
         def __class__(self):
@@ -478,7 +490,9 @@ def test_safe_type_name_edge_cases(monkeypatch):
     assert _safe_type_name(_HostileType) == "_HostileTypeNameMeta"
     assert _safe_type_name(_HostileType()) == "object"
 
-    # str.__str__(name) raising BaseException (lines 55-56)
+
+def test_safe_type_name_survives_base_str_slot_raising_base_exception(monkeypatch):
+    """A name that blows up in the base ``str`` slot is skipped, not propagated."""
     import django_strawberry_framework.exceptions as exc_mod
 
     class _MockStrMeta(type):
@@ -631,11 +645,10 @@ def test_safe_text_strips_a_str_subclass_returned_by_tp_str():
 def test_write_error_envelope_survives_hostile_str_returning_message_object():
     """The shared envelope ctor survives a message leaf whose str leaks a subclass.
 
-    ``field_error`` is the single FieldError leaf constructor; a validator or
+    ``field_error`` is the single FieldError leaf constructor. A validator or
     serializer error whose message is a non-str object whose ``__str__``
-    returns a hostile ``str`` subclass used to detonate inside ``_str_list``
-    during envelope assembly, escaping the write pipeline as a raw
-    ``RuntimeError`` instead of a field-keyed ``FieldError``.
+    returns a hostile ``str`` subclass must stay a field-keyed ``FieldError``,
+    never escape envelope assembly as a raw ``RuntimeError``.
     """
 
     class _HostileRender(str):

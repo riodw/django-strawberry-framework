@@ -1,15 +1,16 @@
 """Governance tests for the CI workflow definitions.
 
-This module is the home for standing repo-wide structural pins - properties of
-the repository that no other test can see because nothing imports the artifact
-carrying them. Two corpora sit under it: the least-privilege posture in
-``.github/workflows/`` (nothing imports a workflow, so a permission scope quietly
-widening, an action pin decaying back to a mutable tag, or a new job landing
-without a timeout would all pass CI) and the first-party Python sources (whose
-``extensions=`` construction shape is a per-request performance contract no
-assertion inside a single test module can hold repo-wide). These tests assert
-each posture structurally instead, so the governance contract is enforced rather
-than reviewed by eye.
+Repo tooling: these rows pin YAML under ``.github/workflows/``, Dependabot
+ecosystems, the first-party ``DjangoOptimizerExtension`` ``extensions=`` form
+sweep, and install-floor constants against ``pyproject.toml``. A live
+``/graphql/`` request has no wire shape for a workflow permission block, an
+action SHA pin, a digest-pinned container image, a Dependabot ecosystem list,
+an AST classifier over every committable ``.py``, or a TOML dependency row,
+so none of these rows can move. There is no live sibling in
+``examples/fakeshop/test_query/``. Plan-cache reuse across HTTP requests on
+the shipped schema lives in
+``examples/fakeshop/test_query/test_library_api.py``; that row cannot audit
+a forbidden ``extensions=`` form in any other file.
 
 Coverage note: the assertions target YAML under ``.github/`` and the text of
 first-party ``.py`` files, not ``django_strawberry_framework``'s runtime
@@ -43,6 +44,9 @@ WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 # ``@v6.1.0``, ``@main`` -- is mutable by definition, so the action's contents can
 # change under a pin that still reads the same.
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+IMAGE_REFERENCE = re.compile(
+    r"\b(postgres|ghcr\.io/[\w./-]+)(:[\w.-]+|@sha256:[0-9a-f]{64})",
+)
 
 # Local composite actions (``./.github/actions/...``) are part of this repository
 # and therefore already covered by the commit under review.
@@ -140,14 +144,11 @@ def test_every_job_declares_a_timeout(path):
 def test_every_job_declares_a_runner(path):
     """Every job says what it runs on, so the whole file stays schedulable.
 
-    ``runs-on`` is required, and omitting it does not fail the one job: GitHub
-    refuses to parse the WORKFLOW, so a push that should have deployed reports
-    an invalid-file error and nothing runs at all. That is worth a structural
-    assertion rather than review, because the property is invisible from inside
-    the suite and the omission is easy to introduce: this test exists because an
-    edit meant to raise one job's ``timeout-minutes`` replaced the adjacent
-    ``runs-on`` line along with it, and the timeout assertion above -- the one
-    property the edit happened to preserve -- passed over the result.
+    ``runs-on`` is required. Omitting it does not fail the one job: GitHub
+    refuses to parse the workflow, so a push that should have run reports an
+    invalid-file error and nothing runs at all. The timeout pin on the same job
+    cannot see this: a job that lost ``runs-on`` while keeping
+    ``timeout-minutes`` still satisfies that row.
     """
     workflow = _load(path)
     for name, job in _jobs(workflow).items():
@@ -225,7 +226,8 @@ def test_checkout_steps_do_not_persist_credentials(path):
             )
 
 
-def test_container_images_are_pinned_by_digest():
+@pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
+def test_container_images_are_pinned_by_digest(path):
     """Every container image started by a workflow is digest-pinned.
 
     A ``postgres:16`` tag is rebuilt upstream and silently becomes a different
@@ -234,16 +236,14 @@ def test_container_images_are_pinned_by_digest():
     alike -- with comments stripped first, so prose naming a tag is not mistaken
     for a reference that actually starts a container.
     """
-    image_reference = re.compile(r"\b(postgres|ghcr\.io/[\w./-]+)(:[\w.-]+|@sha256:[0-9a-f]{64})")
-    for path in WORKFLOW_PATHS:
-        executable = "\n".join(
-            line.split("#", 1)[0] for line in path.read_text(encoding="utf-8").splitlines()
+    executable = "\n".join(
+        line.split("#", 1)[0] for line in path.read_text(encoding="utf-8").splitlines()
+    )
+    for match in IMAGE_REFERENCE.finditer(executable):
+        name, reference = match.group(1), match.group(2)
+        assert reference.startswith("@sha256:"), (
+            f"{path.name}: image {name}{reference} is tag-pinned; pin it by @sha256: digest"
         )
-        for match in image_reference.finditer(executable):
-            name, reference = match.group(1), match.group(2)
-            assert reference.startswith("@sha256:"), (
-                f"{path.name}: image {name}{reference} is tag-pinned; pin it by @sha256: digest"
-            )
 
 
 def test_dependabot_covers_python_and_github_actions():
@@ -384,8 +384,7 @@ def test_forbidden_optimizer_form_classifier_flags_every_forbidden_shape(snippet
     These rows are the sweep's positive control. Without them the sweep can go
     green because the corpus is clean OR because the classifier stopped matching
     anything at all, and those two readings are indistinguishable from a passing
-    run - which is exactly how four sweep instruments in this repo's history died
-    silently on delimiter drift.
+    run.
     """
     assert _forbidden_optimizer_entries(snippet, "<must-flag>"), (
         f"the forbidden-form classifier no longer flags this shape:\n{snippet}"
@@ -421,9 +420,10 @@ EXTRA_SOURCE_FILES = ("conftest.py", "docs/dry/export_dry_review.py", "line_coun
 
 #: Files whose presence in the corpus the forbidden-form gate's answer rests on:
 #: the optimizer's own module, the module that defines the corpus, one file per
-#: source tree, the file added by ``EXTRA_SOURCE_FILES``, and every module the
-#: spec-029 repair edited. Named individually so a narrowed corpus fails by
-#: saying WHICH files left, and so the failure survives a machine without git.
+#: source tree, the file added by ``EXTRA_SOURCE_FILES``, and the modules that
+#: construct a schema with the optimizer. Named individually so a narrowed
+#: corpus fails by saying WHICH files left, and so the failure survives a
+#: machine without git.
 CORPUS_REACH_FILES = (
     "conftest.py",
     "django_strawberry_framework/optimizer/extension.py",
@@ -585,9 +585,9 @@ def test_the_sweep_corpus_covers_every_committable_python_file():
     it sees nothing at all.
 
     Measured, not argued: dropping ``"tests"`` from ``check_citations``'s
-    ``SOURCE_TREES`` removes 136 files from the sweep - most of the sites the
-    spec-029 repair fixed - while ``check_citations`` itself stays green, because
-    no citation happens to point into the files that left.
+    ``SOURCE_TREES`` removes the test tree from the sweep while
+    ``check_citations`` itself stays green, because no citation happens to
+    point into the files that left.
 
     Only the missing direction is asserted. A path the corpus holds and git does
     not list (local scratch inside a source tree) makes the gate stricter, never
@@ -676,19 +676,13 @@ def test_the_corpus_census_accepts_a_complete_oracle_answer():
 def test_the_oracle_requirement_reaches_every_corpus_region(region):
     """What the oracle must report stays as wide as the corpus it is asked about.
 
-    Measured, not argued: narrowing ``CORPUS_REACH_FILES`` to its ``conftest.py``
-    entry alone deleted ten reach rows and cut this requirement from twelve files
-    to two with nothing failing, and narrowing it to the optimizer module instead
-    tripped exactly one row - and that one only because an incoherent-oracle
-    control happens to hardcode ``"conftest.py"`` for an unrelated purpose.
-    Protection that is a side effect of another row's literal is not a contract,
-    so the requirement had no contradictor at all.
-
-    These rows are it. They assert the structural property the requirement exists
-    to hold - this module, every tree the corpus is walked from, and the modules
-    carried in from outside them - so a narrowing fails by naming the region it
-    cost. Not a count and not a copy of the tuple: a count gets "fixed" to the new
-    number, and a copy is one more list needing a contradictor of its own.
+    Narrowing ``CORPUS_REACH_FILES`` deletes reach rows instead of failing one,
+    and a side-effect of another row's literal is not a contract. These rows
+    assert the structural property the requirement exists to hold - this module,
+    every tree the corpus is walked from, and the modules carried in from
+    outside them - so a narrowing fails by naming the region it cost. Not a
+    count and not a copy of the tuple: a count gets "fixed" to the new number,
+    and a copy is one more list needing a contradictor of its own.
     """
     assert region not in _unrepresented_corpus_regions(ORACLE_REQUIRED_FILES), (
         f"ORACLE_REQUIRED_FILES names nothing in {region}, so a corpus that lost "
@@ -801,10 +795,6 @@ def test_no_active_source_uses_a_forbidden_optimizer_extensions_form():
     factory over a singleton scoped to that construction site:
     ``ext = DjangoOptimizerExtension(...)`` then ``extensions=[lambda: ext]``.
 
-    This pin exists because the rule previously had no gate: spec-029 enforced it
-    with a one-shot build-time grep, and four later cards reintroduced both forms
-    across five patch releases with nothing noticing. A rule with no gate rots.
-
     Deliberate limits, considered rather than missed. The pin does NOT match the
     deprecated instance form ``extensions=[DjangoOptimizerExtension()]`` (already
     fatal at runtime, since Strawberry's ``DeprecationWarning`` meets
@@ -842,9 +832,7 @@ def test_channels_floor_constant_matches_the_pyproject_dependency_row():
     'channels>=...'`` hints, so the hints cannot drift from each other. What no
     other test can see is the second place the floor is written: the
     ``channels[daphne]`` dev-group row in ``pyproject.toml``. Nothing imports a
-    TOML dependency row, so a bump on either side used to be silently one-sided
-    - which is exactly how the router's "three places that must agree" comment
-    came to name the wrong number of places.
+    TOML dependency row, so a bump on either side is otherwise silent.
     """
     from django_strawberry_framework.utils.imports import CHANNELS_FLOOR
 
@@ -856,13 +844,12 @@ def test_channels_floor_constant_matches_the_pyproject_dependency_row():
 def test_strawberry_floor_constant_matches_the_pyproject_dependency_row():
     """The Strawberry floor the router's hint recommends is the one the project requires.
 
-    The mirror of the Channels row above, for the same drift class: the router's
-    broken-``strawberry.channels`` hint used to interpolate a hard literal that
-    nothing compared against the ``strawberry-graphql`` row in
-    ``pyproject.toml``, so a floor raise on either side was silently one-sided
-    and the hint could advise installing a version the install itself rejects.
-    Parsed exactly like the Channels row so the two pins cannot diverge in
-    method.
+    The mirror of the Channels row above: the router's broken-``strawberry.channels``
+    hint interpolates ``STRAWBERRY_FLOOR``, and nothing else compares that
+    constant to the ``strawberry-graphql`` row in ``pyproject.toml``. A floor
+    raise on either side would otherwise be silent, and the hint could advise
+    installing a version the install itself rejects. Parsed exactly like the
+    Channels row so the two pins cannot diverge in method.
     """
     from django_strawberry_framework.utils.imports import STRAWBERRY_FLOOR
 

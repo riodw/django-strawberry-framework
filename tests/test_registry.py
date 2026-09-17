@@ -1,12 +1,29 @@
 """TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
 
-The integration-flavored registry tests (collision raised by ``DjangoType``
-subclassing, enum-caching observed through ``convert_choices_to_enum``)
-live alongside their consumers in ``tests/types/test_base.py`` and
-``tests/types/test_converters.py``. This module covers the registry's
-public contract directly without the ``DjangoType`` wrapper, so the
-class can be reasoned about in isolation and so each public method has a
-dedicated test that exercises every branch.
+Package-side TypeRegistry / finalize lifecycle. A live ``/graphql/`` request
+cannot observe map identity, ``clear`` / ``unregister`` teardown order, pending
+identity, phase-1 / phase-3 atomicity, or a ``ConfigurationError`` raised
+before any schema exists. Rungs 1-3 would only wrap those internals in a
+GraphQL type, which is not a consumer contract.
+
+Wire-reachable consequences live elsewhere:
+
+- composed type publication:
+  ``examples/fakeshop/test_query/test_schema_composition_api.py``;
+- Relay ``node(id:)`` / ``nodes(ids:)`` refetch:
+  ``examples/fakeshop/test_query/test_library_api.py``
+  (``test_node_refetch_genre``, ``test_nodes_batch_mixed_types_order_and_null``,
+  ``test_node_malformed_id_live``). Successful type-name decode and
+  ``GLOBALID_INVALID`` collapse to one envelope; the registry method's
+  definition-object identity, Relay-only scan, ``Meta.name`` key, miss, and
+  ambiguity stay here;
+- ``Meta.name`` on a published type (SDL, not the registry lookup):
+  ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+
+DjangoType-wrapper collision and enum-caching through
+``convert_choices_to_enum`` live in ``tests/types/test_base.py`` and
+``tests/types/test_converters.py``. Finalize audit-success lives in
+``tests/types/test_definition_order.py``.
 """
 
 from enum import Enum
@@ -52,7 +69,13 @@ def _isolate_global_registry():
 
 
 def test_definition_for_graphql_name_returns_match():
-    """A registered Relay-Node type's ``graphql_type_name`` resolves to its definition."""
+    """A registered Relay-Node type's ``graphql_type_name`` resolves to its definition.
+
+    Registry lifecycle: definition-object identity or ``ConfigurationError``, which the wire
+    collapses to ``GLOBALID_INVALID``. No live request can show the registry object. Live sibling:
+    ``examples/fakeshop/test_query/test_library_api.py::test_node_refetch_genre`` (acceptance) and
+    ``::test_node_malformed_id_live`` (coded refusal).
+    """
 
     class ItemNode(DjangoType):
         class Meta:
@@ -66,7 +89,13 @@ def test_definition_for_graphql_name_returns_match():
 
 
 def test_definition_for_graphql_name_honors_meta_name():
-    """The lookup keys on ``graphql_type_name`` (``Meta.name``), not ``type_cls.__name__``."""
+    """The lookup keys on ``graphql_type_name`` (``Meta.name``), not ``type_cls.__name__``.
+
+    Registry lifecycle: the decode key is ``graphql_type_name``, not ``__name__``. SDL
+    ``Meta.name`` is live as
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``;
+    this row pins the registry lookup the wire cannot name.
+    """
 
     class ItemNode(DjangoType):
         class Meta:
@@ -84,7 +113,12 @@ def test_definition_for_graphql_name_honors_meta_name():
 
 
 def test_definition_for_graphql_name_ignores_non_relay_definitions():
-    """A non-Relay-Node DjangoType with a matching name is ignored (Relay-only scan)."""
+    """A non-Relay-Node DjangoType with a matching name is ignored (Relay-only scan).
+
+    Registry lifecycle: Relay-only scan. A non-Node type is invisible to this lookup even when the
+    GraphQL name matches. Live ``BranchType`` is non-Relay and never enters ``node(id:)`` decode;
+    ``GLOBALID_INVALID`` would not distinguish this miss from an unknown name.
+    """
 
     class ItemPlain(DjangoType):
         class Meta:
@@ -98,7 +132,13 @@ def test_definition_for_graphql_name_ignores_non_relay_definitions():
 
 
 def test_definition_for_graphql_name_unknown_raises():
-    """An unregistered GraphQL type name raises ``ConfigurationError`` naming it."""
+    """An unregistered GraphQL type name raises ``ConfigurationError`` naming it.
+
+    Registry lifecycle: definition-object identity or ``ConfigurationError``, which the wire
+    collapses to ``GLOBALID_INVALID``. No live request can show the registry object. Live sibling:
+    ``examples/fakeshop/test_query/test_library_api.py::test_node_refetch_genre`` (acceptance) and
+    ``::test_node_malformed_id_live`` (coded refusal).
+    """
 
     class ItemNode(DjangoType):
         class Meta:
@@ -112,7 +152,11 @@ def test_definition_for_graphql_name_unknown_raises():
 
 
 def test_definition_for_graphql_name_ambiguous_raises():
-    """Two Relay-Node definitions sharing one ``graphql_type_name`` raise, naming the collision."""
+    """Two Relay-Node definitions sharing one ``graphql_type_name`` raise, naming the collision.
+
+    Registry lifecycle: two Relay-Node types sharing one ``graphql_type_name``. A live schema
+    cannot publish that collision (Strawberry duplicate-name). No live sibling.
+    """
 
     class CategoryDup(DjangoType):
         class Meta:
@@ -137,7 +181,11 @@ def test_definition_for_graphql_name_ambiguous_raises():
 
 
 def test_register_and_get_round_trips(fresh_registry):
-    """``register(model, type_cls)`` makes ``get(model)`` return ``type_cls``."""
+    """``register(model, type_cls)`` makes ``get(model)`` return ``type_cls``.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class CategoryType:
         pass
@@ -147,17 +195,23 @@ def test_register_and_get_round_trips(fresh_registry):
 
 
 def test_get_returns_none_for_unregistered_model(fresh_registry):
-    """``get`` returns ``None`` rather than raising when the model is unknown."""
+    """``get`` returns ``None`` rather than raising when the model is unknown.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
     assert fresh_registry.get(Category) is None
 
 
 def test_register_same_class_against_two_models_raises(fresh_registry):
     """Registering the same ``type_cls`` against two models raises ``ConfigurationError``.
 
-    Pins the reverse-direction guard: ``_models[type_cls]`` must not be
-    silently overwritten when the same class is reused for a different
-    model, because that would leave ``model_for_type`` returning the
-    wrong model for the original registration.
+    Pins the reverse-direction guard: ``_models[type_cls]`` must not be silently overwritten when
+    the same class is reused for a different model, because that would leave ``model_for_type``
+    returning the wrong model for the original registration.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
     """
 
     class SharedType:
@@ -173,15 +227,21 @@ def test_register_same_class_against_two_models_raises(fresh_registry):
 def test_model_for_type_returns_none_for_none(fresh_registry):
     """Passing ``None`` short-circuits to ``None`` so the optimizer can pipeline.
 
-    ``DjangoOptimizerExtension`` resolves GraphQL return types with
-    ``unwrap_graphql_type`` and then calls ``model_for_type``; the registry
-    must accept a missing origin without raising.
+    ``DjangoOptimizerExtension`` resolves GraphQL return types with ``unwrap_graphql_type`` and
+    then calls ``model_for_type``; the registry must accept a missing origin without raising.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
     """
     assert fresh_registry.model_for_type(None) is None
 
 
 def test_model_for_type_returns_none_for_unregistered_class(fresh_registry):
-    """An unregistered class also returns ``None`` (no exception)."""
+    """An unregistered class also returns ``None`` (no exception).
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class NotRegistered:
         pass
@@ -190,7 +250,11 @@ def test_model_for_type_returns_none_for_unregistered_class(fresh_registry):
 
 
 def test_model_for_type_round_trips(fresh_registry):
-    """``model_for_type`` reverses ``register``: ``type_cls`` -> ``model``."""
+    """``model_for_type`` reverses ``register``: ``type_cls`` -> ``model``.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class CategoryType:
         pass
@@ -200,7 +264,11 @@ def test_model_for_type_round_trips(fresh_registry):
 
 
 def test_register_enum_caches_by_model_field(fresh_registry):
-    """``register_enum`` keys on ``(model, field_name)`` and ``get_enum`` retrieves it."""
+    """``register_enum`` keys on ``(model, field_name)`` and ``get_enum`` retrieves it.
+
+    Registry lifecycle: enum cache keyed on ``(model, field_name)``. Converter acceptance is live
+    via choice fields; this cache contract has no wire shape. No live sibling.
+    """
 
     class Status(Enum):
         ACTIVE = "active"
@@ -215,9 +283,11 @@ def test_register_enum_caches_by_model_field(fresh_registry):
 def test_register_enum_same_class_is_idempotent(fresh_registry):
     """Re-registering the *same* enum class for the same key is a no-op.
 
-    Pins the convert_choices_to_enum cache pattern: the call site reads
-    ``get_enum`` first, so a redundant ``register_enum`` with the same
-    class must not raise.
+    Pins the convert_choices_to_enum cache pattern: the call site reads ``get_enum`` first, so a
+    redundant ``register_enum`` with the same class must not raise.
+
+    Registry lifecycle: enum cache keyed on ``(model, field_name)``. Converter acceptance is live
+    via choice fields; this cache contract has no wire shape. No live sibling.
     """
 
     class Status(Enum):
@@ -229,7 +299,11 @@ def test_register_enum_same_class_is_idempotent(fresh_registry):
 
 
 def test_register_enum_different_class_for_same_key_raises(fresh_registry):
-    """Registering a *different* enum class for an existing key raises."""
+    """Registering a *different* enum class for an existing key raises.
+
+    Registry lifecycle: enum cache keyed on ``(model, field_name)``. Converter acceptance is live
+    via choice fields; this cache contract has no wire shape. No live sibling.
+    """
 
     class StatusA(Enum):
         ACTIVE = "active"
@@ -248,7 +322,11 @@ def test_register_enum_different_class_for_same_key_raises(fresh_registry):
 
 
 def test_clear_drops_all_state(fresh_registry):
-    """``clear()`` empties type, model, and enum maps in one call."""
+    """``clear()`` empties type, model, and enum maps in one call.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class CategoryType:
         pass
@@ -269,7 +347,11 @@ def test_clear_drops_all_state(fresh_registry):
 
 
 def test_clear_runs_owner_registered_subsystem_callback(fresh_registry):
-    """Subsystem teardown is resolved at registration, not by a drifting string lookup."""
+    """Subsystem teardown is resolved at registration, not by a drifting string lookup.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
     callbacks = dict(_subsystem_clears)
     _subsystem_clears.clear()
     calls = []
@@ -291,7 +373,11 @@ def test_type_teardowns_run_in_reverse_order_once_before_registration_drops(
     fresh_registry,
     action,
 ):
-    """Type teardown sees its registration, runs LIFO, and is discarded exactly once."""
+    """Type teardown sees its registration, runs LIFO, and is discarded exactly once.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class CategoryType:
         pass
@@ -322,7 +408,11 @@ def test_type_teardowns_run_in_reverse_order_once_before_registration_drops(
 
 @pytest.mark.parametrize("action", ["clear", "unregister"])
 def test_failed_type_teardown_remains_registered_for_retry(fresh_registry, action):
-    """A teardown failure preserves the callback and the type registration."""
+    """A teardown failure preserves the callback and the type registration.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class CategoryType:
         pass
@@ -354,7 +444,11 @@ def test_failed_type_teardown_remains_registered_for_retry(fresh_registry, actio
 
 
 def test_register_type_teardown_rejects_invalid_registration(fresh_registry):
-    """A teardown must be callable and belong to an already-registered type."""
+    """A teardown must be callable and belong to an already-registered type.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class CategoryType:
         pass
@@ -366,7 +460,11 @@ def test_register_type_teardown_rejects_invalid_registration(fresh_registry):
 
 
 def test_before_bind_iteration_excludes_full_clear_only_callbacks():
-    """The finalizer cannot erase declaration registries before binding them."""
+    """The finalizer cannot erase declaration registries before binding them.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
     callbacks = dict(_subsystem_clears)
     _subsystem_clears.clear()
 
@@ -391,7 +489,11 @@ def test_before_bind_iteration_excludes_full_clear_only_callbacks():
 
 
 def test_register_subsystem_clear_rejects_string_references():
-    """A renamed teardown function cannot degrade into a silent import miss."""
+    """A renamed teardown function cannot degrade into a silent import miss.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
     with pytest.raises(TypeError, match="zero-argument callable"):
         register_subsystem_clear(
             "package.module.clear",  # type: ignore[arg-type]
@@ -400,12 +502,21 @@ def test_register_subsystem_clear_rejects_string_references():
 
 
 def test_register_subsystem_clear_rejects_empty_owner():
+    """``register_subsystem_clear`` rejects an empty owner string.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
     with pytest.raises(ValueError, match="non-empty owner"):
         register_subsystem_clear(lambda: None, owner="")
 
 
 def test_iter_types_yields_registered_pairs(fresh_registry):
-    """``iter_types()`` yields ``(model, type_cls)`` for each registration."""
+    """``iter_types()`` yields ``(model, type_cls)`` for each registration.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class CategoryType:
         pass
@@ -420,12 +531,20 @@ def test_iter_types_yields_registered_pairs(fresh_registry):
 
 
 def test_iter_types_empty_on_fresh_registry(fresh_registry):
-    """``iter_types()`` yields nothing when no types are registered."""
+    """``iter_types()`` yields nothing when no types are registered.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
     assert list(fresh_registry.iter_types()) == []
 
 
 def test_register_definition_rejects_different_definition_for_same_type(fresh_registry):
-    """A type class cannot be rebound to a different collected definition."""
+    """A type class cannot be rebound to a different collected definition.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class CategoryType:
         pass
@@ -444,7 +563,11 @@ def test_register_definition_rejects_different_definition_for_same_type(fresh_re
 
 
 def test_global_registry_is_a_type_registry_instance():
-    """The ``registry`` module-level singleton is a ``TypeRegistry``."""
+    """The ``registry`` module-level singleton is a ``TypeRegistry``.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
     assert isinstance(registry, TypeRegistry)
     # Sanity: still bound to the Django models module (smoke check that
     # the type signature didn't drift to a different shape).
@@ -452,7 +575,12 @@ def test_global_registry_is_a_type_registry_instance():
 
 
 def test_finalize_is_idempotent(monkeypatch):
-    """Calling finalize twice mutates type classes only once."""
+    """Calling finalize twice mutates type classes only once.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
     calls = []
     original_type = finalizer_module.strawberry.type
 
@@ -474,7 +602,12 @@ def test_finalize_is_idempotent(monkeypatch):
 
 
 def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation():
-    """Consumer-authored relation annotations are not rewritten if a stale pending record exists."""
+    """Consumer-authored relation annotations are not rewritten if a stale pending record exists.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     try:
 
@@ -527,7 +660,12 @@ def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_
 
 
 def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalized(monkeypatch):
-    """Definition-level finalized flags prevent duplicate resolver and Strawberry mutation."""
+    """Definition-level finalized flags prevent duplicate resolver and Strawberry mutation.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
     attach_calls = []
     type_calls = []
 
@@ -557,7 +695,12 @@ def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalize
 
 
 def test_registering_concrete_type_after_finalization_raises():
-    """A finalized registry rejects new concrete DjangoType classes."""
+    """A finalized registry rejects new concrete DjangoType classes.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class CategoryType(DjangoType):
         class Meta:
@@ -575,7 +718,12 @@ def test_registering_concrete_type_after_finalization_raises():
 
 
 def test_registry_clear_allows_fresh_type_classes_to_finalize_again():
-    """clear() resets registry state for newly declared type classes."""
+    """clear() resets registry state for newly declared type classes.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class CategoryType(DjangoType):
         class Meta:
@@ -599,10 +747,14 @@ def test_registry_clear_allows_fresh_type_classes_to_finalize_again():
 def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
     """``registry.clear()`` lets a fresh Relay-declared ``DjangoType`` finalize cleanly.
 
-    Pins the lifecycle contract that the same model can be re-bound to a
-    fresh Relay-declared type after the previous one was dropped via
-    ``clear()``. The fresh class must end up with ``relay.Node`` in its
-    MRO plus the four ``resolve_*`` classmethods injected.
+    Pins the lifecycle contract that the same model can be re-bound to a fresh Relay-declared type
+    after the previous one was dropped via ``clear()``. The fresh class must end up with
+    ``relay.Node`` in its MRO plus the four ``resolve_*`` classmethods injected.
+
+    Registry lifecycle: ``clear()`` then a fresh Relay ``DjangoType`` must finalize and inject
+    ``resolve_*``. ``strawberry.Schema(...)`` here is construction, not a GraphQL execute. Live
+    sibling for those methods on shipped types:
+    ``examples/fakeshop/test_query/test_library_api.py::test_node_refetch_genre``.
     """
 
     class CategoryNode(DjangoType):
@@ -648,7 +800,12 @@ def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
 
 
 def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers():
-    """Unresolved targets fail before class mutation and can retry after the target appears."""
+    """Unresolved targets fail before class mutation and can retry after the target appears.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class ItemType(DjangoType):
         class Meta:
@@ -678,7 +835,12 @@ def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers(
 
 
 def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_target_is_missing():
-    """A mixed pending set stays untouched until every relation target resolves."""
+    """A mixed pending set stays untouched until every relation target resolves.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class CategoryType(DjangoType):
         class Meta:
@@ -729,7 +891,12 @@ def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_targe
 
 
 def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(monkeypatch):
-    """A Strawberry-side failure is recovered by clear() plus fresh class recreation."""
+    """A Strawberry-side failure is recovered by clear() plus fresh class recreation.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
     original_type = finalizer_module.strawberry.type
 
     def failing_type(type_cls, **kwargs):
@@ -767,7 +934,12 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
 
 
 def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure():
-    """Pending records remain after unresolved failure but disappear after success."""
+    """Pending records remain after unresolved failure but disappear after success.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class ItemType(DjangoType):
         class Meta:
@@ -793,10 +965,12 @@ def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure
 def test_discard_pending_uses_identity_match_with_real_pending_relation(fresh_registry):
     """``discard_pending`` removes the exact records handed back by the caller.
 
-    Pins the identity-based contract so this module does not couple to
-    ``PendingRelation``'s ``__eq__``/``__hash__`` semantics.  Builds two
-    equal-by-value records and asserts that discarding one leaves the
-    other in place.
+    Pins the identity-based contract so this module does not couple to ``PendingRelation``'s
+    ``__eq__``/``__hash__`` semantics. Builds two equal-by-value records and asserts that
+    discarding one leaves the other in place.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
     """
     field = Category._meta.get_field("items")
     kind = relation_kind(field)
@@ -826,7 +1000,11 @@ def test_discard_pending_uses_identity_match_with_real_pending_relation(fresh_re
 
 
 def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry):
-    """``discard_pending`` removes pending records by identity without hashing them."""
+    """``discard_pending`` removes pending records by identity without hashing them.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class _NonHashableField:
         __hash__ = None  # type: ignore[assignment]
@@ -850,10 +1028,12 @@ def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry):
 def test_mutators_reject_calls_after_mark_finalized(fresh_registry):
     """After ``mark_finalized``, every mutator raises ``ConfigurationError``.
 
-    Defense-in-depth: ``DjangoType.__init_subclass__`` already rejects
-    new subclasses post-finalization, but the registry boundary itself
-    must also fail loud so out-of-band mutators (late imports, manual
-    test harnesses) cannot silently corrupt the finalized snapshot.
+    Defense-in-depth: ``DjangoType.__init_subclass__`` already rejects new subclasses
+    post-finalization, but the registry boundary itself must also fail loud so out-of-band mutators
+    (late imports, manual test harnesses) cannot silently corrupt the finalized snapshot.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
     """
 
     class CategoryType:
@@ -887,7 +1067,12 @@ def test_mutators_reject_calls_after_mark_finalized(fresh_registry):
 
 
 def test_clear_does_not_remove_mutation_from_previously_finalized_classes():
-    """clear() resets the registry, not already-mutated class objects."""
+    """clear() resets the registry, not already-mutated class objects.
+
+    Registry lifecycle: finalize-time class mutation, pending records, and phase failure atomicity.
+    A live request never sees a half-finalized registry. Live sibling for a successful compose:
+    ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class CategoryType(DjangoType):
         class Meta:
@@ -906,10 +1091,12 @@ def test_clear_does_not_remove_mutation_from_previously_finalized_classes():
 def test_register_with_definition_rolls_back_register_on_definition_failure(fresh_registry):
     """``register_with_definition`` is atomic across the pair.
 
-    If ``register_definition`` raises after ``register`` succeeded, the
-    model->type mapping must not persist. Otherwise a subsequent attempt
-    to register the type would surface "already registered" instead of
-    the real underlying failure.
+    If ``register_definition`` raises after ``register`` succeeded, the model->type mapping must
+    not persist. Otherwise a subsequent attempt to register the type would surface "already
+    registered" instead of the real underlying failure.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
     """
 
     class CategoryType:
@@ -940,7 +1127,13 @@ def test_register_with_definition_rolls_back_register_on_definition_failure(fres
 
 
 def test_register_two_types_same_model_without_primary_allows_both_in_types_for(fresh_registry):
-    """Two types for one model without ``primary`` co-exist; both appear in ``types_for``."""
+    """Two types for one model without ``primary`` co-exist; both appear in ``types_for``.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemTypeA:
         pass
@@ -955,7 +1148,13 @@ def test_register_two_types_same_model_without_primary_allows_both_in_types_for(
 
 
 def test_register_second_type_for_same_model_no_longer_raises_collision(fresh_registry):
-    """Second type for an existing model no longer raises (collision path retired)."""
+    """A second type for an existing model registers without raising.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemTypeA:
         pass
@@ -971,7 +1170,11 @@ def test_register_second_type_for_same_model_no_longer_raises_collision(fresh_re
 
 
 def test_register_same_type_twice_is_idempotent(fresh_registry):
-    """Calling ``register(Model, T)`` twice is a no-op for the second call."""
+    """Calling ``register(Model, T)`` twice is a no-op for the second call.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class ItemType:
         pass
@@ -983,7 +1186,13 @@ def test_register_same_type_twice_is_idempotent(fresh_registry):
 
 
 def test_register_primary_flag_sets_primary_for(fresh_registry):
-    """``primary=True`` populates ``_primaries`` and ``primary_for`` reads it back."""
+    """``primary=True`` populates ``_primaries`` and ``primary_for`` reads it back.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -997,10 +1206,14 @@ def test_register_primary_flag_sets_primary_for(fresh_registry):
 def test_register_two_primaries_for_same_model_raises_configuration_error(fresh_registry):
     """Second ``primary=True`` on the same model raises naming attempt, model, and incumbent primary.
 
-    Pins all three load-bearing identifiers in the error message so a future
-    cosmetic refactor can't silently drop the attempt name (``AdminItemType``),
-    the model name (``Item``), or the incumbent primary (``ItemType``) - the
-    grep-from-a-stack-trace triage path needs each one.
+    Pins all three load-bearing identifiers in the error message so a future cosmetic refactor
+    can't silently drop the attempt name (``AdminItemType``), the model name (``Item``), or the
+    incumbent primary (``ItemType``) - the grep-from-a-stack-trace triage path needs each one.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
     """
 
     class ItemType:
@@ -1021,7 +1234,13 @@ def test_register_two_primaries_for_same_model_raises_configuration_error(fresh_
 
 
 def test_register_same_type_re_register_with_flipped_primary_false_raises(fresh_registry):
-    """Flip of stored ``primary=True`` to ``primary=False`` raises."""
+    """Flip of stored ``primary=True`` to ``primary=False`` raises.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1032,7 +1251,13 @@ def test_register_same_type_re_register_with_flipped_primary_false_raises(fresh_
 
 
 def test_register_same_type_re_register_with_flipped_primary_true_raises(fresh_registry):
-    """Flip of stored ``primary=False`` to ``primary=True`` raises (symmetric guard)."""
+    """Flip of stored ``primary=False`` to ``primary=True`` raises (symmetric guard).
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1043,7 +1268,13 @@ def test_register_same_type_re_register_with_flipped_primary_true_raises(fresh_r
 
 
 def test_register_with_definition_rollback_clears_primary(fresh_registry):
-    """``register_with_definition`` rolls back ``_primaries`` for state it added."""
+    """``register_with_definition`` rolls back ``_primaries`` for state it added.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1066,11 +1297,15 @@ def test_register_with_definition_rollback_clears_primary(fresh_registry):
 def test_register_with_definition_rollback_restores_pre_existing_primary(fresh_registry):
     """Rollback restores ``_primaries[model]`` to the pre-existing primary.
 
-    Pins the ``else: self._primaries[model] = pre_primary`` branch of the
-    rollback in ``register_with_definition``: when a model already has a
-    primary set and a NEW non-primary type's ``register()`` succeeds, then
-    ``register_definition`` raises, the rollback must restore the
-    pre-existing primary rather than popping it.
+    Pins the ``else: self._primaries[model] = pre_primary`` branch of the rollback in
+    ``register_with_definition``: when a model already has a primary set and a NEW non-primary
+    type's ``register()`` succeeds, then ``register_definition`` raises, the rollback must restore
+    the pre-existing primary rather than popping it.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
     """
 
     class ItemType:
@@ -1099,7 +1334,13 @@ def test_register_with_definition_rollback_restores_pre_existing_primary(fresh_r
 
 
 def test_register_with_definition_idempotent_re_register_does_not_corrupt_state(fresh_registry):
-    """A re-register-with-different-definition failure leaves pre-existing state intact."""
+    """A re-register-with-different-definition failure leaves pre-existing state intact.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1120,7 +1361,13 @@ def test_register_with_definition_idempotent_re_register_does_not_corrupt_state(
 
 
 def test_register_with_definition_idempotent_re_register_preserves_primary(fresh_registry):
-    """Primary-preservation corollary: the pre-existing primary survives a re-register failure."""
+    """Primary-preservation corollary: the pre-existing primary survives a re-register failure.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1138,7 +1385,11 @@ def test_register_with_definition_idempotent_re_register_preserves_primary(fresh
 
 
 def test_register_returns_true_for_new_state(fresh_registry):
-    """First registration returns ``True`` (state was added)."""
+    """First registration returns ``True`` (state was added).
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class ItemType:
         pass
@@ -1147,7 +1398,11 @@ def test_register_returns_true_for_new_state(fresh_registry):
 
 
 def test_register_returns_false_for_idempotent_re_register(fresh_registry):
-    """Idempotent re-register returns ``False`` (no state added)."""
+    """Idempotent re-register returns ``False`` (no state added).
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class ItemType:
         pass
@@ -1157,7 +1412,13 @@ def test_register_returns_false_for_idempotent_re_register(fresh_registry):
 
 
 def test_get_returns_single_type_when_one_registered_no_primary(fresh_registry):
-    """``get(Model)`` returns the lone type even when ``primary`` is not declared."""
+    """``get(Model)`` returns the lone type even when ``primary`` is not declared.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1167,7 +1428,13 @@ def test_get_returns_single_type_when_one_registered_no_primary(fresh_registry):
 
 
 def test_get_returns_primary_when_multiple_and_primary_declared(fresh_registry):
-    """``get(Model)`` returns the explicit primary when multiple types are registered."""
+    """``get(Model)`` returns the explicit primary when multiple types are registered.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1181,7 +1448,13 @@ def test_get_returns_primary_when_multiple_and_primary_declared(fresh_registry):
 
 
 def test_get_returns_none_when_multiple_and_no_primary(fresh_registry):
-    """``get(Model)`` returns ``None`` when multi-type and no primary declared."""
+    """``get(Model)`` returns ``None`` when multi-type and no primary declared.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1197,7 +1470,13 @@ def test_get_returns_none_when_multiple_and_no_primary(fresh_registry):
 
 
 def test_primary_for_returns_none_when_only_implicit_single_type(fresh_registry):
-    """``primary_for`` is strictly ``_primaries``; the single-type convenience lives on ``get``."""
+    """``primary_for`` is strictly ``_primaries``; the single-type convenience lives on ``get``.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class ItemType:
         pass
@@ -1208,7 +1487,13 @@ def test_primary_for_returns_none_when_only_implicit_single_type(fresh_registry)
 
 
 def test_types_for_preserves_registration_order(fresh_registry):
-    """``types_for`` returns registrations in the order they happened."""
+    """``types_for`` returns registrations in the order they happened.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class A:
         pass
@@ -1226,7 +1511,13 @@ def test_types_for_preserves_registration_order(fresh_registry):
 
 
 def test_iter_types_yields_each_type_once_when_multiple_registered_for_same_model(fresh_registry):
-    """``iter_types`` yields one pair per registered type; multi-type models appear repeatedly."""
+    """``iter_types`` yields one pair per registered type; multi-type models appear repeatedly.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class A:
         pass
@@ -1241,7 +1532,11 @@ def test_iter_types_yields_each_type_once_when_multiple_registered_for_same_mode
 
 
 def test_register_same_type_against_two_models_still_raises(fresh_registry):
-    """Reverse-collision contract is preserved by the multi-type registry."""
+    """Reverse-collision contract is preserved by the multi-type registry.
+
+    Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
+    live sibling.
+    """
 
     class SharedType:
         pass
@@ -1252,7 +1547,11 @@ def test_register_same_type_against_two_models_still_raises(fresh_registry):
 
 
 def test_clear_resets_primaries(fresh_registry):
-    """``clear()`` wipes ``_primaries`` alongside the other registry maps."""
+    """``clear()`` wipes ``_primaries`` alongside the other registry maps.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class ItemType:
         pass
@@ -1264,7 +1563,13 @@ def test_clear_resets_primaries(fresh_registry):
 
 
 def test_models_with_multiple_types_yields_only_models_with_two_or_more(fresh_registry):
-    """``models_with_multiple_types`` reports only models with ``>= 2`` registered types."""
+    """``models_with_multiple_types`` reports only models with ``>= 2`` registered types.
+
+    Registry lifecycle: primary / multi-type maps. A live request cannot show ``types_for`` order
+    or rollback. Live sibling for shipped multi-type with a primary:
+    ``test_library_api.py::test_public_patron_exclude_deny_list_shapes_type_and_resolves``.
+    Ambiguity at finalize cannot ship.
+    """
 
     class CategoryType:
         pass
@@ -1304,7 +1609,12 @@ def test_models_with_multiple_types_yields_only_models_with_two_or_more(fresh_re
 
 
 def test_finalize_raises_when_model_has_multiple_types_no_primary():
-    """``finalize_django_types`` raises when a model has 2+ types and no primary."""
+    """``finalize_django_types`` raises when a model has 2+ types and no primary.
+
+    Registry lifecycle: ``_audit_primary_ambiguity`` inside ``finalize_django_types``. A live
+    schema with two types and no primary never builds. No live sibling for the raise; composition
+    success is ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class ItemTypeA(DjangoType):
         class Meta:
@@ -1327,7 +1637,12 @@ def test_finalize_raises_when_model_has_multiple_types_no_primary():
 
 
 def test_finalize_ambiguity_error_message_contains_actionable_fix():
-    """The ambiguity error message ends with the actionable ``Declare Meta.primary`` sentence."""
+    """The ambiguity error message ends with the actionable ``Declare Meta.primary`` sentence.
+
+    Registry lifecycle: ``_audit_primary_ambiguity`` inside ``finalize_django_types``. A live
+    schema with two types and no primary never builds. No live sibling for the raise; composition
+    success is ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+    """
 
     class ItemTypeA(DjangoType):
         class Meta:
@@ -1352,10 +1667,13 @@ def test_finalize_ambiguity_error_message_contains_actionable_fix():
 def test_audit_runs_once_per_build(monkeypatch):
     """The ambiguity audit runs exactly once per finalize-cycle build.
 
-    Pins that ``_audit_primary_ambiguity`` sits *below* the
-    ``registry.is_finalized()`` short-circuit in ``finalize_django_types``;
-    a second ``finalize_django_types()`` call must short-circuit without
-    re-auditing.
+    Pins that ``_audit_primary_ambiguity`` sits *below* the ``registry.is_finalized()``
+    short-circuit in ``finalize_django_types``; a second ``finalize_django_types()`` call must
+    short-circuit without re-auditing.
+
+    Registry lifecycle: ``_audit_primary_ambiguity`` inside ``finalize_django_types``. A live
+    schema with two types and no primary never builds. No live sibling for the raise; composition
+    success is ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
     calls = []
     original = registry.models_with_multiple_types
@@ -1387,7 +1705,11 @@ def test_audit_runs_once_per_build(monkeypatch):
 
 
 def test_unregister_removes_from_types_models_primaries_definitions(fresh_registry):
-    """``unregister`` drops the type from every registry map."""
+    """``unregister`` drops the type from every registry map.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class ItemType:
         pass
@@ -1407,10 +1729,12 @@ def test_unregister_removes_from_types_models_primaries_definitions(fresh_regist
 def test_unregister_evicts_connection_type_cache_entry(fresh_registry):
     """``unregister`` drops the type's generated-connection-class cache entry.
 
-    ``clear()`` already purges the whole identity-keyed cache; ``unregister``
-    promises "all traces" of one type, so its eviction keeps the two public
-    mutators consistent. Entries for OTHER types
+    ``clear()`` already purges the whole identity-keyed cache; ``unregister`` promises "all traces"
+    of one type, so its eviction keeps the two public mutators consistent. Entries for OTHER types
     survive.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
     from django_strawberry_framework.connection import _connection_type_cache
 
@@ -1435,9 +1759,12 @@ def test_unregister_evicts_connection_type_cache_entry(fresh_registry):
 def test_unregister_tolerates_unimportable_connection_submodule(fresh_registry):
     """``unregister``'s connection-cache ``except ImportError`` guard is best-effort.
 
-    Unregister twin of ``test_clear_tolerates_unimportable_connection_submodule``
-    - same poisoned-``sys.modules`` shape; the registry's own maps are still
-    cleaned when ``connection.py`` cannot be imported.
+    Unregister twin of ``test_clear_tolerates_unimportable_connection_submodule`` - same
+    poisoned-``sys.modules`` shape; the registry's own maps are still cleaned when
+    ``connection.py`` cannot be imported.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
     import sys
 
@@ -1461,7 +1788,11 @@ def test_unregister_tolerates_unimportable_connection_submodule(fresh_registry):
 
 
 def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry):
-    """``unregister`` discards pending relations whose ``source_type`` matches."""
+    """``unregister`` discards pending relations whose ``source_type`` matches.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class CategoryType:
         pass
@@ -1503,10 +1834,12 @@ def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry):
 def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry):
     """``unregister`` of one type for a model leaves siblings registered.
 
-    When the unregistered type was the primary, the model loses its
-    primary slot - the caller is responsible for re-declaring a primary
-    via a fresh registration cycle. Siblings stay in ``types_for`` in
-    their original registration order.
+    When the unregistered type was the primary, the model loses its primary slot - the caller is
+    responsible for re-declaring a primary via a fresh registration cycle. Siblings stay in
+    ``types_for`` in their original registration order.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
 
     class ItemTypeA:
@@ -1534,15 +1867,17 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
     """``unregister(primary_for_multi)`` leaves a state the finalize audit refuses.
 
     Pins the contract narrated by ``unregister``'s docstring at
-    ``django_strawberry_framework/registry.py::TypeRegistry.unregister #"When ``type_cls`` is the primary for its model"``: when ``type_cls`` is the primary for its
-    model, the model loses its primary even if siblings remain - the
-    caller must re-declare a primary via a fresh registration cycle.
-    Concretely: register three types against the same model with the
-    first as primary, unregister the primary, then call
-    ``finalize_django_types()`` and confirm it raises the canonical
-    ambiguity error. Prevents a later change from "helpfully"
-    auto-promoting the next sibling to primary on unregister, which
-    would silently change the relation-resolution target.
+    ``django_strawberry_framework/registry.py::TypeRegistry.unregister #"When ``type_cls`` is the
+    primary for its model"``: when ``type_cls`` is the primary for its model, the model loses its
+    primary even if siblings remain - the caller must re-declare a primary via a fresh registration
+    cycle. Concretely: register three types against the same model with the first as primary,
+    unregister the primary, then call ``finalize_django_types()`` and confirm it raises the
+    canonical ambiguity error. Prevents a later change from "helpfully" auto-promoting the next
+    sibling to primary on unregister, which would silently change the relation-resolution target.
+
+    Registry lifecycle: ``_audit_primary_ambiguity`` inside ``finalize_django_types``. A live
+    schema with two types and no primary never builds. No live sibling for the raise; composition
+    success is ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
 
     class ItemTypeA(DjangoType):
@@ -1584,7 +1919,11 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
 
 
 def test_unregister_is_noop_on_unknown_type(fresh_registry):
-    """``unregister`` returns silently when ``type_cls`` was never registered."""
+    """``unregister`` returns silently when ``type_cls`` was never registered.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
+    """
 
     class NotRegistered:
         pass
@@ -1597,11 +1936,13 @@ def test_unregister_is_noop_on_unknown_type(fresh_registry):
 def test_unregister_raises_after_finalize():
     """``unregister`` honours ``_check_mutable``: post-finalize calls raise.
 
-    The finalized registry is the runtime lookup source for optimizer
-    planning, the schema audit, and relation-target resolution. Removing
-    entries after ``finalize_django_types()`` would silently disable
-    planning for types still present in the built Strawberry schema, so
-    the public mutator refuses to corrupt the snapshot.
+    The finalized registry is the runtime lookup source for optimizer planning, the schema audit,
+    and relation-target resolution. Removing entries after ``finalize_django_types()`` would
+    silently disable planning for types still present in the built Strawberry schema, so the public
+    mutator refuses to corrupt the snapshot.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
 
     class CategoryType(DjangoType):
@@ -1618,13 +1959,15 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
     """``clear()`` itself imports nothing, so a broken ``sys.modules`` cannot break it.
 
     Every subsystem binds its own teardown callback at ITS import time via
-    ``register_subsystem_clear``, and ``clear()`` replays the already-resolved
-    callables. That replay is the only place a poisoned ``sys.modules`` can be
-    reached at all, and it imports neither poisoned name directly; the two
-    submodule lookups it does make are best-effort
-    (``utils/inputs.py::_safe_import``). So neither the poisoned package nor the
-    poisoned ``inputs`` module can make ``clear()`` raise: the registry's own
-    state is dropped either way (spec-027 Decision 9).
+    ``register_subsystem_clear``, and ``clear()`` replays the already-resolved callables. That
+    replay is the only place a poisoned ``sys.modules`` can be reached at all, and it imports
+    neither poisoned name directly; the two submodule lookups it does make are best-effort
+    (``utils/inputs.py::_safe_import``). So neither the poisoned package nor the poisoned
+    ``inputs`` module can make ``clear()`` raise: the registry's own state is dropped either way
+    (spec-027 Decision 9).
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
     import sys
 
@@ -1658,17 +2001,17 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
 def test_clear_tolerates_unimportable_order_submodules(fresh_registry):
     """``clear()`` itself imports nothing, so a broken ``sys.modules`` cannot break it.
 
-    Order twin of ``test_clear_tolerates_unimportable_filter_submodules``.
-    Every subsystem binds its own teardown callback at ITS import time via
-    ``register_subsystem_clear`` -- the order side registers
-    ``clear_order_input_namespace`` and
-    ``_clear_helper_referenced_ordersets`` -- and ``clear()`` replays the
-    already-resolved callables. That replay is the only place a poisoned
-    ``sys.modules`` can be reached at all, and it imports neither poisoned
-    name directly; the two submodule lookups it does make are best-effort
-    (``utils/inputs.py::_safe_import``). So neither the poisoned package nor
-    the poisoned ``inputs`` module can make ``clear()`` raise: the registry's
-    own state is dropped either way (spec-028 Decision 9).
+    Order twin of ``test_clear_tolerates_unimportable_filter_submodules``. Every subsystem binds
+    its own teardown callback at ITS import time via ``register_subsystem_clear`` -- the order side
+    registers ``clear_order_input_namespace`` and ``_clear_helper_referenced_ordersets`` -- and
+    ``clear()`` replays the already-resolved callables. That replay is the only place a poisoned
+    ``sys.modules`` can be reached at all, and it imports neither poisoned name directly; the two
+    submodule lookups it does make are best-effort (``utils/inputs.py::_safe_import``). So neither
+    the poisoned package nor the poisoned ``inputs`` module can make ``clear()`` raise: the
+    registry's own state is dropped either way (spec-028 Decision 9).
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
     import sys
 
@@ -1703,11 +2046,13 @@ def test_clear_tolerates_unimportable_connection_submodule(fresh_registry):
     """The connection-cache ``except ImportError`` guard in ``clear()`` is best-effort.
 
     Connection twin of ``test_clear_tolerates_unimportable_order_submodules``. The
-    connection-type-cache co-clear (``clear_connection_type_cache``) uses a
-    cycle-safe local import (``spec-030-connection_field-0_0_9`` P3b). If
-    ``connection.py`` cannot be imported (forced here by poisoning ``sys.modules``),
-    ``clear()`` skips that block and still clears the registry's own state rather
-    than raising.
+    connection-type-cache co-clear (``clear_connection_type_cache``) uses a cycle-safe local import
+    (``spec-030-connection_field-0_0_9`` P3b). If ``connection.py`` cannot be imported (forced here
+    by poisoning ``sys.modules``), ``clear()`` skips that block and still clears the registry's own
+    state rather than raising.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
     import sys
 
@@ -1736,13 +2081,15 @@ def test_clear_tolerates_unimportable_connection_submodule(fresh_registry):
 def test_clear_tolerates_unimportable_relay_module(fresh_registry):
     """The node-field-ledger ``except ImportError`` guard in ``clear()`` is best-effort.
 
-    Relay twin of ``test_clear_tolerates_unimportable_connection_submodule``.
-    The root-node-field ledger co-clear (``_node_fields_declared.clear()``,
-    spec-032 Decision 8) uses a cycle-safe local import. If the top-level
-    ``relay.py`` cannot be imported (forced here by poisoning ``sys.modules``),
-    ``clear()`` skips that block and still clears the registry's own state
-    rather than raising. The positive co-clear path is pinned by
+    Relay twin of ``test_clear_tolerates_unimportable_connection_submodule``. The root-node-field
+    ledger co-clear (``_node_fields_declared.clear()``, spec-032 Decision 8) uses a cycle-safe
+    local import. If the top-level ``relay.py`` cannot be imported (forced here by poisoning
+    ``sys.modules``), ``clear()`` skips that block and still clears the registry's own state rather
+    than raising. The positive co-clear path is pinned by
     ``tests/test_relay_node_field.py::test_node_field_without_node_types_raises_at_finalize``.
+
+    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
+    LIFO order, retry, or ImportError guards. No live sibling.
     """
     import sys
 

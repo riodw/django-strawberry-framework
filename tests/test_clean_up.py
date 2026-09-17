@@ -1,4 +1,14 @@
-"""Script tests for clean_up generated-artifact deletion boundaries."""
+"""Script tests for clean_up generated-artifact deletion boundaries.
+
+Keeps the deletion inventory for ``scripts/clean_up.py``: generated review,
+builder, shadow, worker-memory, and bug-hunt artifacts go; standing docs,
+``dicta.md``, ``HUNT.md``, and the worker-memory directory shells stay. Also
+keeps the ``FILE_GLOBS`` pattern for ``docs/bug_hunt`` in lockstep with the
+name ``scripts/bug_hunt.py`` writes. A live ``/graphql/`` request has no wire
+shape for filesystem deletion of cycle scratch or for a glob agreeing with
+another script's output name, so neither row can move. There is no live
+sibling in ``examples/fakeshop/test_query/``.
+"""
 
 from fnmatch import fnmatch
 from pathlib import Path
@@ -14,6 +24,7 @@ def _write(root: Path, relative_path: str) -> Path:
 
 
 def test_clean_up_targets_current_generated_artifacts(tmp_path, monkeypatch):
+    """The cleaner deletes generated artifacts and leaves standing docs plus worker-memory shells."""
     monkeypatch.setattr(clean_up, "REPO_ROOT", tmp_path)
 
     deleted_paths = {

@@ -1,5 +1,14 @@
 """Script tests for the failability-proof runner's refusals and restore proof.
 
+Repo tooling: these rows pin ``scripts/prove_failability.py`` (manifest
+refusals, exactly-once anchors, mutate-run-restore with byte-compared restore,
+acceptance verdicts, and the labelling that stops a narrowed ``--only`` run's
+report from reading like a complete one). A live ``/graphql/`` request has no
+wire shape for a CLI that mutates tracked source and writes a markdown proof
+record. Rungs 1-3 (shipped field, fixture extension, holder schema) would only
+wrap those refusals in a GraphQL type, which is not a consumer contract. There
+is no live sibling in ``examples/fakeshop/test_query/``.
+
 The runner writes to tracked production source, so the boundaries worth pinning
 are the ones that stop it writing the wrong thing or leaving a mutation behind:
 the exactly-once anchor, the inside-the-repo target check, the outside-the-repo

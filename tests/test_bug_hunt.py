@@ -1,4 +1,12 @@
-"""Focused tests for the autonomous bug-hunt progress generator."""
+"""Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
+
+Keeps CLI, progress-file, dicta, git-inventory, and shadow-publish contracts for
+``scripts/bug_hunt.py`` and the snapshot helper it delegates to
+(``scripts/review_historical_package_snapshot_at_commit.py``). A live
+``/graphql/`` request has no wire shape for generated markdown, git listings, or
+``docs/shadow/current/`` publish/rollback, so none of these rows can move. There
+is no live sibling in ``examples/fakeshop/test_query/``.
+"""
 
 import subprocess
 from collections.abc import Sequence

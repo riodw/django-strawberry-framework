@@ -1,4 +1,13 @@
-"""Tests for TREE renderer planned descriptions, replacements, and source discovery."""
+"""Tests for TREE renderer planned descriptions, replacements, and source discovery.
+
+Repo tooling: these rows pin ``scripts/build_tree_md.py`` planned-path
+annotations, target-layout replacements, and fakeshop source discovery, which
+run at render time against the working tree and an in-process card snapshot.
+A live ``/graphql/`` request has no wire shape for TREE.md markdown, a
+curated planned-path sentence, or a filesystem inventory the renderer walks,
+so none of these rows can move. There is no live sibling in
+``examples/fakeshop/test_query/``.
+"""
 
 import re
 from types import SimpleNamespace
@@ -6,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.build_tree_md import (
+    PLANNED_PATH_DESCRIPTIONS,
     REPO_ROOT,
     PlannedPath,
     TargetNode,
@@ -16,6 +26,22 @@ from scripts.build_tree_md import (
     render_fakeshop_project_tree,
     render_target_tree,
 )
+
+_FAKESHOP_PROJECT = REPO_ROOT / "examples" / "fakeshop"
+_FAKESHOP_APP_NAMES = fakeshop_app_names(_FAKESHOP_PROJECT / "apps")
+_CURATED_PLANNED_DESCRIPTIONS = tuple(PLANNED_PATH_DESCRIPTIONS.items())
+_FAKESHOP_TREE_SOURCE_FILES = (
+    "graphql_client.py",
+    "manage.py",
+    "schema_reload.py",
+    "strategy_schemas.py",
+    "constraints.py",
+    "filters_genre.py",
+    "serializers.py",
+    "signals.py",
+    "factories.py",
+)
+_FAKESHOP_APP_LOCAL_TESTS = ("test_signals.py", "test_import_spec_terms.py")
 
 
 def _card(
@@ -38,6 +64,11 @@ def _row(path: str, *, is_directory: bool, cards: list) -> SimpleNamespace:
         is_directory=is_directory,
         cards=SimpleNamespace(all=lambda cards=cards: list(cards)),
     )
+
+
+@pytest.fixture(scope="module")
+def rendered_fakeshop_project_tree() -> str:
+    return "\n".join(render_fakeshop_project_tree(_FAKESHOP_PROJECT))
 
 
 def test_planned_path_uses_branch_specific_description() -> None:
@@ -88,12 +119,15 @@ def test_planned_path_rejects_a_two_sentence_title_like_any_summary() -> None:
         _ = planned.description
 
 
-def test_every_curated_planned_description_is_one_sentence() -> None:
-    from scripts.build_tree_md import PLANNED_PATH_DESCRIPTIONS
-
-    for path, summary in PLANNED_PATH_DESCRIPTIONS.items():
-        planned = PlannedPath(path=path, is_directory=True, card_id="X-1", card_title="ignored")
-        assert planned.description == f"planned by X-1 - {summary}"
+@pytest.mark.parametrize(
+    ("path", "summary"),
+    _CURATED_PLANNED_DESCRIPTIONS,
+    ids=[path.rstrip("/").replace("/", "-") for path, _ in _CURATED_PLANNED_DESCRIPTIONS],
+)
+def test_curated_planned_description_is_one_sentence(path: str, summary: str) -> None:
+    """Each curated planned-path summary is one sentence and wins over the card title."""
+    planned = PlannedPath(path=path, is_directory=True, card_id="X-1", card_title="ignored")
+    assert planned.description == f"planned by X-1 - {summary}"
 
 
 def test_planned_rows_skip_paths_that_already_exist_on_disk() -> None:
@@ -162,20 +196,22 @@ def test_target_tree_replaces_flat_module_with_planned_package(tmp_path) -> None
     assert "permissions.py" not in rendered
 
 
-def test_fakeshop_project_tree_discovers_root_helpers_and_every_app() -> None:
-    rendered = "\n".join(render_fakeshop_project_tree(REPO_ROOT / "examples" / "fakeshop"))
+@pytest.mark.parametrize("filename", _FAKESHOP_TREE_SOURCE_FILES)
+def test_fakeshop_project_tree_includes_source_file(
+    filename: str,
+    rendered_fakeshop_project_tree: str,
+) -> None:
+    """Root helpers and app sources the renderer is meant to walk appear in the tree."""
+    assert filename in rendered_fakeshop_project_tree
 
-    for filename in (
-        "graphql_client.py",
-        "manage.py",
-        "schema_reload.py",
-        "strategy_schemas.py",
-    ):
-        assert filename in rendered
-    for app_name in fakeshop_app_names(REPO_ROOT / "examples" / "fakeshop" / "apps"):
-        assert f"{app_name}/" in rendered
-    for app_source in ("constraints.py", "filters_genre.py", "serializers.py"):
-        assert app_source in rendered
+
+@pytest.mark.parametrize("app_name", _FAKESHOP_APP_NAMES)
+def test_fakeshop_project_tree_includes_app(
+    app_name: str,
+    rendered_fakeshop_project_tree: str,
+) -> None:
+    """Every filesystem-discovered fakeshop app is a directory in the project tree."""
+    assert f"{app_name}/" in rendered_fakeshop_project_tree
 
 
 def test_discovered_fakeshop_apps_equal_the_installed_local_apps() -> None:
@@ -185,21 +221,19 @@ def test_discovered_fakeshop_apps_equal_the_installed_local_apps() -> None:
     renderer's discovery is checked against the project's own declaration, and a
     seventh app added to either side without the other fails here.
     """
-    settings_text = (REPO_ROOT / "examples" / "fakeshop" / "config" / "settings.py").read_text(
+    settings_text = (_FAKESHOP_PROJECT / "config" / "settings.py").read_text(
         encoding="utf-8",
     )
     installed = tuple(sorted(set(re.findall(r'"apps\.(\w+)\.apps\.', settings_text))))
 
-    assert fakeshop_app_names(REPO_ROOT / "examples" / "fakeshop" / "apps") == installed
+    assert fakeshop_app_names(_FAKESHOP_PROJECT / "apps") == installed
     assert installed  # the regex must have found the local apps at all
 
 
-def test_fakeshop_project_tree_excludes_app_local_tests() -> None:
-    rendered = "\n".join(render_fakeshop_project_tree(REPO_ROOT / "examples" / "fakeshop"))
-
-    # App sources render...
-    assert "signals.py" in rendered
-    assert "factories.py" in rendered
-    # ...but each app's own tests/ tree does not (it is rendered separately).
-    for app_local_test in ("test_signals.py", "test_import_spec_terms.py"):
-        assert app_local_test not in rendered
+@pytest.mark.parametrize("filename", _FAKESHOP_APP_LOCAL_TESTS)
+def test_fakeshop_project_tree_excludes_app_local_test(
+    filename: str,
+    rendered_fakeshop_project_tree: str,
+) -> None:
+    """Each app's own tests tree is omitted from the project tree."""
+    assert filename not in rendered_fakeshop_project_tree

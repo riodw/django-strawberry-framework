@@ -1,4 +1,12 @@
-"""Focused tests for the standalone DRY review toolkit."""
+"""Repo-tooling tests for the DRY review plan, audit, and check CLI.
+
+Keeps CLI, inventory, dossier, and completeness-gate contracts for
+``docs.dry.export_dry_review`` (``plan`` / ``audit`` / ``check``). A live
+``/graphql/`` request has no wire shape for generated DRY review artifacts,
+static AST inventories, duplicate-body groups, or review completeness checks,
+so none of these rows can move. There is no live sibling in
+``examples/fakeshop/test_query/``.
+"""
 
 from pathlib import Path
 

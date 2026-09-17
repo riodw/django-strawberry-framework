@@ -1,4 +1,15 @@
-"""Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation."""
+"""Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
+
+Repo tooling: these rows pin ``scripts/_kanban_lib.py`` helpers and
+``scripts/build_kanban_html.py::assert_placeholders_resolve``, which run at
+render time against an in-process snapshot. A live ``/graphql/`` request has
+no wire shape for a version-tuple parse, a Vue-shell placeholder that would
+print literally in ``KANBAN.html``, or a silent ``max_list_rows`` cap the
+freshness checks cannot see, so none of these rows can move. The kanban
+GraphQL surface lives in ``examples/fakeshop/test_query/test_kanban_api.py``
+and ``examples/fakeshop/test_query/test_kanban_mutations_api.py``; those cover
+reads and writes over HTTP, not this renderer.
+"""
 
 import pytest
 
@@ -13,9 +24,19 @@ from scripts._kanban_lib import (
 from scripts.build_kanban_html import assert_placeholders_resolve
 
 
-def test_version_tuple_ignores_non_ascii_digit_like_characters() -> None:
-    assert version_tuple("1\u00b2.2") == (1, 2)
-    assert version_tuple("\u00b2.2") == (0,)
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1\u00b2.2", (1, 2)),
+        ("\u00b2.2", (0,)),
+    ],
+    ids=["digit-then-superscript", "leading-superscript"],
+)
+def test_version_tuple_ignores_non_ascii_digit_like_characters(
+    text: str,
+    expected: tuple[int, ...],
+) -> None:
+    assert version_tuple(text) == expected
 
 
 def test_version_tuple_stops_at_an_oversized_decimal_segment() -> None:
@@ -40,10 +61,8 @@ def test_a_numeric_card_ref_backed_by_a_reference_row_resolves() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    [
-        "{{card_ref:N}}",  # non-numeric index: the shell's pattern never matches it
-        "{{card_ref:99}}",  # numeric but backed by no reference row
-    ],
+    ["{{card_ref:N}}", "{{card_ref:99}}"],
+    ids=["non-numeric", "out-of-range"],
 )
 def test_a_card_ref_the_shell_cannot_resolve_is_reported(text: str) -> None:
     assert unresolvable_placeholders(text, reference_orders={0}) == [text]
@@ -106,7 +125,7 @@ def test_a_board_matching_the_database_reports_no_truncation() -> None:
 
 
 def test_a_card_whose_items_were_capped_is_reported() -> None:
-    """The live defect: card 52 crossed ``max_list_rows`` and one item silently vanished."""
+    """A nested ``items`` list short of the database count is reported."""
     assert truncation_defects(
         [_payload_card(52, items=100)],
         _expected(52, items=101),
@@ -115,11 +134,10 @@ def test_a_card_whose_items_were_capped_is_reported() -> None:
 
 @pytest.mark.parametrize("payload_key", sorted(CARD_NESTED_LISTS))
 def test_every_guarded_list_can_actually_fail(payload_key: str) -> None:
-    """A list in the map that no case exercises is coverage on paper only.
+    """Each nested list in the census reports its own shortfall.
 
-    ``items`` was the list that broke, but it was not the only one the bound
-    reaches - ``glossaryLinks`` sat at 53 of the old 100 - so each entry is
-    proven to report its own shortfall rather than inheriting the proof.
+    Covering ``items`` does not prove ``glossaryLinks`` (or any other key); a
+    map entry no case exercises is coverage on paper only.
     """
     defects = truncation_defects(
         [_payload_card(52, **{payload_key: 4})],

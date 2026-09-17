@@ -6,22 +6,26 @@ file is the role's delta.
 
 ## Required reading
 
-`AGENTS.md`, `docs/dry/DRY.md`, this file, the artifact, the item-scoped diff including new files,
-the complete target, every consolidated site, its important consumers, and the relevant tests.
-Never Worker 1's `worker-memory/`.
+In this order: `AGENTS.md`, `docs/dry/DRY.md`, this file, the plan item, the complete target, the
+item-scoped diff including new files, every site the diff touches with its important consumers and
+tests, and anything upstream or downstream your own trace needs, in any folder. Then the
+artifact. Never Worker 1's `worker-memory/`.
 
 ## Job
 
-1. Re-trace the family or target through the system rather than the edited lines.
-2. Confirm the matrix was discharged against the target's real surface: judge a claimed
+1. Before opening `## Findings`, record your own trace under
+   `## Independent verification (Worker 2)`: sites, roles, definition counts per posited change,
+   the owner you would choose. Then read the findings and reconcile every difference explicitly.
+2. Check `### Enumeration` member by member against your own count; a sample proves nothing.
+   Confirm the matrix was discharged against the target's real surface: judge a claimed
    inapplicability on its reason, and never let a found consolidation excuse an unsearched axis.
-3. Re-run the change challenges and confirm the definition counts. Confirm each site's role
-   (definition, consumer, oracle, projection) and that no oracle was rewritten to read from the
-   owner it checks.
+3. Confirm the definition counts. Confirm each site's role (definition, consumer, oracle,
+   projection) and that no oracle was rewritten to read from the owner it checks.
 4. Confirm observable equivalence on the axes of `DRY.md` principle 8, using fresh scratch tests
    under `docs/dry/temp-tests/<scope>/` when execution gives stronger evidence than inspection;
-   anything mutating source runs in the disposable workspace `DRY.md` "Tests" describes.
-   Permanent behavior gaps return to Worker 1 for production tests and fixes.
+   anything mutating source runs in a fresh workspace copy taken after Worker 1's edits, as
+   `DRY.md` "Tests" describes. Permanent behavior gaps return to Worker 1 for production tests
+   and fixes.
 5. For a zero-edit family, folder, or project item, confirm the scoped diff is empty and search
    independently for a real consolidation before accepting. For a file item, validate coverage and
    assignment and route any candidate to its holding family; never demand a production edit.
@@ -29,8 +33,13 @@ Never Worker 1's `worker-memory/`.
    freshness field carries fingerprints, that each structural gate fails its negative control, that
    `## Pending execution` lists every deferred proof with its command, and that coupled findings
    are marked so neither can be accepted alone.
-7. For the final gate, confirm the bound inputs still match the tree and every pending command ran.
+7. Check the item-scoped diff against the `AGENTS.md` prose rules: no process provenance,
+   `path::Symbol` citations, tests at the mandated tier. A violation is `revision-needed`.
+   Record any defect you find under `## Defects` marked `(Worker 2)`; do not spend the verdict
+   asking Worker 1 to write it.
+8. For the final gate, confirm the bound inputs still match the tree and every pending command
+   ran, and that each failure is routed to an item or recorded pre-existing.
 
-Append `## Independent verification (Worker 2)`. Set `Status: verified` and tick the plan item
-(marking it `pending execution` when deferred proofs remain), or `Status: revision-needed` with
-concrete named candidates and reproducible feedback. Preserve unrelated work; do not commit.
+Set `Status: verified` and tick the plan item (marking it `pending execution` when deferred proofs
+remain), or `Status: revision-needed` with concrete named candidates and reproducible feedback.
+Preserve unrelated work; do not commit.

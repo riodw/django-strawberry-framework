@@ -15,8 +15,12 @@ out of scope.
 
 Two roles. **Construction discipline**: "Design principles" bind every builder plan /
 implementation / review ([BUILD.md][build]). **Consolidation flow**: the cycle below hunts rules
-that grew a second owner. Reading the principles never starts a cycle; Rio starts one by name
-([START.md][start] Agentflows). [AGENTS.md][agents] governs safety, tests, formatting, commits.
+that grew a second owner. Entry: `Execute docs/dry/DRY.md (You are Worker-0)`. Worker 0 reads
+[AGENTS.md][agents] + [START.md][start], generates or resumes the plan, then runs every item,
+revision and the final gate autonomously until the plan says `Status: complete` or a genuine
+maintainer decision blocks it; `pause-after-each-item` only when the command names that mode.
+Reading the principles never starts a cycle; nothing here self-starts. [AGENTS.md][agents]
+governs safety, tests, formatting, commits.
 
 ## Vocabulary
 
@@ -148,14 +152,20 @@ reports one owner per file while the rule has three across the package).
 
 Every `.py` under `django_strawberry_framework/` is a plan item. File item discharged when every
 rule it defines/enforces is assigned to a named family in the plan's responsibility index, or
-recorded file-local w/ no second site after the matrix. No consolidation inside a file item;
-consolidation lives in the family item holding all sites. Folder + project items audit the
-unassigned remainder + cross-boundary families. Discovery + consolidation in one cycle; no
-catalog-only cycle.
+recorded file-local w/ no second site after the matrix. Completeness is mechanical: the
+artifact's `### Enumeration` names the instrument (every name in `ast.Module.body`, or better) +
+its count, and every member lands in a family row, a file-local row, or a rejection; every
+`### Challenges` row ends in one of those homes. Sampling the challenge table finds gaps only in
+rules someone already challenged. A `file-local` index row carries its one file + the challenge
+that found no second site; a row whose finding names a second site is a family or a rejection,
+never `file-local`. No consolidation inside a file item; consolidation lives in the
+family item holding all sites. Folder + project items audit the unassigned remainder +
+cross-boundary families. Discovery + consolidation in one cycle; no catalog-only cycle.
 
 Family item sweeps the WHOLE package for the rule's mechanism (dunder, decorator, exception,
 sentinel), not the target's neighbours — the second definition is routinely in a module no seed
-named. Family item writes every sub-rule it decomposes back to the index as its own row.
+named. Family item reports every sub-rule it decomposes; Worker 0 adds each to the index as its
+own row (Worker 0 alone edits the plan; workers name families and rows in the artifact).
 
 ### Mandatory probing matrix
 
@@ -235,12 +245,15 @@ Every finding, consolidated or rejected:
   ([test_resolvers.py][test-resolvers]`::test_write_flavors_share_resolver_entry_factory` asserts
   `__name__` thrice). Owner already single + no gate = `gate-only` finding: distinct outcome, not
   a consolidation; needs a justified population (which mechanism, which bypass is plausible),
-  never a bespoke existence test per helper.
+  never a bespoke existence test per helper. First run the would-be gate against the tree and
+  show the rule currently holds: a gate born red gets weakened, not fixed; a red result is a
+  defect, not a gate.
 - **Coupling** — findings that must land together + why (generated slot collides, import moves).
   Visible to a reviewer reading one finding alone.
 - **Freshness** — fingerprint of every input inspected: blob id per file (`git hash-object
-  <path>`; `HEAD:<path>` when clean), searched population, tests, contract sources. A path name
-  can't say later whether its bytes changed. Any fingerprint change reopens the finding.
+  <path>`; `HEAD:<path>` when clean), searched population, tests, contract sources, and every
+  module EXCLUDED from the family on the strength of its body. A path name can't say later
+  whether its bytes changed. Any fingerprint change reopens the finding.
 
 Fields only where they apply; a finding is a decision aid, not a catalog entry. Finding line
 estimate = per finding; plan outcomes measure the cycle over the baseline diff; the two need not
@@ -256,31 +269,52 @@ trigger to check, never a substitute for a fresh trace; "reviewed once" ≠ perm
 ### Tests
 
 Remove tests of deleted internals only when each distinct behavior demonstrably survives as a case
-on the owner. Boundary tests stay at the [AGENTS.md][agents] tier; oracles never rewritten to read
-from the owner they check. Owner coverage ≠ every former behavior still runs. Intentional test
-repetition stays when it keeps behaviors independently legible. Every gate a finding relies on must
-be shown able to fail for the divergence it guards (`scripts/prove_failability.py`).
+on the owner. Boundary tests stay at the [AGENTS.md][agents] tier; when the live tier needs a
+fakeshop fixture that doesn't exist (model, relation shape), the test lands at the strongest
+existing tier and the missing fixture becomes a `## Defects` entry for Rio: never a new example
+model inside an item. Oracles never rewritten to read from the owner they check. Owner coverage ≠
+every former behavior still runs. Intentional test repetition stays when it keeps behaviors
+independently legible. Every gate a finding relies on must be shown able to fail for the
+divergence it guards (`scripts/prove_failability.py`).
 
 That runner mutates and restores the checkout it lives in: root from its own path, targets
 resolved against it, pytest run inside it, scratch root refused inside it. Copying a target under
 `temp-tests/` redirects nothing; running the live script on a package target edits the shared tree
 and its restore can erase a concurrent edit ([HUNT.md][hunt] "A scratch directory is not a
-sandbox"). Rule: `git archive HEAD | tar -x -C <scratch>/dry-ws`; copy every dirty/untracked input
-the proof depends on by explicit path (list them in the artifact); run THAT copy's runner via
-`uv run --project <scratch>/dry-ws ...` w/ `--scratch-root` outside both trees; before any verdict
-print the imported package `__file__` + the database target from inside the workspace; never
-branch. The runner's pytest subprocess is a test run: Rio's authorization covers it, or the proof
-waits as `execution-deferred`.
+sandbox"). Workspace = the hunt's recipe:
+
+```shell
+WS=<scratch>/dry-ws/<item>
+rsync -a --exclude .git --exclude .venv --exclude '__pycache__' --exclude docs/ ./ "$WS/"
+uv run --directory "$WS" python -c "import django_strawberry_framework as p; print(p.__file__)"
+```
+
+Copy of the live tree, cycle edits included. Every command runs w/ `$WS` as cwd via
+`uv run --directory "$WS"`: `--project` alone keeps the caller's cwd on `sys.path`, so the import
+above then prints the SHARED package and the check passes for the wrong tree. Run THAT copy's
+runner the same way w/ `--scratch-root` outside both trees; before any verdict record the printed
+package `__file__` + the database `NAME` resolved from inside `$WS`; never branch. A proof
+importing the shared checkout or opening its database = invalid, whatever it showed. Worker 2
+takes a fresh copy after Worker 1's edits. The entry command authorizes any run inside `$WS`, a
+focused permanent test w/ `--no-cov` in the shared tree, and the final gate `uv run pytest`;
+nothing else converts into a test run, and a proof needing one it can't get =
+`execution-deferred`. `FAKESHOP_SHARDED=1` and Postgres cells need Rio's separate word; without
+it they stay `unverified` and the gate lists them, unless `inapplicable by construction`: the
+target's code path reaches no database, alias or dialect decision, Worker 1 states the reason,
+Worker 2 judges it.
 
 ### Defects found while tracing
 
 Reading for contract finds non-duplication bugs: docstring contradicting its body, guard one flavor
 lacks (axis 6, contract source found), layering claim the imports contradict. → `## Defects` in the
-artifact w/ owner; never fixed inside the item; never dropped. Before closeout Worker 0 homes each
+artifact w/ owner; never fixed inside the item; never dropped. Worker 2 appends its own entries
+there, marked `(Worker 2)`; Worker 0 homes them the same way. Before closeout Worker 0 homes each
 on a NAMED owning card (unowned deferral dies). Defect a consolidation can't land without → the
 finding's Coupling names it and the family stays open: Rio authorizes a combined fix, or the
 consolidation is redesigned to stand alone. Carding the repair while accepting the dependent
-consolidation is not a resolution.
+consolidation is not a resolution. A defect w/ security impact (authorization, database routing,
+data exposure) goes to Rio by the [SECURITY.md][security] path as `blocked`, its reproduction kept
+out of the artifact.
 
 ### Zero-edit result
 
@@ -292,33 +326,42 @@ admission ticket.
 
 ### Plan
 
-One plan per release via the planner (inventories current source; refuses to overwrite):
+One plan per release via the planner (inventories current source; release from the package
+`__version__`; refuses to overwrite):
 
 ```shell
-uv run python docs/dry/export_dry_review.py plan \
-  --target-release <X.Y.Z> \
-  --mode <autonomous|pause-after-each-item>
+uv run python docs/dry/export_dry_review.py plan
 ```
 
-`docs/dry/dry-<release>.md`: every `.py`, one folder integration item per package folder, project
-integration, final test gate. Artifacts: `dry-file-<path>.md` (`/`→`__`, `.py` dropped),
-`dry-folder-<path>.md`, `dry-project.md`. Worker 0 appends what the planner doesn't generate:
-`## Responsibility index` (family, owner, files covered, holding item, status); `## Families` (one
-`dry-rule-<family>.md` item per discovered family, added as found); `## Owned changes` (ledger,
-"Baseline and ownership"); `## Outcomes` (closeout); fills the `Cycle baseline:` line. Plan already
-exists for the release → continue under `## Run <release> <date>-<n>` (the run id every artifact's
-`Run:` line repeats), never replace. Before a run's first dispatch, and again before the final
-gate, reconcile the plan w/ the current inventory: `.py` added → new item; removed/renamed → item
-closed w/ note, artifact re-keyed; family members found → index rows. Item w/o a freshness
+`docs/dry/dry-<release>.md` (`0.0.15` → `dry-0_0_15.md`): `Status:`, `Mode:`, `Run:` (run id
+`<release> <date>-<n>`, repeated on every artifact's `Run:` line); `## Cycle baseline`
+(`git status --short` at generation); `## How to work one item`; every `.py` as a file item, one
+folder integration item per package folder, project integration, final test gate;
+`## Responsibility index` (family, owner, files covered, holding item, status); `## Families`
+(one `dry-rule-<family>.md` item per discovered family, added as found); `## Owned changes`
+(ledger, "Baseline and ownership"); `## Outcomes` (closeout). Artifacts: `dry-file-<path>.md`
+(`/`→`__`, `.py` dropped), `dry-folder-<path>.md`, `dry-rule-<family>.md`, `dry-project.md`.
+`--mode pause-after-each-item` when the entry command names it; `--target-release` only when the
+version literal is mid-change. Worker 0 alone edits the plan; nobody erases prior lines. A run
+Rio scopes below the whole plan sets `Status: partial (<scope>)` and closes w/ an `## Outcomes`
+"Scope of this run" section naming what ran and what did not; an unticked box never reads as
+examined.
+
+Plan already exists for the release → resume: validate `Status:`, `Run:` + `## Cycle baseline`
+against the tree (a `Status:` line alone is never trusted), continue under
+`## Run <release> <date>-<n>`, never replace. Before a run's first dispatch, and again before the
+final gate, reconcile the plan w/ the current inventory: `.py` added → new item; removed/renamed →
+item closed w/ note, artifact re-keyed; family members found → index rows. Item w/o a freshness
 fingerprint the finding record can compare = unverified, whatever its checkbox says: reopen, don't
-tick. Fingerprint changed → reopen.
+tick. Fingerprint changed → reopen. A plan w/o `## Cycle baseline` predates this planner: its
+ticks are history; every item is re-verified under the new run.
 
 ### Baseline and ownership
 
-Cycle entry: Worker 0 records `CYCLE_BASELINE=$(git stash create)` (empty → `HEAD`) +
-`git status --short` + untracked files under the package, on the plan's `Cycle baseline:` line.
-Stash object = tracked changes only; listings = the rest. Everything dirty there = concurrent work:
-never edited, reverted, tidied; final net change = diff vs this object + the untracked listing.
+Cycle entry: Worker 0 appends `CYCLE_BASELINE=$(git stash create)` (empty → `HEAD`) + untracked
+files under the package to the plan's `## Cycle baseline`, once. Stash object = tracked changes
+only; listings = the rest. Everything dirty there = concurrent work: never edited, reverted,
+tidied; final net change = diff vs this object + the untracked listing.
 
 Per item: `ITEM_BASELINE=$(git stash create)` + the same listings, for the item-scoped comparison
 only. Item-scoped diff = `git diff <item baseline> -- <paths touched>` PLUS every file the item
@@ -329,9 +372,14 @@ Dirty ≠ untouchable. Each item landing tracked edits or new files appends to t
 `## Owned changes`: path, item, symbols changed. A later item may build on a path listed there.
 Attribute by content, never by dirty status: before editing a dirty path, diff vs
 `git show HEAD:<path>` and match every hunk to the ledger or the cycle baseline; a hunk in neither
-= external edit → stop, report to Worker 0, who reconciles w/ Rio. Same stop when the item-scoped
-diff shows hunks the worker didn't make. A file clean at cycle entry, dirty w/o a ledger row =
-external.
+= external edit → stop, report to Worker 0, who reconciles w/ Rio. Scope = the paths the item
+touches; dirt elsewhere is concurrent work to leave alone, not a stop. Same stop when the
+item-scoped diff shows hunks the worker didn't make. A file clean at cycle entry, dirty w/o a
+ledger row = external.
+
+A test failing before the item's first edit is pre-existing: reproduce it in a workspace copy taken
+before that edit, record it under `## Defects` w/ owner + the failing command, route to Rio
+through Worker 0. It blocks the gate row, never the item.
 
 ### Workers
 
@@ -340,35 +388,58 @@ Fresh workers per item; author never approves own change. No worker reads anothe
 [worker-0.md][worker-0], [worker-1.md][worker-1], [worker-2.md][worker-2] = role delta only; this
 doc is canonical.
 
-1. **Worker 1** traces the family/target system-wide, tries to disprove each candidate, writes the
+**The item fences edits, never inspection.** A rule is DRY or not across the whole system, so
+Worker 1 and Worker 2 read and trace wherever it leads: upstream callers, downstream consumers,
+sibling flavors, tests at every tier, examples, docs, the installed Django / Strawberry / DRF
+sources in `.venv`, any package folder. Nobody needs permission to open a file outside the item;
+an investigation that stopped at the target's own module has not been done. Only the edit is
+scoped: the owner, its tests, the ledger rows the item lands.
+
+1. **Worker 0** dispatches in plan order: file items; a family item as soon as an artifact names
+   it, before the folder item holding its members; folder items; project; gate. Per item: record
+   the baseline, spawn a fresh Worker 1 w/ the item, artifact path, run id, baseline, ledger,
+   required reading. Artifact `Status:` drives the next step: `ready-for-verification/<n>` →
+   Worker 2 (fresh on pass 1);
+   `designed` → Worker 1 w/ edit rights, or Rio; `revision-needed` → Worker 1 again, and its
+   resubmission returns to the SAME Worker 2 whose trace is already on disk (fresh only when that
+   context is gone; two failed re-passes → `blocked`, Rio decides; a standing Worker 1 / Worker 2
+   disagreement → `blocked` at once w/ both positions recorded, never a third pass to break it);
+   `verified` → ledger rows,
+   tick, advance (`autonomous`) or
+   report + wait for Rio's go (`pause-after-each-item`). Adds `## Families` items, index rows,
+   ledger rows; reconciles unattributed hunks w/ Rio before further dispatch; removes item scratch
+   by explicit path after `verified` only. Never reviews, implements, approves, overrides Worker 2.
+2. **Worker 1** traces the family/target system-wide, tries to disprove each candidate, writes the
    artifact; confirmed consolidation → implements at the owner w/ permanent tests in the same
-   change. `Status: fix-implemented` for edited AND proved zero-edit results. No edit rights
-   (design pass) → `Status: designed`: findings complete + unapplied, proofs ≤ `static-reviewed`;
-   Worker 0 routes to a Worker 1 w/ edit rights or to Rio.
-2. **Worker 2** re-traces independently; challenges equivalence + ownership; confirms matrix
-   discharged against the target's REAL surface (claimed inapplicability judged on its reason);
-   confirms definition counts; confirms each gate fails its negative control. Zero-edit family /
-   folder / project item → searches for a real consolidation before accepting; zero-edit FILE item
-   → validates coverage + assignment and routes any candidate to its holding family (a file item
-   never owes a production edit). `verified` (`## Pending execution` intact → plan item marked
-   `verified, pending execution`) or `revision-needed` w/ concrete named candidates.
-3. Revisions → Worker 1. Worker 2 alone completes a plan item. `pause-after-each-item`: Worker 0
-   reports each verified item and dispatches nothing until Rio says go; `autonomous`: advance.
-   Verification stale (item reopens) when any freshness fingerprint changes.
+   change. `Status: ready-for-verification/<n>` (n = submission pass) for edited AND proved
+   zero-edit results. No edit rights (design pass) → `Status: designed`: findings complete +
+   unapplied, proofs ≤ `static-reviewed`.
+3. **Worker 2** works expectation-first: receives the plan item, target, item-scoped diff and
+   fresh workspace, records its own trace (sites, roles, definition counts, owner) in
+   `## Independent verification (Worker 2)` BEFORE reading `## Findings`; then checks
+   `### Enumeration` member by member, never by sample; challenges equivalence + ownership;
+   confirms matrix discharged against the target's REAL surface (claimed inapplicability judged
+   on its reason); confirms each gate fails its negative control; checks the item-scoped diff
+   against [AGENTS.md][agents] prose rules (no process provenance, `path::Symbol` citations, test
+   tier); records defects it finds under `## Defects` marked `(Worker 2)`. Zero-edit family /
+   folder / project item → searches for a real consolidation before accepting; zero-edit FILE
+   item → validates coverage + assignment and routes any candidate to its holding family (a file
+   item never owes a production edit). `verified` (`## Pending execution` intact → plan item
+   marked `verified, pending execution`) or `revision-needed` w/ concrete named candidates.
+   Worker 2 alone completes a plan item; verification goes stale (item reopens) when any
+   freshness fingerprint changes.
 
-Worker 0 coordinates + preserves baseline; never reviews, implements, approves. Cross-file changes
-expected when a family reveals a package-owned rule. Unrelated cleanup out of scope.
-
-After an edit: `uv run ruff format .`, `uv run ruff check --fix .`. Pytest only on Rio's explicit
-authorization; worker prose never converts dispatch into it; a proof needing a run it didn't get =
-`execution-deferred`. Changelog edits need explicit authorization. Only Rio commits.
+Cross-file changes expected when a family reveals a package-owned rule. Unrelated cleanup out of
+scope. After an edit: `uv run ruff format .`, `uv run ruff check --fix .`. Test runs only as
+"Tests" authorizes; worker prose never converts dispatch into more. Changelog edits need explicit
+authorization. Only Rio commits.
 
 ### Artifact
 
 ```text
 # DRY review: `<family or path>`
 
-Status: investigating | designed | fix-implemented | revision-needed | verified
+Status: investigating | designed | ready-for-verification/<n> | revision-needed | verified
 Run: <release> <date>-<n>
 
 ## System trace
@@ -380,6 +451,10 @@ What the target owns, sites found, connected behavior examined.
 ### Matrix
 
 Each axis searched or ruled inapplicable, for the family as a whole.
+
+### Enumeration
+
+File items: instrument + count; every member → family row | file-local | rejection.
 
 ### Challenges
 
@@ -408,30 +483,36 @@ reasoning. No inventories, copied tool output, empty placeholders.
 
 ### Final gate and closeout
 
-Every item but the gate verified + inventory re-reconciled → Worker 0 asks Rio to authorize
-`uv run pytest` (unless already given), then dispatches the gate Worker 1. Gate = full suite +
-package coverage 100% + every `## Pending execution` command from every artifact, run as listed (a
-green unmutated suite discharges no failability proof). Record failures, coverage, skips, xfails,
-collected/selected counts, `FAKESHOP_SHARDED` mode: sharded-only tests skip by default, so their
-behaviors stay unverified unless Rio also authorizes a `FAKESHOP_SHARDED=1` run. Bind the result:
+Every item but the gate verified + inventory re-reconciled → Worker 0 dispatches the gate
+Worker 1 (the entry command authorized `uv run pytest`). Gate = full suite + package coverage 100%
++ every `## Pending execution` command from every artifact, run as listed (a green unmutated suite
+discharges no failability proof). Record failures, coverage, skips, xfails, collected/selected
+counts, `FAKESHOP_SHARDED` mode: sharded-only tests skip by default, so their behaviors stay
+unverified unless Rio also authorizes a `FAKESHOP_SHARDED=1` run. Bind the result:
 `git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + mode. Change to
 package source, tests, fixtures, pytest/coverage config, dependencies or mode invalidates it; prose
 doesn't. Worker 2 completes the gate row by confirming the bound inputs still match the tree and
-each pending command ran; failures route to their owning item.
+each pending command ran. Failure in a path an item touched → that item back to Worker 1;
+failure reproduced against `git show HEAD:` of its test + target → pre-existing, `## Defects`,
+gate row `blocked` on it for Rio; environment failure → recorded precisely, `blocked`.
 
 Worker 0 fills `## Outcomes` BEFORE deleting anything. Artifacts are untracked; Outcomes is the
 only record a later run can invalidate a verdict from. Per finding: rule, owner before/after, each
 challenge w/ count, freshness fingerprints, proof commands + status, negative control, verifier
-judgment. Per run: machinery deleted; rejections w/ triggers; families left open; coupling
-introduced; net source change vs cycle baseline; gate record; concurrent work untouched. Then
-remove only this run's `docs/dry/temp-tests/<scope>/` dirs, `<scratch>/dry-ws`, +
+judgment. Per run: machinery deleted; rejections w/ triggers; families left open; defects homed
+(each on a NAMED owning card); coupling introduced; net source change vs cycle baseline; gate
+record; cells unverified; blocked items w/ the decision owed; concurrent work untouched. Then
+`Status: complete` (`partial (<scope>)` for a scoped run; `blocked` w/ the decision Rio owes);
+remove only this run's `docs/dry/temp-tests/<scope>/` dirs, `<scratch>/dry-ws/`, +
 `docs/dry/worker-memory/` contents, by explicit path. Never recursively clear `docs/dry/`; never
-delete another run's scratch.
+delete another run's scratch. Never
+remove `DRY.md`, the role files, the planner, or the plan. Do not commit.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../../AGENTS.md
+[security]: ../../SECURITY.md
 [start]: ../../START.md
 
 <!-- docs/ -->

@@ -8,7 +8,8 @@ permanent tests. `docs/bug_hunt/HUNT.md` is canonical; this file is the role's d
 
 `AGENTS.md`, `START.md`, `docs/bug_hunt/HUNT.md`, this file, the progress file (read only), the
 item's shadow inputs when present, the complete live target, and every connected source, test,
-example, doc and contract a sound judgment needs. `## Package questions` guide exploration and
+example, doc and contract a sound judgment needs, upstream and downstream, in any folder: the
+item fences your fix, never your reading. `## Package questions` guide exploration and
 never define results. Prior hunt records and `pbugs.md` are leads with provenance, revalidated on
 the current source.
 

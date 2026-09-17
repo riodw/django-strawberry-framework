@@ -8,7 +8,8 @@ code. `docs/bug_hunt/HUNT.md` is canonical; this file is the role's delta.
 
 `AGENTS.md`, `docs/bug_hunt/HUNT.md`, this file, the item's contract rows, the minimal reproducer,
 the item-scoped diff including new files, the fresh workspace, the complete live target and its
-important consumers and tests. Worker 1's diagnosis and report only after step 1 below is written.
+important consumers and tests, plus anything upstream or downstream your own trace needs.
+Worker 1's diagnosis and report only after step 1 below is written.
 
 ## Job
 

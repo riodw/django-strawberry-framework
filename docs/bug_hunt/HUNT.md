@@ -31,7 +31,16 @@ only; this doc is canonical.
   concurrent work; a fix crosses files when the invariant does; unrelated cleanup stays out.
 - Invoking this flow authorizes the runs it names: a focused permanent test w/ `--no-cov` in the
   shared tree, any run inside a workspace copy, and the final gate `uv run pytest`. Nothing else
-  converts into a test run. `FAKESHOP_SHARDED=1` and Postgres cells need Rio's separate word.
+  converts into a test run. `FAKESHOP_SHARDED=1` and Postgres cells need Rio's separate word;
+  without it a cell is `unverified`, or `inapplicable by construction` when the target's code
+  path reaches no database, alias or dialect decision (Worker 1 states the reason, Worker 2
+  judges it).
+- **The item fences edits, never inspection.** A defect lives where several layers meet, so
+  Worker 1 and Worker 2 read and trace wherever the contract leads: upstream callers, downstream
+  consumers, sibling flavors, tests at every tier, examples, docs, the installed Django /
+  Strawberry / DRF sources in `.venv`, any package folder. Nobody needs permission to open a file
+  outside the item; a hunt that stayed inside the target's own module has not been done. Only the
+  fix is scoped: the layer owning the broken invariant, its tests, the ledger rows.
 - **Confirm before editing.** Warnings, suspicious shapes, shadow markers, missing tests, surviving
   mutants = leads. A defect has evidence a stranger can replay.
 - **Contract row first.** Before probing a boundary, record the contract that governs it: boundary,
@@ -53,7 +62,10 @@ only; this doc is canonical.
   branch, the unhandled shape, the guard that should exist. A new guard needs a test that reaches
   it through real usage; `pragma: no cover` never lands one.
 - **Root cause at the owner.** Fix the layer owning the violated contract, never only the observed
-  caller. Permanent behavioral test at the strongest reachable tier, same change.
+  caller. Permanent behavioral test at the strongest reachable tier, same change. Live tier
+  needing a fakeshop fixture that doesn't exist (model, relation shape) → test at the strongest
+  existing tier + the missing fixture reported as its own `blocked` line for Rio; never a new
+  example model inside an item.
 - **Severity = impact.** Reachability, actor prerequisites, likelihood, C/I/A impact, blast radius,
   confidence, each stated. No origin floors or caps: a developer-robustness defect and a security
   vulnerability are different categories, yet a fail-open authorization outcome reachable by a
@@ -140,17 +152,22 @@ source-mutating probe runs in a disposable copy:
 ```shell
 WS=<scratch>/hunt-ws/<item>
 rsync -a --exclude .git --exclude .venv --exclude '__pycache__' --exclude docs/ ./ "$WS/"
-uv run --project "$WS" python -c "import django_strawberry_framework as p; print(p.__file__)"
+uv run --directory "$WS" python -c "import django_strawberry_framework as p; print(p.__file__)"
 ```
 
-Before any verdict the record shows the printed package path inside `$WS` and the database `NAME`
-resolved from inside `$WS` (`examples/fakeshop` settings). A probe importing the shared checkout or
-opening its database = `invalid`, whatever it found. Workspace holds its own sqlite copy, caches,
-subprocesses; no network, no credentials, no `FAKESHOP_PG_DSN`. Worker 2 gets a FRESH copy taken
-after Worker 1's fix so it verifies the exact patch. `scripts/prove_failability.py` runs only from
-inside `$WS` ([DRY.md][dry] "Tests" has the recipe); never the live script on a live target.
-Promotion = Worker 1 applying the confirmed fix to the shared tree by hand, then the focused
-permanent test there. No branches, no shared-tree restores.
+Every command runs w/ `$WS` as cwd (`uv run --directory "$WS"`): `--project` alone keeps the
+caller's cwd on `sys.path`, so the import above prints the SHARED package and the check passes for
+the wrong tree. Before any verdict the record shows the printed package path inside `$WS` and the
+database `NAME` resolved from inside `$WS` (`examples/fakeshop` settings). A probe importing the
+shared checkout or opening its database = `invalid`, whatever it found. Workspace holds its own
+sqlite copy, caches, subprocesses; no network, no credentials, no `FAKESHOP_PG_DSN`. Worker 2 gets
+a FRESH copy taken after Worker 1's fix so it verifies the exact patch.
+`scripts/prove_failability.py` runs only from inside `$WS` ([DRY.md][dry] "Tests" has the recipe);
+never the live script on a live target. Promotion = Worker 1 applying the confirmed fix to the
+shared tree by hand, then the focused permanent test there. No branches, no shared-tree restores.
+
+Shadow inputs (`docs/shadow/current/`) are not in the copy (`--exclude docs/`): read them from
+the shared tree, read-only; they are orientation, never a target.
 
 Read-only scratch (a probe that imports the live package and writes nothing) may live under
 `docs/bug_hunt/temp-tests/<scope>/`. Worker 1 never cleans up; Worker 0 removes item scratch +
@@ -275,6 +292,8 @@ diagnosis and report AFTER recording its own expectation.
    against the target's real surface, search independently where the trace is shallow.
 7. Confirm severity factors; dispute product semantics → `blocked` for Rio, never a regrade by
    fiat.
+8. Check the item-scoped diff against [AGENTS.md][agents] prose rules: no process provenance,
+   `path::Symbol` citations, tests at the mandated tier. A violation is `revision-needed`.
 
 Verdict `verified` w/ the `Verification:` line, or `revision-needed` w/ concrete reproducible
 challenges. Worker 2 never edits the production fix or its tests.

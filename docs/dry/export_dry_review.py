@@ -3,8 +3,11 @@
 The script has three modes:
 
 ``plan``
-    Inventory the current package source and build a file-by-file DRY review
-    plan with folder and project integration passes.
+    Inventory the current package source and build the cycle plan: file items,
+    folder and project integration passes, the final gate, the cycle baseline
+    (``git status --short``), the responsibility index, the families list, the
+    owned-changes ledger and the outcomes section. The release defaults to the
+    package ``__version__``.
 
 ``audit``
     Build the one-stop evidence dossier for a new deep DRY review. It discovers
@@ -18,10 +21,9 @@ The script has three modes:
     Gate a completed review: every targeted definition (class, method,
     function, and optionally constant) and every required topic must be named.
 
-Fresh source-driven plan::
+Fresh source-driven plan (release read from the package)::
 
-    python docs/dry/export_dry_review.py plan \
-      --target-release 0.0.14
+    python docs/dry/export_dry_review.py plan
 
 New deep-review workflow::
 
@@ -50,6 +52,7 @@ import fnmatch
 import hashlib
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from collections import Counter, defaultdict
@@ -318,12 +321,129 @@ def _artifact_name(prefix: str, relative_path: Path) -> str:
     return f"{prefix}-{slug}.md"
 
 
+VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"', re.MULTILINE)
+
+_HOW_TO_WORK_ONE_ITEM = """## How to work one item
+
+`docs/dry/DRY.md` is the method; this brief is a reminder, not a substitute. Worker 0 dispatches
+one item at a time to a fresh Worker 1, then a fresh Worker 2; only Worker 2 ticks an item.
+
+- File item: read the complete target, write `### Enumeration` (instrument + count, every name),
+  discharge the six-axis probing matrix, run the change challenges, then assign every rule to a
+  family in `## Responsibility index` or record it file-local with the challenge that proved it.
+  No consolidation inside a file item.
+- Family item (`## Families`, added as discovered): sweep the whole package for the rule's
+  mechanism, inventory every site with its role, count authoritative definitions per posited
+  change, choose the owner by responsibility, implement the confirmed consolidation with permanent
+  tests in the same change, and record every rejection at the owner with its trigger.
+- Folder and project items audit the unassigned remainder and cross-boundary families.
+- The item fences edits, never inspection: read and trace wherever the rule leads, upstream and
+  downstream, across every package folder, test tier, example, doc, and installed dependency.
+- Before editing a dirty path, attribute every hunk in the paths the item touches to
+  `## Owned changes` or `## Cycle baseline`; an unattributed hunk stops the item.
+- Source-mutating proofs run only in the disposable workspace `DRY.md` "Tests" describes; every
+  finding carries freshness fingerprints, behavioral proof status, and a structural gate with its
+  negative control.
+- Nobody cleans up mid-item; Worker 0 removes item scratch by explicit path after verification.
+"""
+
+
+def _package_version(package_root: Path) -> str:
+    """Read ``__version__`` from the package ``__init__.py``."""
+    init_path = package_root / "__init__.py"
+    try:
+        source = init_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(
+            f"cannot read the release from {init_path.as_posix()}; pass --target-release",
+        ) from exc
+    match = VERSION_PATTERN.search(source)
+    if match is None:
+        raise ValueError(
+            f"no __version__ literal in {init_path.as_posix()}; pass --target-release",
+        )
+    return match.group(1)
+
+
+def _git_status_short(root: Path) -> str | None:
+    """Return ``git status --short`` for ``root``, or ``None`` outside a usable checkout."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "--no-pager", "status", "--short"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout
+
+
+def _cycle_baseline_block(status_output: str | None) -> list[str]:
+    """Render the concurrent-work inventory captured at generation time.
+
+    Every path listed is dirty or untracked before the cycle begins, so no item
+    may edit, revert, tidy, or claim it. An empty or unavailable listing is
+    stated rather than omitted, so a missing section reads as lost, not clean.
+    """
+    if status_output is None:
+        body = ["`git status --short` unavailable at generation; Worker 0 records it at start."]
+    elif status_output.strip():
+        body = ["```text", status_output.rstrip("\n"), "```"]
+    else:
+        body = ["Clean tree at generation."]
+    return [
+        "## Cycle baseline",
+        "",
+        "`git status --short` at generation. Every path below is concurrent work: never edited, "
+        "reverted,",
+        "tidied, or attributed to an item. Worker 0 appends the `CYCLE_BASELINE` stash object "
+        "once at",
+        "start and nothing afterwards.",
+        "",
+        *body,
+    ]
+
+
+def _ledger_blocks() -> list[str]:
+    """Render the sections Worker 0 maintains: index, families, ledger, outcomes."""
+    return [
+        "## Responsibility index",
+        "",
+        "One row per rule the cycle has traced; family items decompose sub-rules back here as "
+        "their own",
+        "rows. Status: `open`, `file-local` (one file + its challenge), `consolidated`, `rejected`,",
+        "`defect-routed`.",
+        "",
+        "| Family | Owner | Files covered | Holding item | Status |",
+        "|---|---|---|---|---|",
+        "",
+        "## Families",
+        "",
+        r"One `- [ ] Family \`<name>\` — [dry-rule-<family>.md](dry-rule-<family>.md)` item per "
+        "discovered",
+        "family, added by Worker 0 as artifacts name them. None discovered at generation.",
+        "",
+        "## Owned changes",
+        "",
+        "Path, item, symbols for every tracked edit or new file a verified item landed. A later "
+        "item may",
+        "build on a path listed here; any other dirty hunk is external.",
+        "",
+        "## Outcomes",
+        "",
+        "Filled by Worker 0 at closeout before any scratch is removed.",
+        "",
+    ]
+
+
 def _render_source_plan(
     package_root: Path,
     *,
     target_release: str,
     generated_date: str,
     mode: str,
+    status_output: str | None,
 ) -> tuple[str, int, int]:
     """Render a fresh plan from the current package source inventory."""
     source_files = sorted(path for path in package_root.rglob("*.py") if path.is_file())
@@ -337,13 +457,18 @@ def _render_source_plan(
     lines = [
         f"# System-wide DRY review plan: {target_release}",
         "",
+        "Status: in-progress",
         f"Target: `{package_root.as_posix()}/`",
         f"Generated: {generated_date}",
         f"Mode: {mode}",
         "Workflow: `docs/dry/DRY.md`",
-        "Cycle baseline: record before dispatch",
+        f"Run: {target_release} {generated_date}-1",
         "",
         "Fresh source review. Do not import findings from prior build, review, or DRY artifacts.",
+        "",
+        *_cycle_baseline_block(status_output),
+        "",
+        *_HOW_TO_WORK_ONE_ITEM.rstrip("\n").split("\n"),
     ]
 
     folder_count = 0
@@ -380,6 +505,7 @@ def _render_source_plan(
             "- [ ] Project integration — [dry-project.md](dry-project.md)",
             "- [ ] Final test gate",
             "",
+            *_ledger_blocks(),
         ],
     )
     return "\n".join(lines), len(source_files), folder_count
@@ -1401,7 +1527,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     plan = subparsers.add_parser(
         "plan",
-        help="Generate a fresh file-by-file plan from the current package source.",
+        help="Generate a fresh cycle plan from the current package source.",
     )
     plan.add_argument("--root", type=Path, default=Path.cwd())
     plan.add_argument(
@@ -1409,7 +1535,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("django_strawberry_framework"),
     )
-    plan.add_argument("--target-release", required=True)
+    plan.add_argument("--target-release")
     plan.add_argument(
         "--mode",
         choices=("autonomous", "pause-after-each-item"),
@@ -1479,7 +1605,7 @@ def _run_plan(args: argparse.Namespace) -> int:
     package_root = _resolve_path(args.package_root, root)
     if not package_root.is_dir():
         raise ValueError(f"--package-root is not a directory: {package_root.as_posix()}")
-    target_release = args.target_release
+    target_release = args.target_release or _package_version(package_root)
     if not RELEASE_PATTERN.fullmatch(target_release):
         raise ValueError(
             f"invalid --target-release {target_release!r}; expected dotted digits such as 0.0.14",
@@ -1492,6 +1618,7 @@ def _run_plan(args: argparse.Namespace) -> int:
         target_release=target_release,
         generated_date=_validate_date(args.generated_date),
         mode=args.mode,
+        status_output=_git_status_short(root),
     )
     _atomic_write(output, content, force=args.force)
     print(

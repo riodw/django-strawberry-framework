@@ -21,7 +21,9 @@ def _write(path: Path, content: str) -> Path:
 
 def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(dry, "_git_status_short", lambda root: " M package/root.py\n?? notes.md\n")
     package = tmp_path / "package"
     _write(package / "__init__.py", "")
     _write(package / "root.py", "VALUE = 1\n")
@@ -47,7 +49,13 @@ def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
     assert dry.main(arguments) == 0
     report = output.read_text(encoding="utf-8")
     assert "# System-wide DRY review plan: 0.0.1" in report
+    assert "Status: in-progress" in report
     assert "Generated: 2026-01-02" in report
+    assert "Run: 0.0.1 2026-01-02-1" in report
+    assert "## Cycle baseline" in report
+    assert "```text\n M package/root.py\n?? notes.md\n```" in report
+    assert "## How to work one item" in report
+    assert "an unattributed hunk stops the item" in report
     assert "File `__init__.py`" in report
     assert "File `nested/worker.py`" in report
     assert "Folder integration `nested/`" in report
@@ -56,8 +64,50 @@ def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
     assert report.index("File `nested/deeper/leaf.py`") < report.index(
         "Folder integration `nested/`",
     )
+    assert "| Family | Owner | Files covered | Holding item | Status |" in report
+    assert "## Families" in report
+    assert "## Owned changes" in report
+    assert report.rstrip().endswith(
+        "Filled by Worker 0 at closeout before any scratch is removed.",
+    )
+    assert (
+        report.index("- [ ] Final test gate")
+        < report.index("## Responsibility index\n")
+        < report.index("## Families\n")
+        < report.index("## Owned changes\n")
+        < report.index("## Outcomes\n")
+    )
     assert dry.main(arguments) == 2
     assert dry.main([*arguments, "--force"]) == 0
+
+
+def test_plan_reads_the_release_from_the_package_and_states_a_missing_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(dry, "_git_status_short", lambda root: None)
+    package = tmp_path / "package"
+    _write(package / "__init__.py", '__version__ = "0.0.7"\n')
+    _write(package / "root.py", "VALUE = 1\n")
+    arguments = [
+        "plan",
+        "--root",
+        str(tmp_path),
+        "--package-root",
+        "package",
+    ]
+
+    assert dry.main(arguments) == 0
+    report = (tmp_path / "docs" / "dry" / "dry-0_0_7.md").read_text(encoding="utf-8")
+    assert "# System-wide DRY review plan: 0.0.7" in report
+    assert "`git status --short` unavailable at generation" in report
+
+    monkeypatch.setattr(dry, "_git_status_short", lambda root: "")
+    _write(package / "__init__.py", "")
+    assert dry.main(arguments) == 2
+    assert dry.main([*arguments, "--target-release", "0.0.8"]) == 0
+    clean = (tmp_path / "docs" / "dry" / "dry-0_0_8.md").read_text(encoding="utf-8")
+    assert "Clean tree at generation." in clean
 
 
 def _audit_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:

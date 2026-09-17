@@ -1038,6 +1038,28 @@ def test_hide_flat_filters_changes_library_filter_input_shape_over_http(
         assert "shelvesCode" not in hidden
 
 
+def test_hide_flat_filters_hides_deep_relatedfilter_flat_on_loan_input(
+    project_schema_override,
+):
+    """``HIDE_FLAT_FILTERS=True`` hides a multi-hop flat leaf of a RelatedFilter.
+
+    ``LoanFilter.book`` is a ``RelatedFilter``; ``book__loans__patron__email``
+    (``bookLoansPatronEmail``) is an expanded child at depth greater than one
+    hop. The nested ``book`` branch stays; the flat spelling disappears.
+    """
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"HIDE_FLAT_FILTERS": False}):
+        project_schema_override()
+        shown = _input_field_names("LoanFilterInputType")
+        assert "book" in shown
+        assert "bookLoansPatronEmail" in shown
+
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"HIDE_FLAT_FILTERS": True}):
+        project_schema_override()
+        hidden = _input_field_names("LoanFilterInputType")
+        assert "book" in hidden
+        assert "bookLoansPatronEmail" not in hidden
+
+
 @pytest.mark.django_db
 def test_library_branches_empty_filter_input_is_noop_over_http():
     """An empty GraphQL filter input behaves like no filter while preserving root visibility."""
@@ -4677,6 +4699,21 @@ async def test_node_refetch_genre_async():
     )
     assert "errors" not in payload, payload
     assert payload["data"]["node"] == {"__typename": "GenreType", "name": "Speculative"}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_genres_connection_filter_applies_async():
+    """A ``filter:`` argument on the shipped connection applies over ``/graphql-async/``."""
+    await models.Genre.objects.acreate(name="Speculative")
+    await models.Genre.objects.acreate(name="Romance")
+    payload = await _post_async_shipped(
+        'query { allLibraryGenresConnection(filter: { name: { exact: "Romance" } })'
+        " { edges { node { name } } } }",
+    )
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryGenresConnection"]["edges"] == [
+        {"node": {"name": "Romance"}},
+    ]
 
 
 @pytest.mark.django_db(transaction=True)

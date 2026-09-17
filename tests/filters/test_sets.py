@@ -5,6 +5,12 @@ behavior (cycle-safe `get_filters` expansion + `_get_fields` narrowing),
 the spec-027 Decision 4 owner-aware Relay-vs-scalar conditional in
 `filter_for_field`, and the spec-027 Decision 8 apply pipeline
 (`apply_sync` / `apply_async` / `apply` + the five named helpers).
+
+Empty-filter, ``FILTER_INVALID``, nested ``check_<field>_permission`` denial,
+and EXISTS SQL live in ``test_library_api.py`` / ``test_products_api.py``.
+This file keeps generation provenance, capability gates, permission
+call-count, the apply dispatcher, and query-object routing -- internals a
+response cannot show.
 """
 
 from __future__ import annotations
@@ -3822,21 +3828,6 @@ def test_evaluate_logic_tree_preserves_request_context():
 
 
 @pytest.mark.django_db
-def test_apply_sync_filters_against_simple_scalar_input():
-    Category.objects.create(name="alpha")
-    Category.objects.create(name="beta")
-
-    class CategoryFilter(FilterSet):
-        class Meta:
-            model = Category
-            fields = {"name": ["exact"]}
-
-    info = _make_info()
-    qs = CategoryFilter.apply_sync({"name": "alpha"}, Category.objects.all(), info)
-    assert list(qs.values_list("name", flat=True)) == ["alpha"]
-
-
-@pytest.mark.django_db
 def test_permission_checks_run_only_through_apply_entrypoint():
     """``apply_*`` is the sole permission-aware entry; the bare ``.qs`` path does not gate.
 
@@ -3881,6 +3872,9 @@ def test_permission_checks_run_only_through_apply_entrypoint():
 @pytest.mark.django_db
 def test_apply_sync_nested_related_gate_fires_once_not_per_level():
     """A nested ``RelatedFilter`` child gate fires exactly once through ``apply_sync``.
+
+    Call-count has no wire shape. Nested denial over HTTP:
+    ``test_products_api.py::test_products_items_related_category_name_permission_fires_for_anonymous``.
 
     Regression test for the double-fire defect: the related-visibility
     derivation invoked the child filterset's ``apply_sync``, which runs
@@ -3965,50 +3959,12 @@ def test_apply_sync_nested_related_gate_fires_once_not_per_level():
 
 
 @pytest.mark.django_db
-def test_apply_sync_nested_related_gate_still_denies():
-    """The single-fire fix must not weaken enforcement: a nested gate still denies.
-
-    The derivation no longer fires the child's gates, but the top-level
-    ``_run_permission_checks`` pass still recurses into every active related
-    branch, so a raising ``check_<field>_permission`` inside a nested branch
-    still aborts ``apply_sync`` with the consumer's ``GraphQLError`` before
-    any rows are returned.
-    """
-    branch = library_models.Branch.objects.create(name="alpha")
-    library_models.Shelf.objects.create(branch=branch, code="AAA")
-
-    class ShelfType(DjangoType):
-        class Meta:
-            model = library_models.Shelf
-            fields = ("id", "code")
-
-    class ShelfFilter(FilterSet):
-        class Meta:
-            model = library_models.Shelf
-            fields = {"code": ["exact", "icontains"]}
-
-        def check_code_permission(self, request):
-            raise GraphQLError("denied shelf code")
-
-    class BranchFilter(FilterSet):
-        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
-
-        class Meta:
-            model = library_models.Branch
-            fields = {"name": ["exact"]}
-
-    with pytest.raises(GraphQLError) as excinfo:
-        BranchFilter.apply_sync(
-            {"shelves": {"code": {"i_contains": "AAA"}}},
-            library_models.Branch.objects.all(),
-            _make_info(),
-        )
-    assert "denied shelf code" in str(excinfo.value)
-
-
-@pytest.mark.django_db
 def test_apply_async_nested_related_gate_fires_once_and_still_denies():
-    """The async related derivation neither duplicates nor bypasses nested gates."""
+    """The async related derivation neither duplicates nor bypasses nested gates.
+
+    Call-count (fires once) has no wire shape. Nested denial over HTTP is
+    ``test_products_api.py::test_products_items_related_category_name_permission_fires_for_anonymous``.
+    """
     import asyncio
 
     branch = library_models.Branch.objects.create(name="alpha")
@@ -4068,33 +4024,6 @@ def test_apply_async_nested_related_gate_fires_once_and_still_denies():
                 _make_info(),
             ),
         )
-
-
-@pytest.mark.django_db
-def test_apply_sync_passes_through_empty_filter_input():
-    Category.objects.create(name="alpha")
-    Category.objects.create(name="beta")
-
-    class CategoryFilter(FilterSet):
-        class Meta:
-            model = Category
-            fields = {"name": ["exact"]}
-
-    info = _make_info()
-    qs = CategoryFilter.apply_sync({}, Category.objects.all(), info)
-    assert qs.count() == 2
-
-
-@pytest.mark.django_db
-def test_apply_sync_raises_graphql_error_on_invalid_input():
-    class CategoryFilter(FilterSet):
-        class Meta:
-            model = Category
-            fields = {"id": ["exact"]}
-
-    info = _make_info()
-    with pytest.raises(GraphQLError):
-        CategoryFilter.apply_sync({"id": "not-an-integer"}, Category.objects.all(), info)
 
 
 # ---------------------------------------------------------------------------
@@ -5076,23 +5005,6 @@ def test_apply_related_constraints_skips_branch_without_qs_or_explicit():
         {},
     )
     assert "shelves__in" not in str(constrained.query)
-
-
-@pytest.mark.django_db
-def test_apply_async_filters_against_scalar_input():
-    """``apply_async`` builds the filtered queryset (no related branches)."""
-    import asyncio
-
-    class CategoryFilter(FilterSet):
-        class Meta:
-            model = Category
-            fields = {"name": ["exact"]}
-
-    qs = asyncio.run(
-        CategoryFilter.apply_async({"name": "alpha"}, Category.objects.all(), _make_info()),
-    )
-    sql = str(qs.query).lower()
-    assert "alpha" in sql
 
 
 @pytest.mark.django_db

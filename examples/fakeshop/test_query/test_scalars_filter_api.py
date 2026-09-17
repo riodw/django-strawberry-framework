@@ -8,15 +8,19 @@ these tests exercise it on the INPUT side via the filtersets wired in
 counterpart to the library/products own-PK ``GlobalIDMultipleChoiceFilter``
 path. ``ScalarSpecimenFilter.tag`` (a ``RelatedFilter`` onto a type whose
 ``get_queryset`` filters ``active=True``) exercises related-branch
-visibility through a relation traversal.
+visibility through a relation traversal. ``price_span`` is a declared
+``RangeFilter`` on both specimen filtersets: its nested input type is scoped
+per owning filterset and the ``range`` lookup applies over the wire.
 """
 
 import datetime
 import uuid
+from decimal import Decimal
 
 import pytest
 from apps.scalars import models
 from graphql_client import assert_graphql_data as _assert_graphql_data
+from graphql_client import assert_graphql_success as _assert_graphql_success
 
 _DATE = datetime.date(2021, 6, 15)
 _DATETIME = datetime.datetime(2021, 6, 15, 9, 30, tzinfo=datetime.timezone.utc)
@@ -135,4 +139,61 @@ def test_scalars_order_by_label_desc():
     _assert_graphql_data(
         "query { allScalarSpecimens(orderBy: [{ label: DESC }]) { label } }",
         {"allScalarSpecimens": expected},
+    )
+
+
+_RANGE_TYPE_QUERY = """
+query {
+  scalar: __type(name: "ScalarSpecimenFilterPriceRangeInputType") {
+    name
+    inputFields { name }
+  }
+  nullable: __type(name: "NullableScalarSpecimenFilterPriceRangeInputType") {
+    name
+    inputFields { name }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_range_input_types_are_scoped_per_filterset():
+    """Two shipped filtersets sharing a RangeFilter field_name mint distinct nested types.
+
+    ``price_span`` is a declared ``RangeFilter(field_name="price")`` on both
+    ``ScalarSpecimenFilter`` and ``NullableScalarSpecimenFilter``. Unscoped,
+    both nested classes would claim ``PriceRangeInputType`` and Strawberry
+    would silently keep one. The owning-filterset qualifier keeps both
+    ``__type`` results non-null, each with ``start`` / ``end``.
+    """
+    data = _assert_graphql_success(_RANGE_TYPE_QUERY)
+
+    scalar = data["scalar"]
+    nullable = data["nullable"]
+    assert scalar is not None
+    assert nullable is not None
+    assert scalar["name"] == "ScalarSpecimenFilterPriceRangeInputType"
+    assert nullable["name"] == "NullableScalarSpecimenFilterPriceRangeInputType"
+    assert scalar["name"] != nullable["name"]
+    assert {field["name"] for field in scalar["inputFields"]} == {"start", "end"}
+    assert {field["name"] for field in nullable["inputFields"]} == {"start", "end"}
+
+
+@pytest.mark.django_db
+def test_scalars_filter_by_price_span_range():
+    """Declared ``priceSpan: { range: { start, end } }`` keeps in-range rows and drops the rest."""
+    _seed_specimen("cheap", price=Decimal("1.0000"))
+    _seed_specimen("mid", price=Decimal("50.0000"))
+    _seed_specimen("dear", price=Decimal("50000.0000"))
+    _assert_graphql_data(
+        """
+        query {
+          allScalarSpecimens(
+            filter: { priceSpan: { range: { start: "10.0000", end: "100.0000" } } }
+          ) {
+            label
+          }
+        }
+        """,
+        {"allScalarSpecimens": [{"label": "mid"}]},
     )

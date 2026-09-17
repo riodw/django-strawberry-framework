@@ -610,8 +610,8 @@ The 14, and what each contract is covered by at `HEAD`:
 
 | Named in the spec, absent from the tree | Covered instead by |
 | --- | --- |
-| `test_apply_sync_against_sync_get_queryset_target` | `tests/filters/test_sets.py::test_apply_sync_filters_against_simple_scalar_input` |
-| `test_apply_async_against_async_get_queryset_target` | `::test_apply_async_filters_against_scalar_input`, `::test_qs_and_apply_sync_and_async_over_eligible_candidate` |
+| `test_apply_sync_against_sync_get_queryset_target` | `examples/fakeshop/test_query/test_scalars_filter_api.py::test_scalars_filter_by_label_icontains` |
+| `test_apply_async_against_async_get_queryset_target` | `examples/fakeshop/test_query/test_library_api.py::test_genres_connection_filter_applies_async`, `tests/filters/test_sets.py::test_qs_and_apply_sync_and_async_over_eligible_candidate` |
 | `test_apply_sync_against_async_target_raises_runtime_error_naming_target_type` | `::test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message` (+ the two `_propagates_other_*` siblings). The old name also asserted the retired target-type interpolation. |
 | `test_check_permissions_only_fires_for_active_filter_branches` | `::test_run_permission_checks_fires_only_for_active_input_fields` and seven `_run_permission_checks` siblings, plus `::test_check_permissions_walks_explicit_requested_fields` / `::test_check_permissions_falls_back_to_active_input_when_no_requested_fields` |
 | `test_apply_extracts_request_from_info_context_request_attribute` | `::test_request_from_info_uses_context_request_attribute` |

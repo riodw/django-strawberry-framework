@@ -5,6 +5,12 @@ Covers the lookup-name table, the `_build_logic_fields` /
 `convert_filter_to_input_annotation` / `normalize_input_value` table
 cases, `FieldSpec` source-path mapping, and the `filter_input_type`
 consumer helper (Decision 11).
+
+``HIDE_FLAT_FILTERS`` wire shape lives in
+``test_library_api.py`` / ``test_products_api.py``. Scoped ``RangeFilter``
+type names live in ``test_scalars_filter_api.py``. This file keeps
+converter dispatch, namespace lifecycle, and digit-boundary type-name
+injectivity -- construction and private helpers a request cannot name.
 """
 
 from __future__ import annotations
@@ -1160,7 +1166,11 @@ def test_materialize_input_class_registers_in_module_globals():
 
 
 def test_build_range_input_class_is_cached_on_the_filter_instance():
-    """The same generation identity returns one cached class."""
+    """The same generation identity returns one cached class.
+
+    Owned names over HTTP:
+    ``test_scalars_filter_api.py::test_range_input_types_are_scoped_per_filterset``.
+    """
     f = RangeFilter(field_name="price")
     first = _build_range_input_class(f, int)
     second = _build_range_input_class(f, int)
@@ -1206,82 +1216,13 @@ def test_build_range_input_class_cache_is_keyed_by_owner_field_and_scalar():
 
 
 def test_build_range_input_class_name_unqualified_without_filterset():
-    """No owning filterset -> the historical ``<Field>RangeInputType`` name is preserved."""
+    """No owning filterset -> the historical ``<Field>RangeInputType`` name is preserved.
+
+    Live scoping of owned names:
+    ``examples/fakeshop/test_query/test_scalars_filter_api.py::test_range_input_types_are_scoped_per_filterset``.
+    """
     f = RangeFilter(field_name="price")
     assert _build_range_input_class(f, int).__name__ == "PriceRangeInputType"
-
-
-@pytest.mark.django_db
-def test_range_input_type_name_is_scoped_per_filterset():
-    """Two filtersets sharing a ``field_name`` mint DISTINCT range sub-input classes.
-
-    Regression pin for the spec-027 collision hazard. The nested
-    ``RangeFilter`` sub-input class name derived from ``field_name`` alone, so two
-    filtersets that each declare a ``RangeFilter`` for a same-named column both
-    stamped one GraphQL name (``PriceRangeInputType``). These nested classes are
-    embedded directly in the annotation (NOT run through the Decision-9
-    materialization ledger nor the arguments-factory collision registry), so
-    Strawberry does NOT raise on the clash -- it silently keeps whichever class it
-    registers first and drops the other, advertising the wrong axis scalar for the
-    loser. The name is now qualified by the owning filterset so the two are
-    distinct and both survive in the schema.
-    """
-    import re
-
-    from apps.scalars import models as scalar_models
-
-    class ScalarPriceFilter(FilterSet):
-        price = RangeFilter(field_name="price")
-
-        class Meta:
-            model = scalar_models.ScalarSpecimen
-            fields = []
-
-    class TextPriceFilter(FilterSet):
-        # Same generated top-level ``price`` field, but a text-backed source:
-        # this proves the two scoped nested types retain different axis scalars.
-        price = RangeFilter(field_name="price")
-
-        class Meta:
-            model = library_models.Branch
-            fields = []
-
-    def _range_cls_of(bag):
-        for annotation in bag.__annotations__.values():
-            for arg in get_args(annotation):
-                if getattr(arg, "__name__", "").endswith("RangeInputType"):
-                    return arg
-        raise AssertionError("no RangeInputType found in operator bag")
-
-    def _bag(triples):
-        by_attr = {p: a for p, a, _ in triples}
-        return next(x for x in get_args(by_attr["price"]) if x is not type(None))
-
-    bag1 = _bag(_build_input_fields(ScalarPriceFilter))
-    bag2 = _bag(_build_input_fields(TextPriceFilter))
-    r1 = _range_cls_of(bag1)
-    r2 = _range_cls_of(bag2)
-
-    # Owning-filterset qualifier makes the two names distinct (pre-fix: both
-    # were ``PriceRangeInputType``).
-    assert r1.__name__ == "ScalarPriceFilterPriceRangeInputType"
-    assert r2.__name__ == "TextPriceFilterPriceRangeInputType"
-    assert r1.__name__ != r2.__name__
-    assert r1.__annotations__["start"] != r2.__annotations__["start"]
-
-    # Both nested range types survive when both operator bags land in one schema;
-    # pre-fix the name clash silently collapsed the two into a single input type
-    # (Strawberry keeps whichever it registers first and drops the other).
-    @strawberry.type
-    class Query:
-        ok: int
-
-    sdl = str(strawberry.Schema(query=Query, types=[bag1, bag2]))
-    range_defs = set(re.findall(r"input (\w*RangeInputType)", sdl))
-    assert range_defs == {
-        "ScalarPriceFilterPriceRangeInputType",
-        "TextPriceFilterPriceRangeInputType",
-    }
 
 
 @pytest.mark.django_db
@@ -1395,134 +1336,6 @@ def test_build_input_fields_skips_related_filter_with_none_target():
     triples = _build_input_fields(PlaceholderFilter)
     names = {python_attr for python_attr, _annotation, _kwargs in triples}
     assert "rel" not in names
-    assert "code" in names
-
-
-# ---------------------------------------------------------------------------
-# _build_input_fields - HIDE_FLAT_FILTERS toggle (django-graphene-filters parity)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_build_input_fields_shows_flat_relational_when_hide_flat_filters_false(settings):
-    """Default (``HIDE_FLAT_FILTERS=False``) exposes BOTH shapes for a relation.
-
-    The nested ``RelatedFilter`` branch (``shelves`` -- the strawberry-django
-    shape) AND the flat relational traversal field (``shelves_code`` -- the
-    django-graphene-filters shape) are both emitted, matching the upstream
-    default at ``django_graphene_filters/conf.py`` (``HIDE_FLAT_FILTERS: False``).
-    """
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": False}
-
-    class HffShelfFilter(FilterSet):
-        class Meta:
-            model = library_models.Shelf
-            fields = {"code": ["exact", "icontains"]}
-
-    class HffBranchFilter(FilterSet):
-        shelves = RelatedFilter(HffShelfFilter, field_name="shelves")
-
-        class Meta:
-            model = library_models.Branch
-            fields = {"name": ["exact"]}
-
-    names = {
-        python_attr for python_attr, _annotation, _kwargs in _build_input_fields(HffBranchFilter)
-    }
-    assert "shelves" in names  # nested branch (strawberry-django shape)
-    assert "shelves_code" in names  # flat relational traversal (graphene-django shape)
-    assert "name" in names  # scalar own field
-
-
-@pytest.mark.django_db
-def test_build_input_fields_hides_flat_relational_when_hide_flat_filters_true(settings):
-    """``HIDE_FLAT_FILTERS=True`` drops only the flat relational traversal fields.
-
-    The relation is then reachable solely through its nested branch
-    (``shelves``); the nested branch and scalar own fields are untouched, so
-    strawberry-django parity is preserved in either toggle position.
-    """
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
-
-    class HffShelfFilter(FilterSet):
-        class Meta:
-            model = library_models.Shelf
-            fields = {"code": ["exact", "icontains"]}
-
-    class HffBranchFilter(FilterSet):
-        shelves = RelatedFilter(HffShelfFilter, field_name="shelves")
-
-        class Meta:
-            model = library_models.Branch
-            fields = {"name": ["exact"]}
-
-    names = {
-        python_attr for python_attr, _annotation, _kwargs in _build_input_fields(HffBranchFilter)
-    }
-    assert "shelves" in names  # nested branch still present
-    assert "name" in names  # scalar own field still present
-    assert "shelves_code" not in names  # flat relational traversal hidden
-
-
-@pytest.mark.django_db
-def test_build_input_fields_hides_deep_multi_hop_flat_relational_when_true(settings):
-    """``HIDE_FLAT_FILTERS=True`` hides flat traversal at EVERY depth, not just one hop.
-
-    A two-hop chain (Branch -> shelves -> books -> title) produces a flat
-    ``shelves_books_title`` field when shown; the ``is_expanded_child`` guard keys on
-    the first path segment, so it drops the path at any depth. The relation stays
-    reachable through the chained nested branches.
-    """
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
-
-    class DeepBookFilter(FilterSet):
-        class Meta:
-            model = library_models.Book
-            fields = {"title": ["exact"]}
-
-    class DeepShelfFilter(FilterSet):
-        books = RelatedFilter(DeepBookFilter, field_name="books")
-
-        class Meta:
-            model = library_models.Shelf
-            fields = {"code": ["exact"]}
-
-    class DeepBranchFilter(FilterSet):
-        shelves = RelatedFilter(DeepShelfFilter, field_name="shelves")
-
-        class Meta:
-            model = library_models.Branch
-            fields = {"name": ["exact"]}
-
-    names = {
-        python_attr for python_attr, _annotation, _kwargs in _build_input_fields(DeepBranchFilter)
-    }
-    assert "shelves" in names  # nested branch (reach the chain through here)
-    assert "shelves_code" not in names  # one-hop flat hidden
-    assert "shelves_books_title" not in names  # two-hop flat hidden
-
-
-@pytest.mark.django_db
-def test_build_input_fields_keeps_non_relatedfilter_flat_traversal_visible_when_true(settings):
-    """A flat ``<rel>__<field>`` whose root is NOT a declared ``RelatedFilter`` survives.
-
-    The guard only trims expansions of declared ``RelatedFilter`` relations; an explicit
-    ``Meta.fields`` traversal with no nested alternative (spec-027's intentional flat
-    shape) stays visible even when ``HIDE_FLAT_FILTERS=True``.
-    """
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
-
-    class PlainTraversalShelfFilter(FilterSet):
-        # ``branch`` is a real FK but is NOT declared as a RelatedFilter here.
-        class Meta:
-            model = library_models.Shelf
-            fields = {"branch__name": ["exact"], "code": ["exact"]}
-
-    names = {
-        python_attr
-        for python_attr, _annotation, _kwargs in _build_input_fields(PlainTraversalShelfFilter)
-    }
-    assert "branch_name" in names  # non-RelatedFilter flat traversal stays visible
     assert "code" in names
 
 

@@ -17,6 +17,11 @@ Covers:
   package was never imported (subprocess test pins the cycle-safe
   contract per spec-027 Decision 9).
 - Unresolved ``RelatedFilter`` propagates as ``ConfigurationError``.
+
+Bound filtersets answering live queries live in the fakeshop filter modules
+and ``test_query/``. This file keeps finalize-time binding, orphan
+rejection, and ``registry.clear`` namespace co-clear -- a request cannot
+observe an unbound FilterSet.
 """
 
 from __future__ import annotations

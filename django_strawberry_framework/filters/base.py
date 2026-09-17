@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.forms import Field, MultipleChoiceField, SelectMultiple
+from django.forms import Field, MultipleChoiceField, MultiWidget, SelectMultiple, TextInput
 from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter, NumberFilter
 from django_filters.constants import EMPTY_VALUES
 from django_filters.filters import BaseInFilter, BaseRangeFilter, FilterMethod
@@ -375,11 +375,48 @@ def validate_range(value: Any) -> None:
         )
 
 
+class _RangeWidget(MultiWidget):
+    """Two-box widget that reads ``<name>_0`` / ``<name>_1``.
+
+    ``normalize_input_value`` emits those positional keys for ``RangeFilter``.
+    Django's ``MultiWidget`` default suffixes are ``_0`` / ``_1``; django-filter's
+    ``RangeWidget`` uses ``min`` / ``max`` and would miss the patch.
+    """
+
+    def __init__(self, attrs: dict[str, Any] | None = None) -> None:
+        super().__init__((TextInput, TextInput), attrs)
+
+    def decompress(self, value: Any) -> list[Any]:
+        """Split a two-element value, or two empty boxes when nothing is bound."""
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            return list(value)
+        return [None, None]
+
+
 class RangeField(Field):
-    """`forms.Field` whose default validator is `validate_range`."""
+    """`forms.Field` whose default validator is `validate_range`.
+
+    The widget binds the positional ``<name>_0`` / ``<name>_1`` keys the
+    range normalizer emits. A missing pair arrives as ``[None, None]`` and
+    ``to_python`` collapses it to ``None`` so django-filter skips the
+    constraint instead of compiling ``col BETWEEN NULL AND NULL``.
+    """
 
     default_validators: ClassVar[list] = [validate_range]
-    empty_values: ClassVar[list] = [None]
+    empty_values: ClassVar[list] = [
+        None,
+        [None, None],
+        (None, None),
+        ["", ""],
+        ("", ""),
+    ]
+    widget = _RangeWidget
+
+    def to_python(self, value: Any) -> Any:
+        """Collapse a missing widget pair to ``None`` so the filter is skipped."""
+        if value in self.empty_values:
+            return None
+        return value
 
 
 class RangeFilter(TypedFilter):

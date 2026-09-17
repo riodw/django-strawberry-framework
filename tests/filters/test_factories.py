@@ -3,6 +3,10 @@
 Covers `FilterArgumentsFactory`'s BFS walk and per-class collision
 check, plus the Layer-6 `get_filterset_class` + `_dynamic_filterset_cache`
 + `make_set_meta_cache_key` plumbing.
+
+Shipped filter argument types are introspected live via ``*FilterInputType``.
+This file keeps the BFS walk, name-collision refusal, and dynamic FilterSet
+cache-key identity -- construction internals a request cannot name.
 """
 
 from __future__ import annotations

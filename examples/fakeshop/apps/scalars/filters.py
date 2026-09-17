@@ -22,11 +22,17 @@ converter path (the non-Relay counterpart to the library app's own-PK
 declares a custom ``get_queryset`` (``active=True``) -- so the related
 branch also exercises the ``get_queryset`` visibility hook through a
 relation traversal.
+
+``price_span`` on both specimen filtersets is a declared ``RangeFilter``
+over the ``price`` column (the acceptance surface for per-filterset
+scoped range input names). ``Meta.fields`` ``price: "__all__"`` still
+expands the CSV ``range`` lookup on the ``price`` operator bag; the
+declared primitive is a separate ``priceSpan: { range: { start, end } }`` field.
 """
 
 from __future__ import annotations
 
-from django_strawberry_framework.filters import FilterSet, RelatedFilter
+from django_strawberry_framework.filters import FilterSet, RangeFilter, RelatedFilter
 
 from . import models
 
@@ -39,6 +45,7 @@ class ScalarSpecimenTagFilter(FilterSet):
 
 class ScalarSpecimenFilter(FilterSet):
     tag = RelatedFilter(ScalarSpecimenTagFilter, field_name="tag")
+    price_span = RangeFilter(field_name="price", lookup_expr="range")
 
     class Meta:
         model = models.ScalarSpecimen
@@ -64,6 +71,7 @@ class ScalarSpecimenFilter(FilterSet):
 
 class NullableScalarSpecimenFilter(FilterSet):
     partner = RelatedFilter(ScalarSpecimenFilter, field_name="partner")
+    price_span = RangeFilter(field_name="price", lookup_expr="range")
 
     class Meta:
         model = models.NullableScalarSpecimen

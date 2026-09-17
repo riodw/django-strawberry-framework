@@ -3,6 +3,13 @@
 Covers the five parity-floor primitives (`TypedFilter`, `ArrayFilter`,
 `RangeFilter`, `ListFilter`, `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`),
 the lazy-resolution mixin, and `RelatedFilter`.
+
+Own-PK empty / malformed GlobalID filter rejection lives in
+``test_library_api.py``. This file keeps primitive ``filter()`` methods,
+marked non-pk ``to_field`` decode, lazy ``RelatedFilter`` resolution, and
+encode-only strategy fail-closed. No fakeshop relation ships a non-pk
+``to_field``; GraphQL never delivers a non-list container to
+``GlobalIDMultipleChoiceFilter``.
 """
 
 from __future__ import annotations
@@ -148,6 +155,24 @@ def test_validate_range_rejects_three_values():
 
 def test_range_filter_uses_range_field_class():
     assert RangeFilter.field_class is RangeField
+
+
+def test_range_field_missing_pair_cleans_to_none():
+    """An omitted ``_0``/``_1`` pair is empty, not a range of nulls.
+
+    Live apply of a supplied pair:
+    ``test_scalars_filter_api.py::test_scalars_filter_by_price_span_range``.
+    """
+    field = RangeField(required=False)
+    assert field.widget.value_from_datadict({}, {}, "price_span") == [None, None]
+    assert field.clean([None, None]) is None
+    assert field.widget.value_from_datadict(
+        {"price_span_0": "10", "price_span_1": "100"},
+        {},
+        "price_span",
+    ) == ["10", "100"]
+    assert field.widget.decompress(("10", "100")) == ["10", "100"]
+    assert field.widget.decompress(None) == [None, None]
 
 
 # ---------------------------------------------------------------------------
@@ -464,34 +489,17 @@ class _CapturingQs:
         return self
 
 
-def test_global_id_multiple_choice_filter_all_empty_node_id_list_rejects():
-    """An all-vacuous ``in`` list rejects with ``GLOBALID_INVALID`` (no silent widen)."""
-    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
-    with pytest.raises(GraphQLError, match="empty node id") as exc_info:
-        f.filter(object(), [relay.to_base64("GenreType", "")])
-    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
-    assert "at index 0" in str(exc_info.value)
-
-
 def test_global_id_multiple_choice_filter_empty_node_id_exact_path_rejects():
-    """The same reject covers the non-``in`` (per-element) path."""
+    """The same reject covers the non-``in`` (per-element) path.
+
+    Live ``in`` twins:
+    ``test_library_api.py::test_library_genres_filter_empty_id_in_list_raises_globalid_invalid_at_index_0``
+    and
+    ``::test_library_genres_filter_mixed_empty_id_in_list_rejects_whole_input_at_index_1``.
+    """
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact")
     with pytest.raises(GraphQLError, match="empty node id") as exc_info:
         f.filter(object(), [relay.to_base64("GenreType", "")])
-    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
-
-
-def test_global_id_multiple_choice_filter_mixed_empty_and_real_rejects_naming_index():
-    """A vacuous element alongside a real id rejects the WHOLE input, naming its index.
-
-    A mixed list must reject like malformed / wrong-type inputs do -- never
-    silently ignore the empty element while accepting the rest -- and the offending
-    index is named so the client can identify it.
-    """
-    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
-    encoded = [relay.to_base64("GenreType", "5"), relay.to_base64("GenreType", "")]
-    with pytest.raises(GraphQLError, match="at index 1") as exc_info:
-        f.filter(object(), encoded)
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
@@ -638,23 +646,13 @@ def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical():
     assert captured == {"genres__in": ["1", "2"]}
 
 
-def test_global_id_filter_empty_node_id_rejects():
-    """A scalar well-typed empty-id GlobalID rejects with ``GLOBALID_INVALID``.
-
-    ``to_base64(<accepted type>, "")`` decodes to ``node_id == ""``, which clears
-    decode + strategy + type-name validation (an unbound owner falls back to
-    node-id-only), but an empty identifier is not a filter value. The old scalar
-    ``EMPTY_VALUES`` no-op silently widened the restrictive filter to the whole
-    queryset; the shared boundary now raises before any queryset clause runs.
-    """
-    f = GlobalIDFilter(field_name="id", lookup_expr="exact")
-    with pytest.raises(GraphQLError, match="empty node id") as exc_info:
-        f.filter(object(), relay.to_base64("GenreType", ""))
-    assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
-
-
 def test_global_id_filter_marked_empty_node_id_rejects_before_query():
     """The marked non-pk-``to_field`` path also rejects an empty id -- never a 500.
+
+    Unmarked own-PK empty-id over HTTP:
+    ``test_library_api.py::test_library_genres_filter_empty_id_scalar_global_id_raises_globalid_invalid``.
+    No fakeshop relation uses a non-pk ``to_field``, so this marked path stays
+    package-side.
 
     Previously a MARKED leaf compiled ``<relation>__pk__exact=""`` (a 500
     ``ValueError`` on the integer target pk) whenever the empty id slipped past the

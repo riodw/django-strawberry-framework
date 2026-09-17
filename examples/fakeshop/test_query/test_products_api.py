@@ -1949,6 +1949,36 @@ def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_paren
     )
 
 
+def _category_filter_input_field_names() -> set[str]:
+    data = _graphql_data(
+        """
+        query {
+          __type(name: "CategoryFilterInputType") {
+            inputFields { name }
+          }
+        }
+        """,
+    )
+    published = data["__type"]
+    assert published is not None
+    return {field["name"] for field in published["inputFields"]}
+
+
+def test_hide_flat_filters_keeps_explicit_non_relatedfilter_flat_on_category_input(
+    project_schema_override,
+):
+    """``itemsName`` stays published under ``HIDE_FLAT_FILTERS=True``.
+
+    ``CategoryFilter`` declares ``items__name`` in ``Meta.fields`` and does not
+    declare ``items`` as a ``RelatedFilter``, so the flat leaf is the only
+    spelling and the hide guard must not drop it.
+    """
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"HIDE_FLAT_FILTERS": True}):
+        project_schema_override()
+        names = _category_filter_input_field_names()
+    assert "itemsName" in names
+
+
 @pytest.mark.django_db
 def test_products_categories_filter_by_starts_with_via_all_lookups():
     """``Meta.fields = {"name": "__all__"}`` exposes lookups beyond the explicit set.

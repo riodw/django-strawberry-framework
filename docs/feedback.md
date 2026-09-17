@@ -1,280 +1,181 @@
-# Adversarial review: execution-mode identity and refusal-input ownership
+# Adversarial review: raw-list QuerySet admission and release evidence
 
 Date: 2026-09-17
 
-Reviewed tree: HEAD `918a86e6` plus the current working-tree changes
+Reviewed tree: `HEAD 92e4efeb` plus the current working-tree changes
 
-Scope: [`spec-050`][spec-050], [`build-050`][build-050], the implementation and its permanent
-tests, under the repository rules in [`AGENTS.md`][agents]
+Scope: [`spec-050`][spec-050], [`build-050`][build-050], the implementation, and the
+repository rules in [`AGENTS.md`][agents]. I used focused runtime probes with the installed
+fakeshop; I did not run pytest because the repository rule reserves it for an explicit request.
 
 ## Verdict
 
-Not ready to mark DONE. The previous review's five findings are materially fixed: enforcement
-authorities are no longer consumer extension entries, refused requests no longer parse or
-select from caller input, diagnostic rendering contains hostile values, and streamed budget
-bindings transfer their reset obligation to the resume scope. I found two new release-blocking
-failures at boundaries those fixes now depend on, plus one permanent-test structure violation.
+Do not mark this card DONE yet. The policy-authority, runner-owned extension state, refusal,
+executor-mode, and stream-lease claims reviewed in the preceding rounds appear structurally
+fixed. A new, independent boundary failure remains: the universal raw-list ceiling trusts a
+consumer `QuerySet` subclass's `__getitem__` implementation. The failure is reachable through a
+real `DjangoListField` relation over a package `DjangoSchema`, so it is a release blocker rather
+than a package-only curiosity.
 
-Neither blocker is an argument-window arithmetic defect. Both are ownership defects:
+The implementation currently has no safe admission rule between “this value is a QuerySet” and
+“call its slice.” The shared visibility sealer already has the right architectural idea (rebuild
+a framework-owned plain queryset), but the raw-list bounding seam and the no-visibility relation
+resolver do not use it.
 
-1. a refused operation has two readers of one potentially single-use transport iterable, and
-2. a list resolver infers the GraphQL executor's mode from the ambient event loop even though
-   those are independent facts.
+## P1 — a QuerySet subclass can return every row past `max_list_rows`
 
-I used focused `uv run python` probes only. Per [`AGENTS.md`][agents], I did not run pytest.
-The recorded full/default/sharded/floor gates therefore remain owed on the final corrected
-tree, exactly as [`build-050`][build-050] already says.
+### Reproduction
 
-## Confirmed closures from the preceding review
-
-- [`django_strawberry_framework/schema.py::DjangoSchema.get_extensions`][schema] now treats
-  direct enforcement entries as declarations and constructs both enforcement authorities
-  afresh per operation from `_SchemaEnforcement`. A factory resolving to either authority
-  fails closed rather than replacing the package authority.
-- [`django_strawberry_framework/schema.py::_refuse_operation_document`][schema] installs a
-  package-owned, import-time-parsed document and clears Strawberry's provided operation name.
-  Malformed documents and absent, invalid, empty, Unicode, and non-string operation names now
-  reach the stable configuration refusal in the tuple/set cases covered by the tests.
-- The refused chain retains the resource extension, so document token/depth bounds still
-  outrank the configuration refusal.
-- Factory diagnostics go through `describe_value`; the newly covered hostile `repr`, `str`,
-  `args`, and type-name cases no longer escape while the refusal is being built.
-- [`django_strawberry_framework/extensions/operation_state.py::OperationState.rebind_on_resume`][operation-state]
-  transfers the arming token to the active resume registrar. The budget remains armed for the
-  operation without remaining bound in the driving task between frames.
-
-These closures should stay. The findings below require extending their abstractions, not
-rolling them back or adding exception-specific patches.
-
-## P1-1 - the refusal path consumes `allowed_operation_types` before Strawberry does
-
-### Evidence
-
-Strawberry's three public entry points accept
-`allowed_operation_types: Iterable[OperationType]`. The execution context retains that object,
-and upstream performs one membership test after parsing. The new refusal helper performs its
-own membership search first:
-
-```python
-allowed = getattr(execution_context, "allowed_operations", ()) or ()
-next(document for operation_type, document in _REFUSAL_DOCUMENTS.items()
-     if operation_type in allowed)
-```
-
-That is correct only for reusable containers. A one-shot iterable is exhausted while the
-package chooses its substitute document. Strawberry then tests the selected operation against
-the already-consumed iterable and concludes that the operation type is forbidden.
-
-On the reviewed tree, a refused schema and a generator yielding exactly `OperationType.QUERY`
-produced:
+[`django_strawberry_framework/resource_policy.py::_bounds_by_its_own_slice`][resource-policy]
+classifies every `isinstance(result, QuerySet)` value as slice-bounded. It then calls
+`result[start:stop]` in [`resource_policy.py::_windowed_rows`][resource-policy]. A consumer
+subclass owns that `__getitem__` call and can ignore the slice:
 
 ```text
-execute_sync + tuple       -> SCHEMA_CONFIGURATION_UNAVAILABLE
-execute_sync + generator   -> raised InvalidOperationTypeError(OperationType.QUERY)
-await execute + tuple      -> SCHEMA_CONFIGURATION_UNAVAILABLE
-await execute + generator  -> raised InvalidOperationTypeError(OperationType.QUERY)
-stream + generator         -> one "queries are not allowed" frame, extensions={}
+ResourcePolicy(max_list_rows=1)
+Evil(QuerySet).__getitem__(slice) -> list(self)
+bounded_rows(evil_queryset, info)        -> 75 rows
+bounded_rows_async(evil_queryset, info)  -> 75 rows
 ```
 
-This is not an invalid input that upstream already rejects. The same generator is a valid
-value for the annotated public API and a healthy Strawberry operation consumes it only once.
-The package introduced the second consumer.
+The same seam accepts a non-QuerySet object whose `__class__` property reports `QuerySet`:
 
-There is a second expression of the same ownership error. `allowed = value or ()` invokes
-consumer-defined truthiness. A `list` subclass containing `OperationType.QUERY` whose only
-override is a raising `__bool__` succeeds on a healthy `DjangoSchema`; on a refused schema the
-same value executes that unrelated dunder and replaces the stable configuration refusal with
-a generic masked error. This also contradicts the explicit no-truthiness posture immediately
-below in
-[`django_strawberry_framework/schema.py::_consumer_extension_entries`][schema].
+```text
+isinstance(fake, QuerySet)               -> True
+bounded_rows(fake, info)                 -> 50 rows
+```
 
-### Root-cause fix
+That is not only a direct-helper issue. The generated many-side resolver in
+[`django_strawberry_framework/types/resolvers.py::_make_relation_resolver`][types-resolvers]
+does this on the no-custom-visibility path:
 
-Make the refusal boundary the single owner of a canonical allowed-operation snapshot:
+1. call the relation manager's consumer-overridable `.all()`;
+2. optionally read `_result_cache` from the returned object;
+3. pass the resulting object straight to `bounded_rows` / `bounded_rows_async`.
 
-1. Read `execution_context.allowed_operations` once.
-2. Materialize it once into an exact built-in tuple without a truthiness check.
-3. Assign that tuple back to `execution_context.allowed_operations` before yielding to
-   Strawberry.
-4. Select the substitute document from that same tuple.
+There is no visibility seal on this path because the target has no custom hook. I patched a
+reverse-FK manager to return the hostile queryset, mounted a real `DjangoListField` over a
+`DjangoSchema` with `ResourcePolicy(max_list_rows=1)`, and posted through a real GraphQL view.
+The response contained four related `Loan` rows for one patron, not one:
 
-That makes package selection and upstream authorization read one immutable fact. It also
-preserves nested and streamed behavior because the snapshot belongs to the execution context,
-not module state or a task-global cache.
+```json
+{"data":{"patrons":[{"name":"evil-probe2",
+  "loans":[{"note":"e0"},{"note":"e1"},{"note":"e2"},{"note":"e3"}]}]}}
+```
 
-Do not solve this by appending `QUERY`, replacing an empty iterable with the defaults, or
-catching `InvalidOperationTypeError`. A genuinely empty/forbidden transport policy must remain
-forbidden. The fix is canonical ownership of what the caller supplied, not widening it or
-masking the downstream symptom.
+The same result occurs in direct `execute_sync` and in the exported sync/async bounding helpers.
+This contradicts Decision 8 and the Definition of done: a raw list is supposed to have one
+unconditional ceiling, and the spec says that a QuerySet slice is the package-owned operation
+that carries the limit into SQL. A consumer subclass is not package-owned merely because
+`isinstance` returns true.
+
+### Root-cause fix (required)
+
+Create one shared package-private “raw-list source normalization” seam and make both the
+exported helpers and the generated relation resolver use it. Keep the public signatures of
+`bounded_rows` and `bounded_rows_async` unchanged.
+
+The seam must:
+
+1. Inspect the actual class with `type(value)` (never an `isinstance` check that can consult a
+   hostile `__class__` property). An exact framework `models.QuerySet` may retain the SQL-slice
+   fast path.
+2. Treat a `QuerySet` subclass as untrusted execution state, not as an object whose methods can
+   enforce the ceiling. Normalize it through the existing sealed-queryset rebuild machinery
+   (or a smaller shared rebuild primitive with the same guarantees) into a plain
+   framework-owned `models.QuerySet`, then slice that rebuilt object. If its state cannot be
+   faithfully rebuilt, fail closed with a typed `ConfigurationError`; never fall back to the
+   subclass's `__getitem__`.
+3. Preserve model, query graph, routing, iterable shape, and prefetch state according to the
+   existing seal contract. Do not use “exact type then `islice`” as the whole fix: that would
+   restore the row-count ceiling but lose the SQL `LIMIT` guarantee for a legitimate, sealable
+   project QuerySet subclass.
+4. Make the admission test in the reused sealer itself identity-safe. Its current initial
+   `isinstance(candidate, models.QuerySet)` can execute a hostile `__class__` property; the
+   following probe currently escapes as a raw `RuntimeError`:
+
+   ```text
+   _seal_or_defect(BombWithRaisingClass(), Patron, None)
+       -> RuntimeError("class bomb")
+   ```
+
+   A failed shape proof must remain a typed, fail-closed defect.
+5. Normalize before relation-cache inspection. Reading `_result_cache` with ordinary `getattr`
+   on a subclass is another consumer dispatch point; use the framework-owned state read or
+   normalize first. The relation manager's `.all()` result must enter the same seam whether it
+   came from a warm prefetch cache or an unloaded descriptor.
+6. Keep the common exact-queryset path cheap. Do not run the full recursive seal once per parent
+   row when the value is already an exact framework queryset; only the subclass/untrusted path
+   should pay the rebuild cost. This preserves the spec's accepted SQL behavior and avoids
+   turning nested relation lists into an N+1 validation cost.
 
 ### Required regression proof
 
-Add direct schema-API rows in [`tests/test_schema.py`][test-schema]:
+Add independent, named cases (no loop over asserted cases in a live test body, per the live-tier
+guide):
 
-- a one-shot iterable yielding query survives `execute_sync`, `execute`, and `stream` and all
-  three retain `SCHEMA_CONFIGURATION_UNAVAILABLE`;
-- mutation and subscription substitute selection work from one-shot iterables, so the fix is
-  not accidentally query-only;
-- a counting iterable is traversed once and the stored execution-context value is the exact
-  built-in tuple afterward;
-- a reusable sequence with hostile `__bool__` is never truth-tested;
-- an actually empty iterable still follows Strawberry's operation-type refusal contract and
-  is not silently widened.
+- package tests for a hostile QuerySet subclass through `bounded_rows` and
+  `bounded_rows_async`, with the private `_windowed_rows` / `_windowed_rows_async` arms also
+  covering a zero-width window (the exported helpers must keep their coordinate-free
+  signatures);
+- a package control for an exact framework QuerySet asserting the SQL `high_mark` remains the
+  effective ceiling;
+- a package case for a class-spoofing non-QuerySet, proving it cannot select the SQL-slice arm or
+  escape as an untyped exception;
+- a live sync `/graphql` case with a `DjangoSchema`, `DjangoListField`, a no-custom-visibility
+  many-side relation, and a manager returning a QuerySet subclass; `max_list_rows=1` must yield
+  one related row;
+- the corresponding live async `DjangoSchema`/`AsyncDjangoGraphQLView` case. The existing async
+  relation suite uses a plain `strawberry.Schema`, which does not install the package resource
+  policy and therefore cannot prove this card's bound;
+- a warm-prefetch control and an unloaded-manager control, both through the same normalization
+  seam, plus an exact QuerySet control showing SQL limiting is retained.
 
-This is a package/direct-API boundary; the Django views provide stable built-in operation-type
-sets, so a synthetic HTTP row would not add reachability evidence.
+The live rows belong in [`examples/fakeshop/test_query/`][fakeshop-query]; package mechanics
+belong in [`tests/test_resource_policy.py`][test-resource-policy] and, if the shared sealer is
+changed, [`tests/utils/test_querysets.py`][test-querysets]. Each row should assert the complete
+wire payload and the row count, not merely “no errors.”
 
-## P1-2 - `DjangoListField` confuses an active event loop with async GraphQL execution
+## Spec/build correction required with the code fix
 
-### Evidence
+Decision 8 currently distinguishes exact built-in sequences from their subclasses, but treats
+“QuerySet” as one undifferentiated sliceable category. Amend it to say:
 
-[`django_strawberry_framework/list_field.py::DjangoListField`][list-field] chooses the default
-resolver pipeline with `in_async_context()`. Its synchronous consumer-resolver branch repeats
-the same decision when choosing the final queryset representation. The code comment claims
-this lets one field work under both `schema.execute_sync` and `await schema.execute`.
+- an exact framework-owned `models.QuerySet` is sliced directly;
+- a consumer QuerySet subclass is first sealed/rebuilt to a framework-owned plain queryset, or
+  is rejected with a typed configuration error if sealing is impossible;
+- no `isinstance`/consumer `__getitem__` result can define the ceiling.
 
-Those APIs and ambient loop state are not the same axis. `execute_sync` is callable while an
-event loop is running, including from a nested operation inside an async resolver. In that
-case `in_async_context()` is true, so a default list field returns the async pipeline's
-coroutine to Strawberry's synchronous executor. Strawberry cancels the top-level awaitable and
-returns its generic synchronous-completion error; inner coroutines are left unawaited.
+Add the hostile-queryset relation row to the Definition of done, the package/live test plan, and
+the build's predicted-file ledger. The current hostile list-subclass rows do not cover this
+shape: they exercise the `islice` fallback, while the bug is specifically the QuerySet slice
+arm. The current visibility-hook adversary is also insufficient because the visibility boundary
+already rebuilds its result before bounding; the no-custom-visibility relation branch is the
+uncovered path.
 
-I reproduced this first against fakeshop's shipped schema and then against a minimal schema
-with no optimizer extension. In the isolated case:
+## P1 release gate — the recorded green run is not this tree
 
-```text
-schema.execute_sync("{ __typename }") inside asyncio.run
-    -> {"__typename": "Query"}, no errors
+[`build-050`][build-050] records the final gate at historical commit `207c7328` and explicitly
+says every descendant is ungated. The current `HEAD` is `92e4efeb`, a descendant, and the
+working tree also contains uncommitted implementation/test changes. Therefore the recorded
+7868/7885/463 figures do not certify this code. Before DONE, run and record on one exact final
+tree:
 
-schema.execute_sync("{ rows { name } }") inside the same loop
-    -> data=None
-    -> "GraphQL execution failed to complete synchronously."
-```
+- the full default suite at `fail_under = 100`;
+- the sharded suite;
+- the complete declared supported-floor scope (not the earlier focused 463-row seam run);
+- formatting, lint, structural, link, citation, and tracked-path checks.
 
-The fakeshop reproduction additionally emitted unawaited-coroutine warnings from GraphQL
-field completion, the optimizer and `_execute_queryset_pipeline_async`. The control query
-proves the failure is introduced by list-field dispatch rather than by `execute_sync` merely
-being invoked under a loop. Removing the optimizer proves the optimizer is not its root.
+Do not copy the historical figures beside new edits. A failing or partial run is evidence that
+the gate is still open, not a green record.
 
-This is inside spec-050's scope. The card introduced the async-only queryset adapter and
-promises that async queryset completion is selected correctly while no-argument synchronous
-behavior remains unchanged. The present predicate cannot state either promise when executor
-mode and loop presence disagree. It is also reachable over real HTTP: an async GraphQL
-operation can run a resolver that starts a nested `info.schema.execute_sync(...)`, a nesting
-shape the new operation-state architecture explicitly supports.
+## Review conclusion
 
-### Root-cause fix
-
-Represent GraphQL execution mode as operation state. Do not add another list-field-local
-`ContextVar`, and do not infer the mode from whether Python happens to have a running loop.
-
-The existing runner boundary is the DRY owner:
-
-1. [`django_strawberry_framework/schema.py::DjangoSchema.get_extensions`][schema] receives the
-   authoritative `sync` flag for every operation. Carry that fact into a fresh package-owned
-   per-operation marker in the admitted and refused chains.
-2. [`django_strawberry_framework/schema.py::DjangoSchema.create_extensions_runner`][schema]
-   turns it into a runner-owned operation-mode lease, alongside the runner scope already owned
-   by [`DjangoExtensionsRunner`][operation-state].
-3. Bind/reset it for the operation, result collection, every streamed frame, and every stream
-   resume. Nested operations must token-reset to the outer mode; copied contexts must read
-   nothing after the owning lease closes.
-4. Expose one package-private query such as `current_operation_mode()` and use it wherever the
-   question is *which GraphQL executor is driving this resolver*.
-5. In `DjangoListField`, select the async pipeline only for an async operation. For a sync
-   operation under a running event loop, raise a typed `SyncMisuseError` before constructing a
-   coroutine or async-only adapter, with recourse to `await schema.execute(...)` or move the
-   synchronous call to a worker thread. Silently blocking the event-loop thread is not an
-   acceptable fallback.
-
-Execution mode and ambient-loop safety remain two facts. Some current
-`in_async_context()` calls genuinely guard Django ORM access; others are executor dispatch.
-Classify the complete census in `auth/mutations.py`, `mutations/fields.py`, `relay.py`,
-`types/relay.py`, `types/resolvers.py`, `connection.py`, `list_field.py`, and `schema.py`, then
-migrate only the operation-mode readers to the canonical helper. Otherwise fixing the list
-field alone leaves sibling field factories with the same false predicate and two definitions
-of execution color.
-
-A plain `strawberry.Schema` does not use the package runner. State its fallback contract
-explicitly: either retain ambient dispatch there as a documented limitation or require
-`DjangoSchema` for authoritative mode. Do not imply that the runner-owned guarantee extends to
-a schema that never creates that runner.
-
-### Required regression proof
-
-- Package/direct rows prove all three states separately: `execute_sync` outside a loop,
-  `await execute` inside a loop, and `execute_sync` inside a loop. The third must produce the
-  chosen typed contract with warnings promoted to errors, not Strawberry's generic completion
-  failure and not an orphaned coroutine.
-- Repeat the disagreement case for the default resolver and a synchronous consumer resolver
-  returning a queryset; they currently reach the wrong representation through different call
-  sites.
-- Operation-state rows prove nested mode restoration, exception/cancellation teardown, a
-  copied context after lease closure, and streamed resume in another task.
-- Because the nested disagreement is reachable through the async Django view, add a real
-  `/graphql-async/` acceptance row under
-  [`examples/fakeshop/test_query/`][test-query-readme]: an outer async operation invokes a
-  nested synchronous operation selecting a `DjangoListField`, and the response asserts the
-  selected public contract. A package-only test is insufficient for that reachability claim.
-- Keep the existing optimizer-on/off async HTTP rows. They prove safe completion during a
-  genuinely async operation and are not substitutes for the disagreement row.
-
-## P2-1 - the security architecture added after the dated revision is not specified
-
-The top of [`spec-050`][spec-050] still identifies its latest revision as 2026-09-13 and
-summarizes cleanup precedence, proof determinism, offset ordering, async cleanup, and metadata
-integrity. The later operation-state, authority-ownership, refused-document, diagnostic, and
-resume-binding work is largely absent from the numbered decisions and rationale. One dense
-Definition-of-done clause covers enforcement authority; ledger closure covers only part of
-the lifetime work. [`build-050`][build-050] has a better summary, but explicitly says the
-remediation reasoning is not restated there and points readers to code docstrings.
-
-That leaves the most security-sensitive architecture in the card without a complete design
-record. It is already causing review drift: the allowed-operation double-read above is a new
-invariant of the refused-document design, yet the spec never states who owns the iterable or
-that upstream must read the same canonical value.
-
-Before closing the card, add a compact post-implementation decision section to the spec (with
-derivation in its rationale) that records:
-
-- configuration authority versus operation state;
-- admission of classes, instances, fresh factories, and singleton factories;
-- runner/lease lifetime across operation, result collection and stream resumes;
-- refused-request document, selector, and allowed-operation snapshot ownership;
-- the exact stable refusal guarantees and the transport-policy exception for a genuinely
-  forbidden operation type;
-- canonical execution-mode ownership and the raw-`strawberry.Schema` boundary after P1-2.
-
-Then update the Revision summary and add explicit Definition-of-done rows for both P1 fixes.
-The build record should cite those spec decisions rather than making code docstrings the only
-place the design can be reconstructed.
-
-## P3-1 - a new permanent test bundles three independent attacks in one node
-
-[`tests/extensions/test_operation_state.py::test_a_resolver_cannot_replace_the_binding_carrier_or_rerun_the_constructor`][test-operation-state]
-loops over three independent attacks: descriptor assignment, direct `__dict__` injection, and
-constructor rerun. This is exactly the matrix shape forbidden by
-[`examples/fakeshop/test_query/README.md`][test-query-readme]: no loop in a test body, every
-case gets its own node id with `ids=`. A failure currently reports only the aggregate test and
-can prevent later attacks from running.
-
-Move the attack descriptions to a module-level parameter table and execute one attack per
-test node, with explicit ids. Build a fresh shared extension and schema per parameter so no
-attempt can affect another. The stream frame loops are sequential lifecycle assertions and do
-not need mechanical splitting; this finding is limited to the independent tamper matrix.
-
-## Release conditions after these fixes
-
-1. Fix P1-1 at the refusal input-ownership boundary and add the direct three-API proof.
-2. Fix P1-2 with one runner-owned execution-mode abstraction, audit its semantic call sites,
-   and add both package lifecycle proof and the live async nested-operation row.
-3. Bring the spec/rationale/build traceability up to the architecture that now ships.
-4. Split the independent tamper matrix into separately identified nodes.
-5. Run formatting, lint, structural/link/citation checks, then full default, sharded, and the
-   complete declared-floor scope on one final identified tree at 100% package coverage.
-
-Until step 5 is recorded, the checked historical gate in [`build-050`][build-050] remains
-evidence for `207c7328`, not for this descendant working tree.
+The operation-state and enforcement ownership design is now the right foundation. The remaining
+work is to make the raw-list boundary honor that same ownership rule for QuerySets and for the
+relation resolver that bypasses visibility sealing. Until that is fixed and the same-tree gates
+are recorded, the package's central promise—every non-Relay list is bounded—has a reproducible
+wire-level counterexample.
 
 <!-- LINK DEFINITIONS -->
 
@@ -290,16 +191,15 @@ evidence for `207c7328`, not for this descendant working tree.
 [build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
 
 <!-- django_strawberry_framework/ -->
-[list-field]: ../django_strawberry_framework/list_field.py
-[operation-state]: ../django_strawberry_framework/extensions/operation_state.py
-[schema]: ../django_strawberry_framework/schema.py
+[resource-policy]: ../django_strawberry_framework/resource_policy.py
+[types-resolvers]: ../django_strawberry_framework/types/resolvers.py
 
 <!-- tests/ -->
-[test-operation-state]: ../tests/extensions/test_operation_state.py
-[test-schema]: ../tests/test_schema.py
+[test-resource-policy]: ../tests/test_resource_policy.py
+[test-querysets]: ../tests/utils/test_querysets.py
 
 <!-- examples/ -->
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[fakeshop-query]: ../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
 

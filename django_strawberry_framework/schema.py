@@ -1219,11 +1219,15 @@ def _entry_type(entry: Any) -> type | None:
 
 
 def _extension_entry_matches(extension: Any, extension_type: type) -> bool:
-    """Match a class or instance entry without invoking opaque factories."""
-    candidate = _entry_type(extension)
-    if candidate is None:
-        return False
+    """Match a class or instance entry without invoking opaque factories.
+
+    An entry this package cannot classify comes back from :func:`_entry_type` as
+    ``None``, and ``issubclass(None, ...)`` is one of the raises the guard below
+    already answers ``False`` to. One arm, not two: an entry whose own class is
+    unreadable is not a declared authority, which is the same thing the guard
+    says about every other unanswerable entry.
+    """
     try:
-        return issubclass(candidate, extension_type)
+        return issubclass(_entry_type(extension), extension_type)
     except Exception:
         return False

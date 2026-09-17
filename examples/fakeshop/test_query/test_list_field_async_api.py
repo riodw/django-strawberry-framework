@@ -36,6 +36,7 @@ from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
     DjangoListField,
+    ErrorPolicy,
     strawberry_config,
 )
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
@@ -1965,7 +1966,14 @@ async def test_async_a_nested_synchronous_operation_refuses_a_list_field():
                 return str(inner.errors[0])
             return json.dumps(inner.data)
 
-    schema = DjangoSchema(query=_NestedQuery, config=strawberry_config())
+    # Masking off: the subject is the typed refusal the inner operation reports,
+    # and the default policy answers every unexpected exception with one stable
+    # string, which would leave this row asserting the mask instead.
+    schema = DjangoSchema(
+        query=_NestedQuery,
+        config=strawberry_config(),
+        error_policy=ErrorPolicy(enabled=False),
+    )
 
     control = await _post_async(schema, "{ branches { name } }")
     assert "errors" not in control, control

@@ -267,6 +267,31 @@ Spec: [Decision 8][spec-050-d8].
   be an observable behavior change on callers this card promises not to touch.
 - **Directly reading `source.query.is_sliced` or importing the private seal in list field:**
   Would duplicate or weaken the shared hardened classifier in the visibility boundary.
+- **Treating `isinstance(value, QuerySet)` as proof that the package owns the slice:** It is not
+  a proof of anything. `isinstance` falls back to the value's own `__class__`, so a non-queryset
+  can select the SQL-slice arm; and even when the answer is true, the subscript that follows is
+  the subclass's `__getitem__`. The universal raw-list ceiling was then a call the bounded
+  object decided the result of, reachable through a real relation over a real request.
+- **Exact type plus `islice` as the whole fix:** Restores the row ceiling and loses the SQL one.
+  A project queryset class returned by a custom manager is ordinary Django, and demoting every
+  one of them to a counted Python truncation would fetch the whole relation to discard its tail
+  - trading a wire-level bound for a database-level regression.
+- **Rejecting every `QuerySet` subclass outright:** `Manager.from_queryset` and
+  `QuerySet.as_manager` are the documented way to give a model its own queryset class, so this
+  would refuse ordinary Django. The seal already answers the real question - can this state be
+  faithfully rebuilt - and only the states it cannot rebuild fail closed.
+- **A second, cheaper rebuild primitive for this seam:** Two rebuilds proving different things
+  is how one of them comes to prove less. The shared sealer is reused with its own policy
+  instead, switching off only the axes that guard a RECOMPOSITION, because nothing recomposes
+  here - one `[start:stop]` is taken, and Django takes it on a sliced query and on a combinator
+  alike.
+- **Running the full seal on every source:** The exact queryset is the common case by an
+  enormous margin, and a per-parent-row recursive validation would turn nested relation lists
+  into an N+1 validation cost for a rebuild that would return an equivalent object. It is
+  returned unchanged instead, and only the untrusted shape pays.
+- **Reading the relation cache's `_result_cache` with `getattr` after normalizing:** The read is
+  the same consumer dispatch point the slice was. The rows come out of Django's own slot on an
+  exact queryset or not at all; a subclass answers no cached rows and costs one query.
 
 ### Decision 9 — no-argument sync behavior takes the old branch; async only adapts completion
 

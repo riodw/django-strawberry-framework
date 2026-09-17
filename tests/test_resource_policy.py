@@ -56,6 +56,11 @@ from typing import Any
 
 import pytest
 import strawberry
+from apps.products.models import Category
+from apps.products.services import seed_data
+from asgiref.sync import sync_to_async
+from django.db.models import QuerySet
+from django.db.models.sql import Query
 from graphql import GraphQLError, parse
 from graphql.language.token_kind import TokenKind
 from strawberry.extensions import ValidationCache
@@ -100,6 +105,17 @@ from django_strawberry_framework.resource_policy import (
     validate_trusted_flag,
 )
 from django_strawberry_framework.schema import _consumer_extension_entries
+from django_strawberry_framework.utils.querysets import materialized_rows
+
+#: ``Schema.stream`` landed in strawberry-graphql 0.319.0. Below it the package
+#: has no streamed seam to answer for - ``consumers.py::_StopAwareSchema.stream``
+#: delegates to a name that install does not carry and no handler reads - so the
+#: rows about it are skipped rather than rewritten onto ``subscribe``, which
+#: there serves subscriptions alone and would prove a different contract.
+_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
+    not hasattr(strawberry.Schema, "stream"),
+    reason="Schema.stream landed in strawberry-graphql 0.319.0",
+)
 
 # ---------------------------------------------------------------------------
 # Construction and validation
@@ -1931,6 +1947,234 @@ def test_bounded_rows_shared_policy_seams_spy(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# The row source the bound is applied to
+#
+# Live sibling: the hostile-relation rows on ``/rp-hostile-relation/`` and
+# ``/rp-hostile-relation-async/``.
+# ---------------------------------------------------------------------------
+
+
+class _EscapingQuerySet(QuerySet):
+    """A ``QuerySet`` subclass whose slice answers with every row it was asked to drop.
+
+    The shape a raw-list ceiling has to survive: ``result[:limit]`` is the whole
+    bound, and on a subclass that expression is consumer code.
+    """
+
+    def __getitem__(self, key):
+        return list(Category.objects.all())
+
+
+class _UnsealableQuerySet(QuerySet):
+    """A ``QuerySet`` subclass carrying a query the seal cannot faithfully rebuild."""
+
+
+class _ClaimsToBeAQuerySet:
+    """Not a ``QuerySet``, but ``isinstance`` says it is and its slice returns everything."""
+
+    @property
+    def __class__(self):
+        return QuerySet
+
+    def __getitem__(self, key):
+        return list(range(50))
+
+    def __iter__(self):
+        return iter(range(50))
+
+
+@pytest.mark.django_db
+def test_a_queryset_subclass_cannot_answer_its_own_row_bound():
+    """The ceiling is a slice, so a subclass owning that slice owns the ceiling.
+
+    ``isinstance(value, QuerySet)`` admitted every subclass to the SQL-slice
+    arm, which then called the subclass's own ``__getitem__``. A subclass is not
+    package-owned merely because ``isinstance`` returns true: the source is
+    rebuilt into a plain framework-owned queryset first, and the slice runs
+    there.
+    """
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    hostile = _EscapingQuerySet(model=Category)
+    rows = bounded_rows(hostile, info)
+    assert type(rows) is QuerySet
+    assert len(list(rows)) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_queryset_subclass_cannot_answer_its_own_row_bound_when_awaited():
+    """The awaited helper reaches the same seam, so it carries the same ceiling."""
+    await sync_to_async(seed_data)(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    hostile = _EscapingQuerySet(model=Category)
+    rows = await bounded_rows_async(hostile, info)
+    assert type(rows) is QuerySet
+    assert len([row async for row in rows]) == 2
+
+
+@pytest.mark.django_db
+def test_a_windowed_queryset_subclass_is_windowed_on_the_rebuilt_queryset():
+    """The coordinate window is taken on the rebuild, not on the source's subscript."""
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    hostile = _EscapingQuerySet(model=Category)
+    rows = _windowed_rows(hostile, info, offset=1, requested_limit=2)
+    assert type(rows) is QuerySet
+    assert rows.query.low_mark == 1
+    assert rows.query.high_mark == 3
+    assert len(list(rows)) == 2
+
+
+@pytest.mark.django_db
+def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows():
+    """A zero-width window is a subscript the source must not be asked to answer."""
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    hostile = _EscapingQuerySet(model=Category)
+    rows = _windowed_rows(hostile, info, offset=1, requested_limit=0)
+    assert list(rows) == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows_when_awaited():
+    """The awaited window seam delegates here, so the zero-width arm is the same one."""
+    await sync_to_async(seed_data)(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    hostile = _EscapingQuerySet(model=Category)
+    rows = await _windowed_rows_async(hostile, info, offset=1, requested_limit=0)
+    assert list(rows) == []
+
+
+@pytest.mark.django_db
+def test_an_exact_queryset_still_carries_the_row_bound_into_sql():
+    """The common shape pays nothing and keeps the ``LIMIT`` the bound exists to push."""
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = Category.objects.all()
+    rows = bounded_rows(source, info)
+    assert type(rows) is QuerySet
+    assert rows.query.high_mark == 2
+    assert len(list(rows)) == 2
+
+
+@pytest.mark.django_db
+def test_a_sealable_queryset_subclass_keeps_the_row_bound_in_sql():
+    """A rebuilt subclass is still a queryset, so the bound stays a ``LIMIT``.
+
+    Counting a sealable subclass into a Python list would restore the row
+    ceiling and lose the database one, which is the guarantee this seam is for.
+    """
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+
+    class _ProjectQuerySet(QuerySet):
+        """A project's own queryset class, faithfully rebuildable."""
+
+    rows = bounded_rows(_ProjectQuerySet(model=Category), info)
+    assert type(rows) is QuerySet
+    assert rows.query.high_mark == 2
+    assert len(list(rows)) == 2
+
+
+@pytest.mark.django_db
+def test_a_queryset_subclass_that_cannot_be_sealed_is_refused_not_sliced():
+    """An unrebuildable source fails closed; it never falls back to its own slice."""
+    seed_data(2)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+
+    class _ForeignQuery(Query):
+        """A ``Query`` subclass, which the seal cannot rebuild."""
+
+    source = _UnsealableQuerySet(model=Category, query=_ForeignQuery(Category))
+    with pytest.raises(ConfigurationError) as excinfo:
+        bounded_rows(source, info)
+    assert "cannot be sealed" in str(excinfo.value)
+
+
+def test_a_value_that_only_claims_to_be_a_queryset_cannot_reach_the_slice():
+    """``__class__`` is consumer code, so the shape is read from ``type(value)``.
+
+    An object that answers ``isinstance`` with ``QuerySet`` reached the SQL-slice
+    arm and was handed its own ``__getitem__``. Read as what it is, it is an
+    ordinary iterable and is bounded by counting.
+    """
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    claimant = _ClaimsToBeAQuerySet()
+    assert isinstance(claimant, QuerySet)
+    assert bounded_rows(claimant, info) == [0, 1]
+
+
+def test_a_queryset_subclass_whose_state_is_unreadable_is_refused():
+    """State is read through ``object.__getattribute__``, and that read can still fail.
+
+    A class is free to define ``__dict__`` as a descriptor that raises, and the
+    rebuild has nothing to read there. The bound fails closed rather than
+    letting the raw exception out of a collection resolver.
+    """
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+
+    class _UnreadableQuerySet(QuerySet):
+        @property
+        def __dict__(self):
+            """Refuse to hand over the instance state the rebuild reads."""
+            raise RuntimeError("no state")
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        bounded_rows(_UnreadableQuerySet(model=Category), info)
+    assert "instance state is unreadable" in str(excinfo.value)
+
+
+def test_a_queryset_subclass_without_a_model_class_is_refused():
+    """The model a source declares is a slot, and the rebuild needs a real class there.
+
+    A raw-list source is validated against no registered type, so the model it
+    declares is the only one the rebuild has. Reaching ``model._meta`` on
+    whatever that slot holds would be the untyped raise the boundary exists to
+    replace.
+    """
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = _EscapingQuerySet(model=Category)
+    object.__getattribute__(source, "__dict__")["model"] = object()
+    with pytest.raises(ConfigurationError) as excinfo:
+        bounded_rows(source, info)
+    assert "without a model class" in str(excinfo.value)
+
+
+@pytest.mark.django_db
+def test_rows_a_source_already_fetched_are_read_from_the_frameworks_own_slot():
+    """A prefetch cache's rows come out of Django's slot on an exact queryset."""
+    seed_data(3)
+    warm = Category.objects.all()
+    list(warm)
+    assert materialized_rows(warm) == list(warm)
+
+
+@pytest.mark.django_db
+def test_a_queryset_subclass_is_never_asked_what_it_has_already_fetched():
+    """The object whose slice cannot be trusted cannot be trusted for its cache either.
+
+    Reading ``_result_cache`` off the relation cache with ``getattr`` is another
+    consumer dispatch point on exactly the value the bound is about to be
+    applied to.
+    """
+    seed_data(3)
+    hostile = _EscapingQuerySet(model=Category)
+    hostile._result_cache = list(Category.objects.all())
+    assert materialized_rows(hostile) is None
+
+
+# ---------------------------------------------------------------------------
 # The pre-parse text scan
 #
 # Live sibling: token / depth rows on ``/rp-tokens/`` and ``/rp-depth/``.
@@ -2777,6 +3021,7 @@ class _StreamedSubscription:
         yield 1
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.parametrize(
     "extensions",
     [[], [ValidationCache]],

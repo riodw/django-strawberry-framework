@@ -49,6 +49,16 @@ from django_strawberry_framework.schema import (
 )
 from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 
+#: ``Schema.stream`` landed in strawberry-graphql 0.319.0. Below it the package
+#: has no streamed seam to answer for - ``consumers.py::_StopAwareSchema.stream``
+#: delegates to a name that install does not carry and no handler reads - so the
+#: rows about it are skipped rather than rewritten onto ``subscribe``, which
+#: there serves subscriptions alone and would prove a different contract.
+_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
+    not hasattr(strawberry.Schema, "stream"),
+    reason="Schema.stream landed in strawberry-graphql 0.319.0",
+)
+
 
 class CustomErrorPolicyExtension(DjangoErrorPolicyExtension):
     """A consumer subclass of the masking authority, which is not one."""
@@ -1803,6 +1813,7 @@ async def test_a_refused_schema_answers_an_awaited_operation_name_the_same_way(o
     ]
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "operation_name",
@@ -1906,6 +1917,7 @@ async def test_a_refused_schema_answers_a_one_shot_transport_policy_when_awaited
     ]
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_refused_schema_streams_a_refusal_under_a_one_shot_transport_policy():
     """The stream is where an exhausted policy was quietest.
@@ -2081,6 +2093,7 @@ def test_the_substitute_document_is_of_a_type_the_transport_allows(allowed, expe
     assert print_ast(context.graphql_document) == expected
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_refused_schema_answers_a_streamed_operation_with_one_frame():
     """The streaming transport gets the refusal as a frame, not as an exception.
@@ -2222,6 +2235,7 @@ class _UpstreamRunnerSchema(DjangoSchema):
         return []
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_stream_whose_runner_is_not_the_packages_is_handed_back_untouched():
     """The resume wrapper binds what a ``DjangoExtensionsRunner`` owns, and nothing else.

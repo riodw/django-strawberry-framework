@@ -2798,6 +2798,16 @@ _PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=T
 _LIST_ARGUMENT_VISIBILITY_POLICY = _SealPolicy(reject_combined=True)
 # Post-OrderSet result policy: model rows, unevaluated, unsliced, uncombined.
 _ORDERSET_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=True)
+# A raw-list row source about to be windowed by ``resource_policy.py``. Every axis
+# that exists to protect a RECOMPOSITION is off, because nothing recomposes here:
+# one ``[start:stop]`` is taken and Django takes it on a sliced query and on a
+# combinator alike. A ``.values()`` projection is a legitimate list of rows, and a
+# source the consumer already evaluated is a cost (one discarded result cache, one
+# more query) rather than a broken seal - the same line ``_DEFAULT_SEAL_POLICY``
+# draws for every ``get_queryset`` return. What is NOT optional is the rebuild
+# itself: the point of sealing here is that the slice runs on a queryset this
+# package built.
+_RAW_LIST_SOURCE_POLICY = _SealPolicy(require_model_rows=False, reject_sliced=False)
 
 
 def _routing_hints_equal(cand_hints: Any, orig_hints: Any) -> bool:
@@ -3142,7 +3152,14 @@ def _seal_or_defect(
     query shares no mutable object with the candidate graph and a retained consumer reference
     cannot rewrite the visibility predicate between seal and compile.
     """
-    if not isinstance(candidate, models.QuerySet):
+    # ``issubclass(type(candidate), ...)`` and never ``isinstance``: an isinstance
+    # test whose first check fails falls back to the candidate's ``__class__``, which
+    # is a consumer-defined property on an arbitrary object - it can claim to be a
+    # QuerySet, or raise, and either way the admission test itself has dispatched
+    # consumer code. The real type is the one thing the candidate cannot restate, so
+    # the shape proof starts from it and a spoofed class stays the typed ``type``
+    # defect every other unusable shape is.
+    if not issubclass(type(candidate), models.QuerySet):
         return None, ("type", _safe_type_name(candidate))
     try:
         state = object.__getattribute__(candidate, "__dict__")
@@ -3311,6 +3328,152 @@ def _seal_or_defect(
     sealed._sticky_filter = state.get("_sticky_filter") is True
     sealed._for_write = state.get("_for_write") is True
     return sealed, None
+
+
+def _row_source_model(state: dict[str, Any]) -> type[models.Model]:
+    """The model a candidate row source declares, proven to be a model class.
+
+    ``_seal_or_defect`` reaches ``model._meta.concrete_model`` on its first line,
+    so the model it is given has to be a real model class before the call, not
+    after it: a raw-list source is not validated against a registered type's
+    table, so the model IT declares is the only one available, and that slot
+    holds whatever the candidate's instance dictionary holds.
+
+    ``issubclass(type(model), type)`` asks whether ``model`` IS a class without
+    letting a ``__class__`` property answer for it - ``type(model)`` is a real
+    type object whatever ``model`` is - which also makes the following
+    ``issubclass`` call safe to reach.
+    """
+    model = state.get("model")
+    if not issubclass(type(model), type) or not issubclass(model, models.Model):
+        raise ConfigurationError(
+            "A collection resolver returned a QuerySet subclass whose model is "
+            f"{_safe_type_name(model)}; the row bound rebuilds a framework-owned "
+            "queryset from that state and cannot do so without a model class.",
+        )
+    return model
+
+
+def normalized_row_source(value: Any) -> Any:
+    """Return a row source whose slice is an operation this package owns.
+
+    The raw-list ceiling is applied by slicing, because slicing a queryset is
+    what carries the bound into SQL as ``LIMIT``. That only bounds anything if
+    the package owns what the slice DOES. On an exact ``models.QuerySet`` it
+    does: ``QuerySet.__getitem__`` is Django's, it sets ``low_mark`` /
+    ``high_mark`` on the query, and the database returns no more rows than it
+    was asked for. On a SUBCLASS the same expression is consumer code, free to
+    ignore the slice and answer with every row - which turns the one thing
+    standing between a client and the whole table into a call the client's own
+    object decides the result of.
+
+    So the shape is read from ``type(value)``, never through an ``isinstance``
+    test a ``__class__`` property can answer, and:
+
+    - an exact ``models.QuerySet`` is returned unchanged. It is the common case
+      by an enormous margin (every framework-built queryset and every default
+      manager's ``.all()``), and it already is what this seam exists to produce,
+      so it pays nothing - no rebuild per parent row, no N+1 validation cost;
+    - a ``QuerySet`` SUBCLASS is untrusted execution state and is rebuilt into a
+      plain framework-owned queryset through the same seal every visibility
+      boundary runs, which preserves its model, query graph, routing, row
+      iterable and prefetch state. A sealable project subclass therefore keeps
+      its ``LIMIT`` in SQL instead of being demoted to a counted Python
+      truncation; one whose state cannot be faithfully rebuilt fails closed with
+      a typed ``ConfigurationError``, and never by falling back to its own
+      ``__getitem__``;
+    - anything else is returned unchanged for the caller's counting path, which
+      bounds by building a list of its own and needs no ownership of the source.
+
+    The rebuilt queryset is unevaluated even when the candidate had rows cached,
+    so a subclass source costs one extra query. That is the price of the bound
+    being enforceable at all, and it is paid only by the untrusted shape.
+    """
+    source_type = type(value)
+    if source_type is models.QuerySet or not issubclass(source_type, models.QuerySet):
+        return value
+    model = _row_source_model(_readable_queryset_state(value))
+    sealed, defect = _seal_or_defect(value, model, None, _RAW_LIST_SOURCE_POLICY)
+    if defect is not None:
+        raise ConfigurationError(_raw_list_source_message(defect, _safe_type_name(value)))
+    return sealed
+
+
+def materialized_rows(value: Any) -> Any:
+    """The rows a row source has already fetched, or ``None`` when it has none.
+
+    Django's prefetch cache holds a queryset whose ``_result_cache`` is the list
+    of rows it fetched, and returning that list directly is what lets a
+    prefetched relation skip a clone and a copy per parent row. The read is
+    taken out of the instance dictionary of an EXACT queryset, so it is the
+    package reading Django's own slot rather than a ``getattr`` dispatching
+    whatever a consumer subclass defines - the same object whose ``__getitem__``
+    cannot be trusted with the bound cannot be trusted to answer what it has
+    already fetched. Every other shape answers ``None`` and is bounded as the
+    source it is.
+    """
+    if type(value) is not models.QuerySet:
+        return None
+    return _readable_queryset_state(value).get("_result_cache")
+
+
+def _readable_queryset_state(value: Any) -> dict[str, Any]:
+    """The instance dictionary of ``value``, read without dispatching consumer code.
+
+    ``object.__getattribute__`` is the only read here for the reason the seal
+    gives: a custom ``__getattribute__`` or a redefined descriptor cannot run
+    code or return a lie during extraction. A shape with no instance dictionary
+    at all is not a queryset Django produced, so it fails closed rather than
+    being waved through with an empty one.
+    """
+    try:
+        return object.__getattribute__(value, "__dict__")
+    except BaseException:
+        raise ConfigurationError(
+            f"A collection resolver returned a {_safe_type_name(value)} whose "
+            "QuerySet instance state is unreadable, so the row bound cannot "
+            "rebuild a framework-owned queryset to apply itself to.",
+        ) from None
+
+
+def _raw_list_source_message(defect: tuple[str, str], name: str) -> str:
+    """The wording for a row source the raw-list bound could not take ownership of.
+
+    Only the defects ``_RAW_LIST_SOURCE_POLICY`` can actually reach have arms:
+    ``evaluated``, ``sliced`` and ``projection`` are switched off by that policy,
+    and ``routing`` / ``alias`` need an expectation this surface never states. A
+    code added to the seal without an arm here renders as the framework defect it
+    is rather than as one of these.
+    """
+    return _defect_message(
+        {
+            "type": (
+                f"A collection resolver returned a {name}, which the raw-list row "
+                "bound cannot slice; the bound is applied by slicing a queryset."
+            ),
+            "table": (
+                f"A collection resolver returned a {name} whose query is over a "
+                f"different table than its own model declares ({defect[1]}), so the "
+                "row bound cannot rebuild it into a framework-owned queryset."
+            ),
+            "untrusted": (
+                f"A collection resolver returned a {name} that cannot be sealed into "
+                f"a framework-owned execution queryset ({defect[1]}), so the raw-list "
+                "row bound has nothing it owns the slice of. Slicing the subclass "
+                "itself would let the object being bounded decide how many rows the "
+                "bound returns. Return a plain django.db.models.QuerySet, or a "
+                "subclass backed by a plain django.db.models.sql.Query with Django's "
+                "own row iterable."
+            ),
+            "combined": (
+                f"A collection resolver returned a {name} combining queries "
+                f"({defect[1]}), which the row bound cannot rebuild, so the bound has "
+                "no framework-owned queryset to slice."
+            ),
+        },
+        defect,
+        f"the {name} a collection resolver returned",
+    )
 
 
 def _coerced_manager_queryset(manager: models.Manager) -> models.QuerySet:

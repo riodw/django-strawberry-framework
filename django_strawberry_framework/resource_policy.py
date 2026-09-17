@@ -77,7 +77,7 @@ from .utils.context import clear_context_key, get_context_value, stash_on_contex
 from .utils.errors import coded_error_extensions
 from .utils.operation_lease import OperationLease
 from .utils.policies import canonical_policy, copy_policy, resolve_policy
-from .utils.querysets import is_async_only_iterable
+from .utils.querysets import is_async_only_iterable, normalized_row_source
 
 __all__ = (
     "DEFAULT_RESOURCE_POLICY",
@@ -926,23 +926,33 @@ def check_deadline(info: Any) -> None:
 
 
 #: The collection representations whose own slice is the operation that bounds
-#: them. A ``QuerySet`` is sliced because slicing is the only thing that carries
-#: the bound into SQL as ``LIMIT``, so a queryset is never evaluated unbounded;
-#: the exact built-in sequences are sliced because at an exact type ``[a:b]`` is
-#: the interpreter's own subscript rather than a method the value brought with
-#: it. Everything else is bounded by COUNTING instead - see ``_windowed_rows``.
+#: them. An exact ``QuerySet`` is sliced because slicing is the only thing that
+#: carries the bound into SQL as ``LIMIT``, so a queryset is never evaluated
+#: unbounded; the exact built-in sequences are sliced because at an exact type
+#: ``[a:b]`` is the interpreter's own subscript rather than a method the value
+#: brought with it. Everything else is bounded by COUNTING instead - see
+#: ``_windowed_rows``.
 _SLICE_BOUNDED_ROW_TYPES = (
     list,
     tuple,
     str,
     bytes,
     bytearray,
+    QuerySet,
 )
 
 
 def _bounds_by_its_own_slice(result: Any) -> bool:
-    """Whether slicing ``result`` is an operation this package owns the meaning of."""
-    return type(result) in _SLICE_BOUNDED_ROW_TYPES or isinstance(result, QuerySet)
+    """Whether slicing ``result`` is an operation this package owns the meaning of.
+
+    Exact types only, and ``type(result)`` rather than ``isinstance``: a subclass
+    of any of these brings its own ``__getitem__``, and an ``isinstance`` test
+    can be answered by a ``__class__`` property on an object that is none of
+    them. A QuerySet subclass does not reach here as itself - it arrives already
+    rebuilt into an exact framework-owned queryset by
+    ``utils/querysets.py::normalized_row_source``, or not at all.
+    """
+    return type(result) in _SLICE_BOUNDED_ROW_TYPES
 
 
 def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -> int:
@@ -980,13 +990,22 @@ def _windowed_rows(
     runs whatever ``__getitem__`` the value brought with it, so on a consumer's
     own sequence type the bound is enforced by consumer code and a slice can
     answer with every row it was asked to drop; ``[start:stop]`` is therefore
-    reached only for the representations in ``_SLICE_BOUNDED_ROW_TYPES`` and for
-    a ``QuerySet``, whose slice is what pushes ``LIMIT`` into SQL. Every other
-    shape - a subclass of those types, a mapping, a bare iterable, a relation
-    accessor's sequence proxy - is bounded by COUNTING through ``islice`` into a
-    list this package built, which cannot return more items than it was asked
-    for whatever the source does, and a zero-width window on such a shape is the
-    empty list rather than a subscript nobody can predict the answer to.
+    reached only for the exact representations in ``_SLICE_BOUNDED_ROW_TYPES``,
+    among them the ``QuerySet`` whose slice is what pushes ``LIMIT`` into SQL.
+    Every other shape - a subclass of those types, a mapping, a bare iterable, a
+    relation accessor's sequence proxy - is bounded by COUNTING through
+    ``islice`` into a list this package built, which cannot return more items
+    than it was asked for whatever the source does, and a zero-width window on
+    such a shape is the empty list rather than a subscript nobody can predict
+    the answer to.
+
+    A ``QuerySet`` SUBCLASS is neither sliced as itself nor demoted to counting:
+    ``utils/querysets.py::normalized_row_source`` rebuilds it into a plain
+    framework-owned queryset first, so a sealable project subclass keeps its
+    ``LIMIT`` in SQL and an unsealable one fails closed. That seam is the only
+    thing between "this value is a queryset" and "call its slice", and it runs
+    before the shape is classified because the classification is what it
+    settles.
 
     Package-private because a coordinate pair is a claim this seam cannot check:
     a window wider than the request's own ceiling would silently widen the bound
@@ -1000,6 +1019,7 @@ def _windowed_rows(
     limit = _raw_list_bound(info, declared, trusted=trusted)
     if result is None:
         return None
+    result = normalized_row_source(result)
     by_slice = _bounds_by_its_own_slice(result)
     if offset is None and requested_limit is None:
         return result[:limit] if by_slice else list(islice(result, limit))
@@ -1035,12 +1055,16 @@ def bounded_rows(
     cache) is truncated in Python, which cannot un-fetch those rows but does
     stop the response from serializing them. Which operation does the truncating
     follows from what the value IS, never from whether a subscript happened to
-    answer: an exact ``list``, ``tuple``, ``str``, ``bytes`` or ``bytearray`` is
-    sliced and keeps its type, and every other shape - a subclass of one of
-    those, a mapping, a bare iterable - is counted into a fresh list instead,
-    which is how the ceiling stays a ceiling on a sequence type whose own
-    ``__getitem__`` is consumer code. A mapping therefore still comes back as a
-    bounded list of its keys.
+    answer: an exact ``list``, ``tuple``, ``str``, ``bytes``, ``bytearray`` or
+    ``QuerySet`` is sliced and keeps its type, and every other shape - a
+    subclass of one of the sequence types, a mapping, a bare iterable - is
+    counted into a fresh list instead, which is how the ceiling stays a ceiling
+    on a sequence type whose own ``__getitem__`` is consumer code. A mapping
+    therefore still comes back as a bounded list of its keys. A ``QuerySet``
+    subclass is the one shape that is rebuilt rather than reclassified: it is
+    sealed into a plain framework-owned queryset and sliced there, so it keeps
+    the SQL ``LIMIT`` a counted truncation would lose, or fails closed with a
+    typed ``ConfigurationError`` when its state cannot be rebuilt.
 
     A raw list is the one collection shape Relay pagination does not bound, so
     this is the only thing between a client and the whole table. It is

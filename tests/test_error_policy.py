@@ -305,16 +305,24 @@ def test_a_callable_policy_entry_cannot_become_the_masking_authority():
     ]
 
 
-def test_callable_policy_and_debug_entries_preserve_debug_exception_capture():
-    """A callable error policy must not duplicate and preempt debug teardown."""
+def test_a_declared_policy_beside_a_debug_factory_preserves_debug_exception_capture():
+    """Declaring the masking extension must not duplicate it or preempt debug teardown.
 
-    def error_factory():
-        return DjangoErrorPolicyExtension()
+    A direct entry of the schema's own error-policy extension is read once as a
+    declaration and never joins the chain, so the schema still installs exactly
+    one masking authority - and the neighbouring factory entry still builds its
+    own extension per operation and still captures the exception that was
+    masked. Two masking extensions would mint a second correlation id for an
+    already-masked error and leave debug's teardown looking at the wrong one.
+    """
 
     def debug_factory():
         return DjangoDebugExtension(allow_unsafe_production=True)
 
-    schema = DjangoSchema(query=_Query, extensions=[error_factory, debug_factory])
+    schema = DjangoSchema(
+        query=_Query,
+        extensions=[DjangoErrorPolicyExtension(), debug_factory],
+    )
     result = schema.execute_sync("{ boom }")
 
     assert len(result.extensions["debug"]["exceptions"]) == 1

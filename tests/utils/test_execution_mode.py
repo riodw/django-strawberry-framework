@@ -20,12 +20,22 @@ from __future__ import annotations
 import pytest
 import strawberry
 
-from django_strawberry_framework import DjangoSchema, SyncMisuseError
+from django_strawberry_framework import DjangoSchema, ErrorPolicy, SyncMisuseError
 from django_strawberry_framework.utils.execution_mode import (
     OperationMode,
     async_execution,
     current_operation_mode,
     operation_is_async,
+)
+
+#: ``Schema.stream`` landed in strawberry-graphql 0.319.0. Below it the package
+#: has no streamed seam to answer for - ``consumers.py::_StopAwareSchema.stream``
+#: delegates to a name that install does not carry and no handler reads - so the
+#: rows about it are skipped rather than rewritten onto ``subscribe``, which
+#: there serves subscriptions alone and would prove a different contract.
+_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
+    not hasattr(strawberry.Schema, "stream"),
+    reason="Schema.stream landed in strawberry-graphql 0.319.0",
 )
 
 
@@ -45,7 +55,13 @@ class _Query:
 
 
 def _schema() -> DjangoSchema:
-    return DjangoSchema(query=_Query)
+    """A schema whose masking is off, so the refusal is assertable as itself.
+
+    The default policy answers every unexpected exception with one stable string
+    and strips ``original_error``, which would leave the misuse rows asserting
+    the mask rather than the typed error they are about.
+    """
+    return DjangoSchema(query=_Query, error_policy=ErrorPolicy(enabled=False))
 
 
 def test_nothing_is_bound_outside_every_operation():
@@ -73,6 +89,7 @@ async def test_an_awaited_operation_is_asynchronous_all_the_way_down():
     assert result.data == {"readings": "OperationMode.ASYNC|True|True"}
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_streamed_operation_is_asynchronous_too():
     """``stream`` and ``subscribe`` come through the same flag as ``execute``."""

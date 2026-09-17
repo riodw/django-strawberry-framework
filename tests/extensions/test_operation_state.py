@@ -64,6 +64,16 @@ from django_strawberry_framework.utils.execution_mode import (
     current_operation_mode,
 )
 
+#: ``Schema.stream`` landed in strawberry-graphql 0.319.0. Below it the package
+#: has no streamed seam to answer for - ``consumers.py::_StopAwareSchema.stream``
+#: delegates to a name that install does not carry and no handler reads - so the
+#: rows about it are skipped rather than rewritten onto ``subscribe``, which
+#: there serves subscriptions alone and would prove a different contract.
+_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
+    not hasattr(strawberry.Schema, "stream"),
+    reason="Schema.stream landed in strawberry-graphql 0.319.0",
+)
+
 
 @strawberry.type
 class _Query:
@@ -356,6 +366,7 @@ async def test_a_hook_that_raises_while_setting_up_resets_on_the_async_path_too(
     assert shared._operation_state() is None
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_closed_stream_leaves_no_state_bound_and_the_next_operation_is_clean():
     """The streaming runner outlives the operation scope, and its binding must not.
@@ -380,6 +391,7 @@ async def test_a_closed_stream_leaves_no_state_bound_and_the_next_operation_is_c
     assert shared.execution_context is None
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_cancelled_stream_leaves_no_state_bound_either():
     """Cancellation unwinds the generator's ``finally``, and the binding resets there.
@@ -635,6 +647,7 @@ async def _run_stream(schema, context_value):
         pass
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.parametrize(
     "run",
     [_run_execute_sync, _run_execute, _run_stream],
@@ -863,6 +876,7 @@ async def test_a_child_released_during_result_collection_reads_a_closed_binding(
     assert seen["child_nested"] is False
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_task_outliving_a_cancelled_stream_reads_nothing_either():
     """A dropped subscription cancels the task driving it, and its children remain.
@@ -1055,6 +1069,7 @@ async def _frame_in_its_own_task(stream):
     return await asyncio.ensure_future(stream.__anext__())
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_stream_frame_produced_in_another_task_is_bound_to_its_operation():
     """Python resumes an async generator in the CALLER's context, not the producer's.
@@ -1079,6 +1094,7 @@ async def test_a_stream_frame_produced_in_another_task_is_bound_to_its_operation
     await stream.aclose()
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_stream_resumed_with_asend_from_another_task_is_bound_the_same_way():
     """``asend`` is the other way to advance an iterator, and transports use it.
@@ -1103,6 +1119,7 @@ async def test_a_stream_resumed_with_asend_from_another_task_is_bound_the_same_w
     await stream.aclose()
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_stream_closed_from_another_task_leaves_every_scope_terminal():
     """The close is the operation's teardown, and it runs wherever the closer is.
@@ -1136,6 +1153,7 @@ async def test_a_stream_closed_from_another_task_leaves_every_scope_terminal():
     assert reference() is None
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_stream_cancelled_in_one_task_is_closable_from_another():
     """Cancellation leaves the generator suspended; the close still has to work.
@@ -1162,6 +1180,7 @@ async def test_a_stream_cancelled_in_one_task_is_closable_from_another():
     assert _read_in_the_copied_context(seen)["armed"] is None
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operation():
     """``athrow`` is the other way a transport ends a stream, and it binds the same.
@@ -1198,6 +1217,7 @@ def _armed_rows():
     return None if armed is None else armed.max_list_rows
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_paused_stream_leaves_no_binding_in_the_task_that_drove_it():
     """A frame is handed over, and the operation is not.
@@ -1229,6 +1249,7 @@ async def test_a_paused_stream_leaves_no_binding_in_the_task_that_drove_it():
     assert _armed_rows() is None
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_two_streams_interleaved_in_one_task_each_keep_their_own_budget():
     """Frames from two operations alternate in one task, and neither leaks into it.
@@ -1257,6 +1278,7 @@ async def test_two_streams_interleaved_in_one_task_each_keep_their_own_budget():
     await narrow_stream.aclose()
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_stream_driven_inside_an_operation_restores_the_outer_budget():
     """Between inner frames the caller gets its enclosing operation back, not nothing.
@@ -1290,6 +1312,7 @@ async def test_a_stream_driven_inside_an_operation_restores_the_outer_budget():
     assert between == [9, 9, 9]
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_child_started_after_a_frame_was_yielded_copies_no_live_budget():
     """Transport code between frames is where a background job is started from.
@@ -1335,6 +1358,7 @@ class _RefusingToSaySchema:
         raise RuntimeError("no schema here")
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.parametrize(
     "forge",
     [
@@ -1537,6 +1561,7 @@ async def test_a_task_that_copied_an_operations_context_reads_no_mode():
     assert read == {"mode": None}
 
 
+@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_every_frame_of_a_stream_carries_the_operations_mode():
     """A frame produced in another task is the same operation as the one before it.

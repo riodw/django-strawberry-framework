@@ -61,6 +61,8 @@ from ..utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
+    materialized_rows,
+    normalized_row_source,
 )
 from ..utils.relations import instance_accessor, is_many_side_relation_kind
 from .converters import _field_output_type_for
@@ -563,7 +565,16 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
                             visibility_type,
                             info,
                         )
-                    result_cache = getattr(cached, "_result_cache", None)
+                    # The cache entry is a queryset, and reading what it has
+                    # already fetched through ``getattr`` would dispatch a
+                    # consumer subclass's own attribute access for the value the
+                    # bound is then applied to. It is normalized first, so the
+                    # rows come out of Django's own slot on an object this
+                    # package owns - or the subclass is rebuilt and answers no
+                    # cached rows at all, which is one extra query and a bound
+                    # that holds.
+                    cached = normalized_row_source(cached)
+                    result_cache = materialized_rows(cached)
                     source = result_cache if result_cache is not None else cached
                     return bounded_rows(source, info)
             # The bound is applied to the QUERYSET, before ``list(...)``, so the

@@ -48,7 +48,20 @@ rather than as another figure beside the one above:
   Decision 19);
 - the resume-scoped budget binding - an operation's budget stays armed for the operation and
   bound only while a task is driving it, so between two streamed frames the driving task
-  answers from its enclosing operation or from nothing.
+  answers from its enclosing operation or from nothing;
+- the raw-list row-source ownership - the universal non-Relay row ceiling is applied only to a
+  value this package owns the slice of, so an exact queryset keeps its SQL `LIMIT`, a
+  `QuerySet` subclass is rebuilt through the shared sealer and sliced there or refused with a
+  typed configuration error, and an object that merely claims through `__class__` to be a
+  queryset reaches the counting arm instead; the generated many-side relation resolver reaches
+  that seam on its no-custom-visibility branch and normalizes the relation cache before reading
+  the rows it holds ([`spec-050`][spec-050] Decision 8, with the two new Definition-of-done
+  rows it earns).
+
+The predicted files gain
+[`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy] for
+the live hostile-relation rows on both transports; no new tracked path is added, so neither
+generated view moves.
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).
@@ -290,6 +303,7 @@ comparison measures the tree you were trying to exclude.
 <!-- tests/ -->
 
 <!-- examples/ -->
+[fakeshop-test-resource-policy]: ../../../examples/fakeshop/test_query/test_resource_policy_api.py
 
 <!-- scripts/ -->
 

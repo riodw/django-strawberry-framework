@@ -785,6 +785,42 @@ def test_exact_queryset_pending_deferred_filter_is_resolved():
     assert "later" in params
 
 
+def test_a_value_whose_class_property_raises_is_a_typed_seal_defect():
+    """The admission test itself must not dispatch the candidate's own code.
+
+    ``isinstance(candidate, QuerySet)`` falls back to the candidate's
+    ``__class__`` when the real type does not match, and that is a consumer
+    property on an arbitrary object: it can claim to be a queryset, or raise
+    straight out of the shape proof the boundary exists to fail closed. The real
+    type answers instead, so a value that cannot be one is the typed ``type``
+    defect every other unusable shape is.
+    """
+
+    class _RaisingClass:
+        @property
+        def __class__(self):
+            raise RuntimeError("class bomb")
+
+    sealed, defect = _seal_or_defect(_RaisingClass(), Category, None)
+    assert sealed is None
+    assert defect == ("type", "_RaisingClass")
+
+
+def test_a_value_that_only_claims_to_be_a_queryset_is_a_typed_seal_defect():
+    """A ``__class__`` that names ``QuerySet`` does not make a value one."""
+
+    class _ClaimsToBeAQuerySet:
+        @property
+        def __class__(self):
+            return models.QuerySet
+
+    candidate = _ClaimsToBeAQuerySet()
+    assert isinstance(candidate, models.QuerySet)
+    sealed, defect = _seal_or_defect(candidate, Category, None)
+    assert sealed is None
+    assert defect == ("type", "_ClaimsToBeAQuerySet")
+
+
 def test_pending_deferred_filter_over_foreign_query_never_dispatches():
     """Resolving a pending deferred filter must not dispatch a foreign ``_query``.
 
@@ -4375,24 +4411,43 @@ def test_reject_async_iterable_in_sync_context_names_the_flavor():
         reject_async_iterable_in_sync_context(
             _AsyncOnlyIterable(),
             flavor_noun="DjangoListField",
+            async_executor=False,
         )
     with pytest.raises(SyncMisuseError, match="A connection resolver returned"):
         reject_async_iterable_in_sync_context(
             _AsyncOnlyIterable(),
             flavor_noun="connection",
+            async_executor=False,
         )
 
 
 def test_reject_async_iterable_in_sync_context_passes_sync_sources():
     """Sync-iterable sources (lists, QuerySets) pass through untouched."""
-    reject_async_iterable_in_sync_context([1, 2], flavor_noun="connection")
-    reject_async_iterable_in_sync_context(Category.objects.none(), flavor_noun="connection")
+    reject_async_iterable_in_sync_context(
+        [1, 2],
+        flavor_noun="connection",
+        async_executor=False,
+    )
+    reject_async_iterable_in_sync_context(
+        Category.objects.none(),
+        flavor_noun="connection",
+        async_executor=False,
+    )
 
 
 async def test_reject_async_iterable_in_sync_context_noop_under_async_execution():
-    """Under async execution the guard is a no-op: the async executor consumes it."""
+    """Under the async executor the guard is a no-op: that executor consumes the source.
+
+    The verdict is the CALLER's, so the row states it as one. A guard that read
+    the ambient loop would call a synchronous operation nested inside an
+    asynchronous one async and pass a source its executor cannot consume.
+    """
     source = _AsyncOnlyIterable()
-    reject_async_iterable_in_sync_context(source, flavor_noun="connection")
+    reject_async_iterable_in_sync_context(
+        source,
+        flavor_noun="connection",
+        async_executor=True,
+    )
 
 
 def test_reject_async_in_sync_context_cancels_future():
@@ -4564,12 +4619,20 @@ class _ProxyTargetCategory(Category):
 
 
 class _ProxyTargetHolder(models.Model):
-    """A model whose foreign key is declared to a PROXY model."""
+    """A model whose foreign key is declared to a PROXY model.
+
+    Only the FORWARD relation is under test, and this model has no table. It has
+    to live in an installed app to be registered at all, so ``related_name="+"``
+    and ``on_delete=DO_NOTHING`` keep it out of what Django walks on the way to
+    deleting a ``Category``: the deletion collector skips ``DO_NOTHING``
+    relations, and without that it would query a table that was never created,
+    failing anything that deletes a ``Category`` in a worker this module ran in.
+    """
 
     cat = models.ForeignKey(
         _ProxyTargetCategory,
-        related_name="proxy_target_holders",
-        on_delete=models.CASCADE,
+        related_name="+",
+        on_delete=models.DO_NOTHING,
     )
 
     class Meta:

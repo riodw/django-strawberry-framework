@@ -1214,14 +1214,32 @@ docstring and migration note carry that as the recommendation it is.
 The public list-field pipeline permits nonzero offset only for a queryset carrying the
 visible order guarantee below; an opaque Python iterable cannot establish it. Once the
 single bounding seam is handed validated coordinates, the window is applied with an operation
-the package owns the meaning of: a queryset receives `[start:stop]`, because slicing is what
-carries the bound into SQL as `LIMIT`; an exact built-in sequence receives the same slice and
-keeps its type; and every other shape — a subclass of one of those types, a mapping, a
-non-subscriptable iterable — is counted into a fresh list with
+the package owns the meaning of: an exact `django.db.models.QuerySet` receives `[start:stop]`,
+because slicing is what carries the bound into SQL as `LIMIT`; an exact built-in sequence
+receives the same slice and keeps its type; and every other shape — a subclass of one of those
+sequence types, a mapping, a non-subscriptable iterable — is counted into a fresh list with
 `itertools.islice(start, stop)`. Which operation applies follows from what the value IS,
 never from whether a subscript happened to answer, because `__getitem__` on a consumer's own
 sequence type is consumer code and a bound enforced by calling it is a bound the bounded party
-decides. That lower-level arithmetic remains shape-complete and is
+decides.
+
+A `QuerySet` SUBCLASS is the one shape that is neither sliced as itself nor counted. It is
+normalized first, by the one shared seam every raw-list caller runs
+(`utils/querysets.py::normalized_row_source`), which rebuilds it into a plain framework-owned
+queryset through the same sealer the visibility boundary uses — preserving model, query graph,
+routing, row iterable and prefetch state — and then slices that. A subclass that cannot be
+faithfully rebuilt is refused with a typed `ConfigurationError`; the fallback is never its own
+`__getitem__`. Counting a sealable subclass into a Python list was rejected as the whole fix
+because it restores the row ceiling while losing the SQL `LIMIT` for a legitimate project
+queryset class. The shape is read from `type(value)` rather than `isinstance`, because
+`isinstance` falls back to a consumer-defined `__class__` and an object that merely claims to be
+a queryset would select the slice arm. `isinstance` results and consumer `__getitem__` results
+define no part of the ceiling. The same rule governs the relation cache: the generated many-side
+resolver normalizes the cached source before reading the rows it already fetched, so that read
+is Django's own slot on an object the package owns rather than an attribute lookup the subclass
+answers. *Derivation and rejected alternatives: see the [rationale][rationale-d8].*
+
+That lower-level arithmetic remains shape-complete and is
 unit-pinned, but it does not widen the list field's order precondition, and the two tiers must
 not be blurred: positive-offset arithmetic over an async iterator is pinned against the helper
 directly in [`tests/test_resource_policy.py`][test-resource-policy], while every LIVE
@@ -2341,6 +2359,35 @@ target's private rows while costing one item query for the whole page, and
 nested window over `PeriodicalType.issuesConnection`. Each of those rows is proven to fail when
 the planner's custom-`get_queryset` verdict is forced false.
 
+### The raw-list row source
+
+The ceiling's ownership is proven at both tiers, because the seam is shared and the relation
+branch that reaches it has no visibility rebuild in front of it.
+
+Package rows in [`tests/test_resource_policy.py`][test-resource-policy] take a `QuerySet`
+subclass whose slice returns every row through `bounded_rows` and `bounded_rows_async`, and
+through the private `_windowed_rows` / `_windowed_rows_async` arms with a coordinate window and
+with a zero-width one, so the exported helpers keep their coordinate-free signatures. Beside
+them: an exact-queryset control asserting the SQL `high_mark` is still the effective ceiling, a
+sealable subclass asserting the rebuild keeps that `high_mark` rather than counting the rows in
+Python, an unrebuildable subclass asserting a typed `ConfigurationError` rather than a fallback
+to its own subscript, a class-spoofing non-queryset asserting it reaches the counting arm and
+escapes as nothing untyped, and the two fail-closed arms the rebuild owns - a source whose
+declared model is not a model class, and one whose instance state cannot be read. The warm
+cache is pinned both ways: an exact queryset's fetched rows are read out of Django's slot, and a
+subclass answers none. [`tests/utils/test_querysets.py`][test-querysets] pins the sealer's own
+admission: a value whose `__class__` raises, and one whose `__class__` names `QuerySet`, are
+both the typed `type` defect rather than a raw exception or an admission.
+
+Live rows in [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy]
+mount a `DjangoListField` root over `PatronType`, whose many-side `loans` target declares no
+custom `get_queryset`, at `max_list_rows=1` over a patron seeded with four loans. The reverse
+manager's `.all()` is made to return a `QuerySet` subclass, and the complete wire payload must
+carry one loan on the sync transport and one on `AsyncDjangoGraphQLView`; the same document with
+Django's own manager is the control. No shipped root pairs a `DjangoListField` with a
+no-custom-visibility many-side target, so the root is declared in the suite, and its schema is
+built from the type the module reload left in place rather than one captured at import.
+
 ### Failability and commands
 
 Each SQL test is proven to fail if slice order is reversed, the offset is ignored, the
@@ -2533,6 +2580,19 @@ structural checks, and link/kanban verification prescribed by
       ORDERED OFFSET; no spec, docstring, glossary, or error text promises a stable or
       repeatable page, and a published `offset` is documented as a runtime precondition rather
       than a per-field pagination capability.
+- [ ] No raw-list row source decides its own ceiling. An exact `QuerySet` is sliced and keeps
+      its SQL `LIMIT`; a `QuerySet` SUBCLASS is rebuilt into a plain framework-owned queryset
+      through the shared sealer and sliced there, so a sealable project queryset class keeps
+      that `LIMIT` and an unrebuildable one is refused with a typed `ConfigurationError`
+      instead of falling back to its own `__getitem__`; an object whose `__class__` merely
+      claims to be a queryset cannot select the slice arm at all. The shape is read from
+      `type(value)` at every admission, including the sealer's own, so a `__class__` property
+      can neither be consulted nor raise out of a shape proof.
+- [ ] The generated many-side relation resolver reaches that seam on its no-custom-visibility
+      branch too - the one path with no visibility rebuild in front of it - and normalizes the
+      relation cache before reading the rows it holds. Proven live on both transports with a
+      relation manager returning a `QuerySet` subclass over a `DjangoListField` root: the
+      response carries `max_list_rows` rows, not the relation's.
 - [ ] Visibility runs before order; order runs before one combined slice; order permission
       failures occur before slicing.
 - [ ] Public `OrderSet.apply_*` results are mechanically validated as unevaluated, unsliced,

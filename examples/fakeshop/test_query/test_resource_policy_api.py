@@ -58,17 +58,20 @@ from __future__ import annotations
 import json
 import threading
 import warnings
+from contextlib import contextmanager
 from functools import cache
 from typing import NewType
 
 import pytest
 import strawberry
 from apps.library import models as library_models
+from apps.library import schema as library_schema
 from apps.products.services import create_users, seed_data
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
+from django.db.models import QuerySet
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
@@ -80,7 +83,7 @@ from strawberry.extensions.validation_cache import _get_validate_cache
 from django_strawberry_framework import (
     DEFAULT_ERROR_POLICY,
     RESOURCE_LIMIT_ERROR_CODE,
-    SCHEMA_CONFIGURATION_ERROR_CODE,
+    DjangoListField,
     DjangoSchema,
     ErrorPolicy,
     strawberry_config,
@@ -170,6 +173,108 @@ def _probe_async_view(**overrides: int):
 
     view.csrf_exempt = True
     return view
+
+
+#: The bound the hostile-relation mounts narrow to. One row makes the ceiling and
+#: the seeded relation impossible to confuse: every assertion below is "one, not
+#: four", never "fewer than seeded".
+HOSTILE_RELATION_ROWS = 1
+
+
+class _EscapingQuerySet(QuerySet):
+    """A ``QuerySet`` subclass whose slice answers with every row it was asked to drop.
+
+    The raw-list ceiling is ``result[:limit]``, and on a subclass that expression
+    is consumer code. A project's manager is free to return one of these - Django
+    itself builds relation managers over whatever queryset class the model
+    declares - so this is a shape the bound meets in ordinary code, not only in
+    an attack.
+    """
+
+    def __getitem__(self, key):
+        return list(library_models.Loan.objects.all())
+
+
+@contextmanager
+def _hostile_relation_manager():
+    """Make the reverse ``loans`` manager hand back the escaping subclass.
+
+    The relation resolver builds its source with ``getattr(root, accessor).all()``
+    on Django's own related manager, so replacing that one method is how a real
+    project's custom queryset class reaches the raw-list bound - no framework
+    seam is bypassed and no test double stands in for the resolver.
+    """
+    manager_cls = library_models.Patron.loans.related_manager_cls
+    original = manager_cls.all
+
+    def escaping_all(self):
+        source = original(self)
+        hostile = _EscapingQuerySet(model=library_models.Loan, query=source.query)
+        hostile._db = source._db
+        return hostile
+
+    manager_cls.all = escaping_all
+    try:
+        yield
+    finally:
+        manager_cls.all = original
+
+
+@cache
+def _hostile_relation_schema(patron_type: type) -> DjangoSchema:
+    """A ``DjangoListField`` schema over a type whose many-side target seals nothing.
+
+    ``PatronType`` and ``LoanType`` both leave ``get_queryset`` at the default, so
+    the generated ``loans`` resolver takes the no-custom-visibility branch - the
+    one path to the raw-list bound that no visibility rebuild stands in front of.
+    No shipped root pairs a ``DjangoListField`` with such a target, so the root
+    is declared here rather than borrowed.
+
+    The type is an ARGUMENT, and the cache is keyed on it, because these suites
+    reload every app schema module per module: a root captured at import time
+    would hold the generation before that reload and mix two type graphs into
+    one schema.
+    """
+
+    # Built with ``type(...)`` and a REAL annotation object: this module runs
+    # under ``from __future__ import annotations``, so a written annotation would
+    # be the string ``"list[patron_type]"`` and would resolve against the module
+    # globals, where the local type argument does not exist.
+    query_cls = strawberry.type(
+        type(
+            "_HostileRelationQuery",
+            (),
+            {
+                "__annotations__": {"patrons": list[patron_type]},
+                "__doc__": "A raw-list root over a type whose many-side target seals nothing.",
+                "patrons": DjangoListField(patron_type),
+            },
+        ),
+    )
+    return DjangoSchema(
+        query=query_cls,
+        config=strawberry_config(),
+        resource_policy=ResourcePolicy(max_list_rows=HOSTILE_RELATION_ROWS),
+    )
+
+
+def _hostile_relation_view(request, *args, **kwargs):
+    """Mount the package view over the hostile-relation probe schema."""
+    schema = _hostile_relation_schema(library_schema.PatronType)
+    return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
+
+
+_hostile_relation_view.csrf_exempt = True
+
+
+async def _hostile_relation_async_view(request, *args, **kwargs):
+    """The async twin, so the bound is proven on a real event loop too."""
+    schema = _hostile_relation_schema(library_schema.PatronType)
+    built = AsyncDjangoGraphQLView.as_view(schema=schema)
+    return await built(request, *args, **kwargs)
+
+
+_hostile_relation_async_view.csrf_exempt = True
 
 
 MAX_TOKENS = 40
@@ -1057,6 +1162,8 @@ urlpatterns = [
     path("rp-value-depth/", _probe_view(max_value_depth=MAX_VALUE_DEPTH)),
     path("rp-deadline/", _probe_view(execution_deadline_seconds=DEADLINE_SECONDS)),
     path("rp-values-async/", _probe_async_view(**_VALUE_BOUNDS)),
+    path("rp-hostile-relation/", _hostile_relation_view),
+    path("rp-hostile-relation-async/", _hostile_relation_async_view),
     path(
         "rp-rows/",
         _probe_view(max_list_rows=MAX_LIST_ROWS, max_page_size=MAX_PAGE_SIZE),
@@ -2574,27 +2681,27 @@ def test_an_extension_factory_still_builds_one_per_operation():
     [("/rp-forged-entries/", "forge"), ("/rp-dropped-entries/", "drop")],
     ids=["forge-the-accepted-entries", "delete-the-accepted-entries"],
 )
-def test_losing_the_accepted_extensions_refuses_the_next_request(mount, field):
-    """A configuration that cannot be read back is refused, never widened.
+def test_losing_the_accepted_extensions_does_not_widen_the_next_request(mount, field):
+    """A bound is not held in anything a resolver can forge or delete.
 
-    The accepted entries are the only record of what a consumer extension
-    declared, so resolving the list that replaced them - or falling back to the
-    schema's own policy, which here is the package default - would answer a
-    deleted attribute with a budget three times wider than the one the
-    deployment configured. Each row gets its own mount because the schema it
-    breaks stays broken.
+    Every private name a schema carries is replaced with an empty value of the
+    same shape, and then deleted outright. The bound the deployment configured
+    is read from neither: it was taken as a declaration at construction and is
+    held where no name on the schema answers with it, so the request after the
+    write is bounded exactly as the request before it - not widened to the
+    package default, which is three times wider here. Each row gets its own
+    mount because whatever a write does to a schema stays done.
     """
     first = _post(mount, "{ rows }")
     _no_rejection(first)
     assert first["data"]["rows"] == ["a"]
 
-    attacked = _post(mount, "{ %s }" % field)
+    attacked = _post(mount, f"{{ {field} }}")
     assert attacked["data"] == {field: ["_django_extensions"]}, attacked
 
     second = _post(mount, "{ rows }")
-    assert second["data"] is None, second
-    assert len(second["errors"]) == 1
-    assert second["errors"][0]["extensions"] == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
+    _no_rejection(second)
+    assert second["data"]["rows"] == ["a"]
 
 
 @pytest.mark.parametrize(
@@ -2792,6 +2899,85 @@ def test_the_composed_admission_stage_answers_the_same_on_the_async_transport(or
     )
     assert _rejection(json.loads(response.response.content)) == sync_extensions
     assert _scalar_parses == []
+
+
+def _seed_hostile_relation() -> None:
+    """One patron with four loans, so a ceiling of one cannot be mistaken for the data."""
+    branch = library_models.Branch.objects.create(name="hostile-branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="hostile-shelf")
+    patron = library_models.Patron.objects.create(name="hostile-patron")
+    for index in range(4):
+        book = library_models.Book.objects.create(shelf=shelf, title=f"hostile-{index}")
+        library_models.Loan.objects.create(book=book, patron=patron, note=f"loan-{index}")
+
+
+_HOSTILE_RELATION_QUERY = "{ patrons { name loans { note } } }"
+
+
+@pytest.mark.django_db
+def test_a_relation_manager_cannot_widen_the_raw_list_bound_with_its_own_slice():
+    """The many-side relation is bounded by what the package slices, not by the source.
+
+    The generated ``loans`` resolver hands its source straight to the raw-list
+    bound, and that source is whatever the relation manager returned. A manager
+    returning a ``QuerySet`` subclass used to put the ceiling in that subclass's
+    ``__getitem__``, so four related rows came back through a real request under
+    a bound of one.
+    """
+    _seed_hostile_relation()
+    with _hostile_relation_manager():
+        payload = _post("/rp-hostile-relation/", _HOSTILE_RELATION_QUERY)
+    _no_rejection(payload)
+    assert payload["data"] == {
+        "patrons": [
+            {"name": "hostile-patron", "loans": [{"note": "loan-0"}]},
+        ],
+    }
+    assert len(payload["data"]["patrons"][0]["loans"]) == HOSTILE_RELATION_ROWS
+
+
+@pytest.mark.django_db
+def test_an_ordinary_relation_manager_is_bounded_the_same_way():
+    """The control: the same mount, the same document, Django's own manager.
+
+    Without it the row above would prove only that something rejected four rows,
+    not that the bound is the thing doing it.
+    """
+    _seed_hostile_relation()
+    payload = _post("/rp-hostile-relation/", _HOSTILE_RELATION_QUERY)
+    _no_rejection(payload)
+    assert payload["data"] == {
+        "patrons": [
+            {"name": "hostile-patron", "loans": [{"note": "loan-0"}]},
+        ],
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_relation_manager_cannot_widen_the_raw_list_bound_on_the_async_transport():
+    """Sync/async parity: the awaited relation branch is bounded by the same seam.
+
+    The async many-side branch iterates the bound asynchronously instead of
+    calling ``list(...)``, so it reaches the row source through its own call and
+    owes its own proof.
+    """
+    _seed_hostile_relation()
+    with _hostile_relation_manager():
+        response = _await_response(
+            AsyncTestClient().query(
+                _HOSTILE_RELATION_QUERY,
+                assert_no_errors=False,
+                url="/rp-hostile-relation-async/",
+            ),
+        )
+    payload = json.loads(response.response.content)
+    _no_rejection(payload)
+    assert payload["data"] == {
+        "patrons": [
+            {"name": "hostile-patron", "loans": [{"note": "loan-0"}]},
+        ],
+    }
+    assert len(payload["data"]["patrons"][0]["loans"]) == HOSTILE_RELATION_ROWS
 
 
 @pytest.mark.django_db

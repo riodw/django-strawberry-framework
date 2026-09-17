@@ -72,6 +72,7 @@ from django_strawberry_framework import (
     DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
+    ErrorPolicy,
     ListArgumentError,
     finalize_django_types,
 )
@@ -2112,7 +2113,11 @@ def _execution_mode_schema() -> DjangoSchema:
         )
 
     finalize_django_types()
-    return DjangoSchema(query=Query)
+    # Masking off, because the subject of these rows is the typed error itself.
+    # Under the default policy every unexpected exception reaches the wire as one
+    # stable string with ``original_error`` stripped, so a row asserting the
+    # misuse would be asserting the mask instead.
+    return DjangoSchema(query=Query, error_policy=ErrorPolicy(enabled=False))
 
 
 _EXECUTION_MODE_FIELDS = ["defaultRows", "consumerRows"]

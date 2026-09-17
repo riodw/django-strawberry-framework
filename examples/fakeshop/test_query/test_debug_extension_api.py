@@ -47,7 +47,7 @@ from apps.products.services import create_users, seed_data
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
-from django.db import connection
+from django.db import DEFAULT_DB_ALIAS, connection
 from django.test.utils import override_settings
 from django.urls import path
 from strawberry import relay
@@ -202,23 +202,27 @@ def _middleware_without_debug_toolbar():
 
 @contextlib.contextmanager
 def _atomic_requests_enabled():
-    """Turn on ``ATOMIC_REQUESTS`` on every live alias without replacing ``DATABASES``.
+    """Turn on ``ATOMIC_REQUESTS`` for the request's own alias without replacing ``DATABASES``.
 
     The handler reads ``DATABASES[<alias>]["ATOMIC_REQUESTS"]``, not a project
     setting named ``ATOMIC_REQUESTS``. Replacing ``DATABASES`` wholesale fires
     Django's ``UserWarning`` (this suite treats warnings as errors). The per-alias
     dict is the same object the handler walks, so flipping the key in place is
     what the wrap actually reads; restored in ``finally``.
+
+    Only the default alias, because that is the one the request under test
+    writes to. Flipping every configured alias would have the handler open a
+    transaction on each of them, and under ``FAKESHOP_SHARDED`` that is a second
+    database this test case never declared - which pytest-django refuses, for a
+    connection the subject has nothing to do with.
     """
-    databases = settings.DATABASES
-    prior = {alias: config.get("ATOMIC_REQUESTS", False) for alias, config in databases.items()}
+    config = settings.DATABASES[DEFAULT_DB_ALIAS]
+    prior = config.get("ATOMIC_REQUESTS", False)
     try:
-        for config in databases.values():
-            config["ATOMIC_REQUESTS"] = True
+        config["ATOMIC_REQUESTS"] = True
         yield
     finally:
-        for alias, value in prior.items():
-            databases[alias]["ATOMIC_REQUESTS"] = value
+        config["ATOMIC_REQUESTS"] = prior
 
 
 def _grant_add_item_and_visible_category_gid():

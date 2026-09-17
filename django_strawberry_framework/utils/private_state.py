@@ -39,23 +39,27 @@ one its own shape admits:
   the owner dies.
 - :class:`PrivateMembership` holds one piece of weak evidence per MEMBER of an
   accepted sequence and answers with what that evidence points at. The owner
-  holds the members themselves, in one sealed holder, which is what gives the
-  graph the owner's lifetime; what the owner holds is never READ, so writing it
-  does not change what a later read answers with. This is where an arbitrary
-  object graph goes, the schema's extension configuration being the one the
-  package has. A member no weak reference can be taken of - a ``__slots__``
-  callable, which Strawberry accepts as a factory - is answered by its place
-  inside that sealed holder, of which one weak reference is filed; the holder
-  belongs to the owner, so neither form roots anything here.
+  holds the members themselves, which is what gives the graph the owner's
+  lifetime; the ATTRIBUTE holding them is never read, so writing it does not
+  change what a later read answers with. This is where an arbitrary object graph goes,
+  the schema's extension configuration being the one the package has. A member
+  no weak reference can be taken of - a ``__slots__`` callable, which Strawberry
+  accepts as a factory - is held by the owner inside a box the interpreter
+  itself refuses to rewrite, and answered from one weak reference to that box.
 
 Which object answers is a smaller question than what it holds, and only the
 second one is the configuration. A carrier whose contents consumer code can
 write is a carrier whose identity that write leaves untouched, so evidence about
 the carrier certifies nothing about the membership inside it - which is why the
-evidence here is per member and why a read is answered from the evidence rather
-than from the owner. Evidence that no longer resolves is the one thing that
-cannot be answered: the accepted member is exactly what is gone, so the read
-reports that rather than substituting for it.
+evidence here is per member, why a read is answered from the evidence rather
+than from the owner, and why the box a non-weak member is answered through is
+one whose contents no assignment, ``__dict__`` write, ``object.__setattr__`` or
+re-initialization can change: the object authenticated by weak identity and the
+object supplying the member have to be the same immutable thing, or the
+authentication is of a carrier and the member inside it is anyone's to swap.
+Evidence that no longer resolves is the one thing that cannot be answered: the
+accepted member is exactly what is gone, so the read reports that rather than
+substituting for it.
 
 Both file entries under ``id(owner)`` rather than under the owner itself. A
 ``WeakKeyDictionary`` finds its keys by hash and equality, and both of those are
@@ -73,27 +77,14 @@ the address.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Generic, TypeVar
+from types import MethodType
+from typing import Any, Generic, NamedTuple, TypeVar
 from weakref import ReferenceType, ref
 
 __all__ = ("PrivateAuthority", "PrivateMembership")
 
 StateT = TypeVar("StateT")
 MemberT = TypeVar("MemberT")
-
-#: What one member's place in an accepted sequence is answered from: a weak
-#: reference to the member itself, or - for a member no weak reference can be
-#: taken of - its index inside the owner's sealed holder.
-_Evidence = ReferenceType[MemberT] | int
-
-#: One owner's filed evidence: which object the entry belongs to, the sealed
-#: holder that owner keeps its members in, and one piece of evidence per member
-#: of the sequence it was accepted with.
-_Accepted = tuple[
-    ReferenceType[Any],
-    ReferenceType["_SealedMembers"],
-    tuple[_Evidence[MemberT], ...],
-]
 
 
 class PrivateAuthority(Generic[StateT]):
@@ -156,75 +147,71 @@ class PrivateAuthority(Generic[StateT]):
         return None if entry is None or entry[0]() is not owner else entry[1]
 
 
-def _member_evidence(member: Any, index: int) -> _Evidence[Any]:
-    """What one accepted member is answered from: its own weak reference, or its place.
+def _boxed_member() -> None:
+    """The callable a box binds its member to, and never calls.
+
+    ``types.MethodType`` needs a function to bind an object to, and this is that
+    function: a box is a carrier, so nothing invokes it and it takes no
+    arguments to be invoked with. What matters is the binding, which the
+    interpreter holds in ``__self__`` and refuses every write to.
+    """
+
+
+class _BoxedMember(NamedTuple):
+    """Evidence for a member no weak reference can be taken of: its owner's box.
+
+    A ``types.MethodType`` is weak-referenceable, holds the object it was built
+    on strongly, and hands it back through ``__self__`` - which is a read-only
+    C-level attribute, not a Python one: assignment, ``object.__setattr__``,
+    ``del`` and a second ``__init__`` all leave it exactly as it was bound, and
+    it carries no state-restoring protocol for a caller to rebuild it through.
+    That is what a Python class cannot offer, whatever its ``__setattr__``
+    refuses: the primitive its own constructor uses to write its slot is a
+    primitive consumer code can use too.
+
+    So the box IS the evidence. One weak reference to it is filed, the owner
+    holds it, and the member comes back out of the object that weak reference
+    authenticated rather than out of anything a later write could substitute.
+    """
+
+    box: ReferenceType[MethodType]
+
+
+#: What one member of an accepted sequence is answered from: a weak reference to
+#: the member itself, or - for a member no weak reference can be taken of - one
+#: to the box its owner holds it in.
+_Evidence = ReferenceType[MemberT] | _BoxedMember
+
+#: One owner's filed evidence: which object the entry belongs to, and one piece
+#: of evidence per member of the sequence it was accepted with.
+_Accepted = tuple[ReferenceType[Any], tuple[_Evidence[MemberT], ...]]
+
+
+def _accepted_member(member: MemberT) -> tuple[_Evidence[MemberT], Any]:
+    """What one accepted member is answered from, and what the owner holds for it.
 
     A weak reference is preferred wherever the member's layout admits one,
     because it is evidence about that member alone and stops resolving exactly
-    when the member does. A variable-size or ``__slots__`` object without a
-    ``__weakref__`` slot admits none - which says nothing about whether
-    Strawberry can run it - so its place in the owner's sealed holder is the
-    evidence instead.
+    when the member does; the owner then holds the member itself. A
+    variable-size or ``__slots__`` object without a ``__weakref__`` slot admits
+    none - which says nothing about whether Strawberry can run it - so the owner
+    holds a box built on it and the evidence is a weak reference to that box.
     """
     try:
-        return ref(member)
+        return ref(member), member
     except TypeError:
-        return index
-
-
-class _SealedMembers:
-    """One accepted sequence, held by its owner and closed to every later write.
-
-    The holder exists for the entries no weak reference can be taken of. A
-    ``__slots__`` callable with no ``__weakref__`` slot is a perfectly valid
-    extension factory for Strawberry, and evidence about such an entry has to be
-    something ELSE the owner holds - so the owner holds this, and this holds the
-    members.
-
-    Sealed, because what a carrier holds is exactly what evidence about a
-    carrier cannot certify: an object whose contents consumer code can rewrite
-    is one a rewrite leaves looking accepted. Nothing here exposes a membership
-    API, and the one attribute is refused a second assignment, so the members
-    this answers with are the members it was built with.
-
-    ``__weakref__`` is declared because this object IS the evidence - the record
-    filed in the module holds one weak reference to it, which is what lets a
-    read verify it is reading the holder that was accepted rather than whatever
-    a later attribute write supplied.
-    """
-
-    __slots__ = ("__weakref__", "_members")
-
-    def __init__(self, members: tuple[Any, ...]) -> None:
-        object.__setattr__(self, "_members", members)
-
-    @property
-    def members(self) -> tuple[Any, ...]:
-        """The accepted members, as they were accepted."""
-        return self._members
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        """Refuse every write, including a second write to the sealed tuple."""
-        raise AttributeError(
-            f"{type(self).__name__} is sealed at construction; {name!r} cannot be assigned.",
-        )
-
-    def __delattr__(self, name: str) -> None:
-        """Refuse every deletion, for the reason :meth:`__setattr__` refuses writes."""
-        raise AttributeError(
-            f"{type(self).__name__} is sealed at construction; {name!r} cannot be deleted.",
-        )
+        box = MethodType(_boxed_member, member)
+        return _BoxedMember(ref(box)), box
 
 
 class PrivateMembership(Generic[MemberT]):
     """One accepted sequence, for every object of one kind that carries one.
 
-    ``attribute`` is the name the members are held under on their owner, as one
-    sealed holder. That attribute is the sequence's STRONG hold and nothing
-    else: it is what gives an object graph that reaches its owner back the
-    owner's own lifetime, and what keeps it out of this module's reach, where
-    holding it would root the owner forever. It is not where a read gets its
-    answer.
+    ``attribute`` is the name the sequence is held under on its owner. That
+    attribute is the STRONG hold and nothing else: it is what gives an object
+    graph that reaches its owner back the owner's own lifetime, and what keeps
+    it out of this module's reach, where holding it would root the owner
+    forever. It is not where a read gets its answer.
 
     The answer comes from evidence filed here, per member, and the evidence is
     weak in both of its forms. A member a weak reference can be taken of is
@@ -233,18 +220,15 @@ class PrivateMembership(Generic[MemberT]):
     reading the attribute, a member consumer code wrote over the attribute was
     never accepted and is never answered with. A member that takes no weak
     reference - a ``__slots__`` callable, which is a valid extension factory and
-    not an invalid surface - is answered by its place inside the holder, of
-    which one weak reference is filed; the holder is the owner's, so the record
-    here still roots nothing.
+    not an invalid surface - is answered through the box the owner holds it in
+    (:class:`_BoxedMember`), which is the same rule one indirection along: what
+    the weak reference authenticates is the object the member is read out of.
 
     A write that drops the only strong hold on an accepted member does end the
-    sequence - the member is collected and its evidence stops resolving - and
-    that is the condition :meth:`recall` reports, for the caller to refuse on.
-    Nothing here can stand in for what is gone: the accepted member is exactly
-    what the evidence was evidence of. A slotted member is the sharper case of
-    the same rule, because the holder is its only evidence: losing the holder
-    loses the record of what that entry declared, and there is no weaker answer
-    to fall back to.
+    sequence - the member or its box is collected and the evidence stops
+    resolving - and that is the condition :meth:`recall` reports, for the caller
+    to refuse on. Nothing here can stand in for what is gone: the accepted
+    member is exactly what the evidence was evidence of.
     """
 
     def __init__(self, attribute: str) -> None:
@@ -255,15 +239,12 @@ class PrivateMembership(Generic[MemberT]):
         """Accept ``members`` as ``owner``'s sequence, replacing whatever it carried.
 
         The evidence is taken first, so nothing is half-accepted for a later
-        read to answer with; a member that takes no weak reference is recorded
-        by its position in the holder the owner is about to be given, rather
-        than refused for a memory layout that says nothing about whether
+        read to answer with; a member that takes no weak reference is boxed
+        rather than refused for a memory layout that says nothing about whether
         Strawberry can run it.
         """
-        accepted = tuple(members)
-        evidence = tuple(_member_evidence(member, index) for index, member in enumerate(accepted))
-        holder = _SealedMembers(accepted)
-        owner.__dict__[self._attribute] = holder
+        taken = tuple(_accepted_member(member) for member in members)
+        owner.__dict__[self._attribute] = tuple(hold for _, hold in taken)
         key = id(owner)
 
         def forget(dead: ReferenceType[Any]) -> None:
@@ -271,34 +252,33 @@ class PrivateMembership(Generic[MemberT]):
             if entry is not None and entry[0] is dead:
                 del self._accepted[key]
 
-        self._accepted[key] = (ref(owner, forget), ref(holder), evidence)
+        self._accepted[key] = (ref(owner, forget), tuple(evidence for evidence, _ in taken))
 
     def recall(self, owner: Any) -> tuple[MemberT, ...] | None:
         """The sequence ``owner`` was accepted with, or ``None`` for one that is gone.
 
         ``None`` is the answer when no sequence was ever accepted, when the
-        entry was filed under an identity that has since been reused, when any
-        accepted member no longer exists - which is what a write to the
+        entry was filed under an identity that has since been reused, and when
+        any accepted member no longer exists - which is what a write to the
         attribute holding them amounts to when that attribute was their last
-        strong hold - and, for a member the holder is the only evidence of, when
-        the holder itself is what that write replaced.
+        strong hold, for a boxed member and a directly referenced one alike.
 
-        The holder is resolved only when a member needs it. A sequence every
-        member of which something else still holds is answered without it, which
-        is what keeps an accepted class resolvable after an attribute write.
+        Each member is resolved from its own evidence, so a sequence whose
+        entries something else still holds is answered in full: an accepted
+        class the module it was defined in still names survives a write to the
+        attribute, and the entry the write dropped the last hold on is the one
+        that ends the sequence.
         """
         entry = self._accepted.get(id(owner))
         if entry is None or entry[0]() is not owner:
             return None
-        holder: _SealedMembers | None = None
         accepted: list[MemberT] = []
-        for evidence in entry[2]:
-            if isinstance(evidence, int):
-                if holder is None:
-                    holder = entry[1]()
-                    if holder is None:
-                        return None
-                accepted.append(holder.members[evidence])
+        for evidence in entry[1]:
+            if isinstance(evidence, _BoxedMember):
+                box = evidence.box()
+                if box is None:
+                    return None
+                accepted.append(box.__self__)
                 continue
             member = evidence()
             if member is None:

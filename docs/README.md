@@ -145,6 +145,8 @@ schema = DjangoSchema(query=Query, error_policy={"enabled": False})
 
 The extension is **prepended** to `extensions=`, because Strawberry unwinds teardowns LIFO and masking must happen after every extension that reads `GraphQLError.original_error` has had its turn; your own `DjangoErrorPolicyExtension` entry suppresses the prepend and keeps your position. Subscriptions served through the package's ASGI router are covered per event rather than per operation, so every event carries the policy message and its own `correlationId`.
 
+One entry, not two. A schema is enforced by exactly one error policy and exactly one resource policy, because each arms its own scope over the whole operation and the last one armed is what every mask, bound and deadline check reads - so two of a kind would make list order decide what the request is held to. Two entries this package can classify at construction (a class or an instance of either extension) raise `ConfigurationError` there; two that resolve out of opaque factories are caught when the operation resolves them, and every request on that schema is answered with the `SCHEMA_CONFIGURATION_UNAVAILABLE` error instead of running. The same refusal covers a factory that raises and one that returns something other than a `SchemaExtension` instance: the exception text and the returned object stay in the server's log, and the client gets the stable code. Configure a single entry with `DjangoResourcePolicyExtension(policy=...)`, or pass `DjangoSchema(resource_policy=..., error_policy=...)` and let the package install its own.
+
 ## Reading data
 
 ### `DjangoListField` — a plain list

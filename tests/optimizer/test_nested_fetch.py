@@ -17,12 +17,15 @@ from django.db.models import Prefetch
 
 from django_strawberry_framework import DjangoOptimizerExtension
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
+from django_strawberry_framework.optimizer._context import (
+    begin_execution_frame,
+    end_execution_frame,
+)
 from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.optimizer.nested_fetch import (
     AUTO_STRATEGY,
     WINDOWED_STRATEGY,
     WindowedPrefetchStrategy,
-    _active_strategy,
     _builtin_strategies,
     active_strategy,
     resolve_strategy,
@@ -255,15 +258,15 @@ def test_optimizer_hint_strategy_accepts_and_drives_a_consumer_instance():
     assert planned == [request]
 
 
-def test_active_strategy_defaults_windowed_and_reads_contextvar():
+def test_active_strategy_defaults_windowed_and_reads_the_execution_frame():
     """Direct ``plan_optimizations`` callers get windowed; executions get the published one."""
     assert active_strategy() is WINDOWED_STRATEGY
     custom = SimpleNamespace(name="custom", plan=lambda request, plan: True)
-    token = _active_strategy.set(custom)
+    frame = begin_execution_frame({}, nested=False, strategy=custom)
     try:
         assert active_strategy() is custom
     finally:
-        _active_strategy.reset(token)
+        end_execution_frame(frame)
     assert active_strategy() is WINDOWED_STRATEGY
 
 
@@ -280,11 +283,11 @@ def test_active_strategy_preserves_falsey_consumer_strategy():
             return True
 
     custom = FalseyStrategy()
-    token = _active_strategy.set(custom)
+    frame = begin_execution_frame({}, nested=False, strategy=custom)
     try:
         assert active_strategy() is custom
     finally:
-        _active_strategy.reset(token)
+        end_execution_frame(frame)
 
 
 def test_on_execute_publishes_instance_strategy():

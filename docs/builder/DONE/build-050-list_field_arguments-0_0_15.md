@@ -6,12 +6,27 @@ Target release: `0.0.15`
 Status: the final gate is GREEN at HEAD `207c7328`, which carries the tenth round's
 remediation - default 7868, sharded 7885, both at 100.00% package coverage, focused floor
 463. Those are the only gate figures this plan states; `## Final gate record` below owns the
-scope, the commands and the standing evidence. Work landed on descendants of that tree is not
-covered by it: the eleventh round's policy-authority remediation (the object every bound is
-read from is no longer reachable from any consumer-visible name, a policy subclass is
-canonicalized at schema construction, the resource-policy extension deduplicates a consumer
-factory, and the two pre-parse document bounds are stated as request-level) is implemented and
-ungated at the time of writing.
+scope, the commands and the standing evidence. **That gate covers the tree it names and
+nothing later.** Every change on a descendant of it is ungated at the time of writing, and
+the card's delivery gate is owed as one same-tree full, sharded and declared-floor run
+rather than as another figure beside the one above:
+
+- the policy-authority remediation - the object every bound is read from is no longer
+  reachable from any consumer-visible name, a policy subclass is canonicalized at schema
+  construction, the resource-policy extension deduplicates a consumer factory, and the two
+  pre-parse document bounds are stated as request-level;
+- the accepted-configuration work - a schema's extension entries are authenticated per entry
+  rather than by the carrier holding them, and an entry no weak reference can be taken of is
+  answered through an interpreter-owned immutable binding;
+- the operation-state boundary - one state per resolved framework extension per runner, bound
+  by the package runner around the operation, result collection, every streamed frame and
+  every resumption of a streamed result;
+- the revocable-lease work - every operation-lifetime value a copied context can hold (the
+  runner scope, the armed resource budget, the optimizer's execution frame) is reached
+  through a lease its scope closes, so a task that outlived its request reads none of them;
+- the resolved-chain admission - factory invocation, member typing and enforcement
+  cardinality are one transaction, and an invalid or ambiguous population fails closed on the
+  wire with the stable schema-configuration code.
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).

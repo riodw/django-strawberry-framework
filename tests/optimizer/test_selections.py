@@ -353,17 +353,18 @@ def test_ast_to_converted_selections_memoized_per_execution():
     wrapper list of the same nodes still hits. Outside a lifecycle the memo is
     disabled and every call converts fresh (unchanged direct-caller behavior).
     """
-    from django_strawberry_framework.optimizer.selections import (
-        ast_to_converted_selections,
-        converted_selections_cache,
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
     )
+    from django_strawberry_framework.optimizer.selections import ast_to_converted_selections
 
     doc = parse("{ items { name } books { title } }")
     field_nodes = list(doc.definitions[0].selection_set.selections)
     info = SimpleNamespace(fragments={}, variable_values={})
     single = field_nodes[:1]
 
-    token = converted_selections_cache.set({})
+    frame = begin_execution_frame({}, nested=False)
     try:
         first = ast_to_converted_selections(info, single)
         assert ast_to_converted_selections(info, single) is first  # single-node id key
@@ -372,7 +373,7 @@ def test_ast_to_converted_selections_memoized_per_execution():
         # ids (the graphql-core subfields-cache shape), not the list id.
         assert ast_to_converted_selections(info, list(field_nodes)) is pair
     finally:
-        converted_selections_cache.reset(token)
+        end_execution_frame(frame)
 
     # No memo installed: every call converts fresh.
     assert ast_to_converted_selections(info, single) is not first

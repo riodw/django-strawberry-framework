@@ -5194,7 +5194,10 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
     after refusal, so even a callback that mutates every plan field behaves
     exactly like the other refusal arms.
     """
-    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
+    )
 
     def decline_after_mutation(request, plan):
         _mutate_every_plan_field(plan, "leaked")
@@ -5202,7 +5205,7 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
 
     registry.clear()
     refusing = SimpleNamespace(name="refuse-all", plan=decline_after_mutation)
-    token = _active_strategy.set(refusing)
+    frame = begin_execution_frame({}, nested=False, strategy=refusing)
     try:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
@@ -5226,13 +5229,16 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
         assert plan.select_path_resolver_keys == {}
         assert plan.cacheable is True
     finally:
-        _active_strategy.reset(token)
+        end_execution_frame(frame)
         registry.clear()
 
 
 def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once():
     """An accepted dirty candidate commits every field with duplicate collapse."""
-    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
+    )
 
     def accept_after_mutation(request, plan):
         _mutate_every_plan_field(plan, "accepted")
@@ -5240,7 +5246,7 @@ def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once():
 
     registry.clear()
     accepting = SimpleNamespace(name="accept-all", plan=accept_after_mutation)
-    token = _active_strategy.set(accepting)
+    frame = begin_execution_frame({}, nested=False, strategy=accepting)
     try:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
@@ -5266,7 +5272,7 @@ def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once():
         }
         assert plan.cacheable is False
     finally:
-        _active_strategy.reset(token)
+        end_execution_frame(frame)
         registry.clear()
 
 
@@ -5274,7 +5280,10 @@ def test_raising_nested_fetch_strategy_leaves_parent_byte_identical():
     """A strategy exception propagates before the walker commits any candidate."""
     from apps.library.models import Genre
 
-    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
+    )
     from django_strawberry_framework.optimizer.walker import _plan_connection_relation
 
     def raise_after_mutation(request, plan):
@@ -5283,7 +5292,7 @@ def test_raising_nested_fetch_strategy_leaves_parent_byte_identical():
 
     registry.clear()
     raising = SimpleNamespace(name="raise-all", plan=raise_after_mutation)
-    token = _active_strategy.set(raising)
+    frame = begin_execution_frame({}, nested=False, strategy=raising)
     try:
         types = _connection_relay_types()
         genre_type = types["Genre"][1]
@@ -5319,7 +5328,7 @@ def test_raising_nested_fetch_strategy_leaves_parent_byte_identical():
 
         assert parent.finalize() == before
     finally:
-        _active_strategy.reset(token)
+        end_execution_frame(frame)
         registry.clear()
 
 
@@ -5463,15 +5472,18 @@ def test_lateral_strategy_plans_a_lateral_queryset_through_the_walker():
     lateral backend attaches its spec-carrying queryset and the plan records
     the resolver identities exactly as the windowed default would.
     """
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
+    )
     from django_strawberry_framework.optimizer.lateral_fetch import (
         LATERAL_STRATEGY,
         LateralQuerySet,
     )
-    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
     from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
     registry.clear()
-    token = _active_strategy.set(LATERAL_STRATEGY)
+    frame = begin_execution_frame({}, nested=False, strategy=LATERAL_STRATEGY)
     try:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
@@ -5495,7 +5507,7 @@ def test_lateral_strategy_plans_a_lateral_queryset_through_the_walker():
         assert spec.parent_link_column == "genre_id"
         assert plan.planned_resolver_keys != []
     finally:
-        _active_strategy.reset(token)
+        end_execution_frame(frame)
         registry.clear()
 
 
@@ -5541,13 +5553,14 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
     from strawberry import relay
 
     from django_strawberry_framework import DjangoType, finalize_django_types
-    from django_strawberry_framework.optimizer.nested_fetch import (
-        _active_strategy,
-        resolve_strategy,
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
     )
+    from django_strawberry_framework.optimizer.nested_fetch import resolve_strategy
 
     registry.clear()
-    token = _active_strategy.set(resolve_strategy(strategy_name))
+    frame = begin_execution_frame({}, nested=False, strategy=resolve_strategy(strategy_name))
     try:
 
         class BookType(DjangoType):
@@ -5584,7 +5597,7 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
         ), reason
         assert plan.planned_resolver_keys == (), reason
     finally:
-        _active_strategy.reset(token)
+        end_execution_frame(frame)
         registry.clear()
 
 

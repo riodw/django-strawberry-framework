@@ -36,16 +36,14 @@ contracts cannot drift:
   only).
 
 Cycle-safe: ``walker.py`` and ``extension.py`` both import from here; this
-module imports neither (it previously lived split between them, with
-``extension`` importing the edge-node helpers back from ``walker`` - the reverse
-dependency this consolidation removes). Beyond graphql-core AST node types and
-the stdlib it reaches only ``utils/typing.py`` (itself stdlib-only) for the
-schema-config dig ``connection_field_names`` needs.
+module imports neither. Beyond graphql-core AST node types and the stdlib it
+reaches ``utils/typing.py`` (itself stdlib-only) for the schema-config dig
+``connection_field_names`` needs, and ``_context.py`` for the execution frame
+its converted-selection memo lives on - both below it in the dependency order.
 """
 
 from __future__ import annotations
 
-from contextvars import ContextVar
 from dataclasses import dataclass, fields
 from types import SimpleNamespace
 from typing import Any
@@ -58,6 +56,7 @@ from graphql.language.ast import (
 )
 
 from ..utils.typing import schema_config_from_info
+from ._context import converted_selections_memo
 
 # ---------------------------------------------------------------------------
 # AST -> converted-selection adapter - the package-owned ``convert_selections``
@@ -77,17 +76,13 @@ from ..utils.typing import schema_config_from_info
 # nodes, NOT the id of the wrapping list, which may be rebuilt or reused): AST
 # node ids are stable for the memo's whole lifetime because the document is
 # owned by the execution context that spans the same ``on_execute`` lifecycle.
-# Set to an empty dict / reset by ``DjangoOptimizerExtension.on_execute``
-# (``extension.py`` imports this name; this module stays stdlib +
-# graphql-core only). ``None`` (the default) outside an ``on_execute``
-# lifecycle disables the memo, so direct / test callers see unchanged behavior.
+# The memo belongs to the execution frame ``DjangoOptimizerExtension.on_execute``
+# opens (``_context.py::_ExecutionFrame``), so it ends when that execution does
+# and a task that copied the binding reads nothing. ``None`` outside a managed
+# execution disables the memo, so direct / test callers see unchanged behavior.
 # Consumers treat the converted list as read-only (the walker clones before
 # mutating; Strawberry's ``selected_fields`` readers only iterate), so sharing
 # one list across rows is safe.
-converted_selections_cache: ContextVar[dict[Any, list[Any]] | None] = ContextVar(
-    "django_strawberry_framework_converted_selections_cache",
-    default=None,
-)
 
 
 def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
@@ -133,13 +128,13 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
     connection primes it. Keep it a mirror - if Strawberry's ``convert_selections``
     gains a field or changes a shape, mirror the change here rather than diverging.
 
-    Memoized per execution via ``converted_selections_cache`` (see the
-    ``ContextVar`` comment above): within one ``on_execute`` lifecycle the same
-    field-node group converts once, so the per-parent-row
-    ``prime_selected_fields`` calls of a fallback connection pipeline reuse the
-    first row's list instead of re-running the conversion for every parent.
+    Memoized per execution on the execution frame (see the comment above):
+    within one ``on_execute`` lifecycle the same field-node group converts once,
+    so the per-parent-row ``prime_selected_fields`` calls of a fallback
+    connection pipeline reuse the first row's list instead of re-running the
+    conversion for every parent.
     """
-    memo = converted_selections_cache.get()
+    memo = converted_selections_memo()
     memo_key: Any = None
     if memo is not None:
         # One-node groups are the overwhelmingly common shape; key on the single

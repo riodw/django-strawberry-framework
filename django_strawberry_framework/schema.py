@@ -59,6 +59,7 @@ from graphql.execution.execute import ExecutionContext
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.utils.inspect import in_async_context
 
+from . import logger
 from .error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, resolve_error_policy
 from .exceptions import ConfigurationError, describe_value
 from .extensions.error_policy import DjangoErrorPolicyExtension
@@ -421,7 +422,7 @@ _SCHEMA_ENFORCEMENT: PrivateAuthority[_SchemaEnforcement] = PrivateAuthority()
 #: them strongly would keep every such schema, its last execution context and
 #: that request's variables alive for the life of the process.
 #:
-#: The schema therefore holds them, in one sealed holder, and
+#: The schema therefore holds them, and
 #: ``utils/private_state.py::PrivateMembership`` holds one piece of weak evidence
 #: per accepted ENTRY - which is the granularity the question is asked at. What
 #: decides whether the next operation is bounded is not which object the
@@ -463,20 +464,42 @@ def _enforcement(schema: Any) -> _SchemaEnforcement:
     return _FALLBACK_ENFORCEMENT if record is None else record
 
 
-class _RefusedConfiguration(SchemaExtension):
-    """Refuse every operation on a schema whose accepted extensions cannot be read back.
+#: What the wire is told when a schema cannot produce the chain it was accepted
+#: with. One message per cause and nothing more: the object that was invalid,
+#: the exception a factory raised, and the population that was ambiguous are all
+#: diagnostics for the deployment's own logs, and a wire field carrying any of
+#: them hands a client the shape of a schema's configuration.
+_UNREADABLE_CONFIGURATION = (
+    "The schema's accepted extension configuration could not be read back, "
+    "so the operation cannot be enforced as configured."
+)
+_UNRESOLVED_CHAIN = (
+    "The schema's extensions did not resolve into the enforcement configuration "
+    "the schema was accepted with, so the operation cannot be enforced as configured."
+)
 
-    Installed in place of the extension chain when the configuration a schema
-    was constructed with was replaced or deleted behind the attribute holding
-    it. Running the operation anyway would mean enforcing something other than
-    what the deployment accepted, and the entries that are missing are the only
-    record of what they declared.
+
+class _RefusedConfiguration(SchemaExtension):
+    """Refuse every operation on a schema that cannot produce its accepted chain.
+
+    Installed in place of the extension chain in two cases. The configuration a
+    schema was constructed with was replaced or deleted behind the attribute
+    holding it; or the accepted entries no longer resolve into that
+    configuration - a factory raised, returned something that is not a
+    ``SchemaExtension`` instance, or the resolved population carries two of an
+    enforcement authority that admits exactly one. Running the operation anyway
+    would mean enforcing something other than what the deployment accepted, and
+    in the first case the entries that are missing are the only record of what
+    they declared.
 
     The refusal is PUBLISHED as this request's pre-execution error and restated
     where execution would begin, which is the pair of seams every transport
     renders - the same shape a resource rejection uses, for the same reason: an
     exception out of a hook leaves a streaming operation with no frame at all.
     """
+
+    def __init__(self, message: str) -> None:
+        self._message = message
 
     def on_parse(self) -> Iterator[None]:
         """Publish the refusal once the document exists, before anything validates it."""
@@ -496,10 +519,27 @@ class _RefusedConfiguration(SchemaExtension):
     def _refusal(self) -> GraphQLError:
         """The error this schema answers every operation with."""
         return GraphQLError(
-            "The schema's accepted extension configuration could not be read back, "
-            "so the operation cannot be enforced as configured.",
+            self._message,
             extensions={"code": SCHEMA_CONFIGURATION_ERROR_CODE},
         )
+
+
+def _refused_chain(message: str, reason: str) -> list[Any]:
+    """The only chain a refused configuration runs: mask, then refuse.
+
+    The masking extension is kept because the refusal still travels as an
+    ordinary response and an unexpected exception from anything upstream of it
+    must not reach the client raw. Nothing else runs - no consumer hook, no
+    resolver - because what a consumer entry would enforce is exactly what could
+    not be established.
+
+    ``reason`` names the object or the population that failed, for the
+    deployment's own logs. It never reaches ``message``: a factory's exception
+    text and a bad member's representation are the consumer's own strings, and
+    the wire gets the stable code instead.
+    """
+    logger.error("Refusing every operation on this schema: %s", reason)
+    return [DjangoErrorPolicyExtension(), _RefusedConfiguration(message)]
 
 
 class DjangoSchema(strawberry.Schema):
@@ -649,6 +689,30 @@ class DjangoSchema(strawberry.Schema):
                     "SchemaExtension subclass, an instance of one, or a callable that "
                     f"returns one. {describe_value(entry)} is none of those.",
                 )
+        # Two entries of one enforcement kind are refused HERE when they can be
+        # told apart without running anything - a class or an instance names its
+        # type. Each arms its own scope over the whole operation and the last one
+        # to arm is what every seam reads, so which of two policies bounds the
+        # request would be decided by the order they were listed in. That is a
+        # configuration with two answers rather than a preference, and the
+        # deployment is told at the construction that supplied it. An opaque
+        # factory cannot be classified without calling it, which is what
+        # :meth:`DjangoSchema.get_extensions` is for.
+        for extension_type, kind in (
+            (DjangoResourcePolicyExtension, "resource-policy"),
+            (DjangoErrorPolicyExtension, "error-policy"),
+        ):
+            supplied = [
+                entry for entry in value if _extension_entry_matches(entry, extension_type)
+            ]
+            if len(supplied) > 1:
+                raise ConfigurationError(
+                    f"DjangoSchema(extensions=[...]) carries {len(supplied)} "
+                    f"{kind} extensions, and an operation can be enforced by one. "
+                    "Pass a single entry, and configure it with "
+                    f"{extension_type.__name__}(policy=...) or with the schema's own "
+                    "resource_policy= / error_policy= argument.",
+                )
         # The flag goes where no attribute answers with it, so that deleting the
         # accepted entries cannot make a schema look unconstructed and admit a
         # replacement list as its first settlement.
@@ -689,7 +753,7 @@ class DjangoSchema(strawberry.Schema):
         return copy_policy(_enforcement(self).error_policy)
 
     def get_extensions(self, sync: bool = False) -> list[Any]:
-        """Resolve extensions and remove a duplicate automatic policy instance.
+        """Resolve the accepted entries into this operation's chain, or refuse it.
 
         Strawberry accepts classes, instances, and zero-argument factories. A
         factory cannot be identified by type without calling it, and calling it
@@ -736,11 +800,56 @@ class DjangoSchema(strawberry.Schema):
         own policy would answer a lost entry with a budget the deployment never
         chose, and the entries that replaced it are ones no construction
         accepted. The operation is refused instead.
+
+        **Resolution is the admission boundary for what the entries PRODUCE**,
+        and it is one transaction: calling the factories, typing what they
+        returned, and counting the enforcement authorities among them all
+        happen here, before any of it reaches Strawberry. Construction can
+        answer for the entries themselves and nothing more - a factory is opaque
+        until it runs, and running one at construction is the one thing a
+        per-operation factory must not have done to it - so this is where the
+        other half is settled:
+
+        - A factory that RAISES is refused rather than allowed to escape. It
+          escapes from here, which is outside the block upstream converts into a
+          response, so what a consumer's exception says would reach the client
+          unmasked and the package's own error policy would never see it.
+        - A member that is not a ``SchemaExtension`` INSTANCE is refused. A
+          class is not one either: upstream resolves an entry once and assigns
+          ``execution_context`` on whatever came back, so an integer, a bare
+          object or a class produces an ``AttributeError`` deep in the engine,
+          again outside every seam this package masks or refuses at.
+        - Two resolved extensions of one enforcement kind are refused. Each arms
+          its own scope over the whole operation and the last one armed is what
+          every bound, every mask and every deadline check reads, so the order
+          two entries were listed in would decide which policy the request is
+          held to. Neither first nor last is a rule a deployment can have meant;
+          an ambiguous authority is a configuration error, and composing them
+          implicitly would invent a policy nobody wrote.
+
+        Nothing is resolved twice to establish any of it: the factories run once,
+        through upstream, and every check reads the members that came back.
         """
         enforcement = _enforcement(self)
         if enforcement.extensions_settled and _SCHEMA_EXTENSIONS.recall(self) is None:
-            return [DjangoErrorPolicyExtension(), _RefusedConfiguration()]
-        resolved = super().get_extensions(sync=sync)
+            return _refused_chain(
+                _UNREADABLE_CONFIGURATION,
+                "the accepted extension entries can no longer be read back",
+            )
+        try:
+            resolved = super().get_extensions(sync=sync)
+        except Exception as exc:
+            return _refused_chain(
+                _UNRESOLVED_CHAIN,
+                f"resolving the accepted extension entries raised {exc!r}",
+            )
+        for member in resolved:
+            if not _is_extension(member, SchemaExtension):
+                return _refused_chain(
+                    _UNRESOLVED_CHAIN,
+                    f"a resolved extension entry is {describe_value(member)}, "
+                    "which is not a SchemaExtension instance",
+                )
         if enforcement.auto_error_extension:
             resolved = _without_automatic_policy(
                 resolved,
@@ -753,6 +862,9 @@ class DjangoSchema(strawberry.Schema):
                 DjangoResourcePolicyExtension,
                 automatic=-1,
             )
+        ambiguous = _ambiguous_authority(resolved)
+        if ambiguous is not None:
+            return _refused_chain(_UNRESOLVED_CHAIN, ambiguous)
         return [*resolved, _AdmissionGuard()]
 
     def create_extensions_runner(
@@ -769,16 +881,44 @@ class DjangoSchema(strawberry.Schema):
         factory returning a shared singleton all arrive as resolved members, and
         all three get one state per operation out of this.
 
-        Claiming the engine's assignments happens as the runner is built, before
-        this returns. Upstream constructs the middleware manager and the rest of
-        the execution machinery between this call and ``operation()``, and a
-        failure in that gap runs no operation teardown: an assignment left
-        standing there would outlive the request that made it.
+        The context handed here is the whole input: upstream assigns
+        ``execution_context`` on every resolved extension just before this call
+        and runs no hook in between, so the assignment carries nothing this
+        argument does not, and recording it would only add a place for a
+        half-built request to be left behind.
         """
         return DjangoExtensionsRunner(
             execution_context=execution_context,
             extensions=extensions,
         )
+
+    def _stream(
+        self,
+        execution_context: Any,
+        extensions_runner: Any,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Stream the operation's frames with this operation bound in every task.
+
+        The narrowest seam that already receives the exact runner and the raw
+        iterator upstream built, which is what the wrapper needs: a streamed
+        operation's frames are produced wherever the transport drives them, and
+        an async generator's body runs in the resuming caller's context. Upstream
+        binds nothing per resume because nothing upstream is task-local; this
+        package's budget, operation state and optimizer frame all are.
+
+        ``stream`` and ``subscribe`` both come through here - the second is a
+        thin wrapper around the first - so one override covers every streamed
+        operation on every transport. A runner some subclass built instead is
+        passed through untouched: the wrapper binds what a
+        :class:`DjangoExtensionsRunner` owns and has nothing to say about
+        anything else.
+        """
+        source = super()._stream(execution_context, extensions_runner, *args, **kwargs)
+        if issubclass(type(extensions_runner), DjangoExtensionsRunner):
+            return extensions_runner.resumed_stream(source)
+        return source
 
 
 def _is_resolvable_extension_entry(entry: Any) -> bool:
@@ -830,6 +970,35 @@ def _without_automatic_policy(
         return resolved
     dropped = indexes[automatic]
     return [extension for index, extension in enumerate(resolved) if index != dropped]
+
+
+def _ambiguous_authority(resolved: list[Any]) -> str | None:
+    """Say which enforcement kind the resolved chain does not have exactly one of.
+
+    ``None`` when both authorities have exactly one owner, which is what the
+    constructor guarantees for the entries it can classify: it installs its own
+    of each kind unless a consumer entry names one, and
+    :func:`_without_automatic_policy` has already dropped the automatic entry
+    where an opaque factory turned out to produce one too.
+
+    Zero is refused for the same reason two are. A schema that reaches this with
+    no resource or no error extension resolved is one whose accepted
+    configuration was never the configuration this class installs - a subclass
+    that skipped its constructor, an object whose construction raised - and its
+    operations would run unbounded or unmasked while the package's own record
+    said otherwise.
+    """
+    for extension_type, kind in (
+        (DjangoResourcePolicyExtension, "resource-policy"),
+        (DjangoErrorPolicyExtension, "error-policy"),
+    ):
+        count = sum(1 for extension in resolved if _is_extension(extension, extension_type))
+        if count != 1:
+            return (
+                f"the resolved extensions carry {count} {kind} extensions, "
+                "and an operation is enforced by one"
+            )
+    return None
 
 
 def _with_resource_policy_extension(extensions: Any) -> tuple[list[Any], bool]:

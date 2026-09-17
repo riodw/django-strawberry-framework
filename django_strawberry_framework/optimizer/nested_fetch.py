@@ -41,7 +41,7 @@ DB alias selects lateral SQL only at fetch time, while every non-Postgres
 alias executes the already-windowed ORM body. This keeps cached plans
 backend-neutral and follows explicit ``.using(...)`` and router decisions
 without consulting the default alias. The walker reaches the active
-instance's strategy through a ``ContextVar`` the extension publishes in
+instance's strategy through the execution frame the extension opens in
 ``on_execute`` - direct ``plan_optimizations`` callers (tests) get the
 windowed default.
 
@@ -65,7 +65,6 @@ it is schema-static and needs no plan-cache-key change.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
@@ -76,6 +75,7 @@ from django.db.models.query import ModelIterable
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.connections import assert_window_fetch_mode_for
+from ._context import active_nested_strategy
 from .join_taxonomy import RelationJoinDescriptor
 from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagination
 
@@ -475,16 +475,14 @@ def resolve_strategy(value: Any) -> NestedConnectionStrategy:
     )
 
 
-#: The active extension instance's strategy, published by
-#: ``DjangoOptimizerExtension.on_execute`` for the walker (which cannot
-#: import the extension module - the dependency points the other way).
-_active_strategy: ContextVar[NestedConnectionStrategy | None] = ContextVar(
-    "django_strawberry_framework_nested_fetch_strategy",
-    default=None,
-)
-
-
 def active_strategy() -> NestedConnectionStrategy:
-    """The strategy the current execution planned with; windowed by default."""
-    strategy = _active_strategy.get()
+    """The strategy the current execution planned with; windowed by default.
+
+    Published on the execution frame by ``DjangoOptimizerExtension.on_execute``
+    for the walker, which cannot import the extension module (the dependency
+    points the other way). Outside a managed execution - and in a task that
+    copied a frame binding and outlived the execution - there is no strategy to
+    read and the default answers, which is what an unmanaged caller gets.
+    """
+    strategy = active_nested_strategy()
     return strategy if strategy is not None else WINDOWED_STRATEGY

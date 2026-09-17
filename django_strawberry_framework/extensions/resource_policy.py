@@ -112,6 +112,7 @@ from ..resource_policy import (
     admission_rejection,
     armed_resource_policy,
     begin_resource_budget,
+    budget_resume_binding,
     end_resource_budget,
     record_admission_rejection,
 )
@@ -1270,8 +1271,17 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
         Two scopes, closed in the order they were opened: the published context
         mirror is restored by ``restored_context_keys``, and the armed budget -
         the value the enforcement seams actually read - is disarmed by its own
-        token, so a nested execution restores the outer operation's budget
+        scope, so a nested execution restores the outer operation's budget
         rather than leaving the inner one armed.
+
+        The budget is armed for the whole operation, which for a streamed one
+        means frames produced in tasks this hook never ran in. Registering it on
+        the operation state has the runner bind it again around each of them
+        (``operation_state.py::OperationState.rebind_on_resume``), so the second
+        frame is bounded by the policy the first was admitted under instead of
+        falling back to the published mirror every resolver in the request can
+        write. A plain ``strawberry.Schema`` has no state to register on and no
+        runner to resume anything: its stream keeps upstream's behavior.
         """
         policy = self._resolved_policy()
         context = self.execution_context.context
@@ -1282,14 +1292,17 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
         # round trip, one ``is`` comparison away from restoring a key that was
         # never set.
         with restored_context_keys(context, DST_RESOURCE_POLICY, DST_RESOURCE_DEADLINE):
-            token = begin_resource_budget(context, policy)
+            scope = begin_resource_budget(context, policy)
+            state = self._operation_state()
+            if state is not None:
+                state.rebind_on_resume(*budget_resume_binding(scope))
             try:
                 # The ARMED snapshot, not the object it was resolved from: the
                 # scan and the seams that run under it must charge one policy.
                 scan_document_text(armed_resource_policy(), self.execution_context.query)
                 yield
             finally:
-                end_resource_budget(token)
+                end_resource_budget(scope)
 
     def on_parse(self) -> Iterator[None]:
         """Charge the document's shape and every argument value, once it is parsed.

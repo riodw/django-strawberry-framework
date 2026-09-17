@@ -301,6 +301,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
+    ├── operation_lease.py        # Revocable access to state that belongs to one operation.
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── policies.py               # Shared schema-construction policy normalization.
     ├── private_state.py          # State an object owns, that consumer code can neither read out nor forge.
@@ -433,6 +434,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     ├── imports.py                # Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input construction and lifecycle primitives shared by set and write families.
+    ├── operation_lease.py        # Revocable access to state that belongs to one operation.
     ├── permissions.py            # Shared permission traversal and Django/Channels request-context decoding.
     ├── policies.py               # Shared schema-construction policy normalization.
     ├── predicates.py             # planned by TODO-BETA-058-0.1.1 - Graph substrate: shared graph policy and dependency planning.
@@ -463,7 +465,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
-├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
+├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
@@ -666,6 +668,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_debug_extension_api.py   # Live GraphQL HTTP tests for the ``DjangoDebugExtension`` request-visible contract.
 ├── test_debug_toolbar_api.py     # Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.
 ├── test_error_policy_api.py      # Live ``/graphql/`` production-error-policy acceptance tests (spec-048).
+├── test_extension_isolation_api.py  # Live GraphQL HTTP tests for what one operation's extensions may be answered from.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
 ├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface.
@@ -701,7 +704,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
-├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
+├── test_bug_hunt.py              # Focused tests for the autonomous bug-hunt progress generator.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.

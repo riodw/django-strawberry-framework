@@ -1673,107 +1673,64 @@ def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper):
 # ---------------------------------------------------------------------------
 # A shared instance: the payload belongs to one operation, and the
 # acknowledgement to one construction.
+#
+# What one operation's response carries is asserted where a client reads it, in
+# ``examples/fakeshop/test_query/test_debug_extension_api.py`` - the stale
+# payload a parse failure would republish, and the disclosure a resolver would
+# arm for a later request. What is left here is the state object those rows are
+# true because of, and the authority the acknowledgement is read from.
 # ---------------------------------------------------------------------------
 
 
-def _debug_entry(spelling, shared):
-    """The ``extensions=[...]`` entry that spells ``spelling``."""
-    if spelling == "class":
-        return DjangoDebugExtension
-    if spelling == "fresh-factory":
-        return DjangoDebugExtension
-    if spelling == "instance":
-        return shared
-    return lambda: shared
-
-
 @override_settings(DEBUG=True)
-@pytest.mark.parametrize(
-    "spelling",
-    [
-        "class",
-        "fresh-factory",
-        "instance",
-        "singleton-factory",
-    ],
-    ids=[
-        "class",
-        "fresh-factory",
-        "shared-instance",
-        "singleton-factory",
-    ],
-)
-def test_a_parse_failure_never_republishes_the_previous_operations_payload(spelling):
-    """The payload belongs to the operation that built it, not to the extension.
+def test_one_operations_payload_is_not_the_extensions():
+    """Two operations on one shared instance get two states, and one payload each.
 
-    A parse failure ran no SQL and raised nothing, so it publishes no ``debug``
-    key at all. On a shared entry the payload of the LAST successful operation
-    would still be sitting on the extension - and the response that carries it
-    is the one answering a document the server could not even parse. The class
-    and fresh-factory rows are the controls: their instance is per operation, so
-    they could never have shown it.
+    The payload is the value a response publishes, so an extension that kept it
+    would publish the last operation's on whatever response came next. The
+    states are per operation; the extension between them holds nothing.
     """
     shared = DjangoDebugExtension()
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        schema = DjangoSchema(query=_OkQuery, extensions=[_debug_entry(spelling, shared)])
+        schema = DjangoSchema(query=_OkQuery, extensions=[lambda: shared])
 
     first = schema.execute_sync("{ ok }")
+    second = schema.execute_sync("{ ok }")
+
     assert first.extensions["debug"] == {"sql": [], "exceptions": []}
-    published = first.extensions["debug"]
-
-    failed = schema.execute_sync("{ this is not a document")
-
-    assert failed.errors is not None
-    assert "debug" not in (failed.extensions or {})
-    assert published == {"sql": [], "exceptions": []}  # untouched, not reused
+    assert second.extensions["debug"] == {"sql": [], "exceptions": []}
+    assert first.extensions["debug"] is not second.extensions["debug"]
+    assert shared._operation_state() is None  # nothing is left on the extension
 
 
 @override_settings(DEBUG=False)
-def test_a_resolver_cannot_arm_the_production_disclosure_for_a_later_request():
-    """The acknowledgement is a construction statement, not a request-local preference.
+def test_the_acknowledgement_is_read_from_the_construction_not_from_an_attribute():
+    """An attribute write does not change what the extension answers, or what it does.
 
-    The extension is reachable from every resolver the schema serves, and a
-    process-lived one is reachable from every resolver of every LATER request.
-    Written as an attribute, one assignment inside one resolver would arm
-    unmasked tracebacks and interpolated SQL for all of them.
+    The wire half - a resolver writing this on a process-lived entry and the
+    NEXT request still withholding - is
+    ``examples/fakeshop/test_query/test_debug_extension_api.py``. What this row
+    pins is the read itself, and its control: an extension constructed WITH the
+    acknowledgement discloses under the same settings.
     """
     withheld = DjangoDebugExtension()
 
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def widen(self) -> bool:
-            """Try both ways an attribute is written, and report neither took."""
-            for attempt in (
-                lambda: setattr(withheld, "allow_unsafe_production", True),
-                lambda: withheld.__dict__.update(allow_unsafe_production=True),
-            ):
-                with contextlib.suppress(AttributeError):
-                    attempt()
-            return withheld.allow_unsafe_production
+    for attempt in (
+        lambda: setattr(withheld, "allow_unsafe_production", True),
+        lambda: withheld.__dict__.update(allow_unsafe_production=True),
+    ):
+        with contextlib.suppress(AttributeError):
+            attempt()
 
-        @strawberry.field
-        def ok(self) -> str:
-            return "ok"
-
+    assert withheld.allow_unsafe_production is False
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        schema = DjangoSchema(query=Query, extensions=[withheld])
-
-    assert "debug" not in (schema.execute_sync("{ ok }").extensions or {})
-    attacked = schema.execute_sync("{ widen }")
-    assert attacked.data == {"widen": False}
+        schema = DjangoSchema(query=_OkQuery, extensions=[lambda: withheld])
     assert "debug" not in (schema.execute_sync("{ ok }").extensions or {})
 
-
-@override_settings(DEBUG=False)
-def test_an_acknowledged_extension_still_discloses_under_the_same_settings():
-    """The control: the row above must not be passing because the diagnostic is off."""
     acknowledged = DjangoDebugExtension(allow_unsafe_production=True)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        schema = DjangoSchema(query=_OkQuery, extensions=[acknowledged])
-
-    assert schema.execute_sync("{ ok }").extensions["debug"] == {"sql": [], "exceptions": []}
-    assert acknowledged.allow_unsafe_production is True
+        control = DjangoSchema(query=_OkQuery, extensions=[lambda: acknowledged])
+    assert control.execute_sync("{ ok }").extensions["debug"] == {"sql": [], "exceptions": []}

@@ -39,10 +39,13 @@ global ``registry`` is cleared on entry and exit.
 
 import asyncio
 import contextlib
+import contextvars
 import datetime
 import decimal
+import gc
 import uuid
 import warnings
+import weakref
 from collections import OrderedDict
 from types import SimpleNamespace
 
@@ -51,6 +54,7 @@ import strawberry
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
 from strawberry import relay
+from strawberry.extensions.base_extension import SchemaExtension
 
 from django_strawberry_framework import (
     DjangoListField,
@@ -959,20 +963,20 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# O3: on_execute ContextVar lifecycle
+# O3: on_execute execution-frame lifecycle
 # ---------------------------------------------------------------------------
 
 
 def test_on_execute_sets_and_resets_context_var():
-    """on_execute publishes ``_active_optimizer`` for the operation, then resets."""
+    """on_execute publishes the running instance for the operation, then closes."""
     ext = DjangoOptimizerExtension()
-    assert _active_optimizer.get() is None
+    assert _active_optimizer() is None
     gen = ext.on_execute()
     next(gen)  # enter
-    assert _active_optimizer.get() is ext
+    assert _active_optimizer() is ext
     with contextlib.suppress(StopIteration):
         next(gen)
-    assert _active_optimizer.get() is None
+    assert _active_optimizer() is None
 
 
 # ---------------------------------------------------------------------------
@@ -4037,16 +4041,17 @@ def test_optimizer_context_all_exports():
         "DST_OPTIMIZER_PLAN",
         "DST_OPTIMIZER_PLANNED",
         "DST_OPTIMIZER_STRICTNESS",
+        "active_nested_strategy",
+        "active_optimizer",
         "active_strictness",
-        "begin_operation_stashes",
-        "begin_scoped_relations",
-        "begin_strictness",
+        "begin_execution_frame",
+        "cache_key_parts_memo",
         "clear_optimizer_context",
-        "end_operation_stashes",
-        "end_scoped_relations",
-        "end_strictness",
+        "converted_selections_memo",
+        "end_execution_frame",
+        "execution_plan_memo",
         "get_context_value",
-        "optimizer_operation_is_active",
+        "operation_publishes_to_context",
         "optimizer_value",
         "publish_scoped_relations",
         "relation_is_optimizer_scoped",
@@ -4061,8 +4066,8 @@ def test_optimizer_context_all_exports():
 def test_publish_scoped_relations_handles_falsy_and_none_when_active_and_inactive():
     """``publish_scoped_relations`` handles None, empty collections, and generators safely."""
     from django_strawberry_framework.optimizer._context import (
-        begin_scoped_relations,
-        end_scoped_relations,
+        begin_execution_frame,
+        end_execution_frame,
         publish_scoped_relations,
         relation_is_optimizer_scoped,
     )
@@ -4074,7 +4079,7 @@ def test_publish_scoped_relations_handles_falsy_and_none_when_active_and_inactiv
     publish_scoped_relations(())
 
     # Active: safe no-op on falsy and proper consumption of iterables/generators
-    token = begin_scoped_relations()
+    frame = begin_execution_frame({}, nested=False)
     try:
         publish_scoped_relations(None)
         publish_scoped_relations(set())
@@ -4086,14 +4091,14 @@ def test_publish_scoped_relations_handles_falsy_and_none_when_active_and_inactiv
         assert relation_is_optimizer_scoped("rel_c@Type")
         assert not relation_is_optimizer_scoped("unplanned@Type")
     finally:
-        end_scoped_relations(token)
+        end_execution_frame(frame)
 
 
 def test_relation_is_optimizer_scoped_unhashable_fail_closed():
     """``relation_is_optimizer_scoped`` fails closed (returns False) for unhashable objects."""
     from django_strawberry_framework.optimizer._context import (
-        begin_scoped_relations,
-        end_scoped_relations,
+        begin_execution_frame,
+        end_execution_frame,
         publish_scoped_relations,
         relation_is_optimizer_scoped,
     )
@@ -4103,54 +4108,48 @@ def test_relation_is_optimizer_scoped_unhashable_fail_closed():
     assert not relation_is_optimizer_scoped([])  # type: ignore[arg-type]
 
     # Active: still fail-closed (returns False rather than raising TypeError)
-    token = begin_scoped_relations()
+    frame = begin_execution_frame({}, nested=False)
     try:
         publish_scoped_relations({"valid@Type"})
         assert relation_is_optimizer_scoped("valid@Type")
         assert not relation_is_optimizer_scoped({})  # type: ignore[arg-type]
         assert not relation_is_optimizer_scoped([])  # type: ignore[arg-type]
     finally:
-        end_scoped_relations(token)
+        end_execution_frame(frame)
 
 
 def test_strictness_and_scoped_relations_reentrant_isolation():
     """Re-entrant nested executions isolate strictness and scoped relations and restore cleanly."""
     from django_strawberry_framework.optimizer._context import (
         active_strictness,
-        begin_scoped_relations,
-        begin_strictness,
-        end_scoped_relations,
-        end_strictness,
+        begin_execution_frame,
+        end_execution_frame,
         publish_scoped_relations,
         relation_is_optimizer_scoped,
     )
 
-    outer_s = begin_strictness("raise")
-    outer_r = begin_scoped_relations()
+    outer = begin_execution_frame({}, nested=False, strictness="raise")
     try:
         publish_scoped_relations(["outer@Type"])
         assert active_strictness() == "raise"
         assert relation_is_optimizer_scoped("outer@Type")
 
         # Nested execution with different strictness and separate relations
-        inner_s = begin_strictness("warn")
-        inner_r = begin_scoped_relations()
+        inner = begin_execution_frame({}, nested=False, strictness="warn")
         try:
             publish_scoped_relations(["inner@Type"])
             assert active_strictness() == "warn"
             assert relation_is_optimizer_scoped("inner@Type")
             assert not relation_is_optimizer_scoped("outer@Type")
         finally:
-            end_strictness(inner_s)
-            end_scoped_relations(inner_r)
+            end_execution_frame(inner)
 
         # Outer state restored
         assert active_strictness() == "raise"
         assert relation_is_optimizer_scoped("outer@Type")
         assert not relation_is_optimizer_scoped("inner@Type")
     finally:
-        end_strictness(outer_s)
-        end_scoped_relations(outer_r)
+        end_execution_frame(outer)
 
     assert active_strictness() is None
     assert not relation_is_optimizer_scoped("outer@Type")
@@ -4253,7 +4252,6 @@ def test_an_optimizer_that_settled_no_configuration_reads_the_zero_argument_shap
     )
 
 
-@pytest.mark.django_db
 def _published_optimizer_keys(context):
     """Every optimizer stash currently readable off a request context object."""
     from django_strawberry_framework.optimizer._context import (
@@ -4264,6 +4262,7 @@ def _published_optimizer_keys(context):
     return {key: get_context_value(context, key) for key in DST_OPTIMIZER_KEYS}
 
 
+@pytest.mark.django_db
 def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state():
     """An inner execution through the documented singleton leaves the outer one intact.
 
@@ -4350,6 +4349,90 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     )
     assert fresh.errors is None
     assert all(item["category"]["name"] for item in fresh.data["allItems"])
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "consumer_first",
+    [True, False],
+    ids=["consumer-before-the-optimizer", "consumer-after-the-optimizer"],
+)
+def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_plan(
+    consumer_first,
+):
+    """Whether an operation is nested is the runner's answer, not the hook order's.
+
+    A consumer extension may run its own operation from its ``on_operation``
+    teardown, which happens after the optimizer's executing hook has already
+    reset everything it opened. An inner operation that decided it was outermost
+    from what the optimizer had open would clear the request context and publish
+    its own plan there - onto the object the consumer holding that request reads
+    its plan, elisions and lookup paths off. The runner knows the whole
+    lifetime, so the answer is the same whichever side of the optimizer the
+    consumer entry is installed on.
+    """
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_PLAN,
+        get_context_value,
+    )
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    seen = {}
+
+    class _Nester(SchemaExtension):
+        """A consumer extension that runs its own operation once, at teardown."""
+
+        def on_operation(self):
+            yield
+            if seen:
+                return
+            context = self.execution_context.context
+            state = extension._operation_state()
+            seen["published"] = [_published_optimizer_keys(context)]
+            seen["stashes"] = [dict(state.stashes)]
+            inner = self.execution_context.schema.execute_sync(
+                "{ allItems { name category { id } } }",
+                context_value=context,
+            )
+            assert inner.errors is None, inner.errors
+            seen["published"].append(_published_optimizer_keys(context))
+            seen["stashes"].append(dict(state.stashes))
+
+    finalize_django_types()
+    extension = DjangoOptimizerExtension(strictness="raise")
+    entries = [_Nester, lambda: extension] if consumer_first else [lambda: extension, _Nester]
+    schema = DjangoSchema(query=Query, extensions=entries)
+    shared = SimpleNamespace()
+
+    outer = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=shared,
+    )
+
+    assert outer.errors is None, outer.errors
+    assert all(item["category"]["name"] for item in outer.data["allItems"])
+    published_before, published_after = seen["published"]
+    stashes_before, stashes_after = seen["stashes"]
+    assert published_after == published_before
+    assert stashes_after == stashes_before
+    assert get_context_value(shared, DST_OPTIMIZER_PLAN) is not None
 
 
 @pytest.mark.django_db
@@ -5181,9 +5264,9 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
     """``apply_connection_optimization`` shares the active extension's plan cache.
 
     spec-030 Decision 11 plan-cache-reuse route: ``on_execute`` publishes the
-    active extension on the ``_active_optimizer`` ``ContextVar``; the connection
-    helper discovers it so connection-field plans hit the SAME instance-bound
-    cache the middleware uses (rather than a throwaway cache-less extension).
+    active extension on the execution frame; the connection helper discovers it
+    so connection-field plans hit the SAME instance-bound cache the middleware
+    uses (rather than a throwaway cache-less extension).
     """
     from django_strawberry_framework.optimizer.extension import (
         _active_optimizer,
@@ -5215,14 +5298,14 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
             # SAME instance.
             qs = Item.objects.all()
             apply_connection_optimization(ItemType, qs, info)
-            captured["active"] = _active_optimizer.get()
+            captured["active"] = _active_optimizer()
             return qs
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
     result = schema.execute_sync("{ allItems { id } }")
     assert result.errors is None
-    # The helper saw the installed extension instance via the ContextVar.
+    # The helper saw the installed extension instance through the frame.
     assert captured["active"] is ext
 
 
@@ -5961,3 +6044,175 @@ def test_optimizer_preserves_async_adapter_optimized_tail():
     optimized_res = ext._optimize(adapted_valid, info_optimized)
     assert is_async_queryset_adapter(optimized_res)
     assert optimized_res._queryset is not None
+
+
+# ---------------------------------------------------------------------------
+# The execution frame ends with its execution
+# ---------------------------------------------------------------------------
+
+
+class _FrameSentinel:
+    """A weak-referenceable value, so what a frame holds can be asked about."""
+
+
+def _read_optimizer_state_in_a_copied_context(copied) -> dict:
+    """Everything a task that copied an execution's context could read back."""
+    from django_strawberry_framework.optimizer._context import (
+        active_optimizer,
+        active_strictness,
+        cache_key_parts_memo,
+        converted_selections_memo,
+        execution_plan_memo,
+        optimizer_value,
+        relation_is_optimizer_scoped,
+    )
+
+    read: dict = {}
+
+    def _read() -> None:
+        read["optimizer"] = active_optimizer()
+        read["strictness"] = active_strictness()
+        read["stash"] = optimizer_value(None, "probe")
+        read["plans"] = execution_plan_memo()
+        read["key_parts"] = cache_key_parts_memo()
+        read["converted"] = converted_selections_memo()
+        read["scoped"] = relation_is_optimizer_scoped("probe@Type")
+
+    copied.run(_read)
+    return read
+
+
+def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_ends():
+    """Every per-execution store ends with the execution, in every context at once.
+
+    ``asyncio.create_task`` copies the whole context, and a token reset rewrites
+    only the context that created it - so a resolver's background task went on
+    reading the completed operation's stashes, plan memo, converted selections
+    and cache-key parts, and held the querysets and plans inside them for as
+    long as it ran. The frame is reached through a lease the execution closes,
+    so the copy answers exactly as a context with no optimizer running does, and
+    every sentinel the frame held is collectable.
+    """
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        cache_key_parts_memo,
+        converted_selections_memo,
+        end_execution_frame,
+        execution_plan_memo,
+        publish_scoped_relations,
+        stash_for_optimizer,
+    )
+
+    extension = DjangoOptimizerExtension()
+    sentinels = {
+        name: _FrameSentinel()
+        for name in (
+            "stash",
+            "plans",
+            "key_parts",
+            "converted",
+        )
+    }
+    references = {name: weakref.ref(value) for name, value in sentinels.items()}
+
+    frame = begin_execution_frame(
+        {},
+        nested=False,
+        optimizer=extension,
+        strictness="warn",
+    )
+    try:
+        stash_for_optimizer(None, "probe", sentinels["stash"])
+        execution_plan_memo()["probe"] = sentinels["plans"]
+        cache_key_parts_memo()[1] = sentinels["key_parts"]
+        converted_selections_memo()["probe"] = sentinels["converted"]
+        publish_scoped_relations({"probe@Type"})
+        copied = contextvars.copy_context()
+        inside = _read_optimizer_state_in_a_copied_context(copied)
+    finally:
+        end_execution_frame(frame)
+
+    assert inside["optimizer"] is extension
+    assert inside["stash"] is sentinels["stash"]
+    assert inside["scoped"] is True
+
+    after = _read_optimizer_state_in_a_copied_context(copied)
+
+    assert after["optimizer"] is None
+    assert after["strictness"] is None
+    assert after["stash"] is None
+    assert after["plans"] is None
+    assert after["key_parts"] is None
+    assert after["converted"] is None
+    assert after["scoped"] is False
+
+    sentinels.clear()
+    del inside, after
+    gc.collect()
+    assert {name: reference() for name, reference in references.items()} == dict.fromkeys(
+        references,
+        None,
+    )
+
+
+@pytest.mark.django_db
+def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own():
+    """The second operation is top-level, clears its own context, and restores to none.
+
+    A task that copied an execution's context and outlived the request is not
+    inside anything by the time it runs its own operation. Classified as nested
+    it would publish nothing to the context object it was handed - leaving a
+    consumer reading their own request's plan with the values of a request that
+    has already returned - and what it read back would be the earlier
+    operation's stashes rather than its own.
+    """
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_PLAN,
+        optimizer_value,
+    )
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    seen: dict = {}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self, info: strawberry.Info) -> list[ItemType]:
+            """Copy this operation's context, as a resolver starting a task does."""
+            seen.setdefault("copied", contextvars.copy_context())
+            return Item.objects.all()
+
+    def _second_operation() -> None:
+        """Run a whole operation from the copied context, after the first has ended."""
+        context = SimpleNamespace()
+        seen["result"] = schema.execute_sync(
+            "{ allItems { name category { id name } } }",
+            context_value=context,
+        )
+        seen["published"] = _published_optimizer_keys(context)
+        seen["after"] = optimizer_value(None, DST_OPTIMIZER_PLAN)
+
+    finalize_django_types()
+    extension = DjangoOptimizerExtension()
+    schema = DjangoSchema(query=Query, extensions=[lambda: extension])
+
+    first = schema.execute_sync("{ allItems { name } }", context_value=SimpleNamespace())
+    assert first.errors is None, first.errors
+
+    seen["copied"].run(_second_operation)
+
+    assert seen["result"].errors is None, seen["result"].errors
+    assert seen["result"].data["allItems"][0]["category"]["name"]
+    assert seen["published"][DST_OPTIMIZER_PLAN] is not None
+    assert seen["after"] is None

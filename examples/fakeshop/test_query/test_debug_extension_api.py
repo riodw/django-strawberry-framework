@@ -36,6 +36,7 @@ Serializer/coordinator, merge-precedence, async-overlap, masking-order, and
 nested-reentrancy mechanics belong in ``tests/extensions/test_debug.py``.
 """
 
+import contextlib
 import logging
 
 import pytest
@@ -96,6 +97,16 @@ _EXCEPTION_MESSAGE_CAP = 4096
 _TRUNCATION_MARKER = "... [truncated]"
 
 
+#: One unacknowledged instance, shared by the schema every request in the
+#: disclosure-arming scenario is served by - the shape a resolver's write would
+#: reach on every LATER request if the acknowledgement were an attribute.
+_WITHHELD = DjangoDebugExtension()
+
+#: One acknowledged instance, for the entry spelling that resolves to the SAME
+#: object every operation: a factory returning a singleton.
+_SHARED_DEBUG = DjangoDebugExtension(allow_unsafe_production=True)
+
+
 def _acknowledged_debug():
     """The documented acknowledgement spelling (spec-048 Decision 5), as ONE named factory.
 
@@ -133,6 +144,17 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
         @strawberry.field
         def broken_non_null(self) -> int:
             return None  # a completion error: null for a non-nullable field
+
+        @strawberry.field
+        def arm_debug_disclosure(self) -> bool:
+            """Try both ways an attribute is written, and report neither took."""
+            for attempt in (
+                lambda: setattr(_WITHHELD, "allow_unsafe_production", True),
+                lambda: _WITHHELD.__dict__.update(allow_unsafe_production=True),
+            ):
+                with contextlib.suppress(AttributeError):
+                    attempt()
+            return _WITHHELD.allow_unsafe_production
 
         @strawberry.field
         def huge_boom(self) -> int:
@@ -522,3 +544,80 @@ def test_project_graphql_endpoint_publishes_no_debug_key():
 
     assert res.data == {"__typename": "Query"}
     assert "debug" not in (res.extensions or {})
+
+
+# ---------------------------------------------------------------------------
+# Scenario 11 - the entry spellings that resolve to ONE object every operation.
+# ---------------------------------------------------------------------------
+
+
+def _shared_entry(spelling):
+    """The ``extensions=[...]`` entry that spells ``spelling``.
+
+    The bare-instance spelling is deliberately absent. Strawberry deprecated
+    passing an instance and answers it with a ``DeprecationWarning``, which
+    ``pytest.ini``'s ``filterwarnings = error`` makes fatal - the reading
+    ``tests/test_ci_governance.py::test_no_active_source_uses_a_forbidden_optimizer_extensions_form``
+    already states. A factory over a singleton is the supported spelling of the
+    same shape: both resolve to ONE object every operation, which is the
+    property this scenario is about.
+    """
+    if spelling == "singleton-factory":
+        return lambda: _SHARED_DEBUG
+    return _acknowledged_debug
+
+
+@override_settings(DEBUG=False)
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "spelling",
+    ["singleton-factory", "fresh-factory"],
+    ids=["singleton-factory", "fresh-factory-control"],
+)
+def test_a_parse_failure_never_republishes_the_previous_operations_payload(
+    install_probe_schema,
+    spelling,
+):
+    """The payload belongs to the operation that built it, not to the extension.
+
+    A document the server could not parse ran no SQL and raised nothing, so the
+    response carries no ``debug`` key at all. On an entry that resolves to one
+    object every operation - which a factory over a singleton is, and which is
+    the supported spelling of that shape - a payload left on that object would
+    be published with the refusal, and a client would read the SQL of somebody
+    else's request off an error response. The fresh-factory row is the control:
+    its instance is per operation, so it could never have shown one.
+    """
+    install_probe_schema([_shared_entry(spelling)])
+    client = TestClient()
+
+    first = client.query("query { __typename }")
+    assert _debug(first) == {"sql": [], "exceptions": []}
+
+    failed = client.query("query { this is not a document", assert_no_errors=False)
+
+    assert failed.errors is not None
+    assert "debug" not in (failed.extensions or {})
+
+
+@override_settings(DEBUG=False)
+@pytest.mark.django_db
+def test_a_resolver_cannot_arm_the_production_disclosure_for_a_later_request(
+    install_probe_schema,
+):
+    """The acknowledgement is a construction statement, not a request-local preference.
+
+    A process-lived entry is reachable from every resolver of every later
+    request through ``info.schema``. Held as an attribute, one assignment inside
+    one resolver would arm unmasked tracebacks and interpolated SQL for all of
+    them - which is why the row reads the request AFTER the write.
+    """
+    install_probe_schema([lambda: _WITHHELD])
+    client = TestClient()
+
+    assert "debug" not in (client.query("query { __typename }").extensions or {})
+
+    attacked = client.query("query { armDebugDisclosure }")
+
+    assert attacked.data == {"armDebugDisclosure": False}
+    assert "debug" not in (client.query("query { __typename }").extensions or {})

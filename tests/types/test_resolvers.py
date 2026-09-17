@@ -29,10 +29,13 @@ from django.utils import timezone
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.optimizer._context import (
-    begin_scoped_relations as _begin_scoped_relations,
+    DST_OPTIMIZER_FK_ID_ELISIONS,
 )
 from django_strawberry_framework.optimizer._context import (
-    end_scoped_relations as _end_scoped_relations,
+    begin_execution_frame as _begin_execution_frame,
+)
+from django_strawberry_framework.optimizer._context import (
+    end_execution_frame as _end_execution_frame,
 )
 from django_strawberry_framework.optimizer._context import (
     publish_scoped_relations as _publish_scoped_relations,
@@ -249,13 +252,18 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
     # and this target's hook hides every row.
     assert resolver(Root(), fake_info) is None
 
-    # Published as planned: the stub is served as-is, no visibility re-read.
-    token = _begin_scoped_relations()
+    # Published as planned: the stub is served as-is, no visibility re-read. The
+    # execution that planned it published its elisions to its own frame, which is
+    # where a managed read looks; the unmanaged read above has only the context.
+    frame = _begin_execution_frame(
+        {DST_OPTIMIZER_FK_ID_ELISIONS: {key}},
+        nested=False,
+    )
     try:
         _publish_scoped_relations({key})
         scoped = resolver(Root(), fake_info)
     finally:
-        _end_scoped_relations(token)
+        _end_execution_frame(frame)
     assert isinstance(scoped, Category)
     assert scoped.pk == category.pk
 
@@ -1509,10 +1517,8 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
     import django_strawberry_framework.types.resolvers as resolvers_mod
     from django_strawberry_framework.optimizer._context import (
-        begin_scoped_relations,
-        begin_strictness,
-        end_scoped_relations,
-        end_strictness,
+        begin_execution_frame,
+        end_execution_frame,
         publish_scoped_relations,
     )
     from django_strawberry_framework.optimizer.plans import resolver_key
@@ -1540,7 +1546,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
     from django_strawberry_framework.types.finalizer import finalize_django_types
 
     finalize_django_types()
-    token = begin_scoped_relations()
+    frame = begin_execution_frame({}, nested=False)
 
     try:
 
@@ -1606,9 +1612,13 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             res_fwd_unscoped = await res_fwd_unscoped
         assert res_fwd_unscoped.pk == cat.pk
 
-        # Forward resolver under active strictness (warn)
-        strict_token = begin_strictness("warn")
+        # Forward resolver under an execution armed at ``warn``, which is a
+        # whole execution rather than a switch inside one: strictness is part of
+        # the frame ``on_execute`` opens, so the planned relation is published
+        # into that frame too.
+        strict_frame = begin_execution_frame({}, nested=False, strictness="warn")
         try:
+            publish_scoped_relations({fwd_key})
             # Scoped
             res_strict_scoped = fwd_resolver(
                 Item(name="Test Item 3", category_id=cat.pk),
@@ -1633,7 +1643,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             res_sync_scoped = fwd_resolver(loaded_item, fwd_info)
             assert res_sync_scoped.pk == cat.pk
         finally:
-            end_strictness(strict_token)
+            end_execution_frame(strict_frame)
 
         # Fallback when _visible_related_object returns non-awaitable (lines 510, 548, 601)
         orig_vis = resolvers_mod._visible_related_object
@@ -1656,7 +1666,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             assert res_fwd_sync.pk == cat.pk
 
             # Forward non-awaitable fallback with strictness (line 601)
-            strict_token = begin_strictness("warn")
+            strict_frame = begin_execution_frame({}, nested=False, strictness="warn")
             try:
                 res_strict_sync = fwd_resolver(
                     Item(name="Test Item 6", category_id=cat.pk),
@@ -1677,7 +1687,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
                 assert res_strict_null is None
 
             finally:
-                end_strictness(strict_token)
+                end_execution_frame(strict_frame)
         finally:
             resolvers_mod._visible_related_object = orig_vis
 
@@ -1701,7 +1711,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         many_res_scoped = many_resolver(cat_with_cache, many_scoped_info)
         assert len(list(many_res_scoped)) == 1
     finally:
-        end_scoped_relations(token)
+        end_execution_frame(frame)
         registry._finalized = False
         registry.unregister(Category)
         registry.unregister(Item)
@@ -1709,8 +1719,8 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
 def test_sync_forward_and_many_resolver_visibility(db):
     from django_strawberry_framework.optimizer._context import (
-        begin_scoped_relations,
-        end_scoped_relations,
+        begin_execution_frame,
+        end_execution_frame,
         publish_scoped_relations,
     )
     from django_strawberry_framework.optimizer.plans import resolver_key
@@ -1737,7 +1747,7 @@ def test_sync_forward_and_many_resolver_visibility(db):
             return queryset.filter(name__startswith="Visible")
 
     finalize_django_types()
-    token = begin_scoped_relations()
+    frame = begin_execution_frame({}, nested=False)
 
     try:
         cat = Category.objects.create(name="Visible Cat")
@@ -1776,7 +1786,7 @@ def test_sync_forward_and_many_resolver_visibility(db):
         res_many_scoped = many_resolver(cat_with_cache, many_scoped_info)
         assert len(list(res_many_scoped)) == 1
     finally:
-        end_scoped_relations(token)
+        end_execution_frame(frame)
         registry._finalized = False
         registry.unregister(Category)
         registry.unregister(Item)

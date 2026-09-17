@@ -24,7 +24,7 @@ strawberry-graphql-django #572 / #583. We copy the behaviour, not the
 API.
 
 Architecture modeled on ``strawberry_django/optimizer.py`` - same
-root-gate pattern, same ``ContextVar`` lifecycle, same recursive
+root-gate pattern, same per-execution state lifecycle, same recursive
 type-tracing through graphql-core wrappers.
 """
 
@@ -35,7 +35,6 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Set
 from contextlib import suppress
-from contextvars import ContextVar
 from typing import Any, NamedTuple
 
 from django.db import models
@@ -47,7 +46,13 @@ from graphql.language.printer import print_ast
 from graphql.type.definition import GraphQLInterfaceType
 
 from ..exceptions import _safe_arg_repr
-from ..extensions.operation_state import OperationState, _OperationBoundExtension
+from ..extensions.operation_state import (
+    OperationState,
+    _OperationBoundExtension,
+)
+from ..extensions.operation_state import (
+    operation_is_nested as _operation_is_nested,
+)
 from ..registry import registry
 from ..utils.private_state import PrivateAuthority
 from ..utils.querysets import (
@@ -73,28 +78,25 @@ from ._context import (
     DST_OPTIMIZER_STRICTNESS,
 )
 from ._context import (
-    begin_operation_stashes as _begin_operation_stashes,
+    active_optimizer as _active_optimizer,
 )
 from ._context import (
-    begin_scoped_relations as _begin_scoped_relations,
+    begin_execution_frame as _begin_execution_frame,
 )
 from ._context import (
-    begin_strictness as _begin_strictness,
+    cache_key_parts_memo as _cache_key_parts_memo,
 )
 from ._context import (
     clear_optimizer_context as _clear_optimizer_context,
 )
 from ._context import (
-    end_operation_stashes as _end_operation_stashes,
+    end_execution_frame as _end_execution_frame,
 )
 from ._context import (
-    end_scoped_relations as _end_scoped_relations,
+    execution_plan_memo as _execution_plan_memo,
 )
 from ._context import (
-    end_strictness as _end_strictness,
-)
-from ._context import (
-    optimizer_operation_is_active as _optimizer_operation_is_active,
+    operation_publishes_to_context as _operation_publishes_to_context,
 )
 from ._context import (
     optimizer_value as _optimizer_value,
@@ -110,7 +112,6 @@ from ._context import (
 )
 from .hints import hint_is_skip
 from .nested_fetch import StrategySelection, resolve_strategy
-from .nested_fetch import _active_strategy as _active_nested_strategy
 from .plans import (
     diff_plan_for_queryset,
     lookup_paths,
@@ -122,7 +123,6 @@ from .selections import (
     ast_to_converted_selections,
     connection_field_names,
     connection_node_children,
-    converted_selections_cache,
     directive_variable_names,
     named_children,
     node_children_with_runtime_prefix,
@@ -559,7 +559,7 @@ _MAX_DOC_KEY_CACHE_SIZE = 256
 # hot query neither ``print_ast``s NOR re-walks its full operation AST
 # (``_collect_cache_relevant_var_names`` was the last remaining per-request AST
 # descent on the plan-cache-hit path) after first sight. The per-execution
-# ``_cache_key_parts_cache`` only dedupes within ONE request (keyed on
+# cache-key-parts memo only dedupes within ONE request (keyed on
 # ``id(operation)``); this module-level LRU carries the far more valuable
 # cross-request reuse. Correctness-neutral under concurrency exactly like
 # ``_plan_cache`` - the cached value is deterministic, so a dropped or double
@@ -701,71 +701,6 @@ class CacheInfo(NamedTuple):
     hits: int
     misses: int
     size: int
-
-
-# The active ``DjangoOptimizerExtension`` instance for the operation's
-# lifetime, published by ``on_execute`` so the connection field's
-# ``apply_connection_optimization`` helper can discover it and SHARE the
-# instance-bound plan cache (spec-030 Decision 11). ``None`` (the default) means
-# either no optimizer is installed for this execution or the helper is being
-# called outside an ``on_execute`` lifecycle; the helper then short-circuits
-# and returns the queryset unoptimized (the connection field follows the same
-# opt-in contract as the middleware path - see ``apply_connection_optimization``).
-# Presence of a non-``None`` instance is also the sole "optimizer is active"
-# signal for this execution; a parallel boolean ContextVar was removed once
-# this handle carried the same lifecycle.
-_active_optimizer: "ContextVar[DjangoOptimizerExtension | None]" = ContextVar(
-    "django_strawberry_framework_active_optimizer",
-    default=None,
-)
-
-
-# Per-execution memo for the operation-constant cache-key PARTS: the rendered
-# document key plus the fully RESOLVED ``(name, value)`` variable frozenset,
-# keyed by ``id(operation)``.  Both are constants within one execution (the
-# document and ``info.variable_values`` are fixed for the operation), so a
-# nested fallback connection pipeline that calls ``apply_connection_optimization``
-# -> ``_build_cache_key`` once per parent row pays one dict hit per row instead
-# of re-walking the operation AST and rebuilding the value frozenset.  Reusing
-# ONE frozenset object across rows also means its hash is computed once
-# (``frozenset`` memoizes its hash), so the per-row ``_plan_cache`` key hash
-# stays cheap.  This merges the formerly separate printed-AST and
-# variable-names memos: both were consulted on every ``_build_cache_key`` call
-# with the same ``id(operation)`` key, so keeping them apart bought nothing but
-# a second ``ContextVar`` read + dict get per row.  Same per-execution
-# ``ContextVar`` lifecycle as the plan memo below: set to an empty dict in
-# ``on_execute`` and reset on the way out, ``None`` (the default) when
-# ``_build_cache_key`` is called outside an ``on_execute`` lifecycle so the
-# lookup falls back to recomputing -- spec-033 Decision 7.
-_cache_key_parts_cache: ContextVar[dict[int, tuple[str, frozenset[tuple[str, Any]]]] | None] = (
-    ContextVar(
-        "django_strawberry_framework_optimizer_cache_key_parts_cache",
-        default=None,
-    )
-)
-
-
-# Per-execution memo for BUILT plans, keyed by the same tuple as ``_plan_cache``.
-# Its job is the plans the cross-request ``_plan_cache`` deliberately refuses:
-# ``cacheable = False`` plans (those baking a request-scoped ``get_queryset``
-# queryset or a consumer ``Prefetch`` hint). A nested FALLBACK connection pipeline
-# calls ``apply_connection_optimization`` -> ``_get_or_build_plan`` once per parent
-# row with an IDENTICAL cache key (``runtime_path_from_info`` strips list indices,
-# so every parent shares one key), and because those plans are uncacheable the
-# cross-request cache never serves them - so without this memo each parent row
-# re-ran the full walker pass (and rebuilt the child queryset). Reusing the plan
-# built earlier in THIS execution collapses those N per-parent walks to one. Safe
-# because one execution has a single fixed ``info.context``, so a request-scoped
-# ``get_queryset`` baked into the plan filters identically for every parent (the
-# same reason a list field's single root walk reuses one child queryset across
-# all parents). Same per-execution ``ContextVar`` lifecycle as the memos above:
-# set to an empty dict in ``on_execute``, reset on the way out; ``None`` (the
-# default) outside an ``on_execute`` lifecycle disables the memo entirely, so
-# direct / test callers of ``_get_or_build_plan`` see unchanged behavior.
-_execution_plan_cache: ContextVar[dict[Any, Any] | None] = ContextVar(
-    "django_strawberry_framework_optimizer_execution_plan_cache",
-    default=None,
-)
 
 
 def _collect_schema_reachable_types(schema: Any) -> set[type]:
@@ -962,8 +897,8 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
 
     Hooks:
 
-    - ``on_execute`` - sets a ``ContextVar`` marking the optimizer as
-      active for the operation's lifetime.
+    - ``on_execute`` - opens the execution frame that marks the optimizer
+      as active for the operation's lifetime, and closes it at the end.
     - ``resolve`` - gates on ``info.path.prev is None`` (root resolver
       only). Calls ``_next``, checks ``isinstance(QuerySet)``, traces
       the Django model from the graphql-core return type, runs the O2
@@ -1092,63 +1027,49 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
         )
 
     def on_execute(self) -> Any:  # type: ignore[override]
-        """Mark the optimizer as active and seed the per-execution AST memo."""
-        # Drop any optimizer stashes left on a reused ``context_value`` before
-        # this operation publishes. ``_stash_union`` is intentionally
-        # accumulative *within* one execution (parent + nested connection);
-        # without a start-of-execution clear, sequential ``execute_sync``
-        # calls sharing one context object leak FK-id elisions (wrong stub
-        # data) and planned-resolver keys (masked N+1 under strictness) to a
-        # consumer reading the published plan off their request.
+        """Open this execution's frame, and close it however the operation ends.
+
+        One frame carries everything the execution publishes to itself - this
+        instance, its nested-fetch strategy and strictness, the stash store, the
+        planned-relation keys and the three per-execution memos - because all of
+        them end together and a copied context must be able to observe that end
+        (``_context.py::_ExecutionFrame``).
+        """
         # ``execution_context.context`` is the same object resolvers see as
-        # ``info.context`` (Strawberry wires both to ``context_value``).
-        # ``getattr(self, "execution_context", None)`` covers direct/test
-        # callers that invoke ``on_execute`` before Strawberry assigns the
-        # execution context (the engine sets it after constructing the
-        # extension entry). An execution that starts while another optimizer
-        # operation is already running here is nested inside it and shares that
-        # operation's context object, whose published values are current rather
-        # than stale - so the clear belongs to the outermost operation alone.
+        # ``info.context`` (Strawberry wires both to ``context_value``), and it
+        # is ``None`` for a direct caller that invokes ``on_execute`` outside
+        # any operation.
         state = self._operation_state()
         execution_context = self.execution_context
-        if not _optimizer_operation_is_active():
-            _clear_optimizer_context(getattr(execution_context, "context", None))
         # This operation's own store for every optimizer stash. What the package
-        # reads back is here, so a nested execution sharing the request's
-        # context object can neither erase nor answer for the outer operation's
-        # plan; the outermost operation's publishes still reach that object as
-        # introspection.
-        stashes_token = _begin_operation_stashes({} if state is None else state.stashes)
-        # Publish this instance so ``apply_connection_optimization`` can
-        # discover it and share the instance-bound plan cache (spec-030 Decision 11).
-        instance_token = _active_optimizer.set(self)
-        # Publish the instance's nested-connection fetch strategy for the
-        # walker (which cannot import this module - the dependency points the
-        # other way; see ``nested_fetch.py::active_strategy``).
-        strategy_token = _active_nested_strategy.set(self.nested_connection_strategy)
-        key_parts_token = _cache_key_parts_cache.set({})
-        plan_memo_token = _execution_plan_cache.set({})
-        converted_token = converted_selections_cache.set({})
-        # Per-execution record of which relations the walker planned, read by the
-        # generated relation resolvers to tell an optimizer-scoped child cache
-        # from a consumer-supplied one.
-        scoped_token = _begin_scoped_relations()
-        # Arm this instance's strictness for the whole operation, before any
-        # planning runs: a relation the walker never planned - including one on
-        # an operation the walker could not plan at all - must still be visible
-        # to ``_check_n1``.
-        strictness_token = _begin_strictness(self.strictness)
+        # reads back is here, so an operation running inside another one can
+        # neither erase nor answer for the outer operation's plan; the request's
+        # own operation publishes there as well, as introspection. Which one
+        # this is comes from the runner that owns the operation rather than from
+        # where in the hook order the store is opened - an operation started
+        # from a consumer extension's teardown begins after the outer
+        # optimizer's frame was closed and is still inside the outer request.
+        frame = _begin_execution_frame(
+            {} if state is None else state.stashes,
+            nested=_operation_is_nested(),
+            optimizer=self,
+            strategy=self.nested_connection_strategy,
+            strictness=self.strictness,
+        )
+        # Drop any optimizer stashes left on a reused ``context_value`` before
+        # this operation publishes, and only for the operation that object
+        # describes. ``_stash_union`` is intentionally accumulative *within* one
+        # execution (parent + nested connection); without a start-of-execution
+        # clear, sequential ``execute_sync`` calls sharing one context object
+        # leak FK-id elisions (wrong stub data) and planned-resolver keys
+        # (masked N+1 under strictness) to a consumer reading the published plan
+        # off their request.
+        if _operation_publishes_to_context():
+            _clear_optimizer_context(getattr(execution_context, "context", None))
         try:
             yield
         finally:
-            _end_operation_stashes(stashes_token)
-            _end_strictness(strictness_token)
-            _end_scoped_relations(scoped_token)
-            converted_selections_cache.reset(converted_token)
-            _execution_plan_cache.reset(plan_memo_token)
-            _cache_key_parts_cache.reset(key_parts_token)
-            _active_nested_strategy.reset(strategy_token)
-            _active_optimizer.reset(instance_token)
+            _end_execution_frame(frame)
 
     def resolve(
         self,
@@ -1350,8 +1271,9 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
         so a cache hit never pays for it; it is invoked at most once, only on the
         build path. Direct/test callers may still pass a plain list.
 
-        A second, per-execution memo (``_execution_plan_cache``) sits between the
-        cross-request cache and the walker for ``cacheable = False`` plans: those
+        A second, per-execution memo (the execution frame's ``plans``) sits
+        between the cross-request cache and the walker for ``cacheable = False``
+        plans: those
         never enter ``_plan_cache``, so a nested fallback connection pipeline that
         calls this once per parent row (identical cache key each time) would
         otherwise rebuild the same plan for every parent. An intra-execution memo
@@ -1386,7 +1308,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
         # Per-execution reuse of an uncacheable plan already built this execution
         # (the nested-fallback per-parent-row case). ``None`` outside an
         # ``on_execute`` lifecycle, so direct/test callers skip this entirely.
-        exec_memo = _execution_plan_cache.get()
+        exec_memo = _execution_plan_memo()
         if exec_memo is not None:
             memoized_plan = exec_memo.get(cache_key)
             if memoized_plan is not None:
@@ -1447,8 +1369,8 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
         planned_resolver_keys = plan.finalized_planned_resolver_keys
         if planned_resolver_keys is None:
             planned_resolver_keys = frozenset(plan.planned_resolver_keys)
-        # Published on EVERY execution, and to a ``ContextVar`` rather than the
-        # request context: the generated relation resolvers' visibility
+        # Published on EVERY execution, and to the execution frame rather than
+        # the request context: the generated relation resolvers' visibility
         # attribution is live under the default strictness and must also survive
         # an execution that carries no ``context_value`` at all.
         _publish_scoped_relations(planned_resolver_keys)
@@ -1582,12 +1504,12 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
         # frozenset rebuild.  On a memo miss the document-derived halves come
         # from the cross-request ``_doc_cache_entry`` LRU (so a hot query pays
         # neither ``print_ast`` nor the variable-name AST walk after first
-        # sight); only the value resolution runs per execution.  The memo is a
-        # per-execution ``ContextVar`` dict installed by ``on_execute``; if the
-        # extension is invoked outside an ``on_execute`` lifecycle (some test
-        # fixtures call ``_build_cache_key`` directly), fall back to
-        # recomputing -- spec-033 Decision 7.
-        memo = _cache_key_parts_cache.get()
+        # sight); only the value resolution runs per execution.  The memo lives
+        # on the execution frame ``on_execute`` opens; if the extension is
+        # invoked outside an ``on_execute`` lifecycle (some test fixtures call
+        # ``_build_cache_key`` directly), fall back to recomputing -- spec-033
+        # Decision 7.
+        memo = _cache_key_parts_memo()
         parts = memo.get(id(operation)) if memo is not None else None
         if parts is None:
             doc_key, relevant_var_names = _doc_cache_entry(operation, fragments)
@@ -1653,11 +1575,12 @@ def apply_connection_optimization(
     Resolves ``target_model`` from ``target_type``'s registered definition
     (NOT from ``info.return_type``, which is the connection type) and delegates
     to ``DjangoOptimizerExtension.apply_to``. The active extension instance is
-    discovered from the ``_active_optimizer`` ``ContextVar`` published by
-    ``on_execute`` so the connection field shares the instance-bound plan
-    cache. When no optimizer extension is installed for this execution (the
-    ``ContextVar`` is ``None``), the helper short-circuits and returns the
-    queryset unoptimized - the connection field does NOT fabricate a throwaway
+    discovered from the execution frame ``on_execute`` opens
+    (``_context.py::active_optimizer``) so the connection field shares the
+    instance-bound plan cache. When no optimizer extension is running this
+    execution - no frame, or one a copied context outlived - the helper
+    short-circuits and returns the queryset unoptimized; the connection field
+    does NOT fabricate a throwaway
     optimizer to self-optimize. This keeps the connection consistent with the
     rest of the schema: the middleware path only optimizes when the extension is
     installed, and connection fields follow the same opt-in contract.
@@ -1676,7 +1599,7 @@ def apply_connection_optimization(
     target_model = registry.model_for_type(target_type)
     if target_model is None:
         return queryset
-    optimizer = _active_optimizer.get()
+    optimizer = _active_optimizer()
     if optimizer is None:
         return queryset
     # The connection resolver receives Strawberry's wrapped ``Info``; the plan

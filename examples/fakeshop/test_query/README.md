@@ -992,6 +992,7 @@ Module docstring = authoritative description; this = index. Read the docstring b
 | [`test_multi_db.py`][test-multi-db] | Behind `FAKESHOP_SHARDED=1`: resolver isolation on `shard_b`, correlated `EXISTS` pinned to `queryset.db`, post-`OrderSet` routing attestation (four rejections + the accepted identity-preserving row), multi-DB debug capture. |
 | [`test_transport_api.py`][test-transport-api] | Transport boundary: middleware, security headers, hostile `Host`, CSRF directions, `Vary`, exact routing, per-mount IDE / GET controls, cumulative request-body cap across sync / async / multipart, misconfigured cap fails on GET too, async + multipart strict-UTF-8 rows. |
 | [`test_error_policy_api.py`][test-error-policy-api] | Production error policy over the wire. |
+| [`test_extension_isolation_api.py`][test-extension-isolation-api] | What one operation's extensions may be answered from: every write spelling aimed at the box an accepted slotted entry is held in (bound and masking both still enforced on the NEXT request), a consumer extension's own operation leaving the request its published optimizer plan, two resource authorities refusing every request with the stable configuration code, and a worker that outlived its request bounded and publishing for itself over the async mount. |
 | [`test_schema_composition_api.py`][test-schema-composition-api] | Composed project schema over HTTP: one type per contributing app by introspection, reverse relation resolved under the anonymous cascade. |
 | [`test_resource_policy_api.py`][test-resource-policy-api] | Every `ResourcePolicy` bound, against mounts each narrowing one family of bounds; malformed document keeps the parser's own diagnostic / is rejected on size first; the pre-parse token bound charged over the whole request document with its named-operation control; sync/async parity row; streamed multipart rows. |
 | [`test_debug_extension_api.py`][test-debug-extension-api], [`test_debug_toolbar_api.py`][test-debug-toolbar-api] | `DjangoDebugExtension` on a probe mount; `DebugToolbarMiddleware` across GraphQL / panel / pass-through routes under `DEBUG=True` override. |
@@ -1044,6 +1045,7 @@ Outside this dir: [`../tests/`][fakeshop-tests] = project-level rows (urls, sett
 [test-debug-extension-api]: test_debug_extension_api.py
 [test-debug-toolbar-api]: test_debug_toolbar_api.py
 [test-error-policy-api]: test_error_policy_api.py
+[test-extension-isolation-api]: test_extension_isolation_api.py
 [test-glossary-api]: test_glossary_api.py
 [test-kanban-api]: test_kanban_api.py
 [test-kanban-mutations-api]: test_kanban_mutations_api.py

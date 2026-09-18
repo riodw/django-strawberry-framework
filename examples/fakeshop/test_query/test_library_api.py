@@ -9910,3 +9910,105 @@ def test_nested_connection_last_zero_serves_quirk_via_per_parent_fallback():
     # one more query per request and hid the fallback from strictness).
     assert len(captured) == 3
     assert not any("_dst_row_number" in entry["sql"] for entry in captured)
+
+
+def _seed_branch_notes():
+    """Seed two notes on the example's one proxy-targeted relation.
+
+    ``models.BranchNote.branch`` is declared to ``models.ProxyBranch``; rows are
+    created through the proxy so the parent side is the declared target itself.
+    """
+    branch = models.ProxyBranch.objects.create(name="Proxy Central", city="Boston")
+    models.BranchNote.objects.create(branch=branch, body="shelving audit")
+    models.BranchNote.objects.create(branch=branch, body="reopened after repairs")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "field",
+    ["allLibraryBranchNotesOverProxyChild", "allLibraryBranchNotesOverConcreteChild"],
+    ids=["proxy-child", "concrete-child"],
+)
+def test_library_prefetch_child_of_proxy_targeted_relation_resolves_over_http(field):
+    """A consumer ``Prefetch`` over a relation declared TO a proxy survives the seal.
+
+    ``apps/library/schema.py::BranchNoteType`` parents a foreign key whose
+    declared target is ``models.ProxyBranch``. The source queryset a
+    ``DjangoListField`` receives is sealed before its visibility hook runs, and
+    that seal proves every ``Prefetch`` child belongs to the relation the lookup
+    names. The proof is a TABLE proof - a proxy reads its concrete model's
+    table - so a child over the proxy AND a child over the concrete ``Branch``
+    are both legitimate here. Held to the declared class instead, neither is:
+    the relation's own proxy is refused for reading the very table the relation
+    targets, and the field fails closed with no rows at all.
+
+    The response rows are the evidence the child was USED: the prefetched
+    ``branch`` is read out of the related cache the child populated. The SQL
+    shape is the evidence it was a prefetch and not a join - the root query
+    carries no ``JOIN``, and a second query reads ``library_branch`` keyed on
+    the notes' foreign key column.
+    """
+    _seed_branch_notes()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            f"""
+            query {{
+              {field} {{
+                body
+                branch {{ name city }}
+              }}
+            }}
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"][field] == [
+        {"body": "shelving audit", "branch": {"name": "Proxy Central", "city": "Boston"}},
+        {"body": "reopened after repairs", "branch": {"name": "Proxy Central", "city": "Boston"}},
+    ]
+    library_sql = _library_sql(captured)
+    root_sql = _sql_from_table(captured, "library_branchnote")
+    branch_sql = _sql_from_table(captured, "library_branch")
+    assert len(root_sql) == 1, library_sql
+    assert "JOIN" not in root_sql[0], root_sql[0]
+    assert branch_sql, library_sql
+
+
+@pytest.mark.django_db
+def test_library_prefetch_child_over_unrelated_table_is_refused_over_http():
+    """A proxy relation target does not widen the child rule to any model.
+
+    ``allLibraryBranchNotesOverUnrelatedChild`` prefetches the same
+    proxy-targeted ``branch`` relation with a child over ``library_genre``.
+    Reducing both sides of the comparison to their concrete model admits the
+    proxy's own table and nothing else, so this child is still refused and the
+    request fails closed rather than populating ``branch`` with genre rows no
+    visibility hook ever saw.
+    """
+    _seed_branch_notes()
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranchNotesOverUnrelatedChild {
+            body
+            branch { name }
+          }
+        }
+        """,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None, payload
+    assert [error["path"] for error in payload["errors"]] == [
+        ["allLibraryBranchNotesOverUnrelatedChild"],
+    ]
+    # The shipped error policy masks the seal's own detail, so the refusal's
+    # wording stays pinned at the package tier by
+    # ``tests/utils/test_querysets.py::test_prefetch_child_over_unrelated_table_still_fails_for_proxy_target``
+    # and what the wire can show is that the field failed closed with no rows.
+    assert payload["errors"][0]["message"] == "An unexpected error occurred."

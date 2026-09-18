@@ -4,6 +4,7 @@ from typing import Any
 
 import strawberry
 from django.conf import settings
+from django.db.models import Prefetch
 from strawberry import relay
 from strawberry.types import Info
 
@@ -47,6 +48,40 @@ from django_strawberry_framework.orders import order_input_type
 
 def _branches_manager_resolver(root: Any, info: Info) -> Any:
     return models.Branch.objects
+
+
+# Consumer ``Prefetch`` children over the example's one proxy-targeted relation
+# (``models.BranchNote.branch``, declared to ``models.ProxyBranch``). A source
+# queryset a ``DjangoListField`` receives is sealed before the visibility hook
+# runs, and that seal proves each ``Prefetch`` child belongs to the relation the
+# lookup names. The proof is a TABLE proof: a proxy reads its concrete model's
+# table, so both the proxy and the concrete ``Branch`` are legitimate children
+# here, while a child over any other table is refused. The three resolvers below
+# are those three verdicts, each reachable from a real ``/graphql/`` query.
+
+
+def _branch_notes_over_proxy_child_resolver(root: Any, info: Info) -> Any:
+    """Prefetch the proxy-targeted relation with a child over the PROXY itself."""
+    return models.BranchNote.objects.prefetch_related(
+        Prefetch("branch", queryset=models.ProxyBranch.objects.all()),
+    ).order_by("id")
+
+
+def _branch_notes_over_concrete_child_resolver(root: Any, info: Info) -> Any:
+    """Prefetch the proxy-targeted relation with a child over the CONCRETE model."""
+    return models.BranchNote.objects.prefetch_related(
+        Prefetch("branch", queryset=models.Branch.objects.all()),
+    ).order_by("id")
+
+
+def _branch_notes_over_unrelated_child_resolver(root: Any, info: Info) -> Any:
+    """Prefetch the proxy-targeted relation with a child over an UNRELATED table.
+
+    Refused by the seal: a proxy target does not widen the rule to any model.
+    """
+    return models.BranchNote.objects.prefetch_related(
+        Prefetch("branch", queryset=models.Genre.objects.all()),
+    ).order_by("id")
 
 
 def _user_is_staff(info: Info) -> bool:
@@ -275,6 +310,36 @@ class BranchType(DjangoType):
         orderset_class = orders.BranchOrder
 
 
+class ProxyBranchType(DjangoType):
+    """The example's relation target declared as a PROXY model.
+
+    ``models.BranchNote.branch`` is a foreign key to ``models.ProxyBranch``, so
+    this is the type ``branchNote { branch }`` resolves through. The
+    ``get_queryset`` hook is what makes the optimizer plan a ``Prefetch`` for
+    that forward key instead of a ``select_related``, which puts a prefetch
+    child over a proxy-targeted relation on a live request path.
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Hide ``city="restricted"`` branches from non-staff requests."""
+        if _user_is_staff(info):
+            return queryset
+        return queryset.exclude(city="restricted")
+
+    class Meta:
+        model = models.ProxyBranch
+        fields = ("id", "name", "city")
+
+
+class BranchNoteType(DjangoType):
+    """Parent of the proxy-targeted relation (``BranchNote.branch``)."""
+
+    class Meta:
+        model = models.BranchNote
+        fields = ("id", "body", "branch")
+
+
 class PatronType(DjangoType):
     """Patron with nullable reverse OneToOne card and reverse FK loans.
 
@@ -416,6 +481,24 @@ class Query:
     # is a hand-written field that always calls ``apply_sync``.
     all_library_genres_via_list_field: list[GenreType] = DjangoListField(
         GenreType,
+    )
+
+    # The proxy-targeted relation surface (see the resolvers above). Selecting
+    # ``branch`` under any of these also makes the optimizer plan its own
+    # ``Prefetch`` for the same forward key - ``ProxyBranchType`` carries a
+    # ``get_queryset`` hook - so the consumer child and the planned one
+    # reconcile on the shape the seal has just proven.
+    all_library_branch_notes_over_proxy_child: list[BranchNoteType] = DjangoListField(
+        BranchNoteType,
+        resolver=_branch_notes_over_proxy_child_resolver,
+    )
+    all_library_branch_notes_over_concrete_child: list[BranchNoteType] = DjangoListField(
+        BranchNoteType,
+        resolver=_branch_notes_over_concrete_child_resolver,
+    )
+    all_library_branch_notes_over_unrelated_child: list[BranchNoteType] = DjangoListField(
+        BranchNoteType,
+        resolver=_branch_notes_over_unrelated_child_resolver,
     )
 
     @strawberry.field

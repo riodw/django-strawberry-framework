@@ -54,9 +54,11 @@ class Branch(models.Model):
 class ProxyBranch(Branch):
     """Proxy of ``Branch`` carrying a ``for_concrete_model=False`` generic relation.
 
-    Test substrate (never exposed by the public example schema) for the
-    alias-late GenericRelation content-type morph under the NON-default
-    ``for_concrete_model`` setting. ``proxy_tags`` filters ``TaggedItem`` rows by
+    Substrate for the alias-late GenericRelation content-type morph under the
+    NON-default ``for_concrete_model`` setting (``proxy_tags``, reached only by
+    test-local types), and - through ``BranchNote.branch`` - the example's
+    proxy-targeted relation target, exposed by
+    ``apps/library/schema.py::ProxyBranchType``. ``proxy_tags`` filters ``TaggedItem`` rows by
     THIS proxy model's content type (``get_for_model(ProxyBranch,
     for_concrete_model=False)``), not ``Branch``'s concrete content type - so a
     generic connection over a ``ProxyBranch`` parent must resolve the proxy
@@ -74,6 +76,28 @@ class ProxyBranch(Branch):
         proxy = True
         verbose_name = "Proxy branch"
         verbose_name_plural = "Proxy branches"
+
+
+class BranchNote(models.Model):
+    """A note whose branch foreign key is declared TO ``ProxyBranch``.
+
+    The example's only relation whose declared target is a PROXY model. A proxy
+    reads its concrete model's table, so a prefetch child over ``Branch`` - and
+    over ``ProxyBranch`` itself - belongs to this relation, while a child over
+    any other table does not. Comparing a child against the DECLARED target
+    instead of its concrete model cannot tell those cases apart, and every
+    relation declared to a proxy is the shape that distinguishes them.
+    """
+
+    branch = models.ForeignKey(
+        ProxyBranch,
+        related_name="notes",
+        on_delete=models.CASCADE,
+    )
+    body = models.TextField()
+
+    def __str__(self):
+        return self.body
 
 
 class Shelf(models.Model):

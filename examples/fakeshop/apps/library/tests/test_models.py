@@ -7,7 +7,17 @@ __str__ rendering, forward/reverse relation traversal, and a uniqueness rule.
 import pytest
 from django.db import IntegrityError, transaction
 
-from apps.library.models import Book, Branch, Genre, Loan, MembershipCard, Patron, Shelf
+from apps.library.models import (
+    Book,
+    Branch,
+    BranchNote,
+    Genre,
+    Loan,
+    MembershipCard,
+    Patron,
+    ProxyBranch,
+    Shelf,
+)
 
 
 @pytest.mark.django_db
@@ -46,3 +56,23 @@ def test_book_title_unique_per_shelf():
     Book.objects.create(title="Dune", shelf=shelf)
     with pytest.raises(IntegrityError), transaction.atomic():
         Book.objects.create(title="Dune", shelf=shelf)
+
+
+@pytest.mark.django_db
+def test_branch_note_str_and_proxy_targeted_relation():
+    """``BranchNote.branch`` is declared to the ``ProxyBranch`` proxy, not ``Branch``.
+
+    The forward side resolves to a proxy instance and the reverse ``notes``
+    accessor hangs off the proxy, while the rows live in the concrete
+    ``Branch`` table - the table identity the prefetch-child seal proves a
+    relation by.
+    """
+    branch = ProxyBranch.objects.create(name="Proxy Central", city="Boston")
+    note = BranchNote.objects.create(branch=branch, body="shelving audit")
+
+    assert str(note) == "shelving audit"
+    assert BranchNote._meta.get_field("branch").related_model is ProxyBranch
+    assert note.branch == branch
+    assert list(branch.notes.all()) == [note]
+    # The proxy reads the concrete parent's table, so the same row is a Branch.
+    assert Branch.objects.get(pk=branch.pk).name == "Proxy Central"

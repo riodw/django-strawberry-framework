@@ -1142,12 +1142,25 @@ async def _seed_three_shelves_async():
         )
 
 
-def _shelf_offset_schema():
+def _shelf_offset_schema(resolver=None):
     @strawberry.type
     class _ShelfQuery:
-        shelves: list[library_schema.ShelfType] = DjangoListField(library_schema.ShelfType)
+        shelves: list[library_schema.ShelfType] = DjangoListField(
+            library_schema.ShelfType,
+            resolver=resolver,
+        )
 
     return DjangoSchema(query=_ShelfQuery, config=strawberry_config())
+
+
+def _coin_case_ordering(lookup="coin__gt", threshold=0.5):
+    """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
+    return (
+        models.Case(
+            models.When(**{lookup: threshold}, then=models.Value(0)),
+            default=models.Value(1),
+        ),
+    )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1227,6 +1240,43 @@ async def test_async_offset_accepts_an_expression_reference_to_a_relation(
     shelf_sql = _record_table_sql(monkeypatch, "library_shelf")
 
     payload = await _post_async(_shelf_offset_schema(), _ASYNC_RELATION_DEFAULT_OFFSET)
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_rejects_a_conditional_order_over_a_random_predicate(monkeypatch):
+    """The async coloring reads both sides of a predicate the same way the sync one does."""
+    await _seed_three_shelves_async()
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", _coin_case_ordering())
+    shelf_sql = _record_table_sql(monkeypatch, "library_shelf")
+    schema = _shelf_offset_schema(
+        resolver=lambda root, info: library_models.Shelf.objects.alias(coin=Random()),
+    )
+
+    payload = await _post_async(schema, _ASYNC_RELATION_DEFAULT_OFFSET)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert shelf_sql == [], shelf_sql
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_accepts_a_conditional_order_over_a_column_alias_predicate(monkeypatch):
+    """The control for the row above: a predicate comparing a column alias still pages."""
+    await _seed_three_shelves_async()
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", _coin_case_ordering())
+    shelf_sql = _record_table_sql(monkeypatch, "library_shelf")
+    schema = _shelf_offset_schema(
+        resolver=lambda root, info: library_models.Shelf.objects.alias(coin=models.F("code")),
+    )
+
+    payload = await _post_async(schema, _ASYNC_RELATION_DEFAULT_OFFSET)
 
     assert "errors" not in payload, payload
     assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]

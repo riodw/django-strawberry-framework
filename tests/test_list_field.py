@@ -48,6 +48,7 @@ test_library_branches_via_djangolistfield_optimized_nested_selection``.
 import asyncio
 import contextlib
 import copy
+import datetime
 import gc
 import inspect
 import pickle
@@ -62,7 +63,8 @@ from apps.products import services
 from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db import models
-from django.db.models.functions import Random
+from django.db.models import Value
+from django.db.models.functions import Now, Random
 from django.test import RequestFactory
 from graphql import GraphQLError
 from strawberry.schema_directive import Location as _DirectiveLocation
@@ -1616,6 +1618,20 @@ def test_list_field_declined_sync_cleanup_generator_suspended():
     assert finally_ran is True
 
 
+#: A fixed aware instant a predicate can compare against without a clock in the statement.
+_PREDICATE_STAMP = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+
+
+def _predicate_ordering(lookup, threshold):
+    """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
+    return (
+        models.Case(
+            models.When(**{lookup: threshold}, then=Value(0)),
+            default=Value(1),
+        ),
+    )
+
+
 def test_order_term_classifier_rejects_a_non_expression_term():
     """A term with no source expressions is not a readable leaf.
 
@@ -1718,6 +1734,52 @@ def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(m
     monkeypatch.setattr(library_models.Branch._meta, "ordering", (Random(),))
 
     assert _is_model_default_ordering_active(library_models.Book.objects.all()) is True
+
+
+def test_order_predicate_classifier_refuses_an_unresolvable_reference(monkeypatch):
+    """A predicate naming neither an annotation nor a field is a reference nobody can read.
+
+    The comparison still reaches the statement, so a head this package cannot
+    resolve is refused rather than certified on the strength of its literal.
+    """
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(
+        library_models.Shelf._meta,
+        "ordering",
+        _predicate_ordering("nowhere__gt", "A"),
+    )
+
+    assert _is_model_default_ordering_active(library_models.Shelf.objects.all()) is False
+
+
+@pytest.mark.parametrize(
+    ("aliased", "expected"),
+    [(Value(_PREDICATE_STAMP, output_field=models.DateTimeField()), True), (Now(), False)],
+    ids=["readable-alias", "unreadable-alias"],
+)
+def test_order_predicate_classifier_reads_the_annotation_under_a_transform_chain(
+    monkeypatch,
+    aliased,
+    expected,
+):
+    """A lookup is a reference plus trailing lookups, and the reference is what decides.
+
+    ``stamp__year__gt`` names the annotation ``stamp`` under a ``year`` transform
+    and a ``gt`` lookup, so the verdict follows what ``stamp`` itself is: a
+    literal is readable, while a database function called at statement time is
+    not.
+    """
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(
+        library_models.Shelf._meta,
+        "ordering",
+        _predicate_ordering("stamp__year__gt", 2000),
+    )
+    queryset = library_models.Shelf.objects.alias(stamp=aliased)
+
+    assert _is_model_default_ordering_active(queryset) is expected
 
 
 @pytest.mark.django_db

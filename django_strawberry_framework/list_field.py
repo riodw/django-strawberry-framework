@@ -814,6 +814,47 @@ def _is_deterministic_order_value(
     return True
 
 
+def _is_deterministic_order_predicate_reference(
+    query: Any,
+    lookup: str,
+    opts: Any,
+    prefix: str,
+) -> bool:
+    """Classify the left-hand side of one ``(lookup, value)`` predicate child.
+
+    A lookup string is a reference followed by lookups and transforms, and
+    ``django/db/models/sql/query.py::Query.solve_lookup_type`` separates the two
+    the way a ``When`` condition is built: it asks
+    ``django/db/models/query_utils.py::refs_expression`` for the SHORTEST leading
+    run of pieces naming an annotation, and otherwise hands the whole string to
+    ``names_to_path``, which consumes as many leading pieces as resolve to fields
+    and leaves the rest as the lookup. So ``coin__gt`` is the annotation ``coin``
+    under a ``gt``, and ``code__gt`` is a column under the same one.
+
+    An annotation is classified like any other term, which is what refuses a
+    predicate comparing a random alias while accepting one comparing a column
+    alias. A field path is a column order and is NOT expanded into its related
+    model's ``Meta.ordering``: a reference is not a string ordering term, and
+    only the latter reaches the compiler's expansion. A head that names neither
+    is a reference this package cannot read, so the predicate is refused rather
+    than certified. ``opts`` and ``prefix`` scope the two resolutions the same
+    way they scope every other reference read inside an expansion.
+    """
+    pieces = lookup.split(LOOKUP_SEP)
+    for count in range(1, len(pieces) + 1):
+        referenced = f"{prefix}{LOOKUP_SEP.join(pieces[:count])}"
+        annotation = query.annotations.get(referenced)
+        if annotation is not None:
+            return _is_deterministic_order_term(query, annotation)
+        if referenced in query.extra:
+            return False
+    target = opts if opts is not None else query.get_meta()
+    return any(
+        _resolve_order_field_path(target, LOOKUP_SEP.join(pieces[:count])) is not None
+        for count in range(len(pieces), 0, -1)
+    )
+
+
 def _is_deterministic_order_condition(
     query: Any,
     condition: models.Q,
@@ -825,11 +866,22 @@ def _is_deterministic_order_condition(
 
     ``Case`` / ``When`` order by a value a ``Q`` selects, so the predicate is
     part of the ordering and is read the same way. A predicate's children are
-    either nested predicates or ``(lookup, value)`` pairs, and each value is
-    read for the SQL it carries at any depth a lookup can hold one.
+    either nested predicates or ``(lookup, value)`` pairs, and BOTH sides of
+    such a pair are compiled into the statement: the lookup names what is
+    compared as surely as the value names what it is compared against. Reading
+    only the value certifies a predicate that compares unreadable SQL to a
+    literal, which orders the rows by that SQL just as ordering on it directly
+    would - so the whole comparison is read, each side by its own rule, and the
+    value is read for the SQL it carries at any depth a lookup can hold one.
     """
     for child in condition.children:
-        value = child[1] if isinstance(child, tuple) else child
+        if not isinstance(child, tuple):
+            if not _is_deterministic_order_value(query, child, opts, seen, prefix):
+                return False
+            continue
+        lookup, value = child
+        if not _is_deterministic_order_predicate_reference(query, lookup, opts, prefix):
+            return False
         if not _is_deterministic_order_value(query, value, opts, seen, prefix):
             return False
     return True

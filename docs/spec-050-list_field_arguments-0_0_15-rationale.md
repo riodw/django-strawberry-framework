@@ -264,6 +264,12 @@ Spec: [Decision 6][spec-050-d6].
   resolves to a field certifies a default it never read and serves a positive offset over a
   result set the database re-shuffles. Reading the name as far as the compiler reads it is the
   same rule the annotation and `extra` steps already follow, one indirection further.
+- **Reading only the value side of a predicate:** A comparison has two operands and both are
+  compiled. A classifier that reads the value alone accepts `When(coin__gt=0.5)` over a random
+  alias while refusing `order_by("coin")`, which makes the predicate a spelling that buys what
+  the direct one is denied - the guard's rule is about the SQL the rows are ordered by, and a
+  bypass reachable by rewriting the same order as a condition is not a narrower rule but a
+  missing one.
 - **Reading an expression reference through that same expansion:** It is the mirror error, and
   it refuses requests Django answers deterministically. Only strings reach
   `find_ordering_name`; [`Query.resolve_ref`][django-query] resolves an `F` to a column and

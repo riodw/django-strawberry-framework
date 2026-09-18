@@ -493,14 +493,26 @@ query {
 """
 
 
-def _shelf_offset_page(monkeypatch, shelf_ordering, branch_ordering):
-    """Post the shelf page under the two ``Meta.ordering`` values and return it with its SQL."""
+def _shelf_offset_page(
+    monkeypatch,
+    shelf_ordering,
+    branch_ordering,
+    resolver=None,
+):
+    """Post the shelf page under the two ``Meta.ordering`` values and return it with its SQL.
+
+    ``resolver`` supplies the source queryset when a case needs one carrying query
+    state of its own, such as the alias a conditional ordering compares against.
+    """
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", shelf_ordering)
     monkeypatch.setattr(library_models.Branch._meta, "ordering", branch_ordering)
 
     @strawberry.type
     class _ShelfQuery:
-        shelves: list[library_schema.ShelfType] = DjangoListField(library_schema.ShelfType)
+        shelves: list[library_schema.ShelfType] = DjangoListField(
+            library_schema.ShelfType,
+            resolver=resolver,
+        )
 
     schema = DjangoSchema(query=_ShelfQuery, config=strawberry_config())
     with CaptureQueriesContext(connection) as captured:
@@ -591,6 +603,89 @@ def test_holder_offset_accepts_an_expression_reference_to_a_relation(monkeypatch
     _seed_three_shelves()
 
     payload, shelf_sql = _shelf_offset_page(monkeypatch, shelf_ordering, (Random(),))
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+def _coin_case_ordering(lookup="coin__gt", threshold=0.5):
+    """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
+    return (
+        models.Case(
+            models.When(**{lookup: threshold}, then=models.Value(0)),
+            default=models.Value(1),
+        ),
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "carry",
+    [lambda qs: qs.alias(coin=Random()), lambda qs: qs.annotate(coin=Random())],
+    ids=["alias", "annotate"],
+)
+def test_holder_offset_rejects_a_conditional_order_over_a_random_predicate(monkeypatch, carry):
+    """A predicate compares two sides, and the side it compares FROM is ordering SQL too.
+
+    A ``Case`` picking its value by ``coin__gt`` orders the rows by whatever
+    ``coin`` is, exactly as ordering on ``coin`` directly would. Reading only the
+    value a lookup compares against certifies a random alias as an ordinary
+    comparison against a literal, which is the same re-shuffled page the direct
+    spelling is refused for.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(
+        monkeypatch,
+        _coin_case_ordering(),
+        ("name",),
+        resolver=lambda root, info: carry(library_models.Shelf.objects.all()),
+    )
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert shelf_sql == []
+
+
+@pytest.mark.django_db
+def test_holder_offset_accepts_a_conditional_order_over_a_column_alias_predicate(monkeypatch):
+    """The control for the row above: the predicate is read, not assumed unreadable.
+
+    The same conditional ordering over an alias naming a column compares one
+    column against a literal, which is as repeatable as ordering on that column.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(
+        monkeypatch,
+        _coin_case_ordering(),
+        ("name",),
+        resolver=lambda root, info: library_models.Shelf.objects.alias(coin=models.F("code")),
+    )
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+def test_holder_offset_accepts_a_conditional_order_over_a_plain_column_predicate(monkeypatch):
+    """A predicate naming a model column needs no alias to be readable, and still pages."""
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(
+        monkeypatch,
+        _coin_case_ordering(lookup="code__gt", threshold="A"),
+        ("name",),
+    )
 
     assert "errors" not in payload, payload
     assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]

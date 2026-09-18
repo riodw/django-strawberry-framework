@@ -1208,10 +1208,21 @@ the compiler hands through as `RawSQL` - is unreadable for the same reason: thos
 passed through verbatim and reading SQL is the thing this package does not do. An `extra`
 ordering naming a real field is still an ordinary column order and still satisfies the guard,
 as does a conditional order whose predicate and results are themselves columns and literals.
-A predicate is read to the depth a lookup can carry SQL, not just at its top level: a lookup
-taking a sequence holds its operands one bracket deeper - `name__in` a list, `created__range`
-a pair - and the container itself resolves as no expression at all, so a predicate read only
-at its top level reports a fragment boxed inside one as a comparison against literals.
+A predicate is read on BOTH sides of every comparison, and on the value side to the depth a
+lookup can carry SQL. The lookup string names what is compared, and that reference is compiled
+into the statement exactly as the value it is compared against is, so a `Case` picking its
+result by `coin__gt` orders the rows by whatever `coin` is - reading only the value certifies
+a random alias as an ordinary comparison against a literal and hands back the very page
+ordering on `coin` directly is refused for. The lookup is separated into reference and lookups
+the way [`django/db/models/sql/query.py::Query.solve_lookup_type`][django-query] separates them
+when a `When` condition is built: the SHORTEST leading run of pieces naming an annotation wins,
+and otherwise as many leading pieces as resolve to fields are the reference and the rest are
+lookups and transforms. An annotation is classified like any other term, a field path is a
+column order and is not expanded into its related model's default (a reference is not a string
+ordering term), and a head naming neither is refused. On the value side a lookup taking a
+sequence holds its operands one bracket deeper - `name__in` a list, `created__range` a pair -
+and the container itself resolves as no expression at all, so a predicate read only at its top
+level reports a fragment boxed inside one as a comparison against literals.
 The shared post-apply seal rejects consumer-defined expression classes as untrusted query
 state. For compositions of readable leaves that pass the seal, volatility in what the
 database makes of them remains the schema author's responsibility under Decision 7's
@@ -2033,9 +2044,14 @@ weakens no obligation, it only names which card carries it. See the
   refused as unreadable rather than accepted for matching no known random class. A
   composition of columns and literals is read end to end and satisfies the guard, including a
   conditional order's predicate and the slots an aggregate leaves unfilled.
-- A conditional order's predicate is read to the depth a lookup can carry SQL. A fragment
-  inside a sequence a lookup takes - `name__in`, `created__range` - is refused, while a
-  sequence of ordinary literals is as readable as one literal and satisfies the guard.
+- A conditional order's predicate is read on BOTH sides of every comparison, and on the value
+  side to the depth a lookup can carry SQL. The lookup's reference is separated from its
+  trailing lookups and transforms the way the compiler separates them: an annotation reference
+  carries that annotation's verdict, so `coin__gt` over `alias(coin=Random())` is refused while
+  the same predicate over `alias(coin=F("code"))` is served; a field-path reference such as
+  `code__gt` is a column order; a head naming neither is refused. A fragment inside a sequence a
+  lookup takes - `name__in`, `created__range` - is refused, while a sequence of ordinary
+  literals is as readable as one literal and satisfies the guard.
 - Reversing a stable model default remains stable; `standard_ordering=False` changes direction
   and does not by itself disable the fallback.
 - A to-many model default may duplicate parent instances; offset counts SQL result rows.
@@ -2315,6 +2331,17 @@ the shipped SDL.
     read through to its target's default, a chain of two relations whose far end decides the
     verdict, an `F` naming a random annotation still refused, and a reference lifted out of an
     expansion still read as a column.
+    The predicate's left-hand side is pinned live in both colorings on the same holder, because
+    a resolver supplying the alias is what a conditional predicate compares against: a `Case`
+    picking its result by `coin__gt` over a source carrying `alias(coin=Random())` - and over
+    the `annotate` spelling of the same alias, which compiles identically - is refused with no
+    row SQL, while its two controls are served with the raised low mark and no random function:
+    the same predicate over `alias(coin=F("code"))`, and one naming a model column outright
+    (`code__gt`) with no alias at all. Without those controls a guard refusing every predicate
+    it had to resolve would keep the rejection green. The package tier carries the reference
+    forms with no second wire spelling: a head that names neither an annotation nor a field, and
+    a transform chain (`stamp__year__gt`) whose verdict follows the annotation it names, in both
+    directions.
 28. A live async request whose deadline expires after its resolver has obtained an async-only
     source closes that source exactly once and advances it zero times, for the default window
     and for `limit: 0` alike, with the complete `execution_deadline_seconds` extensions on the
@@ -2894,7 +2921,10 @@ structural checks, and link/kanban verification prescribed by
       while the foreign key column named directly does not, and a relation walk Django rejects
       as an infinite loop is refused rather than followed; an expression reference to that same
       relation does NOT expand, resolving to the foreign key column, so it still backs the
-      window. Empty/null order input, cleared or
+      window. A conditional order's predicate is read on both sides, so the reference a lookup
+      compares FROM disqualifies the request exactly as the value compared against does and a
+      random alias cannot be laundered through `When(coin__gt=...)`. Empty/null order input,
+      cleared or
       replaced model ordering, random ordering, grouping that suppresses the default, and
       opaque Python iterables cannot fake the condition. The shipped contract is stated as
       ORDERED OFFSET; no spec, docstring, glossary, or error text promises a stable or

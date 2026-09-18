@@ -3,11 +3,12 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: WIP. The prior close record is superseded because it described a tree that is not the
-current candidate and treated a future maintainer commit as an existing identity. No current
-default, sharded, supported-floor, or adversarial-review result is evidence for this checkout.
-The candidate and evidence-only follow-up protocol in spec Decision 22 must run before the card
-can close. What the gate covers, beyond the five slices:
+Status: Candidate. This tree is the candidate implementation commit of spec Decision 22: the
+production and test changes, the shipped docs, the board's DONE transition, the spec status and
+every generated output are in it, and it is the tree every gate result and review conclusion
+must name. No gate, review or evidence-only follow-up has run against it yet, so no result
+recorded anywhere is evidence for it, and the card is not closed. What the gate covers, beyond
+the five slices:
 
 - the policy-authority remediation - the object every bound is read from is no longer
   reachable from any consumer-visible name, a policy subclass is canonicalized at schema
@@ -68,9 +69,12 @@ live rows in [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-
 both SQLite databases carrying the migration. The migration is a new tracked path, so the
 tracked-path constants and the generated tree move with it and are regenerated on the candidate.
 The offset guard's ordering classifier certifies only named forms: transparent compositions,
-readable leaves, and exact-type approved Django functions, aggregates, transforms and lookups,
-with a relation string expanded into the related model's default and both sides of a predicate
-read; every custom or subclassed node is refused ([`spec-050`][spec-050] Decision 6).
+readable leaves, the `F` and `Q` reference forms, and exact-type approved Django functions,
+aggregates, transforms and lookups, with a relation string expanded into the related model's
+default and both sides of a predicate read. Which arm a term takes is decided by
+`resolve_expression`, the order the compiler dispatches in, and every custom or subclassed
+node is refused - a subclass of `F` or of `Q` for the resolution it substitutes, as a subclass
+of an approved function is for the SQL it substitutes ([`spec-050`][spec-050] Decision 6).
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).
@@ -80,6 +84,8 @@ read; every custom or subclassed node is refused ([`spec-050`][spec-050] Decisio
   - Spec byte count before: 147,842 bytes (2,056 lines)
   - Spec byte count after: 141,617 bytes (1,979 lines)
   - Rationale byte count: 20,524 bytes (342 lines)
+  - Subject of those three figures: the pre-flight tree, measured before any slice ran. They
+    are not measurements of the candidate, whose own counts are taken at the candidate parent.
 
 ## Slices
 
@@ -135,72 +141,76 @@ read; every custom or subclassed node is refused ([`spec-050`][spec-050] Decisio
         tracked-path constants after the path is in the index so governance sees the file.
   - [x] Add the new suite and its shared-helper exemption to
         `examples/fakeshop/test_query/README.md`.
-- [ ] **Slice 5 — documentation fold-in**
+- [x] **Slice 5 — documentation fold-in**
   - [x] Update the list-field docstring and the shipped-surface descriptions in
         `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, and `README.md` where the new
         arguments are enumerated.
   - [x] Update `ResourcePolicy` and bounding-helper docstrings to distinguish returned/skip
         ceilings from total database rows scanned.
-  - [ ] Update the KANBAN database and the current-checkout statements in `TODAY.md` when the
-        candidate implementation commit carries the final board transition; the pre-candidate
-        generated outputs and milestone statements remain WIP.
+  - [x] Update the KANBAN database and the current-checkout statements in `TODAY.md` when the
+        candidate implementation commit carries the final board transition; the board moves to
+        `done` with its transition row, `TODAY.md` drops the three statements that divergence
+        falsified, and the generated exports are rebuilt from the carved database.
   - [x] Leave the version literal, version assertion, package-version glossary row, release
         wording, and `CHANGELOG.md` to card 053's joint cut; `pyproject.toml` and `uv.lock`
         have no duplicate root-package version to bump.
 - [x] **Cross-slice integration pass (Worker 1)**
-- [ ] **Final exact-commit gate** — the maintainer must create the candidate implementation
-      commit, then run the default, sharded, supported-floor, structural and documentation gates
-      on that exact candidate.
+- [ ] **Final exact-commit gate** — the candidate implementation commit is this one; the
+      default, sharded, supported-floor, structural and documentation gates still owe a run
+      against it, and their figures belong in the evidence-only follow-up.
 
 ## Final gate record
 
-No gate is currently recorded. The prior close evidence is superseded because it did not identify
-the tree that the full suites and review actually covered, and a tracked record cannot name the
-commit that contains the record itself.
+No gate is recorded. The candidate tree now exists - this commit - and a tracked record cannot
+name the commit that contains the record itself, so the figures belong in the follow-up
+described below and nowhere else. The prior close evidence stays superseded because it did not
+identify the tree that the full suites and review actually covered.
 
-The maintainer's next close uses two commits:
+The close uses two commits:
 
 1. The candidate implementation commit contains all production and test changes, shipped docs,
-   the final board/database transition, the spec status, and generated outputs. The current
-   pre-candidate checkout stays WIP; the candidate atomically carries the board's DONE state.
-   Its commit id is the exact tree for every default, sharded, supported-floor, structural, link,
-   citation, tracked-path and adversarial-review result.
+   the final board/database transition, the spec status, and generated outputs. It atomically
+   carries the board's DONE state. Its commit id is the exact tree for every default, sharded,
+   supported-floor, structural, link, citation, tracked-path and adversarial-review result, none
+   of which has been produced against it.
 2. After a green gate and a review that admits no finding under Decision 20, an evidence-only
    follow-up commit changes this build record alone. Its parent must be the gated candidate; the
    record must name that parent, list the commands and results, and say that the follow-up's
    structural checks do not turn it into the full-suite tree.
 
-This pre-candidate checkout remains WIP until the candidate commit exists. The candidate's DONE
-board state is not treated as closure evidence until the exact-tree gate, review and evidence-only
-follow-up are complete. No result from another tree is carried forward as current evidence.
+The candidate's DONE board state is not treated as closure evidence until the exact-tree gate,
+review and evidence-only follow-up are complete. No result from another tree is carried forward
+as current evidence, and a suite run on the working tree that produced this commit is a run on
+another tree.
 
 ### Board database state
 
 The tracked SQLite file is one binary, so Git cannot stage card-owned tables separately from a
-concurrent owner's rows. The earlier reconstruction from `HEAD` therefore was not a safe carve:
-it removed the concurrent library data. The workspace now carries that data back in the real
-tracked file, rather than leaving the only copy in `/private/tmp`:
+concurrent owner's rows. The candidate's database is therefore CARVED rather than staged: it is
+`HEAD`'s blob with card 050's own rows applied to it and nothing else -
 
-- `library_book`: 20 rows and sequence `23`;
-- `library_branch`: 7 rows and sequence `10`;
-- `library_loan`: 16 rows and sequence `16`;
-- `library_patron`: 6 rows and sequence `6`;
-- `library_shelf`: 7 rows and sequence `8`.
+- `kanban_card` id `73`: status `wip` to `done`;
+- `kanban_carditem` id `1519`: the last incomplete definition-of-done bullet, complete;
+- `kanban_cardtransition`: one new row recording the move, with its uuid-registry row and the
+  table's sequence bump;
+- `glossary_glossaryterm` ids `583`, `584` and `585`: the three terms this card ships - the
+  list-argument rejection, the async queryset completion adapter and the offset order
+  precondition - from `planned for 0.0.15` to `shipped`, with the two bodies that read as
+  future work restated in the present.
 
-The concurrent timestamp-only changes in `glossary_glossaryspecmention` and
-`kanban_cardglossaryterm` are present as well. Card 050's own glossary bodies remain in
-`glossary_glossaryterm` ids `442`, `455`, `459`, `465`, `507`, and `553`; its board state remains
-WIP (`kanban_card` id `73`, status WIP, and `kanban_carditem` id `1519`, incomplete). The merged
-database passes `PRAGMA integrity_check` and `PRAGMA foreign_key_check`; a semantic comparison
-with the dirty source differs only in those two deliberate WIP fields.
+The kanban and glossary tables were identical between `HEAD` and the concurrent working copy
+before the carve, so no concurrent row could ride along: a per-table `.dump` comparison against
+`HEAD` shows differing lines in those tables alone, and `PRAGMA integrity_check` and
+`PRAGMA foreign_key_check` both pass on the result. Card 050's other glossary bodies were
+already committed at `HEAD` in `glossary_glossaryterm` ids `442`, `455`, `459`, `465`, `507`
+and `553`, so the carve adds nothing there.
 
-This is a WIP workspace state, not a disentangled candidate. Until the concurrent database owner
-lands the library change or provides a coordinated merge point, card 050 cannot safely commit
-`examples/fakeshop/db.sqlite3` as its own candidate input: the same binary would absorb both
-owners' rows, even though the board transition and glossary edits are card-owned. The generated
-`KANBAN.md`, `KANBAN.html`, and `docs/GLOSSARY.md` therefore remain WIP outputs to regenerate at
-the coordinated candidate step. Card 050's final DONE transition belongs in the later candidate
-commit; closure is recognized only in the evidence-only follow-up described above.
+The concurrent owner's library, auth, session, products and migration rows stay in the working
+copy and are not in this commit. `KANBAN.md`, `KANBAN.html` and `docs/GLOSSARY.md` are
+regenerated from the carved database and `docs/TREE.md` re-renders byte-identical; the same
+card-owned rows were then applied to the shared working copy, so a render from either database
+produces the same bytes and the concurrent owner cannot revert the transition by regenerating
+from the checkout they hold.
 
 ### Floor-verification scope
 
@@ -373,9 +383,9 @@ on one identified tree, then one review of that tree under Decision 20, then the
       `docs/builder/bld-050-close-trust_docs.md`.
 - [x] **Spec reconciliation and final verification (Worker 1)** - five homes agree; rationale
       change record; both cohort artifacts are superseded historical records.
-- [ ] **Gate on one candidate implementation commit** - default suite at `fail_under = 100`,
-      sharded suite, the twenty-five-path floor scope, hooks, citations, tracked-path constants,
-      `manage.py check`, and `makemigrations --check --dry-run`.
+- [ ] **Gate on one candidate implementation commit** - this commit; default suite at
+      `fail_under = 100`, sharded suite, the twenty-five-path floor scope, hooks, citations,
+      tracked-path constants, `manage.py check`, and `makemigrations --check --dry-run`.
 - [ ] **One review of that exact candidate tree under Decision 20** - record the review conclusion
       only after the candidate gate is complete; a finding meeting the three conditions re-loops.
 - [ ] **Evidence-only follow-up and card** - the candidate carries card 050's final DONE state in

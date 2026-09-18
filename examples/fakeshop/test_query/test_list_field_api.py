@@ -769,6 +769,118 @@ def test_holder_offset_reads_an_expression_by_its_approved_form(monkeypatch, ord
     assert _RANDOM_ORDER_SQL not in statement, statement
 
 
+class _ProjectF(models.F):
+    """A reference subclass that resolves to SQL of its own instead of to the name it holds."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+
+class _ProjectQ(models.Q):
+    """A predicate subclass that resolves to SQL of its own instead of to its children."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+
+class _ProjectName(str):
+    """A string subclass Django reads as an expression because it carries the method."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+    def asc(self):
+        return OrderBy(Random())
+
+
+def _case_ordering_over(condition):
+    """A conditional ordering whose ``When`` is built from a predicate object."""
+    return (
+        models.Case(
+            models.When(condition, then=models.Value(0)),
+            default=models.Value(1),
+        ),
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("ordering", "served"),
+    [
+        ((_ProjectF("code"),), False),
+        ((_ProjectName("code"),), False),
+        ((models.F("code"),), True),
+    ],
+    ids=["reference-subclass", "name-that-resolves", "reference"],
+)
+def test_holder_offset_reads_a_term_by_the_form_it_resolves_into(monkeypatch, ordering, served):
+    """A reference is read by its exact type, and an expression is never read as a name.
+
+    ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` asks a term
+    for ``resolve_expression`` before it reads anything as a string, so what the
+    term resolves to is what the rows come back in. A subclass of ``F`` resolves
+    to whatever it likes while still holding an ordinary column name, and a
+    ``str`` subclass carrying that method is an expression wearing a field path.
+    Neither is the reference this package can read, while ``F`` itself still
+    pages.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(monkeypatch, ordering, ("name",))
+
+    if not served:
+        err = payload["errors"][0]
+        assert err["extensions"]["reason"] == "order_required"
+        assert err["extensions"]["argument"] == "offset"
+        assert shelf_sql == []
+        return
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("condition", "served"),
+    [(_ProjectQ(code__gt="A"), False), (models.Q(code__gt="A"), True)],
+    ids=["predicate-subclass", "predicate"],
+)
+def test_holder_offset_reads_a_conditional_predicate_by_its_exact_type(
+    monkeypatch,
+    condition,
+    served,
+):
+    """A ``When`` compiles whatever its condition resolves to, subclass or not.
+
+    ``Case`` / ``When`` is an approved composition, so the predicate inside it is
+    the only thing standing between an approved wrapper and arbitrary SQL. A
+    subclass of ``Q`` hands the compiler an expression of its own in place of the
+    children this package reads, which orders the rows by that expression - while
+    the same conditional ordering over ``Q`` itself pages as a comparison between
+    a column and a literal.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(monkeypatch, _case_ordering_over(condition), ("name",))
+
+    if not served:
+        err = payload["errors"][0]
+        assert err["extensions"]["reason"] == "order_required"
+        assert err["extensions"]["argument"] == "offset"
+        assert shelf_sql == []
+        return
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "CASE WHEN" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     "lookup_class",
@@ -820,6 +932,103 @@ def test_holder_offset_accepts_a_predicate_chain_of_approved_forms(monkeypatch):
         resolver=lambda root, info: library_models.Shelf.objects.alias(stamp=stamp),
     )
 
+    assert "errors" not in payload, payload
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "CASE WHEN" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "ordering",
+    [(models.F("coin"),), _coin_case_ordering()],
+    ids=["reference", "predicate"],
+)
+def test_holder_offset_refuses_a_reference_naming_an_extra_select_alias(monkeypatch, ordering):
+    """A name that resolves into ``extra`` is raw SQL wherever the reference stands.
+
+    ``extra(select=...)`` strings are handed to the database verbatim, so a
+    reference naming one says nothing about what the rows are ordered by -
+    whether it arrives as the ordering term itself or as the side a conditional
+    predicate compares from.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(
+        monkeypatch,
+        ordering,
+        ("name",),
+        resolver=lambda root, info: library_models.Shelf.objects.extra(select={"coin": "1"}),
+    )
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert shelf_sql == []
+
+
+@pytest.mark.django_db
+def test_holder_offset_accepts_a_predicate_chain_ending_in_a_transform(monkeypatch):
+    """A chain whose last piece is a transform is compared under Django's implicit ``exact``.
+
+    ``stamp__year`` names no lookup at all: the year is a transform, and the
+    comparison Django builds around it is the equality it falls back to. The
+    approved-form boundary therefore has to read the fallback as well, or an
+    ordinary conditional sort over a date part is refused for the shape of its
+    lookup string.
+    """
+    _seed_three_shelves()
+    stamp = models.Value(
+        datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC),
+        output_field=models.DateTimeField(),
+    )
+
+    payload, shelf_sql = _shelf_offset_page(
+        monkeypatch,
+        _coin_case_ordering(lookup="stamp__year", threshold=2020),
+        ("name",),
+        resolver=lambda root, info: library_models.Shelf.objects.alias(stamp=stamp),
+    )
+
+    assert "errors" not in payload, payload
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "CASE WHEN" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("nested", "served"),
+    [(models.Q(code__lt="Z", coin__gt=0.5), False), (models.Q(code__lt="Z", code__gte="B"), True)],
+    ids=["nested-random", "nested-columns"],
+)
+def test_holder_offset_reads_a_predicate_nested_inside_a_predicate(monkeypatch, nested, served):
+    """A predicate's child can be another predicate, and it carries the same SQL.
+
+    Django keeps a combined ``Q`` whose own connector differs as a child node
+    rather than flattening it, so a comparison written one bracket deeper is
+    read at that depth - the random alias inside it orders the rows exactly as
+    it would at the top level, while columns inside it still page.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(
+        monkeypatch,
+        _case_ordering_over(models.Q(code__gt="A") | nested),
+        ("name",),
+        resolver=lambda root, info: library_models.Shelf.objects.alias(coin=Random()),
+    )
+
+    if not served:
+        err = payload["errors"][0]
+        assert err["extensions"]["reason"] == "order_required"
+        assert err["extensions"]["argument"] == "offset"
+        assert shelf_sql == []
+        return
     assert "errors" not in payload, payload
     assert len(shelf_sql) == 1
     statement = shelf_sql[0].upper()

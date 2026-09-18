@@ -1633,10 +1633,11 @@ def _predicate_ordering(lookup, threshold):
 
 
 def test_order_term_classifier_rejects_a_non_expression_term():
-    """A term with no source expressions is not a readable leaf.
+    """A term that is neither an expression nor a name is not a readable leaf.
 
     GraphQL never supplies an ``int`` as an ordering term; the classifier still
-    has to fail closed rather than treating ``getattr(..., None)`` as certified.
+    has to fail closed on a term matching neither arm rather than fall through
+    to a verdict.
     """
     from django_strawberry_framework.list_field import _is_deterministic_order_term
 
@@ -1743,6 +1744,27 @@ class _SubclassedLower(Lower):
         return "RANDOM()", []
 
 
+class _SubclassedF(models.F):
+    """A subclass of the reference form: an ordinary name over a different resolution."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+
+class _SubclassedQ(models.Q):
+    """A subclass of the predicate form, resolving to SQL instead of to its children."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+
+class _ResolvingName(str):
+    """A field path that is an expression, because it carries ``resolve_expression``."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+
 @pytest.mark.parametrize(
     ("term", "expected"),
     [
@@ -1752,6 +1774,11 @@ class _SubclassedLower(Lower):
         (models.Count("*"), True),
         (models.Sum("id"), False),
         (models.Window(RowNumber()), False),
+        (models.F("code"), True),
+        (_SubclassedF("code"), False),
+        (models.Q(code__gt="A"), True),
+        (_SubclassedQ(code__gt="A"), False),
+        (_ResolvingName("code"), False),
     ],
     ids=[
         "approved-function",
@@ -1760,6 +1787,11 @@ class _SubclassedLower(Lower):
         "row-count",
         "unapproved-aggregate",
         "window",
+        "reference",
+        "subclass-of-reference",
+        "predicate",
+        "subclass-of-predicate",
+        "name-that-resolves",
     ],
 )
 def test_order_term_classifier_admits_only_named_forms(term, expected):
@@ -1768,7 +1800,12 @@ def test_order_term_classifier_admits_only_named_forms(term, expected):
     An expression's sources say nothing about the SQL it wraps them in, and a
     subclass of a pure function carries an ``as_sql`` of its own under an
     approved name - so membership is by exact type, and a form nobody listed is
-    refused however ordinary its children look.
+    refused however ordinary its children look. The two reference forms are
+    matched exactly for the same reason one step earlier: a subclass of ``F`` or
+    of ``Q`` resolves to an expression of its own, whatever name or children it
+    was built with. Which arm a term takes is decided by ``resolve_expression``
+    the way the compiler decides it, so a ``str`` carrying that method is read as
+    the expression it resolves to and never as the field path it spells.
     """
     from django_strawberry_framework.list_field import _is_deterministic_order_term
 

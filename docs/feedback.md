@@ -1,201 +1,179 @@
-# Adversarial review: spec-050 current candidate
+# Adversarial review: spec-050 current tree
 
 Date: 2026-09-18
 
-Verdict: **the isolation, relation-expansion, predicate-LHS, evaluated-queryset, and
-manager fixes are materially better, but this candidate still has one wire-reachable
-ordering-certification bypass and is not closeable yet.** The bypass is in the same
-Decision 6 contract, not a theoretical hostile-object concern. The build record also
-still correctly says WIP: the exact-tree gate has not been run and the checkout carries
-an uncommitted database change.
+Verdict: **not ready to close.** The recent expression whitelist work fixed the
+generic `Func`/`Transform` recursion problem, but the exact-type boundary is not
+propagated to the two reference forms that can still carry arbitrary compiler
+behavior. Both bypasses are reachable from an ordinary Django model declaration
+and a normal positive-offset GraphQL request. Independently, the checkout is still
+the WIP/pre-candidate tree described by the build record, so it cannot yet provide
+release evidence.
 
-I reviewed the current `HEAD` (`02e266df`) and the current working tree. I did not run
-pytest, per the repository rule. I did run direct Django/HTTP probes in fresh Python
-processes, plus the structural tracked-path and tree checks that do not execute pytest.
+I reviewed the current `HEAD` (`ccf46e11`), the complete spec, the build record, the
+classifier and its package/live tests. I also ran fresh Django probes against the
+current code. I did not run pytest, per the repository rule. The non-pytest
+governance checks currently pass: glossary consistency (43 terms), citations (1,121
+resolved), generated tree freshness, and tracked-path constants.
 
-## P1-1 — Generic expression recursion certifies custom SQL as deterministic
+## P1-1 — `F` and `Q` subclasses bypass the exact approved-node boundary
 
-**Broken contract:** spec-050 Decision 6 says a positive offset is allowed only when
-the selected order can be read down to columns and literals. It explicitly says that
-`Func`, `RawSQL`, `Subquery`, and other SQL the classifier cannot read must be refused,
-and Test plan row 27 requires the refusal to be observable before row SQL. The same
-contract applies to a model default selected after visibility; it is not limited to
-`OrderSet.apply_*` output.
+**Broken contract.** Spec-050 Decision 6 defines positive certification as an
+explicit whitelist of exact approved forms and says that *any subclass of an
+approved class is refused*. The same rule appears in the Decision 6 edge cases,
+the Slice 2 acceptance rule, Test plan row 27, and the build inventory. A model
+default that is certified as stable must therefore not emit SQL whose ordering
+semantics this package cannot inspect.
 
-**Supported project shape:** Django's public expression API permits a project to put a
-custom `Func` or `Transform` in `Meta.ordering`. This does not require a private Django
-write, a forged queryset, or a malicious GraphQL scalar. The application owns the model
-and registers the expression in ordinary Python.
+**Supported project shape and wire input.** Django applications may declare custom
+expression subclasses in ordinary model Python and place them in `Meta.ordering`.
+No private queryset mutation, forged GraphQL value, or unsupported transport is
+needed. A client then sends the normal list-field request:
 
-**Wire input:** a normal `DjangoListField` request with a positive `offset` and a
-`limit`, for example `{ shelves(offset: 1, limit: 1) { code } }`. The resolver can be
-the ordinary `Shelf.objects.all()` resolver used by the fakeshop holder probes.
-
-### Reproduction A: a custom `Func` with a readable child
-
-```python
-class Volatile(Func):
-    function = "RANDOM"
-
-    def as_sql(self, compiler, connection, **kwargs):
-        return "RANDOM()", []
-
-Shelf._meta.ordering = (Volatile(F("code")),)
+```graphql
+{ shelves(offset: 1, limit: 1) { code } }
 ```
 
-The current `_is_deterministic_order_term` sees a non-empty
-`get_source_expressions()` result, recursively certifies the child `F("code")`, and
-returns `True`. It never certifies the SQL emitted by `Volatile`. The direct helper
-reported `True`; the synchronous HTTP request was served with:
+### Reproduction A: an `F` subclass
+
+```python
+class VolatileF(models.F):
+    def resolve_expression(
+        self, query=None, allow_joins=True, reuse=None,
+        summarize=False, for_save=False,
+    ):
+        return Random()
+
+class ProbeShelf(models.Model):
+    code = models.CharField(max_length=100)
+
+    class Meta:
+        app_label = "probe050"
+        managed = False
+        db_table = "library_shelf"
+        ordering = (VolatileF("code"),)
+```
+
+The public model declaration reached a real `DjangoListField`/`DjangoSchema`
+request. The classifier returned `True`, the response was successful, and the
+captured row query contained:
 
 ```sql
-ORDER BY RANDOM() ASC LIMIT 1 OFFSET 1
+ORDER BY RAND() ASC LIMIT 1 OFFSET 1
 ```
 
-The asynchronous HTTP request was also served successfully with the same random
-ordering. The guard did not return `order_required`, and row SQL was executed.
+The implementation takes this path in
+`django_strawberry_framework/list_field.py::_is_deterministic_order_term`: the
+`isinstance(term, models.F)` branch trusts the name and never asks what the
+subclass's `resolve_expression` returns.
 
-### Reproduction B: a custom `Transform` hidden in a conditional predicate
+### Reproduction B: a `Q` subclass inside a conditional ordering
 
 ```python
-class Jitter(Transform):
-    lookup_name = "jitter"
-    output_field = models.FloatField()
+class VolatileQ(models.Q):
+    def resolve_expression(self, query, *args, **kwargs):
+        return Random()
 
-    def as_sql(self, compiler, connection):
-        return "RANDOM()", []
-
-models.TextField.register_lookup(Jitter)
-Shelf._meta.ordering = (
-    Case(When(code__jitter__gt=0.5, then=Value(0)), default=Value(1)),
+ordering = (
+    models.Case(
+        models.When(VolatileQ(code__gt="x"), then=models.Value(0)),
+        default=models.Value(1),
+    ),
 )
 ```
 
-The current `_is_deterministic_order_predicate_reference` finds `code` as a valid
-field head and accepts the remaining transform/lookup suffix without classifying the
-transform. The helper again reported `True`; the live SQL was:
+The current classifier again returned `True`, while Django compiled the selected
+ordering as:
 
 ```sql
-ORDER BY CASE WHEN RANDOM() > 0.5 THEN 0 ELSE 1 END ASC
-             LIMIT 1 OFFSET 1
+ORDER BY CASE WHEN RAND() THEN 0 ELSE 1 END ASC
 ```
 
-This is the same failure mode as the earlier random-alias predicate defect, but it is
-now past the alias check: the unreadable SQL is supplied by a standard Django
-transform rather than by an annotation alias.
+The `isinstance(term, models.Q)` branch has the same flaw. This is a second spelling
+of the same contract breach, not a hypothetical extension of the first example:
+`Q` is a public Django predicate class and `Case`/`When` is an approved transparent
+composition in the spec.
 
-### Root cause
+### Root cause and required fix
 
-The generic branch in `django_strawberry_framework/list_field.py::_is_deterministic_order_term`
-uses “has source expressions” as a proxy for “transparent composition.” That is not a
-Django contract. `Func`, `Transform`, `Aggregate`, `Window`, and consumer expression
-subclasses can all have readable children while their own compiler method contributes
-arbitrary SQL. The predicate reader has the same gap: it separates a field/annotation
-head from trailing pieces but does not establish that each trailing transform is a
-known, deterministic operation.
+The whitelist is exact for the expression sets, but the two early reference arms
+still use subclass admission. Replace those arms with exact-type checks (or an
+equivalent identity check) so only `type(term) is models.F` and `type(term) is
+models.Q` enter the reference/predicate logic. A subclass must fall through to the
+unapproved-node refusal before any consumer override can run. Do not add deny-list
+names for `Random`, and do not rely on inspecting a subclass's method or source
+expressions: the contract is exact approved identity.
 
-This is not an application-code trust-boundary exception. The project is trusted to
-declare a model default, but the list-field contract still promises not to certify an
-order it cannot read. A page that spans two executions under `RANDOM()` is a concrete
-violation of that promise.
+Add the missing evidence in the same change:
 
-### Required root fix
+- package classifier cases for exact `models.F`/`models.Q` acceptance and custom
+  subclasses' refusal;
+- synchronous and asynchronous live `/graphql` rows for both model-default shapes,
+  each asserting `order_required` and zero row SQL, beside stable controls;
+- a conditional-order row proving the `Q` subclass is rejected through the predicate
+  path, including the normal `Case`/`When` composition;
+- Decision 6, its edge cases, Test plan row 27, the Slice 2 checklist, and the build
+  inventory updated to name this exact boundary.
 
-1. Replace the generic source-expression recursion with an explicit classifier for the
-   expression forms the package has decided are transparent. Unknown expression nodes,
-   custom `Func`/`Transform`/`Aggregate`/`Window` subclasses, and any node whose own
-   compiler contributes SQL must fail closed. Do not fix this by adding another
-   `Random` class name to a deny-list.
-2. Keep the existing positive handling for the deliberately supported forms (`F`,
-   `OrderBy`, `Case`/`When`, readable leaves, and the relation-string expansion), but
-   make the exact/approved node boundary explicit. If a built-in function such as a
-   deterministic `Lower` or `Cast` is to remain accepted, name and test it as an
-   approved form; otherwise reject it as opaque. The rule must not depend on the
-   function's runtime name or on whether its children happen to be readable.
-3. In `_is_deterministic_order_predicate_reference`, distinguish a field/annotation
-   reference from its trailing lookups and transforms. A transform suffix is not a
-   certified column reference unless it is one of the explicitly approved forms. The
-   same rule must hold when the head is an annotation, and when a reference is lifted
-   through a related-model ordering prefix.
-4. Add both sync and async live `/graphql` rows in
-   `examples/fakeshop/test_query/test_list_field_api.py` and
-   `examples/fakeshop/test_query/test_list_field_async_api.py` for the two reproductions:
-   each must return `order_required`, execute no model-row SQL, and sit beside a
-   deterministic control. Add package-level classifier tests for the exact expression
-   boundary and for an approved deterministic form if one is retained.
-5. Amend Decision 6, its edge-case bullets, rationale, Test plan row 27, the Slice 2
-   checklist, and the build record so the documented positive-certification rule names
-   custom functions/transforms and the chosen whitelist. Do not leave the prose saying
-   “every other leaf is opaque” while the implementation treats every non-empty source
-   list as transparent.
+Until this is fixed, a positive offset can silently page a random result while the
+package claims that the selected order is repeatable. That is a release-blocking
+implementation defect under the spec's own trust-boundary rule.
 
-Until this is fixed, the offset guard can serve a random page while claiming that the
-order is materially active and repeatable. That is a release-blocking implementation
-finding.
+## P1-2 — The checkout still cannot establish a releasable exact tree
 
-## P1-2 — The close record still cannot identify a releasable tree
+This is independent of the classifier defect.
 
-This is a release-integrity blocker independent of the runtime finding.
+- `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` still declares
+  `Status: WIP`.
+- Slice 5 and the final exact-commit gate remain unchecked; the final gate section
+  explicitly says no current default, sharded, supported-floor, structural, or
+  adversarial-review result is evidence for this checkout.
+- The spec remains `WIP — pre-candidate` with its completion protocol still open.
+- The working tree contains unrelated concurrent modifications, including the
+  tracked SQLite database. Because the database is one binary shared by multiple
+  owners, it cannot be treated as a clean card-050 candidate input merely by
+  staging the file.
 
-- `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` still says `Status: WIP`.
-- Slice 5 and the final exact-commit gate are unchecked, and the final gate section says
-  that no current default, sharded, supported-floor, structural, or adversarial-review
-  result is evidence for this checkout.
-- The spec itself remains explicitly `WIP — pre-candidate` with unchecked completion
-  rows. That is currently the truthful state, not a close.
-- `git status --short` still reports an uncommitted `examples/fakeshop/db.sqlite3`
-  change. The build record documents that this SQLite file contains concurrent library
-  data as well as card-owned lifecycle data; it cannot safely be absorbed into a
-  candidate by staging the binary as one file.
+The required disposition is the protocol already specified in Decision 22: make one
+candidate implementation commit after reconciling concurrent database work and
+regenerating derived outputs; run the default, sharded, supported-floor, structural,
+documentation, citation, link, migration, and adversarial gates against that exact
+parent; then make an evidence-only follow-up that names the gated parent. Do not
+mark the card DONE from this working tree or carry results from an earlier hash.
 
-The required fix remains the two-commit protocol already written in Decision 22:
-create one candidate implementation commit, run the complete default/sharded/floor and
-structural/documentation gates against that exact parent, perform the final adversarial
-review, then make an evidence-only follow-up that names the gated parent. Disentangle
-the SQLite data before the candidate commit and regenerate its derived outputs. Do not
-mark the card DONE from the current working tree or from figures produced on an earlier
-hash.
+## P2-1 — Historical build measurements need to be refreshed at candidate time
 
-## P2-1 — The build inventory does not describe the latest in-scope fixture changes
+The build record labels its pre-flight counts as historical, but the recorded spec
+sizes (147,842 bytes/2,056 lines before and 141,617 bytes/1,979 lines after) do not
+describe the current spec (247,637 bytes/3,260 lines). This is not a runtime defect,
+and it is not evidence that the specification is wrong; it is an evidence-integrity
+hazard if those figures are read as measurements of the candidate.
 
-The latest in-scope library test commit (`02e266df`) adds and modifies the proxy-targeted
-prefetch fixture: a new `BranchNote` model and migration, schema surfaces, app-model
-tests, live library tests, and both SQLite databases. The build text still contains the
-sentence that `test_resource_policy_api.py` is the predicted addition and that “no new
-tracked path is added.” That sentence is no longer true for the current candidate.
+At the candidate step, replace the stale measurements with counts from the exact
+candidate parent, state which generated/documentation checks were run on that tree,
+and keep the evidence-only follow-up limited to the gated parent it names.
 
-The generated tree and tracked-path checker are currently green, but those checks do not
-make the build record's inventory accurate. A future close reviewer cannot tell whether
-`examples/fakeshop/apps/library/migrations/0005_branchnote.py` and the proxy fixture are
-intentional spec-050 evidence or unrelated concurrent work.
+## What this pass confirms
 
-Update the build's predicted-file/cohort and floor-scope sections to name every fixture
-path actually carried by the candidate, explain that the proxy fixture is the live proof
-for the prefetch-seal row, and remove the “no new tracked path” assertion. Then rerun
-the tracked-path, tree, citation, and documentation checks on the candidate commit.
-
-## What is now fixed and not reopened
-
-- Per-operation state is runner-owned and token/lease scoped across sync, async, nested,
-  and streamed execution; the previous shared-instance overlap bypass is not reproduced
-  by the current architecture.
-- Enforcement authorities are schema-owned; direct declarations are folded into the
-  construction record, while mutable factories and authority subclasses fail closed.
-- Relation-name ordering now follows Django's recursive related-model default expansion,
-  while `F` references remain foreign-key column references.
-- Conditional ordering predicates classify both the lookup reference and its value, so
-  random annotation aliases in either `alias()` or `annotate()` are rejected.
-- Evaluated exact querysets, project `as_manager()` relations, pending reverse predicates,
-  and proxy/concrete prefetch targets now have the intended live/package coverage.
-- The current static tree check and tracked-path check pass. No pytest result is claimed
-  here.
+- The generic “any readable children means deterministic” bug is no longer present:
+  unknown `Func`/`Transform`/`Window`/aggregate forms and subclasses of approved
+  functions are rejected by the named-node whitelist.
+- Relation-string expansion follows Django's related-model defaults, while ordinary
+  expression references do not accidentally expand relations.
+- Conditional predicates inspect both the reference and value sides, including
+  annotation aliases and approved transform/lookup chains.
+- The runner-owned operation state, authority construction, lease cleanup, refusal
+  chain, row-source sealing, evaluated-queryset handling, and manager/proxy coverage
+  remain aligned with the current spec on code inspection.
+- The four non-pytest governance checks listed at the top of this review pass. No
+  full-suite, sharded, or supported-floor result is claimed here.
 
 ## Required disposition
 
-1. Fix the expression/transform classifier at the production abstraction and add the
-   sync/async live regressions and package controls.
-2. Reconcile the build inventory with the proxy fixture and current tracked paths.
-3. Resolve the concurrent SQLite state and create the exact candidate commit.
-4. Run the declared default, sharded, supported-floor, structural, link, citation,
-   migration, and documentation gates on that candidate.
-5. Re-review that exact tree; only an evidence-only follow-up may then record closure.
+1. Close the exact-type `F`/`Q` subclass bypass in the production classifier.
+2. Add the package and live sync/async regressions and update the corresponding spec
+   and build rows.
+3. Reconcile the concurrent SQLite/working-tree state and create the exact candidate
+   implementation commit.
+4. Run every declared gate on that candidate, perform one final adversarial review of
+   that exact tree, and only then write the evidence-only closure record.

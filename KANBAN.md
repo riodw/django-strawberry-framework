@@ -29,11 +29,11 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**67.1% complete** toward `1.0.0` - 49 of 73 cards done (65.0% size-weighted). Across all non-backlog cards (incl. post-`1.0.0`), 49 of 74 (66.2%, 63.9% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**68.5% complete** toward `1.0.0` - 50 of 73 cards done (66.2% size-weighted). Across all non-backlog cards (incl. post-`1.0.0`), 50 of 74 (67.6%, 65.1% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 49/57 (86.0%) | 84.0% |
+| Alpha (pre-0.1.0) | 50/57 (87.7%) | 85.6% |
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/2 (0.0%) | 0.0% |
 
@@ -43,7 +43,6 @@ Every card on the board, in board order. Links jump to the card.
 
 | Card | Title | Column |
 | --- | --- | --- |
-| [`WIP-ALPHA-050-0.0.15`](#djangolistfield_argument_surface_offset_limit_and_orderby) | `DjangoListField` argument surface: `offset` / `limit` and `orderBy` | In progress |
 | [`TODO-ALPHA-051-0.0.15`](#upstream_parity_gap_closure) | Upstream parity-gap closure | In progress |
 | [`TODO-ALPHA-052-0.0.15`](#extract_djangodebugextension_into_the_standalone_django_strawberry_debug_package) | Extract DjangoDebugExtension into the standalone django-strawberry-debug package | In progress |
 | [`TODO-ALPHA-053-0.0.15`](#boundary_hardening_and_system_wide_dry_squeeze) | Boundary hardening and system-wide DRY squeeze | In progress |
@@ -68,6 +67,7 @@ Every card on the board, in board order. Links jump to the card.
 | [`TODO-BETA-072-0.1.8`](#adversarial_non_live_test_suite) | Adversarial non-live test suite | To Do - Beta (1.0.0) |
 | [`TODO-STABLE-073-1.0.0`](#stable_release_api_freeze_cleanup_verification_beta_stable) | Stable release (API freeze, cleanup, verification, beta → stable) | To Do - Beta (1.0.0) |
 | [`TODO-STABLE-074-1.1.0`](#dynamic_schemas_from_datatype_specs_synthetic_unmanaged_models) | Dynamic schemas from dataType specs (synthetic unmanaged models) | To Do - Beta (1.0.0) |
+| [`DONE-050-0.0.15`](#djangolistfield_argument_surface_offset_limit_and_orderby) | `DjangoListField` argument surface: `offset` / `limit` and `orderBy` | Done |
 | [`DONE-049-0.0.14`](#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci) | Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI | Done |
 | [`DONE-048-0.0.14`](#secure_output_and_error_defaults_drop_file_path_fail_closed_debug_prod_error_policy) | Secure output and error defaults: drop file path, fail-closed debug, prod error policy | Done |
 | [`DONE-047-0.0.14`](#execution_resource_policy_central_budget_object_value_cardinality_walker) | Execution resource policy: central budget object + value-cardinality walker | Done |
@@ -121,61 +121,6 @@ Every card on the board, in board order. Links jump to the card.
 ## In progress
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="djangolistfield_argument_surface_offset_limit_and_orderby"></a>
-### [WIP-ALPHA-050-0.0.15 - `DjangoListField` argument surface: `offset` / `limit` and `orderBy`](KANBAN.html#djangolistfield_argument_surface_offset_limit_and_orderby)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Required)
-- Status: WIP
-- Relative size: M
-- Labels: `list-field`, `ordering`, `public-api`
-- Spec: [spec-050-list_field_arguments-0_0_15.md](docs/spec-050-list_field_arguments-0_0_15.md)
-
-#### Planning note
-
-Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/limit pagination - both upstreams ship a client-facing offset surface) together with spec-028's orphaned orderBy deferral, taken as one card because both open the same list-field argument-factory seam and would otherwise open it twice. Maintainer decision 2026-08-29: build the minimal shape - bounded offset/limit on [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) only, never on connections.
-
-#### Scope
-
-- Bounded `offset` / `limit` arguments on `DjangoListField` only. Connections are a permanent non-goal the spec must pin: grafting offset onto a connection reintroduces the skip-based instability keyset cursors exist to remove, and ⚛'s own `offset: Int`-on-every-connection is the shape being refused.
-- Caps and hygiene: the effective row count is the minimum of the client `limit`, the field's `max_rows`, and the request `ResourcePolicy.max_list_rows` (the shipped bound; `trusted_max_rows` semantics unchanged); `offset` is bounded by a policy ceiling rather than unbounded skip; negative, non-integer, or over-ceiling values raise a typed `GraphQLError`, never a silent clamp in the error direction. With neither argument supplied, behavior and SQL are byte-for-byte today's.
-- `orderBy` argument on `DjangoListField` through the shipped [OrderSet](docs/GLOSSARY.md#orderset) argument machinery (the target type's `orderset_class`, the same binding connections use) - this is spec-028's deferred orderBy-argument integration, orphaned since `0.0.9` and adjudicated onto this card by the doc-debt card's archived-spec deferral sweep. `django_strawberry_framework/list_field.py`'s ordering-contract docstring already promises order "unless the query supplies an `orderBy` argument" - an argument the field could not accept until this card, so the docstring becomes true rather than aspirational.
-- Determinism interplay, a spec decision: an `offset` page without an active order (argument or `Meta.ordering`) is database-dependent and unstable across requests. Preferred answer: require an active order whenever `offset` is non-zero (typed error otherwise); the alternative - documenting the instability - must say why upstream's silent instability was kept.
-- SDL consequence stated up front: nullable optional `offset` and `limit` surface on every `DjangoListField`, while `orderBy` surfaces conditionally only when the target type declares `Meta.orderset_class`. A published `offset` is a runtime-precondition coordinate rather than a per-field pagination claim.
-- Migration mapping: ⚛'s connection `offset` and 🍓's `pagination=True` / `OffsetPaginationInput` / `OffsetPaginated[T]` / `offset_paginated()` all map onto this surface; the migration-guides card owes the note, including that nested/windowed offset pagination stays served by nested connections here.
-
-#### Definition of done
-
-- [x] A spec is written for the card covering the argument shapes, the caps table, the typed-error contract, the offset-requires-order decision, and the connections non-goal.
-- [x] `offset` / `limit` / `orderBy` ship on `DjangoListField`; with none supplied, generated SDL for existing consumers is unchanged apart from the three new optional arguments and the emitted SQL is unchanged byte-for-byte.
-- [x] SQL-shape tests pin that argument omission preserves the existing policy LIMIT unchanged, a smaller client limit lowers the high mark, a positive offset raises the low mark, and no code path injects DISTINCT.
-- [x] `orderBy` composes with type visibility (`get_queryset` narrows first) and reuses the OrderSet pipeline end-to-end; the pk tiebreaker question is answered in the spec (lists have no cursors, so the connection tiebreaker is not blindly inherited).
-- [x] Typed `GraphQLError` on negative / non-integer / over-ceiling `offset` or `limit`, live-tested on both values.
-- [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercises offset paging with an order, the cap interplay, and an orderBy'd list.
-- [x] `django_strawberry_framework/list_field.py`'s ordering-contract docstring is updated to describe the shipped argument.
-- [x] The migration-guides card gains the offset-mapping note (its upstream-settings/surface table).
-- [ ] Full suite green under `fail_under = 100`; live-first placement respected. No version quintet or CHANGELOG entry - the `0.0.15` release state is owned by the DRY-squeeze card's joint cut, which lands last on the line.
-
-#### Files likely touched
-
-- `django_strawberry_framework/list_field.py` (argument factory, caps, docstring)
-- `django_strawberry_framework/orders/` argument machinery reused at the list-field seam
-- `django_strawberry_framework/conf.py` only if the offset ceiling needs its own key (prefer deriving from `max_list_rows`)
-- Mirrored `tests/` modules plus live coverage under `examples/fakeshop/test_query/`
-
-#### Verified in upstream
-
-- ⚛ adds `offset: Int` to every connection field (graphene-django connection arguments).
-- 🍓 `strawberry_django/pagination.py` ships `OffsetPaginationInput`, the `OffsetPaginated[T]` generic (`pageInfo` / `totalCount` / `results`), `offset_paginated()`, and window-function nested offset pagination.
-- spec-028 deferred the `orderBy` argument on `DjangoListField` at `0.0.9`; the deferral had no card until this one.
-
-#### Card references
-
-- Related: Shares the `0.0.15` line; both are pre-beta parity work, this card lands first. -> `TODO-ALPHA-051-0.0.15` - Upstream parity-gap closure
-- Related: Its archived-spec deferral sweep names spec-028's orphaned orderBy integration; adjudicated: carded here. -> `TODO-ALPHA-056-0.0.17` - Alpha documentation-debt discharge
-- Related: Owes the offset-mapping migration note: upstream offset surfaces map to this card's `DjangoListField` arguments; nested offset pagination maps to nested connections. -> `TODO-BETA-071-0.1.8` - Migration and adoption guides
-- Related: The parity claim's offset/limit cut blocker is closed by this card. -> `TODO-ALPHA-057-0.1.0` - Beta release (cleanup, verification, alpha → beta)
 
 <a id="upstream_parity_gap_closure"></a>
 ### [TODO-ALPHA-051-0.0.15 - Upstream parity-gap closure](KANBAN.html#upstream_parity_gap_closure)
@@ -309,7 +254,7 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 #### Dependencies
 
 - `DONE-044-0.0.14` - Response-extensions debug middleware
-- `WIP-ALPHA-050-0.0.15` - `DjangoListField` argument surface: `offset` / `limit` and `orderBy`
+- `DONE-050-0.0.15` - `DjangoListField` argument surface: `offset` / `limit` and `orderBy`
 - `TODO-ALPHA-051-0.0.15` - Upstream parity-gap closure
 - `TODO-ALPHA-052-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
 
@@ -429,7 +374,7 @@ The six code gaps left by the `0.1.0` parity audit after everything homeable was
 
 - Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
 - Dependency: `TODO-ALPHA-052-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
-- Dependency: The list-field card lands first on the shared `0.0.15` line; this card lands last and its Slice-5 quintet waits for every `0.0.15` card. -> `WIP-ALPHA-050-0.0.15` - `DjangoListField` argument surface: `offset` / `limit` and `orderBy`
+- Dependency: The list-field card lands first on the shared `0.0.15` line; this card lands last and its Slice-5 quintet waits for every `0.0.15` card. -> `DONE-050-0.0.15` - `DjangoListField` argument surface: `offset` / `limit` and `orderBy`
 - Dependency: Shares every file in the parity-gap card's Files-likely-touched list except `types/converters.py`, so this card is sequenced behind it (the edge that card's DoD owed, landed at the 2026-08-29 board review). -> `TODO-ALPHA-051-0.0.15` - Upstream parity-gap closure
 
 ## To Do - Alpha (0.1.0)
@@ -1823,6 +1768,55 @@ Created 2026-08-29 from the DIV-033 discussion. Post-1.0 greenfield: neither gra
 ## Done
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence.
+
+<a id="djangolistfield_argument_surface_offset_limit_and_orderby"></a>
+### [DONE-050-0.0.15 - `DjangoListField` argument surface: `offset` / `limit` and `orderBy`](KANBAN.html#djangolistfield_argument_surface_offset_limit_and_orderby)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Required)
+- Status: Done
+- Relative size: M
+- Labels: `list-field`, `ordering`, `public-api`
+- Spec: [spec-050-list_field_arguments-0_0_15.md](docs/spec-050-list_field_arguments-0_0_15.md)
+
+#### Planning note
+
+Promoted from the 0.1.0 parity register's largest unaccounted finding (offset/limit pagination - both upstreams ship a client-facing offset surface) together with spec-028's orphaned orderBy deferral, taken as one card because both open the same list-field argument-factory seam and would otherwise open it twice. Maintainer decision 2026-08-29: build the minimal shape - bounded offset/limit on [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) only, never on connections.
+
+#### Scope
+
+- Bounded `offset` / `limit` arguments on `DjangoListField` only. Connections are a permanent non-goal the spec must pin: grafting offset onto a connection reintroduces the skip-based instability keyset cursors exist to remove, and ⚛'s own `offset: Int`-on-every-connection is the shape being refused.
+- Caps and hygiene: the effective row count is the minimum of the client `limit`, the field's `max_rows`, and the request `ResourcePolicy.max_list_rows` (the shipped bound; `trusted_max_rows` semantics unchanged); `offset` is bounded by a policy ceiling rather than unbounded skip; negative, non-integer, or over-ceiling values raise a typed `GraphQLError`, never a silent clamp in the error direction. With neither argument supplied, behavior and SQL are byte-for-byte today's.
+- `orderBy` argument on `DjangoListField` through the shipped [OrderSet](docs/GLOSSARY.md#orderset) argument machinery (the target type's `orderset_class`, the same binding connections use) - this is spec-028's deferred orderBy-argument integration, orphaned since `0.0.9` and adjudicated onto this card by the doc-debt card's archived-spec deferral sweep. `django_strawberry_framework/list_field.py`'s ordering-contract docstring already promises order "unless the query supplies an `orderBy` argument" - an argument the field could not accept until this card, so the docstring becomes true rather than aspirational.
+- Determinism interplay, a spec decision: an `offset` page without an active order (argument or `Meta.ordering`) is database-dependent and unstable across requests. Preferred answer: require an active order whenever `offset` is non-zero (typed error otherwise); the alternative - documenting the instability - must say why upstream's silent instability was kept.
+- SDL consequence stated up front: nullable optional `offset` and `limit` surface on every `DjangoListField`, while `orderBy` surfaces conditionally only when the target type declares `Meta.orderset_class`. A published `offset` is a runtime-precondition coordinate rather than a per-field pagination claim.
+- Migration mapping: ⚛'s connection `offset` and 🍓's `pagination=True` / `OffsetPaginationInput` / `OffsetPaginated[T]` / `offset_paginated()` all map onto this surface; the migration-guides card owes the note, including that nested/windowed offset pagination stays served by nested connections here.
+
+#### Definition of done
+
+- [x] A spec is written for the card covering the argument shapes, the caps table, the typed-error contract, the offset-requires-order decision, and the connections non-goal.
+- [x] `offset` / `limit` / `orderBy` ship on `DjangoListField`; with none supplied, generated SDL for existing consumers is unchanged apart from the three new optional arguments and the emitted SQL is unchanged byte-for-byte.
+- [x] SQL-shape tests pin that argument omission preserves the existing policy LIMIT unchanged, a smaller client limit lowers the high mark, a positive offset raises the low mark, and no code path injects DISTINCT.
+- [x] `orderBy` composes with type visibility (`get_queryset` narrows first) and reuses the OrderSet pipeline end-to-end; the pk tiebreaker question is answered in the spec (lists have no cursors, so the connection tiebreaker is not blindly inherited).
+- [x] Typed `GraphQLError` on negative / non-integer / over-ceiling `offset` or `limit`, live-tested on both values.
+- [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercises offset paging with an order, the cap interplay, and an orderBy'd list.
+- [x] `django_strawberry_framework/list_field.py`'s ordering-contract docstring is updated to describe the shipped argument.
+- [x] The migration-guides card gains the offset-mapping note (its upstream-settings/surface table).
+- [x] Full suite green under `fail_under = 100`; live-first placement respected. No version quintet or CHANGELOG entry - the `0.0.15` release state is owned by the DRY-squeeze card's joint cut, which lands last on the line.
+
+#### Files likely touched
+
+- `django_strawberry_framework/list_field.py` (argument factory, caps, docstring)
+- `django_strawberry_framework/orders/` argument machinery reused at the list-field seam
+- `django_strawberry_framework/conf.py` only if the offset ceiling needs its own key (prefer deriving from `max_list_rows`)
+- Mirrored `tests/` modules plus live coverage under `examples/fakeshop/test_query/`
+
+#### Card references
+
+- Related: Shares the `0.0.15` line; both are pre-beta parity work, this card lands first. -> `TODO-ALPHA-051-0.0.15` - Upstream parity-gap closure
+- Related: Its archived-spec deferral sweep names spec-028's orphaned orderBy integration; adjudicated: carded here. -> `TODO-ALPHA-056-0.0.17` - Alpha documentation-debt discharge
+- Related: Owes the offset-mapping migration note: upstream offset surfaces map to this card's `DjangoListField` arguments; nested offset pagination maps to nested connections. -> `TODO-BETA-071-0.1.8` - Migration and adoption guides
+- Related: The parity claim's offset/limit cut blocker is closed by this card. -> `TODO-ALPHA-057-0.1.0` - Beta release (cleanup, verification, alpha → beta)
 
 <a id="dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci"></a>
 ### [DONE-049-0.0.14 - Dependency and CI hardening: refresh Django locks, add audit automation, least-privilege CI](KANBAN.html#dependency_and_ci_hardening_refresh_django_locks_add_audit_automation_least_privilege_ci)

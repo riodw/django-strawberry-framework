@@ -92,7 +92,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 |---|---|
 | [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
 | [`apply_cascade_permissions`](#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Async queryset completion adapter](#async-queryset-completion-adapter) | planned for `0.0.15` |
+| [Async queryset completion adapter](#async-queryset-completion-adapter) | shipped (`0.0.15`) |
 | [Async SQL-capture boundary](#async-sql-capture-boundary) | shipped (`0.0.14`) |
 | [Auth mutations](#auth-mutations) | shipped (`0.0.13`) |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
@@ -153,8 +153,8 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Hard dependency](#hard-dependency) | shipped |
 | [Input type generation](#input-type-generation) | shipped (`0.0.11`) |
 | [Joint version cut](#joint-version-cut) | shipped (`0.0.13`) |
-| [List offset order precondition](#list-offset-order-precondition) | planned for `0.0.15` |
-| [`ListArgumentError`](#listargumenterror) | planned for `0.0.15` |
+| [List offset order precondition](#list-offset-order-precondition) | shipped (`0.0.15`) |
+| [`ListArgumentError`](#listargumenterror) | shipped (`0.0.15`) |
 | [Live-first coverage mandate](#live-first-coverage-mandate) | shipped (`0.0.4`) |
 | [Masking-extension ordering](#masking-extension-ordering) | shipped (`0.0.14`) |
 | [`max_value_depth`](#max_value_depth) | shipped (`0.0.14`) |
@@ -308,9 +308,9 @@ qs = await aapply_cascade_permissions(cls, qs, info)
 
 ## Async queryset completion adapter
 
-**Status:** planned for `0.0.15`.
+**Status:** shipped (`0.0.15`).
 
-The package-internal async-only queryset-row wrapper planned by spec-050 for safe list completion under [`AsyncDjangoGraphQLView`](#djangographqlview). graphql-core's `complete_list_value` checks synchronous `Iterable` before `AsyncIterable`, and Django querysets implement both, so a queryset returned to an async view is otherwise iterated synchronously inside the event loop. The adapter's `__aiter__` delegates to Django's safe `QuerySet.__aiter__`, and it deliberately implements no `__iter__`; it wraps the FINAL sliced queryset so the value stays lazy across the resolver boundary. Awaitable child fields additionally rely on the dependency-owned `_graphql_core_patches` workaround, independently controlled by the `graphql_core` `APPLY_UPSTREAM_PATCHES` key; disabling that key restores graphql-core's residual-awaitable defect without disabling Strawberry's HTTP-view hardening. [`DjangoOptimizerExtension`](#djangooptimizerextension) unwraps it ahead of `_optimize`'s first step, applies the root plan to the inner queryset, and rewraps on EVERY return path — unrecognized, the adapter would fall through the non-queryset branch with root-list optimization silently gone while every row assertion still passed. Removes the need for `DJANGO_ALLOW_ASYNC_UNSAFE` specifically during framework-owned final queryset completion under [`AsyncDjangoGraphQLView`](#djangographqlview), without claiming broader async safety for arbitrary user code or ambient event loops.
+The package-internal async-only queryset-row wrapper (spec-050) for safe list completion under [`AsyncDjangoGraphQLView`](#djangographqlview). graphql-core's `complete_list_value` checks synchronous `Iterable` before `AsyncIterable`, and Django querysets implement both, so a queryset returned to an async view is otherwise iterated synchronously inside the event loop. The adapter's `__aiter__` delegates to Django's safe `QuerySet.__aiter__`, and it deliberately implements no `__iter__`; it wraps the FINAL sliced queryset so the value stays lazy across the resolver boundary. Awaitable child fields additionally rely on the dependency-owned `_graphql_core_patches` workaround, independently controlled by the `graphql_core` `APPLY_UPSTREAM_PATCHES` key; disabling that key restores graphql-core's residual-awaitable defect without disabling Strawberry's HTTP-view hardening. [`DjangoOptimizerExtension`](#djangooptimizerextension) unwraps it ahead of `_optimize`'s first step, applies the root plan to the inner queryset, and rewraps on EVERY return path — unrecognized, the adapter would fall through the non-queryset branch with root-list optimization silently gone while every row assertion still passed. Removes the need for `DJANGO_ALLOW_ASYNC_UNSAFE` specifically during framework-owned final queryset completion under [`AsyncDjangoGraphQLView`](#djangographqlview), without claiming broader async safety for arbitrary user code or ambient event loops.
 
 **See also:** [`DjangoListField`](#djangolistfield) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Async SQL-capture boundary](#async-sql-capture-boundary).
 
@@ -1096,7 +1096,7 @@ Moved only by the cut — the version quintet: `[project].version` in `pyproject
 
 ## List offset order precondition
 
-**Status:** planned for `0.0.15`.
+**Status:** shipped (`0.0.15`).
 
 A published `offset` argument is a runtime precondition rather than a per-field capability claim: every list field publishes `offset`, but `offset > 0` requires a materially active order on the post-visibility queryset (spec-050): either a supplied `orderBy` whose surviving non-null [`Ordering`](#ordering) terms leave the validated post-apply queryset ordered, or a still-effective stable model `Meta.ordering` (Django's own default-ordering rule: default ordering enabled, no explicit or extra order replacing it, no grouping suppressing it). On a target with neither `Meta.orderset_class` nor still-effective model `Meta.ordering`, `offset: 0` is accepted and every positive value fails `order_required`. A term is judged by the form Django's compiler resolves it into rather than by how it is written, and it qualifies only when that form reads down to model columns and literals: the literal `"?"`, a `Random()` expression, an annotation alias or `F` naming one, a `Random()` nested inside a composition, a `RawSQL` fragment, a bare `Func` naming a database function, and the inner query a `Subquery` wraps all fail it, as does raw SQL reached through `extra` — a select alias, or the dotted form handed through verbatim — because opaque is not the same as deterministic. An `extra` ordering naming a real field still qualifies, and so does a composition of columns and literals, including a conditional order's predicate and the slots an aggregate leaves unfilled. `.reverse()` still qualifies; a resolver's private `.order_by(...)` does not substitute for the public contract; opaque Python iterables cannot establish it. No pk tiebreaker and no `DISTINCT` are injected — an active order is deliberately weaker than the connection's total-order cursor contract, so consumers paging through ties add a unique final term themselves. Violations raise [`ListArgumentError`](#listargumenterror) with `reason: "order_required"`.
 
@@ -1104,9 +1104,9 @@ A published `offset` argument is a runtime precondition rather than a per-field 
 
 ## `ListArgumentError`
 
-**Status:** planned for `0.0.15`.
+**Status:** shipped (`0.0.15`).
 
-The typed runtime rejection planned for [`DjangoListField`](#djangolistfield)'s client arguments (spec-050): a dual-base `GraphQLError` + package-error class on the `ResourceLimitExceeded` precedent (same pickle-safe `__reduce__` shape), raised when a structurally valid GraphQL `Int` is an invalid list argument. Stable `extensions`: `code: "LIST_ARGUMENT_INVALID"`, `argument` (always the ACTIVE schema wire spelling derived through [`strawberry_config`](#strawberry_config)'s name converter, never a hard-coded literal), and `reason` — `negative` / `over_ceiling` for numeric-domain failures (both carry `value`; only the latter carries `ceiling`), `non_integer` for direct Python calls that bypass GraphQL coercion, `order_required` for a nonzero offset failing the [list offset order precondition](#list-offset-order-precondition), and `queryset_required` for `orderBy` over a non-queryset source. Actual wire-type failures stay GraphQL-owned `Int` coercion errors: the package never replaces the scalar to attach its code.
+The typed runtime rejection for [`DjangoListField`](#djangolistfield)'s client arguments (spec-050): a dual-base `GraphQLError` + package-error class on the `ResourceLimitExceeded` precedent (same pickle-safe `__reduce__` shape), raised when a structurally valid GraphQL `Int` is an invalid list argument. Stable `extensions`: `code: "LIST_ARGUMENT_INVALID"`, `argument` (always the ACTIVE schema wire spelling derived through [`strawberry_config`](#strawberry_config)'s name converter, never a hard-coded literal), and `reason` — `negative` / `over_ceiling` for numeric-domain failures (both carry `value`; only the latter carries `ceiling`), `non_integer` for direct Python calls that bypass GraphQL coercion, `order_required` for a nonzero offset failing the [list offset order precondition](#list-offset-order-precondition), and `queryset_required` for `orderBy` over a non-queryset source. Actual wire-type failures stay GraphQL-owned `Int` coercion errors: the package never replaces the scalar to attach its code.
 
 **See also:** [`DjangoListField`](#djangolistfield) · [`ResourcePolicy`](#resourcepolicy) · [List offset order precondition](#list-offset-order-precondition).
 

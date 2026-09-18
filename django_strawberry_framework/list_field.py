@@ -805,7 +805,10 @@ def _is_deterministic_order_reference(query: Any, name: str, prefix: str) -> boo
     of, because ``find_ordering_name`` rewrites such an expression through
     ``prefix_references`` before the outer query resolves it. The annotation and
     ``extra`` steps are read at that same full name, so a reference naming
-    unreadable SQL is refused at any depth.
+    unreadable SQL is refused at any depth. There is no dotted ``extra_order_by``
+    arm to match the one a string name gets: an ``extra`` ordering is the
+    collection the compiler selects outright, so an expression is only ever
+    classified while that collection is empty.
     """
     referenced = f"{prefix}{name}"
     annotation = query.annotations.get(referenced)
@@ -814,8 +817,6 @@ def _is_deterministic_order_reference(query: Any, name: str, prefix: str) -> boo
     if annotation is not None:
         return _is_deterministic_order_term(query, annotation)
     if referenced in query.extra:
-        return False
-    if "." in referenced and referenced in query.extra_order_by:
         return False
     return _resolve_order_field_path(query.get_meta(), referenced) is not None
 
@@ -916,33 +917,44 @@ def _is_deterministic_order_term(
     leaf (``_READABLE_ORDER_LEAVES``) carries all of its own SQL and is named
     outright: a column reference, the ``*`` of a row count, and a literal value.
 
-    Every match is by EXACT type. A subclass of an approved class is a different
-    ``as_sql`` and is refused, which is the whole difference between naming a
-    form and recognizing a family. Everything unlisted is refused too -
+    Every match is by EXACT type, the two reference forms included. A subclass
+    of an approved class is a different ``as_sql`` and is refused, which is the
+    whole difference between naming a form and recognizing a family; a subclass
+    of ``F`` or of ``Q`` is a different ``resolve_expression``, which is the
+    same difference one step earlier - the name or the predicate this package
+    reads is not what the subclass hands the compiler, so only ``F`` and ``Q``
+    themselves enter the reference and the predicate arms.
+
+    Which arm a term takes is decided the way
+    ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` decides
+    it: a term carrying ``resolve_expression`` is an expression and is read as
+    one, and only a term without it is read as a string name. A ``str`` subclass
+    that carries that method is therefore classified as the expression Django
+    will resolve it to rather than as the field path it spells. Everything
+    unlisted is refused too -
     ``Random()``, a bare or custom ``Func``, a ``Transform``, an unlisted
     ``Aggregate``, a ``Window``, a ``RawSQL`` fragment, the inner ``Query`` a
     ``Subquery`` wraps - because a term this package cannot read is one it must
     not certify as repeatable across the two queries an offset window spans.
     """
+    if hasattr(term, "resolve_expression"):
+        node = type(term)
+        if node is models.F:
+            return _is_deterministic_order_reference(query, term.name, prefix)
+        if node is models.Q:
+            return _is_deterministic_order_condition(query, term, opts, seen, prefix)
+        if node in _READABLE_ORDER_LEAVES:
+            return True
+        if node not in _APPROVED_ORDER_NODES:
+            return False
+        return all(
+            _is_deterministic_order_term(query, source, opts, seen, prefix)
+            for source in term.get_source_expressions()
+            if source is not None
+        )
     if isinstance(term, str):
         return _is_deterministic_order_name(query, term, opts, seen, prefix)
-    if isinstance(term, models.F):
-        return _is_deterministic_order_reference(query, term.name, prefix)
-    if isinstance(term, models.Q):
-        return _is_deterministic_order_condition(query, term, opts, seen, prefix)
-    node = type(term)
-    if node in _READABLE_ORDER_LEAVES:
-        return True
-    if node not in _APPROVED_ORDER_NODES:
-        return False
-    sources = getattr(term, "get_source_expressions", None)
-    if sources is None:
-        return False
-    return all(
-        _is_deterministic_order_term(query, source, opts, seen, prefix)
-        for source in sources()
-        if source is not None
-    )
+    return False
 
 
 def _is_deterministic_order_value(

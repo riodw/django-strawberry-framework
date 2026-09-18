@@ -1340,6 +1340,112 @@ async def test_async_offset_reads_an_expression_by_its_approved_form(
     assert _RANDOM_ORDER_SQL not in statement, statement
 
 
+class _ProjectF(models.F):
+    """A reference subclass that resolves to SQL of its own instead of to the name it holds."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+
+class _ProjectQ(models.Q):
+    """A predicate subclass that resolves to SQL of its own instead of to its children."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+
+class _ProjectName(str):
+    """A string subclass Django reads as an expression because it carries the method."""
+
+    def resolve_expression(self, *args, **kwargs):
+        return Random()
+
+    def asc(self):
+        return OrderBy(Random())
+
+
+def _case_ordering_over(condition):
+    """A conditional ordering whose ``When`` is built from a predicate object."""
+    return (
+        models.Case(
+            models.When(condition, then=models.Value(0)),
+            default=models.Value(1),
+        ),
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("ordering", "served"),
+    [
+        ((_ProjectF("code"),), False),
+        ((_ProjectName("code"),), False),
+        ((models.F("code"),), True),
+    ],
+    ids=["reference-subclass", "name-that-resolves", "reference"],
+)
+async def test_async_offset_reads_a_term_by_the_form_it_resolves_into(
+    monkeypatch,
+    ordering,
+    served,
+):
+    """The async coloring reads a reference by its exact type the same way the sync one does."""
+    await _seed_three_shelves_async()
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", ordering)
+    shelf_sql = _record_table_sql(monkeypatch, "library_shelf")
+
+    payload = await _post_async(_shelf_offset_schema(), _ASYNC_RELATION_DEFAULT_OFFSET)
+
+    if not served:
+        err = payload["errors"][0]
+        assert err["extensions"]["reason"] == "order_required"
+        assert err["extensions"]["argument"] == "offset"
+        assert shelf_sql == [], shelf_sql
+        return
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("condition", "served"),
+    [(_ProjectQ(code__gt="A"), False), (models.Q(code__gt="A"), True)],
+    ids=["predicate-subclass", "predicate"],
+)
+async def test_async_offset_reads_a_conditional_predicate_by_its_exact_type(
+    monkeypatch,
+    condition,
+    served,
+):
+    """The async coloring reads a ``When`` condition by its exact type as well.
+
+    A subclass of ``Q`` hands the compiler an expression in place of the children
+    this package reads, so the approved ``Case`` / ``When`` composition around it
+    launders nothing on either side of the pipeline.
+    """
+    await _seed_three_shelves_async()
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", _case_ordering_over(condition))
+    shelf_sql = _record_table_sql(monkeypatch, "library_shelf")
+
+    payload = await _post_async(_shelf_offset_schema(), _ASYNC_RELATION_DEFAULT_OFFSET)
+
+    if not served:
+        err = payload["errors"][0]
+        assert err["extensions"]["reason"] == "order_required"
+        assert err["extensions"]["argument"] == "offset"
+        assert shelf_sql == [], shelf_sql
+        return
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "CASE WHEN" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_async_offset_rejects_a_predicate_chain_of_project_sql(monkeypatch):
     """A project transform on a built-in field is SQL the predicate wraps its column in."""

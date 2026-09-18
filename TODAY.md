@@ -4,7 +4,7 @@
 
 ## Snapshot contract
 
-"Today" means **the current checkout of `main`**, not the last published release and not the board's `Done` column. Verdicts describe implementation; acceptance (the card's board state) and evidence (which live or package test pins it) are reported beside the verdict, never folded into it. The two diverge in one place at the moment: the [`DjangoListField` argument surface][kanban-list-field-args] (`offset` / `limit` / `orderBy`) is implemented and live-tested while its card is still `WIP`.
+"Today" means **the current checkout of `main`**, not the last published release and not the board's `Done` column. Verdicts describe implementation; acceptance (the card's board state) and evidence (which live or package test pins it) are reported beside the verdict, never folded into it, because a capability can be implemented in this checkout before the card carrying it is accepted.
 
 Three verdict words are used throughout:
 
@@ -186,7 +186,7 @@ Live evidence for this journey: `examples/fakeshop/test_query/test_products_api.
 | # | GOAL criterion | Today | Limitation | Evidence | Owning card |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Rich model-backed types in one `class Meta` | Partially available | `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields` not accepted | `test_products_api.py`, `test_library_api.py` | [Aggregation][kanban-aggregation], [`FieldSet`][kanban-fieldset], [`search_fields`][kanban-search-fields] |
-| 2 | Collections without hand-written resolvers | Available | None in implementation; the `DjangoListField` `offset` / `limit` / `orderBy` arguments are accepted and live-tested while the card is still `WIP` | `test_products_api.py`, `test_list_field_api.py` | [`DjangoListField` arguments][kanban-list-field-args] |
+| 2 | Collections without hand-written resolvers | Available | None in implementation; the `DjangoListField` `offset` / `limit` / `orderBy` arguments are accepted and live-tested | `test_products_api.py`, `test_list_field_api.py` | [`DjangoListField` arguments][kanban-list-field-args] |
 | 3 | Nested filtering / ordering / aggregation / search | Partially available | Filtering and ordering nested through `RelatedFilter` / `RelatedOrder`. No aggregation, no search. Filter / logic key names fixed | `test_products_api.py`, `test_scalars_filter_api.py` | [Aggregation][kanban-aggregation], [`search_fields`][kanban-search-fields], [full-text primitives][kanban-full-text-search], [filter key namespace][kanban-filter-keys] |
 | 4 | Row, field, and cascade permissions, one hook for reads and writes | Partially available | Row and cascade cover connections, nested traversal, refetch, and the mutation locate. Cascade crosses forward single-column FK / O2O edges only; to-many edges are unresolved. No field-level gates | `test_products_visibility_api.py`, `test_products_api.py` | [Graph substrate][kanban-graph-substrate], [`FieldSet`][kanban-fieldset] |
 | 5 | Automatic ORM optimization from one selection walk | Partially available | `select_related` / `prefetch_related` / `only()` from the selection tree, `Prefetch` downgrade for consumer querysets, FK-id elision, strictness modes. A nested connection is window-batched only when it carries no `filter:` / `orderBy:`; with either it resolves per parent row. No explain view | `test_single_parent_fastpath_api.py`, `test_optimizer_auto_api.py`, `test_connection_pagination_api.py` | [Nested sidecar batching][kanban-nested-batching], [Explain mode][kanban-explain-mode] |
@@ -234,7 +234,7 @@ Three different populations, kept apart:
 
 **Success-criterion gaps beyond the seven files.** [Graph substrate][kanban-graph-substrate] (to-many cascade semantics, row-preserving predicate composition), [nested sidecar batching][kanban-nested-batching], [filter / logic key namespace][kanban-filter-keys], [migration guides][kanban-migration-guides], [node-sentinel redaction][kanban-redaction], [explain mode][kanban-explain-mode], [idempotency keys][kanban-idempotency], [adversarial suite][kanban-adversarial], and the cookbook port ([cookbook parity][glossary-cookbook-parity], a glossary obligation proven at `1.0.0` with no owning card today).
 
-**Release and acceptance work.** The `WIP` [`DjangoListField` arguments][kanban-list-field-args], the alpha `To Do` column through the [beta release card][kanban-beta-release] (parity-gap closure, the debug-extension extraction, boundary hardening, the conversion registry, federation, documentation-debt discharge), and on the beta line the [fakeshop activation][kanban-fakeshop-activation] and [product-catalog Layer 3 tests][kanban-layer3-tests] that turn shipped capability into products-level acceptance. The authoritative order is the board itself.
+**Release and acceptance work.** The alpha `To Do` column through the [beta release card][kanban-beta-release] (parity-gap closure, the debug-extension extraction, boundary hardening, the conversion registry, federation, documentation-debt discharge), and on the beta line the [fakeshop activation][kanban-fakeshop-activation] and [product-catalog Layer 3 tests][kanban-layer3-tests] that turn shipped capability into products-level acceptance. The authoritative order is the board itself.
 
 <!-- LINK DEFINITIONS -->
 

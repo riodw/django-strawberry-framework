@@ -185,7 +185,12 @@ Both coordinates are bounded by the request's
 skips, not database row-scan budgets. A published `offset` is a runtime precondition rather
 than a pagination claim: `offset > 0` requires a materially active order from `orderBy` or a
 still-effective model `Meta.ordering`, raising [`ListArgumentError`][glossary-listargumenterror]
-with `reason: "order_required"` when neither is present.
+with `reason: "order_required"` when neither is present. That order must also be one the
+package can read. An ordering built from model columns, literals, `F` references, `Q`
+predicates and Django's own pure functions, comparisons and date transforms backs the window;
+one carrying a project expression class, a custom transform or lookup, raw SQL reached through
+`extra`, a window function, or a random term is refused exactly as an absent order is, because
+what such a term makes the database do is not something this package reads.
 
 The contract is strictly **ordered offset**, not stable or repeatable pagination. Flat lists
 inject no primary-key tiebreaker and no `DISTINCT`; consumers wanting deterministic

@@ -19,7 +19,7 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
   point of the move.
 - **Append-only during the build.** A new review round's decisions land in the spec; their
   rejected alternatives, derivations, and retractions append here in the same custodian pass.
-- Round attribution: Authored for `0.0.15` (card [`WIP-ALPHA-050-0.0.15`][kanban]). Initial
+- Round attribution: Authored for `0.0.15` (card [`DONE-050-0.0.15`][kanban]). Initial
   specification, independent upstream review, audit reconciliation, implementation-contract
   corrections, live-tier compliance review, and blocking architectural review were reconciled
   in place before pre-flight extraction.
@@ -288,6 +288,22 @@ Spec: [Decision 6][spec-050-d6].
   and classifying it like the string `"branch"` would reject a page over a stable column
   because a model it never orders by declares `Random()`. One resolution rule for both
   spellings is wrong in one direction or the other; the compiler's two rules are the contract.
+- **Admitting the two reference forms by `isinstance`:** It leaves the approved list exact
+  everywhere except at the two arms that run first. `F` and `Q` carry no `as_sql`, so what a
+  subclass of either substitutes is `resolve_expression` - the compiler receives whatever that
+  returns, while the classifier is still reading a column name or a set of children that never
+  reach the statement. `Meta.ordering = (VolatileF("code"),)` is an ordinary model declaration,
+  and `Case(When(VolatileQ(code__gt=...), ...))` wraps the same substitution in a composition
+  the spec approves, so both serve a positive offset over a re-shuffled result set. Exact type
+  at every arm is one rule; exact type at the arms that happen to be reached last is a boundary
+  with a door in it.
+- **Deciding a term's form from its own Python type before asking whether it resolves:**
+  [`_order_by_pairs`][django-compiler] asks for `resolve_expression` first and reads a term as a
+  string only when it has none, so a `str` subclass carrying that method is an expression to
+  Django and a field path to a classifier that tests for `str` first. The two readings disagree
+  about the whole statement, not about a detail of it. Dispatching in the compiler's own order
+  costs nothing and removes the disagreement: a name that resolves is classified as what it
+  resolves to.
 
 ### Decision 7 — active order is not total order; no pk tiebreaker is appended
 

@@ -1,12 +1,16 @@
 # Spec: `DjangoListField` argument surface (`offset`, `limit`, and `orderBy`)
 
-Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
-Status: **WIP — pre-candidate.** The current checkout contains the implementation and
-documentation work listed below, but no exact candidate commit, gate, review, or evidence-only
-follow-up exists. Decision 22 therefore keeps this card WIP; this `Status:` line is the lifecycle
-source of truth. Following the repository's shipped-card convention, the Slice checklist remains
-the contract ledger rather than implementation-history evidence; its boxes are not closure
-evidence until that sequence completes.
+Target card: [`DONE-050-0.0.15`][kanban]
+Status: **Shipped — candidate tree.** This tree is the candidate implementation commit of
+Decision 22: it carries the production and test changes, the shipped docs, the board's DONE
+transition, this status, and every generated output. What follows runs against this exact tree
+and is recorded nowhere else - the default, sharded and supported-floor suites with the
+structural, link, citation and tracked-path checks, one review under Decision 20, and the
+evidence-only follow-up that names this tree as its parent. Card closure is recognized only
+when that follow-up exists; this `Status:` line is the lifecycle source of truth. Following the
+repository's shipped-card convention, the Slice checklist remains the contract ledger rather
+than implementation-history evidence; its boxes are not closure evidence until that sequence
+completes.
 Revision: 2026-09-17 - the completion contract is specified in Decisions 20-22 and drawn
 into the Definition of done: application Python is trusted and its documented result contracts
 are validated mechanically, wire input and configuration are the bounded parties, and a finding
@@ -104,8 +108,11 @@ the release wording.
         active-input request and a random term the compiler does not select disqualifies
         nothing. That classification certifies positively, against an explicit list of approved
         forms matched by exact type - named compositions, pure Django functions, the aggregates
-        the shipped `OrderSet` emits, readable leaves, and the approved transforms and lookups a
-        predicate applies - and refuses every other node, subclasses of approved ones included.
+        the shipped `OrderSet` emits, readable leaves, the `F` and `Q` reference forms, and the
+        approved transforms and lookups a predicate applies - and refuses every other node,
+        subclasses of approved ones included. Which arm a term takes is decided by
+        `resolve_expression`, the way the compiler decides it, so a name that is an expression
+        is classified as one.
   - [ ] Sync and async paths run visibility, then `OrderSet`, then the offset/order guard,
         then the one raw-list slice.
   - [ ] The result of a public `OrderSet.apply_*` override is validated as an unevaluated,
@@ -1210,9 +1217,17 @@ the aggregates `Count`, `Max` and `Min`, listed because the shipped surface emit
 `F` reference; and a `Q` predicate. The readable leaves carry all of their own SQL and are
 named outright: a column reference, the `*` of a row count, and a literal value.
 
-Every match is by EXACT type. A subclass of an approved class is a different `as_sql` under an
-approved name and is refused, which is the difference between naming a form and recognizing a
-family. Everything unlisted is refused: `Random()`, a bare or custom `Func` naming a database
+Every match is by EXACT type, the two reference forms included. A subclass of an approved
+class is a different `as_sql` under an approved name and is refused, which is the difference
+between naming a form and recognizing a family; a subclass of `F` or of `Q` is a different
+`resolve_expression` under an ordinary name or an ordinary set of children, which is that same
+difference one step earlier, because what the compiler receives is whatever that method returns
+rather than the reference or the predicate this package read. Only `F` and `Q` themselves
+therefore enter the reference and the predicate arms. Which arm a term takes at all is decided
+the way `_order_by_pairs` decides it: a term carrying `resolve_expression` is an expression and
+is read as one, and only a term without it is read as a string name - so a `str` subclass
+carrying that method is classified as the expression Django resolves it to, never as the field
+path it spells. Everything unlisted is refused: `Random()`, a bare or custom `Func` naming a database
 function, a `Transform`, an aggregate outside the three, a `Window`, a `RawSQL` fragment, and
 the inner `Query` a `Subquery` hands the compiler. A term it cannot read is one it must not
 certify as repeatable across the two queries an offset window spans. A classifier built
@@ -2070,7 +2085,11 @@ weakens no obligation, it only names which card carries it. See the
   a `Subquery` wraps are each refused as unreadable rather than accepted for matching no known
   random class; so are a project `Func`, a `Transform`, a `Window`, an aggregate outside
   `Count` / `Max` / `Min`, and any SUBCLASS of an approved class, because a subclass is a
-  different `as_sql` under an approved name. A composition of approved forms over columns and
+  different `as_sql` under an approved name. The two reference forms are matched exactly for
+  the same reason one step earlier: a subclass of `F` or of `Q` resolves to an expression of
+  its own whatever name or children it was built with, so only `F` and `Q` themselves are read
+  as a reference and a predicate, and a term is read as a string name only when it carries no
+  `resolve_expression` at all. A composition of approved forms over columns and
   literals is read end to end and satisfies the guard, including a conditional order's
   predicate and the slots an aggregate leaves unfilled, and an approved wrapper launders
   nothing - `Coalesce(Random(), Random())` is refused through its children.
@@ -2382,9 +2401,16 @@ the shipped SDL.
     alongside a SUBCLASS of an approved function and a project lookup on the sync view, and each
     is paired with the built-in it imitates - `Lower("code")` as the term, `stamp__year__gt` as
     the chain - served with the raised low mark and no random function, so a guard refusing
-    every expression it had to walk cannot keep the rejections green. The package tier carries
-    the boundary by type: an approved function accepted and its subclass refused, an approved
-    aggregate and a row count accepted, an unlisted aggregate and a `Window` refused.
+    every expression it had to walk cannot keep the rejections green. The two reference forms
+    are pinned there too, in both colorings and through `Meta.ordering` alone: a subclass of
+    `F` resolving to the random function, a `str` subclass carrying `resolve_expression`, and a
+    subclass of `Q` inside the approved `Case` / `When` composition are each refused with no
+    row SQL, each paired with the built-in it imitates - `F("code")` as the term, and a plain
+    `Q` in the same conditional order - served with the raised low mark and no random
+    function. The package tier carries the boundary by type: an approved function accepted and
+    its subclass refused, an approved aggregate and a row count accepted, an unlisted aggregate
+    and a `Window` refused, `F` and `Q` accepted and their subclasses refused, and a name that
+    resolves refused.
 28. A live async request whose deadline expires after its resolver has obtained an async-only
     source closes that source exactly once and advances it zero times, for the default window
     and for `limit: 0` alike, with the complete `execution_deadline_seconds` extensions on the
@@ -2958,9 +2984,12 @@ structural checks, and link/kanban verification prescribed by
       package NAMES - a listed composition, function or aggregate, or a readable leaf, matched
       by exact type - and every source it holds is certified too. So an annotation alias, an
       `F` naming one, a nested `Random()`, a `RawSQL` fragment, a bare or project `Func`, a
-      `Transform`, a `Window`, an unlisted aggregate, a SUBCLASS of an approved class, and a
+      `Transform`, a `Window`, an unlisted aggregate, a SUBCLASS of an approved class - of the
+      `F` and `Q` reference forms as much as of a function - and a
       `Subquery`'s inner query all disqualify as a literal `"?"` does, while a composition of
-      approved forms over columns and literals still backs the window. A predicate's trailing
+      approved forms over columns and literals still backs the window. A term is read as a
+      string name only when it carries no `resolve_expression`, which is the order the compiler
+      dispatches in. A predicate's trailing
       transforms and its final lookup are matched against approved sets the same way. A STRING term naming a relation is judged by the related model's
       own `Meta.ordering`, which the compiler expands it into and which the term as written
       never shows, so a random default one or more relations away disqualifies the request

@@ -4438,6 +4438,43 @@ async def test_create_item_via_form_over_graphql_async():
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_create_item_via_serializer_over_graphql_async():
+    """``createItemViaSerializer`` over ``/graphql-async/`` writes the row through one sync boundary."""
+    await sync_to_async(create_users)(1)
+    await sync_to_async(seed_data)(1)
+
+    def _user_and_category():
+        from django.contrib.auth.models import Permission
+
+        user = get_user_model().objects.get(username="view_item_1")
+        perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
+        user.user_permissions.add(perm)
+        user = get_user_model().objects.get(pk=user.pk)
+        return user, models.Category.objects.first()
+
+    user, category = await sync_to_async(_user_and_category)()
+    client = AsyncClient()
+    await sync_to_async(client.force_login)(user)
+
+    payload = await _post_async_shipped(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": "AsyncSerializerWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "AsyncSerializerWidget", "category": {"name": category.name}}
+    created = await models.Item.objects.aget(name="AsyncSerializerWidget")
+    assert created.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_submit_contact_plain_form_over_graphql_async():
     """``submitContact`` over ``/graphql-async/`` returns the plain-form success envelope."""
     await sync_to_async(create_users)(1)

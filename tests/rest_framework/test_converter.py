@@ -19,6 +19,8 @@ The relation id-type (Relay-``GlobalID`` vs raw pk, single + multi) is pinned at
 the ``resolve_serializer_field`` build site over a real model's primary
 ``DjangoType``; those assertions live here (where the converter resolves the id)
 and in ``test_inputs.py`` (where the built input field's type is asserted).
+Live input shapes: ``examples/fakeshop/test_query/test_library_api.py`` serializer
+introspection rows.
 
 System-under-test runs against the products ``Item`` / ``Category`` fixtures per
 ``AGENTS.md`` (and package-local Relay / non-Relay target ``DjangoType``s).

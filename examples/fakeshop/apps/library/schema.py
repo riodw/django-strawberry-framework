@@ -19,6 +19,7 @@ from django_strawberry_framework import (
     DjangoFormMutation,
     DjangoListField,
     DjangoModelFormMutation,
+    DjangoModelPermission,
     DjangoMutation,
     DjangoMutationField,
     DjangoNodeField,
@@ -1226,12 +1227,20 @@ class UpdateBookGenresViaSerializer(SerializerMutation):
     OMITTED ``genres`` leaves the relation unchanged (``partial=True``); every provided
     member is visibility-decoded against ``GenreType`` and re-validated by DRF against the
     pinned, visibility-scoped relation queryset.
+
+    Default ``permission_classes = []`` isolates the list-relation contract from write-auth.
+    ``FAKESHOP_TEST_BOOK_GENRES_REQUIRE_PERM`` swaps in ``DjangoModelPermission`` so a live
+    row can prove an unauthorized update never snapshots M2M membership.
     """
 
     class Meta:
         serializer_class = serializers.BookGenresSerializer
         operation = "update"
-        permission_classes = []
+        permission_classes = (
+            (DjangoModelPermission,)
+            if getattr(settings, "FAKESHOP_TEST_BOOK_GENRES_REQUIRE_PERM", False)
+            else []
+        )
 
 
 class UpdateBookTitleWithAliasValidator(SerializerMutation):
@@ -1355,8 +1364,9 @@ class CreateShelfViaAltBranchesSerializer(SerializerMutation):
     serializer decode confirms the whole list's visibility in ONE batched ``pk__in`` query
     (through ``BranchType.get_queryset``, hiding ``city="restricted"`` from the anonymous
     caller), and DRF's own re-validation runs against the SAME visibility-scoped queryset. The
-    live test proves the M2M writes for visible branches and that a hidden branch is an
-    ``altBranches`` relation error over ``/graphql/``.
+    live test proves the M2M writes for visible branches, that a hidden branch is an
+    ``altBranches`` relation error, and that visibility SQL is one ``pk__in`` set rather than
+    one query per member.
     """
 
     class Meta:

@@ -14,11 +14,12 @@ from typing import Any, NamedTuple
 import pytest
 import strawberry
 from apps.library import models
+from apps.products.services import create_users
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.models import QuerySet
-from django.test import override_settings
+from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
 from graphql_client import assert_graphql_data as _assert_graphql_data
@@ -8991,6 +8992,60 @@ def test_serializer_m2m_relation_visibility_over_http():
     assert not models.Shelf.objects.filter(code="M2MBadShelf").exists()
 
 
+def _branch_batched_visibility_queries(captured: CaptureQueriesContext) -> list[str]:
+    """``FROM "library_branch"`` queries that are a set check, not a per-pk ``id =``.
+
+    Decode uses ``pk__in`` (SQLite emits ``IN (SELECT ...)``). DRF re-validation
+    then ``get()``s each member (``id =``). Counting only the non-equality
+    queries isolates the batched decode from the per-member DRF lookups.
+    """
+    return [
+        sql
+        for sql in _sql_from_table(captured, "library_branch")
+        if " IN (" in sql
+        and '"library_branch"."id" =' not in sql
+        and '"library_branch"."id"=' not in sql
+    ]
+
+
+@pytest.mark.django_db
+def test_serializer_m2m_alt_branches_visibility_is_one_batched_query_over_http():
+    """A raw-pk M2M list is visibility-checked in one ``pk__in`` query, not one query per id.
+
+    ``createShelfViaAltBranchesSerializer`` decodes ``altBranches`` through
+    ``decode_visible_relation_ids``. Two list lengths must emit the same number of
+    ``library_branch`` ``IN`` queries: a per-member fetch would grow with N.
+    """
+    home = models.Branch.objects.create(name="BatchHome", city="Boston")
+    alts = [models.Branch.objects.create(name=f"BatchAlt{i}", city="Boston") for i in range(5)]
+
+    def _create(code, members):
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(
+                "mutation($d: AltBranchesShelfSerializerInput!) { "
+                "createShelfViaAltBranchesSerializer(data: $d) { "
+                "result { code } errors { field messages } } }",
+                variables={
+                    "d": {
+                        "code": code,
+                        "branchId": home.pk,
+                        "altBranches": [branch.pk for branch in members],
+                    },
+                },
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        assert payload["data"]["createShelfViaAltBranchesSerializer"]["errors"] == []
+        in_sql = _branch_batched_visibility_queries(captured)
+        assert in_sql, captured.captured_queries
+        return in_sql
+
+    two = _create("BatchShelf2", alts[:2])
+    five = _create("BatchShelf5", alts)
+    assert len(two) == len(five) == 1, (two, five)
+
+
 @pytest.mark.django_db
 def test_serializer_save_kwargs_hook_injects_server_side_data_over_http():
     """``get_serializer_save_kwargs`` injects NON-model server-side data at ``serializer.save()``.
@@ -9180,6 +9235,74 @@ def test_serializer_update_omitted_genres_leaves_relation_unchanged_over_http():
 
 
 @pytest.mark.django_db
+def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
+    project_schema_override,
+):
+    """An unauthorized ``updateBookGenresViaSerializer`` never snapshots ``library_book_genres``.
+
+    ``FAKESHOP_TEST_BOOK_GENRES_REQUIRE_PERM`` installs ``DjangoModelPermission``. The
+    pre-save M2M membership snapshot runs at write-step entry, after authorize. An
+    anonymous title-only update is refused with ``data: null`` and issues no
+    through-table query. A caller holding ``change_book`` still writes (the must-not
+    is the denial, not a broken mutation).
+    """
+    from django.contrib.auth.models import Permission
+
+    create_users(1)
+    shelf = _seed_shelf()
+    kept = models.Genre.objects.create(name="AuthOrderKept")
+    book = models.Book.objects.create(title="AuthOrderBook", shelf=shelf)
+    book.genres.set([kept])
+    through_table = models.Book.genres.through._meta.db_table
+    mutation = (
+        "mutation($id: ID!, $d: BookGenresSerializerPartialInput!) { "
+        "updateBookGenresViaSerializer(id: $id, data: $d) { "
+        "node { title } errors { field messages } } }"
+    )
+
+    with override_settings(FAKESHOP_TEST_BOOK_GENRES_REQUIRE_PERM=True):
+        project_schema_override()
+        from apps.library.schema import BookType
+
+        book_id = global_id_for(BookType, book.pk)
+        variables = {"id": book_id, "d": {"title": "DeniedTitle"}}
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(mutation, variables=variables)
+        payload = response.json()
+        assert payload.get("data") is None, payload
+        assert payload.get("errors"), payload
+        assert "Not authorized" in payload["errors"][0]["message"]
+        membership_sql = [
+            entry["sql"] for entry in captured.captured_queries if through_table in entry["sql"]
+        ]
+        assert membership_sql == [], membership_sql
+
+        user = get_user_model().objects.get(username="regular_1")
+        perm = Permission.objects.get(
+            codename="change_book",
+            content_type__app_label="library",
+        )
+        user.user_permissions.add(perm)
+        user = get_user_model().objects.get(pk=user.pk)
+        client = Client()
+        client.force_login(user)
+        allowed = _post_graphql(
+            mutation,
+            client=client,
+            variables={"id": book_id, "d": {"title": "AllowedTitle"}},
+        )
+        allowed_payload = allowed.json()
+        assert "errors" not in allowed_payload, allowed_payload
+        assert allowed_payload["data"]["updateBookGenresViaSerializer"]["errors"] == []
+        assert allowed_payload["data"]["updateBookGenresViaSerializer"]["node"]["title"] == (
+            "AllowedTitle"
+        )
+    book.refresh_from_db()
+    assert book.title == "AllowedTitle"
+    assert list(book.genres.values_list("name", flat=True)) == ["AuthOrderKept"]
+
+
+@pytest.mark.django_db
 def test_serializer_update_genres_empty_and_duplicates_have_set_semantics_over_http():
     """Duplicate members normalize to one relation and an explicit empty list clears it."""
     from apps.library.schema import BookType, GenreType
@@ -9342,6 +9465,45 @@ def test_create_branch_with_nested_shelves_over_http():
     n1 = models.Shelf.objects.get(branch=branch, code="N1")
     # The nested ``alt_branches`` pk was decoded, visibility-checked, and written by create().
     assert set(n1.alt_branches.values_list("pk", flat=True)) == {home.pk}
+
+
+@pytest.mark.django_db
+def test_nested_shelf_alt_branches_visibility_is_one_batched_query_over_http():
+    """A nested ``altBranches`` list is visibility-checked in one ``pk__in`` query, not per id.
+
+    ``createBranchWithNestedShelves`` decodes each nested shelf's M2M through the same
+    batched relation decoder as a top-level serializer field. Two nested-list lengths
+    must emit the same number of ``library_branch`` ``IN`` queries.
+    """
+    alts = [models.Branch.objects.create(name=f"NestBatchAlt{i}", city="Boston") for i in range(5)]
+    top_input = _mutation_data_input_type_name("createBranchWithNestedShelves")
+
+    def _create(name, members):
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(
+                "mutation($d: " + top_input + "!) { createBranchWithNestedShelves(data: $d) { "
+                "result { name } errors { field messages } } }",
+                variables={
+                    "d": {
+                        "name": name,
+                        "city": "Boston",
+                        "shelves": [
+                            {"code": "NB1", "altBranches": [branch.pk for branch in members]},
+                        ],
+                    },
+                },
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        assert payload["data"]["createBranchWithNestedShelves"]["errors"] == []
+        in_sql = _branch_batched_visibility_queries(captured)
+        assert in_sql, captured.captured_queries
+        return in_sql
+
+    two = _create("NestBatch2", alts[:2])
+    five = _create("NestBatch5", alts)
+    assert len(two) == len(five) == 1, (two, five)
 
 
 @pytest.mark.django_db

@@ -32,7 +32,9 @@ System-under-test is the base / validation / bind, run against the products
 ``Item`` / ``Category`` FK fixtures + package-local ``ModelSerializer`` fixtures.
 Mirrors ``tests/forms/test_sets.py`` fixture posture. Build-time invalid configs
 never reach a resolver, so this matrix is correctly owned here (package-internal),
-not live.
+not live. Live bind/write siblings:
+``examples/fakeshop/test_query/test_library_api.py`` and
+``examples/fakeshop/test_query/test_products_api.py``.
 """
 
 from __future__ import annotations

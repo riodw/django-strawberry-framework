@@ -9,9 +9,15 @@ branch is earned LIVE; this file holds the genuinely-unreachable internals:
   shapes no `ItemSerializer` error emits (list indexes, nested dicts, nested
   non-field buckets) - direct-called with synthetic `serializer.errors`-shaped
   dicts;
-- raw-pk / NON-Relay relation decoding and MANY-relation decoding (products'
-  `Category` is Relay-`GlobalID` + single, so the input only ever delivers one
-  shape live - these need a synthetic non-Relay / many fixture and a direct call);
+- raw-pk / NON-Relay relation decoding internals (explicit `None`, empty-list
+  no-query, uncoercible short-circuit) that GraphQL validation never delivers as
+  those Python values; live batched `pk__in` visibility and hidden-member
+  envelopes live in `examples/fakeshop/test_query/test_library_api.py`
+  (`test_serializer_m2m_alt_branches_visibility_is_one_batched_query_over_http`,
+  `test_nested_shelf_alt_branches_visibility_is_one_batched_query_over_http`,
+  `test_serializer_m2m_relation_visibility_over_http`);
+- unauthorized M2M membership SQL is live
+  (`test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http`);
 - the value-preserving `save()`-called-once capture (a save spy);
 - the save-time DRF-vs-Django `ValidationError` class split + the `IntegrityError`
   branch (a synthetic serializer whose `save()` raises each);
@@ -20,8 +26,8 @@ branch is earned LIVE; this file holds the genuinely-unreachable internals:
 - the config-assessment grep-guard + the post-finalization
   `_resolve_globalid_strategy` monkeypatch (recorded strategy consumed, not the
   live setting);
-- the sync + async boundary and the `SyncMisuseError` async-`get_queryset`-from-sync
-  path;
+- the `SyncMisuseError` async-`get_queryset`-from-sync path; async create colour
+  is live (`test_create_item_via_serializer_over_graphql_async`);
 - the G2 re-fetch PLAN OBJECT (`select_related` kept, `.only(...)` suppressed) - the
   optimizer's stashed plan is introspection state no `/graphql` response carries, so
   only its behavioral half (the emitted SQL) is earned live.
@@ -315,7 +321,12 @@ def test_decode_relation_single_wrong_model_global_id_is_field_error():
 
 @pytest.mark.django_db
 def test_decode_relation_multi_collects_visible_then_short_circuits():
-    """A many-relation collects each visible member's pk and short-circuits on a bad element."""
+    """A many-relation collects each visible member's pk and short-circuits on a bad element.
+
+    Live HTTP never delivers an uncoercible Python value (GraphQL rejects it at
+    validation). The batched visible-set SQL is
+    ``test_library_api.py::test_serializer_m2m_alt_branches_visibility_is_one_batched_query_over_http``.
+    """
     _declare_nonrelay_genre_primary()
     g1 = library_models.Genre.objects.create(name="MG1")
     g2 = library_models.Genre.objects.create(name="MG2")
@@ -1022,89 +1033,6 @@ def test_relation_decode_async_get_queryset_from_sync_raises_sync_misuse():
             related_model=library_models.Genre,
             info=None,
         )
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_async_serializer_resolver_runs_sync_body_under_sync_to_async():
-    """The async entry runs the sync body in one `sync_to_async(thread_sensitive=True)` call.
-
-    Driven through the `SerializerMutation.resolve_async` SEAM (not the resolver function
-    directly), so the seam's delegation to `resolve_serializer_async` is exercised too; that
-    in turn rides the shared `run_pipeline_async` boundary. A create over the async surface
-    returns the success payload (the same body the sync path runs), proving the seam +
-    boundary are wired.
-    """
-
-    class CategoryT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Category
-            fields = ("id", "name")
-            primary = True
-
-    class ItemT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Item
-            fields = ("id", "name", "category")
-            primary = True
-
-    class _AllowAll:
-        def has_permission(
-            self,
-            info,
-            mutation,
-            op,
-            data,
-            instance=None,
-        ):
-            return True
-
-    class AsyncBasicItemSerializer(serializers.ModelSerializer):
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "category")
-
-    class CreateItemAsync(SerializerMutation):
-        class Meta:
-            serializer_class = AsyncBasicItemSerializer
-            operation = "create"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def ping(self) -> int:
-            return 1
-
-    @strawberry.type
-    class Mutation:
-        write_item = DjangoMutationField(CreateItemAsync)
-
-    finalize_django_types()
-    DjangoSchema(query=Query, mutation=Mutation)
-    del CategoryT, ItemT
-
-    from asgiref.sync import sync_to_async
-
-    category = await sync_to_async(product_models.Category.objects.create)(name="AsyncCat")
-    gid = relay.GlobalID(type_name="products.category", node_id=str(category.pk))
-
-    @strawberry.input
-    class _Data:
-        name: str
-        category_id: strawberry.ID = strawberry.field(name="categoryId")
-
-    request = HttpRequest()
-    request.user = SimpleNamespace(username="async-u", is_authenticated=True)
-    info = SimpleNamespace(context=SimpleNamespace(request=request))
-    data = _Data(name="AsyncItem", category_id=gid)
-
-    # The managed-transaction context stands in for the DjangoSchema execution the
-    # direct seam call bypasses (it propagates into the sync_to_async worker).
-    with managed_write_transaction("default"):
-        payload = await CreateItemAsync.resolve_async(info, data=data, id=None)
-    assert payload.errors == []
-    assert payload.node is not None
-    assert payload.node.name == "AsyncItem"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1948,59 +1876,9 @@ def test_injected_data_hook_cannot_mutate_nested_client_containers():
 
 
 # ===========================================================================
-# Batched multi-relation visibility
+# Batched multi-relation visibility internals (SQL batching + hidden member
+# envelopes are live in ``test_library_api.py``).
 # ===========================================================================
-
-
-@pytest.mark.django_db
-def test_decode_relation_multi_uses_a_single_batched_visibility_query():
-    """A many-relation confirms the WHOLE set's visibility in ONE ``pk__in`` query."""
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
-    _declare_nonrelay_genre_primary()
-    genres = [library_models.Genre.objects.create(name=f"BatchG{i}") for i in range(3)]
-    pks = [g.pk for g in genres]
-
-    with CaptureQueriesContext(connection) as ctx:
-        result, error = serializer_resolvers._decode_relation_multi(
-            pks,
-            graphql_name="genreIds",
-            related_model=library_models.Genre,
-            info=None,
-        )
-    assert error is None
-    assert result == pks
-    # ONE batched pk__in query for all 3 members (not one visibility query per element).
-    assert len(ctx.captured_queries) == 1
-
-
-@pytest.mark.django_db
-def test_decode_relation_multi_hidden_member_is_field_error_via_batch():
-    """A hidden member in the batched set collapses to the uniform relation error (no leak)."""
-
-    class GenreT(DjangoType):
-        class Meta:
-            model = library_models.Genre
-            fields = ("id", "name")
-            primary = True
-
-        @classmethod
-        def get_queryset(cls, queryset, info):
-            return queryset.exclude(name="HiddenBatch")
-
-    del GenreT
-    visible = library_models.Genre.objects.create(name="VisibleBatch")
-    hidden = library_models.Genre.objects.create(name="HiddenBatch")
-    result, error = serializer_resolvers._decode_relation_multi(
-        [visible.pk, hidden.pk],
-        graphql_name="genreIds",
-        related_model=library_models.Genre,
-        info=None,
-    )
-    assert result is None
-    assert error is not None
-    assert error.field == "genreIds"
 
 
 def test_relation_queryset_scope_pins_unregistered_raw_pk_relation_without_visibility():
@@ -4576,103 +4454,6 @@ def test_supplied_m2m_duplicates_and_explicit_empty_list_pass_attestation():
         )
     assert isinstance(saved, library_models.Book)
     assert not book.genres.exists()
-
-
-@pytest.mark.django_db
-def test_no_m2m_membership_query_runs_before_authorization():
-    """The pre-save M2M snapshot never queries membership before the permission phase ran."""
-    from django.db import connection
-
-    seen = {"authorized": False, "early_m2m": []}
-    through_table = library_models.Book.genres.through._meta.db_table
-
-    class _RecordingPermission:
-        def has_permission(
-            self,
-            info,
-            mutation,
-            op,
-            data,
-            instance=None,
-        ):
-            seen["authorized"] = True
-            return True
-
-    class GenresSerializer(serializers.ModelSerializer):
-        genres = serializers.PrimaryKeyRelatedField(
-            many=True,
-            queryset=library_models.Genre.objects.all(),
-            allow_empty=True,
-            required=False,
-        )
-
-        class Meta:
-            model = library_models.Book
-            fields = ("title", "genres")
-
-    genre = library_models.Genre.objects.create(name="OrderingGenre")
-    book = _seed_book(genres=[genre])
-
-    class GenreT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Genre
-            fields = ("id", "name")
-            primary = True
-
-    class BookT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Book
-            fields = ("id", "title")
-            primary = True
-
-    class UpdateBook(SerializerMutation):
-        class Meta:
-            serializer_class = GenresSerializer
-            operation = "update"
-            permission_classes = [_RecordingPermission]
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def ping(self) -> int:
-            return 1
-
-    @strawberry.type
-    class Mutation:
-        write0 = DjangoMutationField(UpdateBook)
-
-    finalize_django_types()
-    schema = DjangoSchema(query=Query, mutation=Mutation)
-
-    def _watch(
-        execute,
-        sql,
-        params,
-        many,
-        context,
-    ):
-        if through_table in str(sql) and not seen["authorized"]:
-            seen["early_m2m"].append(sql)
-        return execute(sql, params, many, context)
-
-    book_gid = global_id_for(BookT, book.pk)
-    request = HttpRequest()
-    request.user = SimpleNamespace(
-        username="u",
-        is_authenticated=True,
-        get_all_permissions=lambda: set(),
-    )
-    with connection.execute_wrapper(_watch):
-        result = schema.execute_sync(
-            "mutation($id: ID!, $d: GenresSerializerPartialInput!) { write0(id: $id, data: $d) "
-            "{ node { title } errors { field messages } } }",
-            variable_values={"id": book_gid, "d": {"title": "Ordered"}},
-            context_value=SimpleNamespace(request=request),
-        )
-    assert result.errors is None, result.errors
-    assert seen["authorized"] is True
-    # No membership query fired before the permission phase completed.
-    assert seen["early_m2m"] == []
 
 
 # ===========================================================================

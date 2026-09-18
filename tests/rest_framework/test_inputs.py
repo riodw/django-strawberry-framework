@@ -22,6 +22,8 @@ substrate):
 
 System-under-test runs against the products ``Item`` / ``Category`` fixtures per
 ``AGENTS.md`` plus package-local Relay / non-Relay target ``DjangoType``s.
+Consumer round-trips live in ``examples/fakeshop/test_query/test_library_api.py``
+and ``examples/fakeshop/test_query/test_products_api.py`` (serializer mutations).
 """
 
 from __future__ import annotations

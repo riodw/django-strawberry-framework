@@ -34,7 +34,7 @@ Direct, decisive, reverses fast, expects same.
 ## Session rules you will forget
 
 - **No `pytest` after edits.** Format only. Rio says "run tests" / "run the full pipeline" when wanted.
-- After edits: `uv run ruff format .`, `uv run ruff check --fix .`, stop. No `pytest`, `manage.py check`, `uv build`.
+- After edits: `uv run ruff check --fix .`, `uv run ruff format .`, stop. No `pytest`, `manage.py check`, `uv build`.
 - Rio commits. Never auto-commit unless explicitly asked. **NEVER `Co-Authored-By` or any attribution footer.** Message = change description only.
 - **Commit auth covers ONE batch.** Doesn't carry to next batch/task, nor via a compaction summary. Rule is *no auto-commit*, not *never commit*; re-read AGENTS.md when a rule seems to forbid what Rio explicitly asks.
 - **NEVER create/switch branches without explicit auth.** Commit request ≠ branch auth. Commit on current branch; flag oddities after. (Once branched "helpfully" → misrouted Rio's concurrent commit.)

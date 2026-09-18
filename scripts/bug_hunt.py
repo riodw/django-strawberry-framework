@@ -99,7 +99,7 @@ method; this brief is a reminder, not a substitute.
   the shared tree, attributing every hunk of a dirty path first, including
   connected files when required. Add a permanent behavioral test for every
   production fix at the strongest tier required by `AGENTS.md`.
-- After edits run `uv run ruff format .` and `uv run ruff check --fix .`.
+- After edits run `uv run ruff check --fix .` then `uv run ruff format .`.
 - Report evidence, changed files, tests, and validation to Worker 0. Do not edit
   this progress file; Worker 0 runs the mechanical checks, a fresh Worker 2
   verifies, and Worker 0 advances it.

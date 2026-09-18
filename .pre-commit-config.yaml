@@ -5,8 +5,9 @@
 #
 # Local hooks use `uv run` so they share the project's pinned ruff (no separate
 # pinned-rev drift). Order matters: the trailing-comma fixer adds/removes the
-# commas (and reflows the files it touches), then ruff-format normalizes the
-# rest, then ruff lints.
+# commas (and reflows the files it touches), then ruff lints (a `--fix` can add
+# a magic trailing comma), then ruff-format gets the last word so
+# `ruff format --check` always agrees with the tree.
 repos:
   - repo: local
     hooks:
@@ -36,16 +37,16 @@ repos:
         exclude: /migrations/
         require_serial: true
 
-      - id: ruff-format
-        name: ruff format
-        entry: uv run ruff format
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
         language: system
         types: [python]
         require_serial: true
 
-      - id: ruff-check
-        name: ruff check
-        entry: uv run ruff check --fix
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
         language: system
         types: [python]
         require_serial: true

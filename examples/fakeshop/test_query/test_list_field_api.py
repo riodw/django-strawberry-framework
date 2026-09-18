@@ -921,7 +921,7 @@ def test_holder_offset_accepts_a_predicate_chain_of_approved_forms(monkeypatch):
     """
     _seed_three_shelves()
     stamp = models.Value(
-        datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC),
+        datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
         output_field=models.DateTimeField(),
     )
 
@@ -981,7 +981,7 @@ def test_holder_offset_accepts_a_predicate_chain_ending_in_a_transform(monkeypat
     """
     _seed_three_shelves()
     stamp = models.Value(
-        datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC),
+        datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc),
         output_field=models.DateTimeField(),
     )
 

@@ -29,7 +29,7 @@ from strawberry import relay
 from django_strawberry_framework import DjangoNodesField, strawberry_config
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
-from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 #: Settings that open the spec-048 error policy's pass-through gate for ONE live
@@ -1046,6 +1046,9 @@ def test_library_relay_node_global_id_round_trips():
     assert type_name == models.Genre._meta.label_lower
     assert node_id == str(genre.pk)
     assert genres[0]["name"] == "Speculative"
+    from apps.library.schema import GenreType
+
+    assert genres[0]["id"] == global_id_for(GenreType, genre.pk)
 
 
 # ---------------------------------------------------------------------------
@@ -3057,6 +3060,90 @@ def test_nullability_override_acceptance_api_is_queryable():
     rows = payload["data"]["allLibraryNullabilityOverrideBooks"]
     # Only the non-null-subtitle row survives the resolver's exclude().
     assert rows == [{"title": "Parable of the Sower", "subtitle": "Earthseed"}]
+
+
+@pytest.mark.django_db
+def test_secondary_book_global_id_refetches_as_primary_book_type_over_http(
+    project_schema_override,
+):
+    """A Node-shaped secondary Book still emits ``library.book:<pk>``; ``node(id:)`` is BookType.
+
+    ``FAKESHOP_TEST_RELAY_SECONDARY_NODE`` is the acceptance surface: the shipped
+    ``NullabilityOverrideBookType`` stays non-Relay so every schema build does
+    not warn about model-label collapse. Under the flag the secondary's ``id``
+    matches ``global_id_for`` on both the secondary and ``BookType``, and the
+    bare ``node(id:)`` runtime type is the primary (the documented asymmetry:
+    a model-anchored payload cannot name a secondary). The must-not is the
+    ``NullabilityOverrideBookType`` inline fragment staying empty on that
+    refetch, and the default schema keeping the type off ``Node``.
+    """
+    shelf = models.Shelf.objects.create(
+        code="N-1",
+        topic="Fiction",
+        branch=models.Branch.objects.create(name="RelaySecondary", city="Boston"),
+    )
+    book = models.Book.objects.create(
+        title="Parable of the Sower",
+        subtitle="Earthseed",
+        shelf=shelf,
+    )
+
+    with override_settings(FAKESHOP_TEST_RELAY_SECONDARY_NODE=True):
+        project_schema_override()
+        from apps.library.schema import BookType, NullabilityOverrideBookType
+
+        listed = _post_graphql(
+            """
+            query {
+              allLibraryNullabilityOverrideBooks { id title }
+            }
+            """,
+        )
+        assert listed.status_code == 200
+        listed_payload = listed.json()
+        assert "errors" not in listed_payload, listed_payload
+        rows = listed_payload["data"]["allLibraryNullabilityOverrideBooks"]
+        assert len(rows) == 1
+        emitted = rows[0]["id"]
+        assert rows[0]["title"] == "Parable of the Sower"
+        assert emitted == global_id_for(NullabilityOverrideBookType, book.pk)
+        assert emitted == global_id_for(BookType, book.pk)
+        type_name, node_id = _decode_global_id(emitted)
+        assert type_name == models.Book._meta.label_lower
+        assert node_id == str(book.pk)
+        # The one decode primitive ``node(id:)`` shares routes the model-label
+        # payload to the PRIMARY type object, never to the secondary that minted it.
+        assert decode_global_id(emitted) == (BookType, str(book.pk))
+
+        as_primary = _post_node(
+            emitted,
+            (
+                "__typename "
+                "... on BookType { primaryTitle: title } "
+                "... on NullabilityOverrideBookType { secondaryTitle: title }"
+            ),
+        )
+        assert "errors" not in as_primary, as_primary
+        node = as_primary["data"]["node"]
+        assert node["__typename"] == "BookType"
+        assert node["primaryTitle"] == "Parable of the Sower"
+        assert "secondaryTitle" not in node
+
+    project_schema_override()
+    default_sdl = _post_graphql(
+        """
+        query {
+          __type(name: "NullabilityOverrideBookType") {
+            interfaces { name }
+          }
+        }
+        """,
+    )
+    assert default_sdl.status_code == 200
+    default_payload = default_sdl.json()
+    assert "errors" not in default_payload, default_payload
+    interfaces = default_payload["data"]["__type"]["interfaces"] or []
+    assert "Node" not in {entry["name"] for entry in interfaces}
 
 
 @pytest.mark.django_db

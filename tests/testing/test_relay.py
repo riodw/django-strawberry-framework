@@ -1,8 +1,19 @@
 """Public Relay helper tests for global_id_for and decode_global_id.
 
-Mirrors ``django_strawberry_framework/testing/relay.py`` per the
-``docs/TREE.md`` one-to-one rule (``docs/SPECS/spec-032-full_relay-0_0_9.md``
-Decision 11 - no card conflict for this pair).
+Construction-time and throwaway-strategy residue of
+``django_strawberry_framework/testing/relay.py``. Live siblings:
+
+- default ``model``-strategy mint equals the wire id:
+  ``examples/fakeshop/test_query/test_library_api.py::test_library_relay_node_global_id_round_trips``
+- secondary model-label emit + ``node(id:)`` refetch as the primary:
+  ``examples/fakeshop/test_query/test_library_api.py::test_secondary_book_global_id_refetches_as_primary_book_type_over_http``
+
+What stays here has no fakeshop wire: ``type`` / ``type+model`` strategy
+equality (no shipped type sets ``Meta.globalid_strategy``; a flag on a live
+type would rewrite every GlobalID for that type), ``callable`` / ``custom`` /
+unfinalized / non-Node / stale-registry / hostile-input refusals, the
+Phase-3-stamped-unfinalized gate, ``decode_global_id`` identity re-export, and
+int/str/UUID round-trips through the helper (kanban UUID types are non-Relay).
 """
 
 import uuid
@@ -60,43 +71,12 @@ def _schema_with_row(node_type, model) -> strawberry.Schema:
     return strawberry.Schema(query=query_cls, config=strawberry_config())
 
 
-def _emitted_typename(type_cls):
-    """Return the GlobalID type-name slot the installed live closure emits.
-
-    Framework closures for ``model`` / ``type+model`` ignore ``root`` / ``info``
-    content, so a synthetic root faithfully exercises the live emit path.
-    """
-
-    class _FakeRoot:
-        pass
-
-    _FakeRoot._meta = type_cls.__django_strawberry_definition__.model._meta
-    _FakeRoot.id = "1"
-    return type_cls.resolve_typename(_FakeRoot(), None)
-
-
 _ROW_ID_QUERY = "{ row { id } }"
 
 
 # ---------------------------------------------------------------------------
-# global_id_for - the three deterministically encodable strategies
+# global_id_for - strategies no shipped fakeshop type declares
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_global_id_for_model_strategy():
-    """Default (``model``) strategy: helper output equals the live emitted id."""
-    services.seed_data(1)
-    category_node = _make_node_type("CategoryNode")
-    schema = _schema_with_row(category_node, Category)
-    row = Category.objects.order_by("pk").first()
-    result = schema.execute_sync(_ROW_ID_QUERY)
-    assert result.errors is None
-    live_id = result.data["row"]["id"]
-    assert live_id == global_id_for(category_node, row.pk)
-    decoded = relay.GlobalID.from_id(live_id)
-    assert decoded.type_name == "products.category"
-    assert decoded.node_id == str(row.pk)
 
 
 @pytest.mark.django_db
@@ -275,20 +255,6 @@ def test_public_decode_round_trip_primary_and_type_name():
     assert decode_global_id(global_id_for(type_type, 7)) == (type_type, "7")
     # The public name IS the internal dispatch (re-export, not a wrapper).
     assert testing_relay.decode_global_id is types_relay.decode_global_id
-
-
-def test_secondary_model_label_emitter_decodes_to_primary():
-    """A secondary mints the model-label payload it emits; decode routes to the primary."""
-    primary = _make_node_type("PrimaryItem", model=Item, primary=True)
-    secondary = _make_node_type("SecondaryItem", model=Item)
-    finalize_django_types()
-    minted = global_id_for(secondary, 3)
-    # The helper mints exactly the payload the secondary's live closure emits.
-    assert relay.GlobalID.from_id(minted).type_name == "products.item"
-    assert _emitted_typename(secondary) == "products.item"
-    # ... and decode routes the model-label payload to the model's PRIMARY
-    # via registry.get(model) - the documented asymmetry.
-    assert decode_global_id(minted) == (primary, "3")
 
 
 def test_global_id_for_hostile_getattr_keeps_configuration_error_boundary():

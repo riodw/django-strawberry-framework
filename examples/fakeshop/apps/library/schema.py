@@ -219,6 +219,13 @@ class NullabilityOverrideBookType(DjangoType):
     non-null ``subtitle`` so the forced ``subtitle = String!`` contract holds at
     the query boundary (``required_overrides`` changes the GraphQL contract, not
     the data).
+
+    Default-OFF ``FAKESHOP_TEST_RELAY_SECONDARY_NODE`` adds ``relay.Node`` so a
+    live request can observe the model-label GlobalID collapse: this secondary
+    emits ``library.book:<pk>`` (the same payload ``BookType`` emits) and
+    ``node(id:)`` refetches it as ``BookType``. Permanent Node on a secondary
+    would warn on every schema build (spec-031 Decision 8); the flag keeps the
+    shipped type non-Relay.
     """
 
     class Meta:
@@ -227,6 +234,8 @@ class NullabilityOverrideBookType(DjangoType):
         fields = ("id", "title", "subtitle")
         nullable_overrides = ("title",)
         required_overrides = ("subtitle",)
+        if getattr(settings, "FAKESHOP_TEST_RELAY_SECONDARY_NODE", False):
+            interfaces = (relay.Node,)
 
 
 class ShelfType(DjangoType):

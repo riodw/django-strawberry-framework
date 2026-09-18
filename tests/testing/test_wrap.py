@@ -4,7 +4,9 @@ System-under-test:
 :func:`django_strawberry_framework.testing.safe_wrap_connection_method` -
 the wrap-time half of the package's Django Trac #37064 defense-in-depth
 (the unwrap-time half lives in :mod:`django_strawberry_framework._django_patches`
-and is tested in ``tests/test_django_patches.py``).
+and is tested in ``tests/test_django_patches.py``). No GraphQL request can
+observe whether a connection method was wrapped or declined; that is
+connection-object identity, not a wire shape. There is no live sibling.
 
 These tests don't require ``FAKESHOP_SHARDED=1``; the helper operates
 on any Django connection, and the `default` alias is always present.

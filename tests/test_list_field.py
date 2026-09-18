@@ -1619,7 +1619,7 @@ def test_list_field_declined_sync_cleanup_generator_suspended():
 
 
 #: A fixed aware instant a predicate can compare against without a clock in the statement.
-_PREDICATE_STAMP = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
+_PREDICATE_STAMP = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
 
 
 def _predicate_ordering(lookup, threshold):

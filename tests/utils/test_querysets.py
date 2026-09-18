@@ -51,7 +51,6 @@ from django_strawberry_framework.utils.querysets import (
     _PLAIN_CONTAINER_TYPES,
     _PREFETCH_CHILD_POLICY,
     _RETAINED_TYPES,
-    _UNRECOMPOSED_CHILD_POLICY,
     SyncMisuseError,
     _bake_deferred_filter_or_defect,
     _base_table_defect,
@@ -5032,7 +5031,6 @@ def test_seal_policy_presets_answer_slice_and_combinator_independently():
         "sliced",
         "rows 0:5",
     )
-    assert _seal_or_defect(sliced, Category, None, _UNRECOMPOSED_CHILD_POLICY)[1] is None
     assert _seal_or_defect(sliced, Category, None, _PREFETCH_CHILD_POLICY)[1] is None
     assert _seal_or_defect(sliced, Category, None, _CASCADE_SEAL_POLICY)[1] == (
         "sliced",

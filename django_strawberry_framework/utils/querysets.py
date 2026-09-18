@@ -2798,13 +2798,12 @@ _DEFAULT_SEAL_POLICY = _SealPolicy()
 # because the walk narrows by ``.filter(...)`` and re-projects to the edge's
 # target column, neither of which Django supports on those shapes.
 _CASCADE_SEAL_POLICY = _SealPolicy(require_model_rows=False, reject_combined=True)
-# The optimizer walker's nested-connection child: its own gate
+# The optimizer walker's ``Prefetch`` child. Its nested-connection gate
 # (``nested_fetch.py::unwindowable_child_queryset_reason``) classifies a sliced
 # child and degrades the nested connection to the fully-unplanned per-parent
-# fallback WITHOUT recomposing, so the slice rejection's premise does not hold.
-_UNRECOMPOSED_CHILD_POLICY = _SealPolicy(reject_sliced=False)
-# A ``Prefetch`` child: the same no-recomposition licence, plus the shared-alias
-# requirement that keeps one GraphQL resolution on one database connection.
+# fallback WITHOUT recomposing, so the slice rejection's premise does not hold;
+# the shared-alias requirement keeps one GraphQL resolution on one database
+# connection.
 _PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=True)
 # List-field visibility policy for active argument execution: the default read-surface
 # policy with ``reject_combined=True`` so combinators (union, intersect, difference) fail
@@ -3924,9 +3923,9 @@ def apply_type_visibility_sync(
     source and the result so the two seals of one call cannot diverge. It
     defaults to ``_DEFAULT_SEAL_POLICY`` (model rows, no slice, no combinator
     licence); ``permissions.py`` passes ``_CASCADE_SEAL_POLICY`` and the
-    optimizer walker's nested-connection plan path passes
-    ``_UNRECOMPOSED_CHILD_POLICY`` (``spec-045-visibility_boundary-0_0_14``
-    Decision 5 degrade-to-unplanned).
+    optimizer walker's prefetch-child plan path passes
+    ``_PREFETCH_CHILD_POLICY`` (``spec-045-visibility_boundary-0_0_14``
+    Decision 5 degrade-to-unplanned, plus the shared-alias requirement).
     ``model`` is the captured-model seam (``_captured_model``): the field
     factories hand down the model off the ONE definition they read at
     construction, so neither seal of this call re-reads
@@ -4178,7 +4177,7 @@ async def apply_type_visibility_async(
     so the two colored paths cannot drift. ``render_error`` and ``policy`` are
     the sync runner's own seams, declared here for that reason: a surface whose
     seal differs from the default (the cascade's ``_CASCADE_SEAL_POLICY``, the
-    walker's ``_UNRECOMPOSED_CHILD_POLICY``) must be able to state the same
+    walker's ``_PREFETCH_CHILD_POLICY``) must be able to state the same
     contract on either colored path, and an option only one twin can reach IS
     the drift the shared boundary exists to prevent. ``SyncMisuseError`` stays
     reserved for sync boundaries: every defect here is a plain

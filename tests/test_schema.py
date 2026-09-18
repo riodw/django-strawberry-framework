@@ -543,6 +543,16 @@ def test_get_extensions_resolves_one_authority_of_each_kind_for_a_bare_class_ent
     assert sum(_is_extension(e, DjangoErrorPolicyExtension) for e in resolved) == 1
 
 
+def test_get_extensions_sync_and_async():
+    schema = DjangoSchema(query=DummyQuery)
+    sync_exts = schema.get_extensions(sync=True)
+    async_exts = schema.get_extensions(sync=False)
+    assert sum(isinstance(e, DjangoErrorPolicyExtension) for e in sync_exts) == 1
+    assert sum(isinstance(e, DjangoResourcePolicyExtension) for e in sync_exts) == 1
+    assert sum(isinstance(e, DjangoErrorPolicyExtension) for e in async_exts) == 1
+    assert sum(isinstance(e, DjangoResourcePolicyExtension) for e in async_exts) == 1
+
+
 @pytest.mark.parametrize(
     ("attribute", "policy"),
     [
@@ -599,6 +609,34 @@ def test_a_resolver_cannot_install_a_policy_by_writing_the_schema(attribute):
 
     with pytest.raises(AttributeError):
         setattr(schema, attribute, ResourcePolicy(max_list_rows=999))
+
+
+def test_a_resolver_cannot_disarm_enforcement_by_emptying_the_extension_list():
+    """A ``DjangoSchema`` enforces because it is one, not because a list still says so.
+
+    Emptying ``schema.extensions`` would remove the budget and the masking from
+    every later operation on the process, which is a wider primitive than
+    widening one bound: the next request would run with no policy extension
+    instantiated at all. The attribute is a property, so the ``__dict__``
+    spelling that gets past an ordinary one lands in a name nothing reads.
+    """
+
+    @strawberry.type
+    class _Query:
+        @strawberry.field
+        def rows(self, info: strawberry.Info) -> list[str]:
+            info.schema.__dict__["extensions"] = ()
+            return list(bounded_rows(["a", "b", "c"], info, None))
+
+    schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=1))
+    assert schema.execute_sync("{ rows }").data == {"rows": ["a"]}
+
+    second = schema.execute_sync("{ rows }")
+    assert second.errors is None, second.errors
+    assert second.data == {"rows": ["a"]}
+    resolved = schema.get_extensions(sync=True)
+    assert any(isinstance(entry, DjangoResourcePolicyExtension) for entry in resolved)
+    assert any(isinstance(entry, DjangoErrorPolicyExtension) for entry in resolved)
 
 
 @strawberry.type

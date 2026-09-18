@@ -196,9 +196,21 @@ query {
 _HINT_PAGE_DATA = {
     "shelves": [
         {
-            "code": "HINT",
+            "code": "A",
             "booksConnection": {
-                "edges": [{"node": {"title": "Alpha"}}, {"node": {"title": "Beta"}}],
+                "edges": [{"node": {"title": "a0"}}, {"node": {"title": "a1"}}],
+            },
+        },
+        {
+            "code": "B",
+            "booksConnection": {
+                "edges": [{"node": {"title": "b0"}}],
+            },
+        },
+        {
+            "code": "C",
+            "booksConnection": {
+                "edges": [],
             },
         },
     ],
@@ -206,11 +218,20 @@ _HINT_PAGE_DATA = {
 
 
 def _seed_hint_shelf():
-    """One shelf with three books so ``first: 2`` is a real bounded page."""
+    """Three shelves with 5, 1 and 0 books.
+
+    More than one parent keeps the nested page off the single-parent fetch
+    (``django_strawberry_framework/optimizer/single_parent_fetch.py``), whose
+    SQL carries neither a window nor a lateral join, and the uneven counts make
+    ``first: 2`` a real bounded page on one parent only.
+    """
     branch = Branch.objects.create(name="Hint strategy", city="Boston")
-    shelf = Shelf.objects.create(code="HINT", topic="Strategy", branch=branch)
-    for title in ("Alpha", "Beta", "Gamma"):
-        Book.objects.create(title=title, shelf=shelf)
+    shelf_a = Shelf.objects.create(code="A", topic="Strategy", branch=branch)
+    shelf_b = Shelf.objects.create(code="B", topic="Strategy", branch=branch)
+    Shelf.objects.create(code="C", topic="Strategy", branch=branch)
+    for index in range(5):
+        Book.objects.create(title=f"a{index}", shelf=shelf_a)
+    Book.objects.create(title="b0", shelf=shelf_b)
 
 
 def _book_sql(captured):
@@ -268,7 +289,8 @@ def test_per_field_strategy_hint_windowed_under_lateral_default_skips_lateral_ov
     assert response.data == _HINT_PAGE_DATA
     book_sql = _book_sql(captured)
     assert book_sql, captured.captured_queries
-    assert all("CROSS JOIN LATERAL" not in sql for sql in book_sql), book_sql
+    assert any("OVER (" in sql and "PARTITION BY" in sql for sql in book_sql), book_sql
+    assert all("LATERAL" not in sql for sql in book_sql), book_sql
 
 
 @pytest.mark.django_db
@@ -287,3 +309,4 @@ def test_per_field_strategy_hint_lateral_under_windowed_default_emits_lateral_ov
     book_sql = _book_sql(captured)
     assert book_sql, captured.captured_queries
     assert any("CROSS JOIN LATERAL" in sql for sql in book_sql), book_sql
+    assert any("LATERAL" in sql for sql in book_sql), book_sql

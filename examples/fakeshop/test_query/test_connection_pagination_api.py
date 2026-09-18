@@ -221,3 +221,92 @@ def test_root_connection_arguments_follow_declared_sidecars(field_name, required
     names = {arg["name"] for arg in fields[field_name]["args"]}
     assert set(required) <= names, names
     assert names.isdisjoint(forbidden), names
+
+
+_NESTED_CONNECTION_FIELD_ARGS = """
+query {
+  genre: __type(name: "GenreType") {
+    fields {
+      name
+      args {
+        name
+        type {
+          name
+          kind
+          ofType {
+            name
+            kind
+          }
+        }
+      }
+    }
+  }
+  periodical: __type(name: "PeriodicalType") {
+    fields {
+      name
+      args {
+        name
+        type {
+          name
+          kind
+          ofType {
+            name
+            kind
+          }
+        }
+      }
+    }
+  }
+  genre_conn: __type(name: "GenreTypeConnection") {
+    fields {
+      name
+    }
+  }
+  book_conn: __type(name: "BookTypeConnection") {
+    fields {
+      name
+    }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_nested_connection_arguments_follow_declared_sidecars():
+    """Nested connection fields expose ``filter`` and ``orderBy`` only when target declared them.
+
+    Target-driven contract: ``GenreType.booksConnection`` targets ``BookType`` which declares
+    both ``filterset_class`` and ``orderset_class``, so it exposes ``filter: BookFilterInputType``
+    and ``orderBy: [BookOrderInputType!]``. Conversely, ``PeriodicalType.issuesConnection`` targets
+    ``IssueType`` which declares ``orderset_class`` but no ``filterset_class``, so it exposes
+    ``orderBy`` but never ``filter``. Opted-in connection types carry ``totalCount``, while
+    unopted types omit it.
+    """
+    data = assert_graphql_success(_NESTED_CONNECTION_FIELD_ARGS)
+
+    genre_fields = {f["name"]: f for f in data["genre"]["fields"]}
+    assert "booksConnection" in genre_fields
+    books_conn_args = {a["name"]: a for a in genre_fields["booksConnection"]["args"]}
+    assert "first" in books_conn_args
+    assert "last" in books_conn_args
+    assert "before" in books_conn_args
+    assert "after" in books_conn_args
+    assert "filter" in books_conn_args
+    assert books_conn_args["filter"]["type"]["name"] == "BookFilterInputType"
+    assert "orderBy" in books_conn_args
+
+    periodical_fields = {f["name"]: f for f in data["periodical"]["fields"]}
+    assert "issuesConnection" in periodical_fields
+    issues_conn_args = {a["name"]: a for a in periodical_fields["issuesConnection"]["args"]}
+    assert "first" in issues_conn_args
+    assert "last" in issues_conn_args
+    assert "before" in issues_conn_args
+    assert "after" in issues_conn_args
+    assert "orderBy" in issues_conn_args
+    assert "filter" not in issues_conn_args
+
+    genre_conn_fields = {f["name"] for f in data["genre_conn"]["fields"]}
+    assert "totalCount" in genre_conn_fields
+
+    book_conn_fields = {f["name"] for f in data["book_conn"]["fields"]}
+    assert "totalCount" not in book_conn_fields

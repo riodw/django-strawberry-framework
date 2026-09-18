@@ -54,14 +54,16 @@ from cross_web import (
     DjangoHTTPRequestAdapter,
     HTTPException,
 )
+from django.conf import settings
 from django.http import (
     HttpRequest,
     HttpResponse,
     HttpResponseForbidden,
     RawPostDataException,
     UnreadablePostError,
+    multipartparser,
 )
-from django.middleware.csrf import CsrfViewMiddleware
+from django.middleware.csrf import CSRF_SECRET_LENGTH, CsrfViewMiddleware
 from django.test import (
     AsyncClient,
     AsyncRequestFactory,
@@ -2974,6 +2976,11 @@ _DERIVED_BOUNDARY_MIDDLEWARE_PATH = "tests.test_views._DerivedBoundaryMiddleware
 _CSRF_MIDDLEWARE_PATH = "tests.test_views._RejectingCsrfMiddleware"
 _PASSTHROUGH_MIDDLEWARE_PATH = "tests.test_views._passthrough_middleware"
 
+#: Django's own class, for the rows whose witness is the ``request.POST`` read
+#: itself: :class:`_RejectingCsrfMiddleware` refuses before performing one, so it
+#: can prove which class the chain reached but never whether a body was parsed.
+_STOCK_CSRF_MIDDLEWARE_PATH = "django.middleware.csrf.CsrfViewMiddleware"
+
 _ORDERED_CHAIN = [_PASSTHROUGH_MIDDLEWARE_PATH, _BOUNDARY_MIDDLEWARE_PATH, _CSRF_MIDDLEWARE_PATH]
 
 #: The mount cap the over-limit rows are refused by. Small enough that an ordinary
@@ -3046,6 +3053,44 @@ async def _post(path, is_async, client=None, **kwargs):
     if is_async:
         return await client.post(path, **kwargs)
     return client.post(path, **kwargs)
+
+
+def _csrf_enforcing_client(is_async):
+    """A client whose CSRF check actually reaches the ``request.POST`` read.
+
+    Two fixture traps sit in front of that read, and either one silently turns a
+    parse-ordering assertion into a measurement of the fixture: a default test
+    client makes ``CsrfViewMiddleware.process_view`` short-circuit on
+    ``_dont_enforce_csrf_checks``, and an enforcing client *without* a well-formed
+    ``csrftoken`` cookie is rejected on ``REASON_NO_CSRF_COOKIE``. Only an
+    enforcing client carrying a token-shaped cookie gets as far as reading the
+    POST data - which on a multipart body is the ``MultiPartParser`` invocation the
+    boundary exists to precede.
+    """
+    client = (
+        AsyncClient(enforce_csrf_checks=True) if is_async else Client(enforce_csrf_checks=True)
+    )
+    client.cookies[settings.CSRF_COOKIE_NAME] = "a" * CSRF_SECRET_LENGTH * 2
+    return client
+
+
+@contextlib.contextmanager
+def _counting_multipart_parses():
+    """Count real ``MultiPartParser.parse`` invocations, wherever they come from.
+
+    The primary witness for every ordering row: a CSRF call log only says which
+    class the chain reached, while this says whether any component parsed the body
+    at all. The original is called through, so the request behaves normally.
+    """
+    original = multipartparser.MultiPartParser.parse
+    parses = []
+
+    def counting(self, *args, **kwargs):
+        parses.append(True)
+        return original(self, *args, **kwargs)
+
+    with mock.patch.object(multipartparser.MultiPartParser, "parse", counting):
+        yield parses
 
 
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
@@ -3376,6 +3421,65 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
         await middleware(RequestFactory().get("/graphql/"))
 
     assert bool(_CSRF_ORDERING_EXEMPTION) is True
+
+
+@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+async def test_the_same_two_mounts_parse_nothing_without_the_middleware_either(
+    marked,
+    wrapped,
+    is_async,
+):
+    """The other half of the pair, and what makes the row above about a regression.
+
+    Package-only: tests what happens when the boundary middleware is not installed,
+    whereas the live fakeshop app always has it installed.
+
+    On a chain carrying no boundary middleware the exemption is unconditionally
+    true, so both callbacks are skipped by the CSRF middleware and both views
+    enforce their own cap. Holding the two rows together is what states the
+    property: installing the middleware does not change the answer for either
+    mount, so no deployment loses an ordering by installing it.
+    """
+    with _chain([_STOCK_CSRF_MIDDLEWARE_PATH]):
+        with _counting_multipart_parses() as parses:
+            for route in (marked, wrapped):
+                response = await _post(
+                    route,
+                    is_async,
+                    client=_csrf_enforcing_client(is_async),
+                    data={"operations": "{}"},
+                )
+                assert (route, response.status_code) == (route, 413)
+
+    assert parses == []
+
+
+@pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
+async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class(
+    marked,
+    wrapped,
+    is_async,
+):
+    """The secondary witness, against the project's own CSRF class this time.
+
+    ``_RejectingCsrfMiddleware`` records the callbacks Django's chain brings it in a
+    checkable state, and honours an exemption exactly as the base class does. An
+    empty log on an over-limit multipart request to the *declined* mount therefore
+    says the class was never handed the request - which is the same assertion
+    ``::test_the_chain_refuses_an_over_limit_multipart_before_any_csrf_read`` makes
+    for the stamped mount, now made for the one the middleware does not recognize.
+
+    ``marked`` is unused here and present only because both mounts come from one
+    parametrization.
+
+    The live sync mount is marked, so the declined sync colour is package-only.
+    """
+    with _chain(_ORDERED_CHAIN):
+        response = await _post(wrapped, is_async, data={"operations": "{}"})
+
+    assert response.status_code == 413
+    assert response.content.decode() == _BODY_LIMIT_REASON
+    assert _RejectingCsrfMiddleware.calls == []
 
 
 @pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)

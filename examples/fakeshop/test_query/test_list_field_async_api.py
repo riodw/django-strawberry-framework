@@ -549,27 +549,47 @@ async def test_async_http_staticmethod_resolver_still_applies_visibility():
 
 @pytest.mark.django_db(transaction=True)
 async def test_async_http_partial_async_generator_resolver_is_bounded():
-    """A partial-wrapped async-generator instance is capped by ``max_rows``."""
+    """A partial-wrapped async-generator instance is capped by ``max_rows``.
+
+    The source is advanced exactly ``max_rows`` times and then closed: the
+    bound is applied while consuming, never by draining the generator and
+    slicing afterwards, and the un-exhausted generator is released through
+    ``aclose()`` rather than left for garbage collection. The holder keeps a
+    reference to the generator so only an explicit close can run its
+    ``finally``.
+    """
     await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="Bravo", city="Boston")
     rows = await sync_to_async(lambda: list(library_models.Branch.objects.order_by("name")))()
 
+    holder: dict[str, Any] = {"next_count": 0, "closed": False, "gen": None}
+
+    async def _rows():
+        try:
+            for row in rows:
+                holder["next_count"] += 1
+                yield row
+        finally:
+            holder["closed"] = True
+
     class _Resolver:
-        async def __call__(
+        def __call__(
             self,
             prefix,
             root,
             info,
         ):
-            for row in rows:
-                yield row
+            holder["gen"] = _rows()
+            return holder["gen"]
+
+    limit = 1
 
     @strawberry.type
     class _GenQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
             resolver=functools.partial(_Resolver(), "ignored"),
-            max_rows=1,
+            max_rows=limit,
         )
 
     payload = await _post_async(
@@ -577,7 +597,9 @@ async def test_async_http_partial_async_generator_resolver_is_bounded():
         "{ branches { name } }",
     )
     assert "errors" not in payload, payload
-    assert len(payload["data"]["branches"]) == 1
+    assert len(payload["data"]["branches"]) == limit
+    assert holder["next_count"] == limit
+    assert holder["closed"] is True
 
 
 # ---------------------------------------------------------------------------

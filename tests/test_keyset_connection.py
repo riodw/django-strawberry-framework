@@ -40,6 +40,7 @@ This module keeps claims no GraphQL request can express:
 from types import SimpleNamespace
 
 import pytest
+import strawberry
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
 from django.db import models
@@ -47,7 +48,7 @@ from django.db.models import Count, F
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
 
-from django_strawberry_framework import finalize_django_types
+from django_strawberry_framework import DjangoConnectionField, finalize_django_types
 from django_strawberry_framework.connection import (
     _connection_type_for,
     _keyset_connection_context,
@@ -58,15 +59,21 @@ from django_strawberry_framework.connection import (
     _WindowedConnectionRows,
 )
 from django_strawberry_framework.keyset import (
+    KEYSET_CURSOR_PREFIX,
     cursor_columns_for,
     declared_cursor_state_for_definition,
+    from_base64,
     order_fingerprint,
 )
 from django_strawberry_framework.optimizer.nested_planner import (
     _extend_only_projection,
     _keyset_window_slice_from_arguments,
 )
-from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER, WINDOW_TOTAL_COUNT
+from django_strawberry_framework.optimizer.plans import (
+    WINDOW_ROW_NUMBER,
+    WINDOW_TOTAL_COUNT,
+    deferred_loading_of,
+)
 from django_strawberry_framework.utils.connections import UnwindowableConnection
 
 ISSUE_ORDER = ("-number", "id")
@@ -478,5 +485,42 @@ def test_extend_only_projection_passthrough_arms():
     assert _extend_only_projection(only_empty, ("number",)) is only_empty
     deferred = Issue.objects.defer("title")
     assert _extend_only_projection(deferred, ("number",)) is deferred
+    masked_deferred = Issue.objects.defer("number", "title")
+    extended_deferred = _extend_only_projection(masked_deferred, ("number",))
+    names, defer_flag = deferred_loading_of(extended_deferred)
+    assert defer_flag is True
+    assert names == frozenset({"title"})
     covered = Issue.objects.only("number", "id")
     assert _extend_only_projection(covered, ("number",)) is covered
+    only_qs = Issue.objects.only("title")
+    extended_only = _extend_only_projection(only_qs, ("number",))
+    names, defer_flag = deferred_loading_of(extended_only)
+    assert defer_flag is False
+    assert names == frozenset({"number", "title"})
+
+
+@pytest.mark.django_db
+def test_bare_keyset_connection_routes_through_keyset_slicer():
+    """A ``cursor_field`` type with NO ``Meta.connection`` still slices by keyset.
+
+    Package-only: every shipped keyset type declares ``Meta.connection``
+    (``examples/fakeshop/apps/library/schema.py::IssueType``), so the bare
+    shape has no live fixture. The minted cursor's prefix is what separates
+    the keyset slicer from the offset one.
+    """
+    issue_type = _make_issue_type("BareKeysetNode", connection=None)
+
+    @strawberry.type
+    class Query:
+        issues = DjangoConnectionField(issue_type)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    periodical = Periodical.objects.create(name="P")
+    Issue.objects.create(periodical=periodical, number=1, title="one")
+    result = schema.execute_sync("{ issues(first: 1) { edges { cursor } } }")
+    assert not result.errors, result.errors
+    assert len(result.data["issues"]["edges"]) == 1
+    cursor = result.data["issues"]["edges"][0]["cursor"]
+    prefix, _ = from_base64(cursor)
+    assert prefix == KEYSET_CURSOR_PREFIX

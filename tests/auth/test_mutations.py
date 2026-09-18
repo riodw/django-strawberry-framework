@@ -2118,6 +2118,27 @@ def _establish_authenticated_django_session(user, store):
 
 
 @pytest.mark.django_db
+def test_django_logout_signal_failure_no_ok_and_actor_anonymized():
+    """Logout row: a raising ``user_logged_out`` receiver -> no ok, actor anonymous.
+
+    The receiver fires BEFORE ``flush`` (Stage 0), so the durable row is NOT
+    invalidated - and the resolver never falsely claims it was (no ok payload; the
+    error propagates as a top-level GraphQL error).
+    """
+    create_users(1)
+    schema = _login_logout_schema()
+    user = get_user_model().objects.get(username="staff_1")
+    request = _establish_authenticated_django_session(user, DBSessionStore())
+    key = request.session.session_key
+    assert _session_row_exists(key)
+    with _raising_logout_receiver():
+        res = schema.execute_sync(_LOGOUT_Q, context_value=request)
+    assert res.errors is not None
+    assert not request.user.is_authenticated  # local actor made anonymous
+    assert _session_row_exists(key)  # signal preceded flush; no false invalidation
+
+
+@pytest.mark.django_db
 def test_django_logout_flush_failure_no_ok_and_actor_anonymized():
     """Logout row: a store outage during ``flush``/``delete`` -> no ok, actor anonymous, error propagates."""
     create_users(1)

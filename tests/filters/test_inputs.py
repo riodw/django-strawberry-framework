@@ -1226,6 +1226,81 @@ def test_build_range_input_class_name_unqualified_without_filterset():
 
 
 @pytest.mark.django_db
+def test_range_input_type_name_is_scoped_per_filterset():
+    """Two filtersets sharing a ``field_name`` mint DISTINCT range sub-input classes.
+
+    Pin for the spec-027 collision hazard. Shipped filtersets share one axis
+    scalar, so the differing-axis claim is package-only. The nested
+    ``RangeFilter`` sub-input class name derived from
+    ``field_name`` alone, so two filtersets that each declare a ``RangeFilter``
+    for a same-named column both stamped one GraphQL name
+    (``PriceRangeInputType``). These nested classes are embedded directly in the
+    annotation (NOT run through the Decision-9 materialization ledger nor the
+    arguments-factory collision registry), so Strawberry does NOT raise on the
+    clash -- it silently keeps whichever class it registers first and drops the
+    other, advertising the wrong axis scalar for the loser. The name is now
+    qualified by the owning filterset so the two are distinct and both survive in
+    the schema.
+    """
+    import re
+
+    from apps.scalars import models as scalar_models
+
+    class ScalarPriceFilter(FilterSet):
+        price = RangeFilter(field_name="price")
+
+        class Meta:
+            model = scalar_models.ScalarSpecimen
+            fields = []
+
+    class TextPriceFilter(FilterSet):
+        # Same generated top-level ``price`` field, but a text-backed source:
+        # this proves the two scoped nested types retain different axis scalars.
+        price = RangeFilter(field_name="price")
+
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    def _range_cls_of(bag):
+        for annotation in bag.__annotations__.values():
+            for arg in get_args(annotation):
+                if getattr(arg, "__name__", "").endswith("RangeInputType"):
+                    return arg
+        raise AssertionError("no RangeInputType found in operator bag")
+
+    def _bag(triples):
+        by_attr = {p: a for p, a, _ in triples}
+        return next(x for x in get_args(by_attr["price"]) if x is not type(None))
+
+    bag1 = _bag(_build_input_fields(ScalarPriceFilter))
+    bag2 = _bag(_build_input_fields(TextPriceFilter))
+    r1 = _range_cls_of(bag1)
+    r2 = _range_cls_of(bag2)
+
+    # Owning-filterset qualifier makes the two names distinct (pre-fix: both
+    # were ``PriceRangeInputType``).
+    assert r1.__name__ == "ScalarPriceFilterPriceRangeInputType"
+    assert r2.__name__ == "TextPriceFilterPriceRangeInputType"
+    assert r1.__name__ != r2.__name__
+    assert r1.__annotations__["start"] != r2.__annotations__["start"]
+
+    # Both nested range types survive when both operator bags land in one schema;
+    # pre-fix the name clash silently collapsed the two into a single input type
+    # (Strawberry keeps whichever it registers first and drops the other).
+    @strawberry.type
+    class Query:
+        ok: int
+
+    sdl = str(strawberry.Schema(query=Query, types=[bag1, bag2]))
+    range_defs = set(re.findall(r"input (\w*RangeInputType)", sdl))
+    assert range_defs == {
+        "ScalarPriceFilterPriceRangeInputType",
+        "TextPriceFilterPriceRangeInputType",
+    }
+
+
+@pytest.mark.django_db
 def test_direct_range_conversion_does_not_poison_owned_input_build():
     """An earlier unowned conversion cannot defeat owner-qualified generation."""
     from apps.scalars import models as scalar_models

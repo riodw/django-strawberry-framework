@@ -374,12 +374,16 @@ def test_inspect_file_and_image_rows_name_output_converters(
     text = out.getvalue()
 
     attachment_row = _field_row(text, "attachment")
-    assert attachment_type in attachment_row
+    attachment_cols = attachment_row.split()
+    assert attachment_cols[2] == attachment_type
+    assert attachment_cols[3] == "yes"
     assert "convert_field_output -> DjangoFileType" in attachment_row
     assert "SCALAR_MAP" not in attachment_row
 
     image_row = _field_row(text, "image")
-    assert "DjangoImageType" in image_row
+    image_cols = image_row.split()
+    assert image_cols[2] == "DjangoImageType"
+    assert image_cols[3] == "yes"
     assert "convert_field_output -> DjangoImageType" in image_row
     assert "SCALAR_MAP" not in image_row
     assert "DjangoFileType" not in image_row

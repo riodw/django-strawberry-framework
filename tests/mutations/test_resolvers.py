@@ -8,7 +8,9 @@ async-row leak isolation, Relay M2M hide on a second ``Genre`` primary
 (shipped ``GenreType`` has no hide hook; a second primary cannot coexist in the
 live process), raw-pk M2M *update* (no shipped ``updateShelf``), unregistered
 primary existence-only decode, ``TaggedItem.object_id`` GFK indexing, synthetic
-file-column update (no ``UpdateMediaSpecimen``), ``PROTECT`` / ``RESTRICT``
+file-column update (no ``UpdateMediaSpecimen``), relation-override visibility
+(no shipped override declares a relation field, so the composite is
+package-only), ``PROTECT`` / ``RESTRICT``
 delete, pipeline pk-drift, and ``ScalarSpecimen`` writes (scalars app exposes
 no mutation). Consumer-visible create/update/delete, empty-name ``full_clean``,
 unresolvable relation ids, M2M replace/clear/omit, choice-enum unwrap, and
@@ -114,20 +116,20 @@ def _schema(mutation_type: type) -> strawberry.Schema:
 # ---------------------------------------------------------------------------
 
 
-def _build_item_schema():
+def _build_item_schema(*, category_get_queryset=None, input_cls=None):
     """Declare Item/Category primaries + create/update/delete mutations; return (schema, types)."""
 
-    CategoryT = type(
-        "CategoryT",
-        (DjangoType, relay.Node),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
-            ),
-        },
-    )
+    category_body: dict = {
+        "Meta": type(
+            "Meta",
+            (),
+            {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
+        ),
+    }
+    if category_get_queryset is not None:
+        category_body["get_queryset"] = category_get_queryset
+    CategoryT = type("CategoryT", (DjangoType, relay.Node), category_body)
+
     ItemT = type(
         "ItemT",
         (DjangoType, relay.Node),
@@ -149,6 +151,8 @@ def _build_item_schema():
         "operation": "create",
         "permission_classes": [_AllowAll],
     }
+    if input_cls is not None:
+        create_meta["input_class"] = input_cls
     update_meta = {
         "model": product_models.Item,
         "operation": "update",
@@ -420,6 +424,47 @@ def test_integrity_error_race_fallback_via_mocked_save():
     # The catch is broad (``except IntegrityError``), so the message is the honest
     # superset, not an over-claimed "uniqueness".
     assert payload["errors"][0]["messages"] == ["A database constraint was violated."]
+
+
+@pytest.mark.django_db
+def test_globalid_relation_override_flows_through_visibility_contract():
+    """A ``GlobalID`` relation override is still relation-visibility-checked (Decision 10).
+
+    The bind-time type-lock (``sets.py::_validate_relation_override_types``) forces a
+    relation override to keep the generated ``relay.GlobalID`` id type precisely so the
+    override CANNOT bypass the id type-check / Decision-10 visibility contract a
+    raw-pk override would have skipped. This pins the end-to-end guarantee: a
+    ``createItem`` whose ``categoryId`` names a ``Category`` hidden by
+    ``Category.get_queryset`` is a ``FieldError`` on ``categoryId`` (hidden
+    indistinguishable from missing, no existence leak) - even though ``categoryId``
+    came from a consumer ``input_class`` override, not the generated input. A raw-pk
+    override would have been passed through unchecked and silently attached the
+    unseeable row; the type-lock is what guarantees this path is reached.
+
+    No shipped override declares a relation field, so the composite is package-only.
+    """
+
+    @classmethod
+    def _hide_private(cls, queryset, info):
+        return queryset.filter(is_private=False)
+
+    @strawberry.input
+    class GidItemInput:
+        category_id: relay.GlobalID = strawberry.field(description="custom category ref")
+
+    schema, (CategoryT, _ItemT) = _build_item_schema(
+        category_get_queryset=_hide_private,
+        input_cls=GidItemInput,
+    )
+    hidden = product_models.Category.objects.create(name=_category_name(), is_private=True)
+    res = schema.execute_sync(
+        _CREATE,
+        variable_values={
+            "d": {"name": "New", "categoryId": global_id_for(CategoryT, hidden.pk)},
+        },
+    )
+    assert_mutation_field_error(res, "createItem", "categoryId")
+    assert product_models.Item.objects.filter(name="New").count() == 0
 
 
 @pytest.mark.django_db

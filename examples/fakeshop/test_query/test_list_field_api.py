@@ -1652,6 +1652,7 @@ def test_shipped_branches_a_limit_variable_outside_int_is_refused_before_sql(bad
         payload = graphql_payload(_LIMIT_VARIABLE_QUERY, variables={"lim": bad_value})
 
     assert "errors" in payload
+    assert "Int cannot represent non-integer value" in payload["errors"][0]["message"]
     assert payload["data"] is None, payload
     assert len(ctx.captured_queries) == 0
 
@@ -1670,6 +1671,7 @@ def test_shipped_branches_an_offset_variable_outside_int_is_refused_before_sql(b
         payload = graphql_payload(_OFFSET_VARIABLE_QUERY, variables={"off": bad_value})
 
     assert "errors" in payload
+    assert "Int cannot represent non-integer value" in payload["errors"][0]["message"]
     assert payload["data"] is None, payload
     assert len(ctx.captured_queries) == 0
 
@@ -1685,6 +1687,7 @@ def test_shipped_branches_a_float_limit_literal_is_refused_before_sql():
         )
 
     assert "errors" in payload
+    assert "Int cannot represent non-integer value" in payload["errors"][0]["message"]
     assert payload["data"] is None, payload
     assert len(ctx.captured_queries) == 0
 
@@ -1700,6 +1703,7 @@ def test_shipped_branches_a_float_offset_literal_is_refused_before_sql():
         )
 
     assert "errors" in payload
+    assert "Int cannot represent non-integer value" in payload["errors"][0]["message"]
     assert payload["data"] is None, payload
     assert len(ctx.captured_queries) == 0
 
@@ -3472,7 +3476,9 @@ def test_holder_membership_card_list_elides_patron_id_to_one_query():
     ]
     assert len(card_sql) == 1, card_sql
     assert "JOIN" not in card_sql[0].upper()
-    assert "patron_id" in card_sql[0]
+    select_sql, _ = card_sql[0].split(" FROM ", 1)
+    assert "patron_id" in select_sql
+    assert "library_patron" not in card_sql[0]
     patron_sql = [
         entry["sql"]
         for entry in captured.captured_queries

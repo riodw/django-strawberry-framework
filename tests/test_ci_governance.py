@@ -226,6 +226,19 @@ def test_checkout_steps_do_not_persist_credentials(path):
             )
 
 
+def _workflow_image_references(path):
+    executable = "\n".join(
+        line.split("#", 1)[0] for line in path.read_text(encoding="utf-8").splitlines()
+    )
+    return list(IMAGE_REFERENCE.finditer(executable))
+
+
+def test_workflow_container_images_are_present():
+    """At least one workflow file contains a container image reference."""
+    total_images = sum(len(_workflow_image_references(path)) for path in WORKFLOW_PATHS)
+    assert total_images > 0
+
+
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
 def test_container_images_are_pinned_by_digest(path):
     """Every container image started by a workflow is digest-pinned.
@@ -236,10 +249,7 @@ def test_container_images_are_pinned_by_digest(path):
     alike -- with comments stripped first, so prose naming a tag is not mistaken
     for a reference that actually starts a container.
     """
-    executable = "\n".join(
-        line.split("#", 1)[0] for line in path.read_text(encoding="utf-8").splitlines()
-    )
-    for match in IMAGE_REFERENCE.finditer(executable):
+    for match in _workflow_image_references(path):
         name, reference = match.group(1), match.group(2)
         assert reference.startswith("@sha256:"), (
             f"{path.name}: image {name}{reference} is tag-pinned; pin it by @sha256: digest"

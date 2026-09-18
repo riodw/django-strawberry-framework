@@ -119,6 +119,11 @@ def test_planned_path_rejects_a_two_sentence_title_like_any_summary() -> None:
         _ = planned.description
 
 
+def test_curated_planned_descriptions_are_present() -> None:
+    """The curated planned-path descriptions mapping is non-empty."""
+    assert len(PLANNED_PATH_DESCRIPTIONS) > 0
+
+
 @pytest.mark.parametrize(
     ("path", "summary"),
     _CURATED_PLANNED_DESCRIPTIONS,

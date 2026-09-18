@@ -684,6 +684,46 @@ def test_capture_returns_none_when_upstream_owner_is_missing():
     assert patches._captured_upstream_method(None, "parse_json") is None
 
 
+def test_patched_parse_json_translates_a_pathologically_nested_body(pathological_json_text):
+    """A body nested past the parser's C stack -> controlled 400, not a raw escape.
+
+    The second half of gap 1: ``json.loads`` answers a pathologically nested
+    document with ``RecursionError`` - a ``RuntimeError``, so neither
+    upstream's ``except json.JSONDecodeError`` nor a ``ValueError`` widening
+    catches it, and it escaped as an unhandled ``500`` from every one of the
+    nine call sites. The translation is the same ``HTTPException(400, ...)``
+    upstream already gives unparseable JSON, indistinguishable but for
+    ``__cause__``.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_parse_json(BaseView(), pathological_json_text)
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
+    assert type(excinfo.value.__cause__) is RecursionError
+
+
+@pytest.mark.parametrize("param", ["variables", "extensions"])
+def test_patched_parse_query_params_translates_a_deep_param(param, pathological_json_text):
+    """The GET shield owns gap 1's error channel without owning its guard.
+
+    The shield routes the two query-param parses around the envelope guard
+    (upstream's per-param handling owns validity there), but a deep param
+    still drives ``json.loads`` past the C stack - client input that must
+    meet the same controlled ``400`` as malformed JSON, not an unhandled
+    ``RecursionError`` -> ``500`` on a bodyless GET.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_parse_query_params(
+            BaseView(),
+            {"query": "{ __typename }", param: pathological_json_text},
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == patches._UPSTREAM_JSON_PARSE_REASON
+    assert type(excinfo.value.__cause__) is RecursionError
+
+
 def test_patched_sync_parse_multipart_translates_a_deep_operations_document(
     deepcopy_overflow_operations_text,
 ):

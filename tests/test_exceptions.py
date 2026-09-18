@@ -381,6 +381,10 @@ def test_lookup_validation_error_roundtrip_preserves_attributes(roundtrip):
     assert getattr(restored, "custom_tag", None) == "custom_value"
     assert str(restored) == str(err)
     assert repr(restored) == repr(err)
+    if roundtrip is copy.copy:
+        assert restored.terminal is term
+    else:
+        assert restored.terminal is not term
 
 
 def test_str_subclass_with_hostile_format_is_stripped_by_helpers():

@@ -394,7 +394,11 @@ def test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http()
     assert payload.get("errors") is None, payload
     expected = list(Category.objects.order_by("pk").values_list("name", flat=True))
     assert [row["name"] for row in payload["data"]["categories"]] == expected
-    assert all(row["id"] for row in payload["data"]["categories"])
+    decoded = [relay.GlobalID.from_id(row["id"]) for row in payload["data"]["categories"]]
+    assert [int(g.node_id) for g in decoded] == list(
+        Category.objects.order_by("pk").values_list("pk", flat=True),
+    )
+    assert all(g.type_name == Category._meta.label_lower for g in decoded)
 
 
 @pytest.mark.django_db

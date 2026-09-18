@@ -67,6 +67,23 @@ def _production_qs():
     return filterset.qs
 
 
+def test_emitted_leaf_is_a_single_distinct_free_correlated_exists():
+    """The production leaf compiles to one distinct-free ``EXISTS`` on the root table."""
+    _seed()
+    qs = _production_qs()
+    sql = str(qs.query)
+    upper = sql.upper()
+
+    assert qs.query.distinct is False
+    assert upper.count("EXISTS") == 1
+    assert "DISTINCT" not in upper  # distinct-free outer AND inner existence body.
+    # Membership + terminal tables live INSIDE the EXISTS, not the outer alias map.
+    outer_tables = {join.table_name for join in qs.query.alias_map.values()}
+    assert outer_tables == {"library_loan"}
+    # The inner subquery is correlated on the outer pk.
+    assert '= ("library_loan"."id")' in sql
+
+
 def test_explain_analyze_buffers_shows_no_outer_fan_out():
     """EXPLAIN(ANALYZE, BUFFERS) executes the emitted query with no outer multiplication.
 

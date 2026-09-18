@@ -23,7 +23,7 @@ import pytest
 from apps.products.services import TEST_USER_PASSWORD, create_users
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from django.contrib.auth import BACKEND_SESSION_KEY, get_user_model
+from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth import signals as auth_signals
 from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
@@ -364,6 +364,8 @@ def test_login_backend_crash_propagates_and_leaves_session_untouched():
     assert payload.get("data") is None, payload
     assert "backend boom" in payload["errors"][0]["message"], payload
     assert "sessionid" not in client.cookies
+    assert Session.objects.count() == 0
+    assert SESSION_KEY not in client.session
     assert _graphql_data(_ME, client=client)["me"] is None
 
 

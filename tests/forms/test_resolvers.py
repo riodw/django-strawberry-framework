@@ -33,6 +33,7 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from django import forms
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from strawberry import relay
@@ -236,6 +237,49 @@ def test_decode_split_relation_lands_under_form_key_not_id_attr():
     assert provided_data["category"] == cat.pk
     assert "category_id" not in provided_data
     assert provided_files == {}
+
+
+@pytest.mark.django_db
+def test_decode_split_upload_lands_in_files_never_data():
+    """An ``Upload`` field lands in ``provided_files``, never ``provided_data``."""
+
+    class MediaForm(forms.ModelForm):
+        class Meta:
+            model = scalars_models.MediaSpecimen
+            fields = ("label", "attachment", "image")
+
+    class MediaT(DjangoType):
+        class Meta:
+            model = scalars_models.MediaSpecimen
+            fields = ("id", "label")
+            primary = True
+
+    class CreateMedia(DjangoModelFormMutation):
+        class Meta:
+            form_class = MediaForm
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_media = DjangoMutationField(CreateMedia)
+
+    finalize_django_types()
+    _schema(Mutation)
+    upload = SimpleUploadedFile("a.txt", b"hello")
+    image = SimpleUploadedFile("a.png", b"\x89PNG\r\n")
+    data = CreateMedia._input_class(label="L", attachment=upload, image=image)
+    info = SimpleNamespace(context=SimpleNamespace())
+    provided_data, provided_files, error = form_resolvers._decode_form_data(
+        CreateMedia,
+        data,
+        info,
+    )
+    assert error is None
+    assert set(provided_files) == {"attachment", "image"}
+    assert "attachment" not in provided_data
+    assert "image" not in provided_data
+    assert provided_data == {"label": "L"}
 
 
 @pytest.mark.django_db

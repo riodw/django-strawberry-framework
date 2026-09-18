@@ -1540,9 +1540,13 @@ def test_an_unnamed_multi_operation_document_is_charged_in_full(document, bound,
     document for lacking a name, but the budget runs first: ``Big`` is over a
     post-parse ceiling, so the typed resource rejection is what the client sees.
     """
-    extensions = _rejection(_post("/rp-shape/", document))
+    payload = _post("/rp-shape/", document)
+    extensions = _rejection(payload)
+    assert extensions["code"] == RESOURCE_LIMIT_ERROR_CODE
     assert extensions["bound"] == bound
     assert extensions["charged"] == charged
+    errors = payload["errors"]
+    assert all("Must provide operation name" not in err.get("message", "") for err in errors)
 
 
 def test_nested_collections_are_charged_multiplicatively():
@@ -3206,12 +3210,31 @@ def _entry_request(entry, query):
     return _post(mount, query)
 
 
+@pytest.fixture
+def _reset_overlap_state():
+    """Give each parametrized case fresh coordinator and witness state."""
+    _ExecutionWitness.entered.clear()
+    _OverlapCoordinator.parked = threading.Event()
+    _OverlapCoordinator.released = threading.Event()
+    _OverlapCoordinator.armed = False
+    try:
+        yield
+    finally:
+        _OverlapCoordinator.armed = False
+        _OverlapCoordinator.released.set()
+        _ExecutionWitness.entered.clear()
+
+
 @pytest.mark.parametrize(
     ("spelling", "color"),
     ENTRY_ROWS,
     ids=ENTRY_IDS,
 )
-def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling, color):
+def test_an_overlapping_request_does_not_admit_an_oversized_one(
+    spelling,
+    color,
+    _reset_overlap_state,
+):
     """Whichever object a consumer entry resolves to, the charge lands on its own document.
 
     Strawberry resolves a class and a fresh factory into a new extension per
@@ -3233,13 +3256,15 @@ def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling, color)
     benign = "{ rows }"
 
     _ExecutionWitness.entered.clear()
+    _OverlapCoordinator.parked = threading.Event()
+    _OverlapCoordinator.released = threading.Event()
+    _OverlapCoordinator.armed = False
+
     alone = _rejection(_entry_request(entry, oversized))
     assert alone["bound"] == "max_aliases"
     assert alone["limit"] == ENTRY_ALIASES
     assert _ExecutionWitness.entered == []
 
-    _OverlapCoordinator.parked.clear()
-    _OverlapCoordinator.released.clear()
     _OverlapCoordinator.armed = True
     overlapped = {}
 
@@ -3247,8 +3272,8 @@ def test_an_overlapping_request_does_not_admit_an_oversized_one(spelling, color)
         overlapped["payload"] = _entry_request(entry, oversized)
 
     held = threading.Thread(target=_run_oversized)
-    held.start()
     try:
+        held.start()
         assert _OverlapCoordinator.parked.wait(timeout=10), "the oversized request never parked"
         benign_payload = _entry_request(entry, benign)
     finally:

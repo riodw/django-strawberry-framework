@@ -42,8 +42,8 @@ def test_export_schema_raises_command_error_for_missing_positional_argument():
 
 
 def test_export_schema_raises_command_error_when_path_flag_has_no_value():
-    with pytest.raises(CommandError):
-        call_command("export_schema", "x", "--path")
+    with pytest.raises(CommandError, match="expected one argument"):
+        call_command("export_schema", "config.schema:schema", "--path")
 
 
 def test_export_schema_path_help_documents_destructive_utf8_write():

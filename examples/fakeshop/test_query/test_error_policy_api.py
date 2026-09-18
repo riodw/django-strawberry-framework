@@ -775,7 +775,25 @@ def test_a_validation_error_keeps_its_own_message_and_carries_no_correlation_id(
     assert payload["data"] is None, payload
     error = payload["errors"][0]
     assert "Cannot query field 'noSuchFieldAnywhere'" in error["message"], error
-    assert "correlationId" not in (error.get("extensions") or {})
+    assert (error.get("extensions") or {}) == {}, error
+
+
+@pytest.mark.django_db
+def test_an_async_validation_error_keeps_its_own_message_and_carries_no_correlation_id():
+    """The async validation half of the ``original_error is None`` column."""
+    async_response = _await_response(
+        AsyncTestClient().query(
+            "{ noSuchFieldAnywhere }",
+            assert_no_errors=False,
+            url="/ep-async/",
+        ),
+    )
+    payload = json.loads(async_response.response.content)
+    assert payload["data"] is None, payload
+    assert len(payload["errors"]) == 1, payload
+    error = payload["errors"][0]
+    assert "Cannot query field 'noSuchFieldAnywhere'" in error["message"], error
+    assert (error.get("extensions") or {}) == {}, error
 
 
 # ---------------------------------------------------------------------------

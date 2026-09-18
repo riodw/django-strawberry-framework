@@ -47,6 +47,7 @@ from django_strawberry_framework.connection import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, filter_input_type
+from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import _register_relation_connection_teardown
 
@@ -93,6 +94,18 @@ def _schema_with_root(declaring_type, *, field_name="objs"):
         ),
     )
     return strawberry.Schema(query=query_cls, config=strawberry_config())
+
+
+def _field_args_block(sdl, field_name):
+    """Return the SDL argument block of ``field_name``.
+
+    The Relay pagination args carry descriptions, so graphql-core prints a
+    connection field's arguments one per line - a single-line substring check
+    cannot see them. Slices from ``<field_name>(`` to the closing ``): ``.
+    """
+    _, _, rest = sdl.partition(f"{field_name}(")
+    block, _, _ = rest.partition("): ")
+    return block
 
 
 def _seed_library_books(titles, *, genre_name="fiction"):
@@ -412,6 +425,73 @@ def test_connection_only_relation_stays_list_suppressed_on_refinalize():
     sdl = str(_schema_with_root(category_type))
     assert sdl.count("itemsConnection(") == 1
     assert "items: [" not in sdl
+
+
+# =============================================================================
+# Target-driven sidecar arguments + totalCount; visibility; pagination
+# =============================================================================
+
+
+def test_synthesized_connection_carries_sidecar_args_and_total_count():
+    """The synthesized field carries the TARGET's sidecar args and ``totalCount`` opt-in.
+
+    Type-level target-driven contract (Decision 6): ``ItemType`` declares
+    ``filterset_class`` / ``orderset_class`` / ``connection`` so
+    ``itemsConnection`` gets ``filter:`` / ``orderBy:`` arguments and a
+    ``totalCount``-carrying connection type; ``PropertyType`` declares none,
+    so ``propertiesConnection`` carries only the four Relay pagination args
+    and no ``totalCount``.
+
+    Package-only for the sidecar-LESS half: no shipped example type is a
+    nested connection target that declares neither ``filterset_class`` nor
+    ``orderset_class``, so only a constructed type can carry that arm. The
+    live twin
+    (``examples/fakeshop/test_query/test_connection_pagination_api.py``)
+    pins the half a shipped type can express.
+    """
+
+    class _ItemFilter(FilterSet):
+        class Meta:
+            model = Item
+            fields = {"name": ["exact"]}
+
+    class _ItemOrder(OrderSet):
+        class Meta:
+            model = Item
+            fields = ["name"]
+
+    _make_type(
+        "ItemType",
+        Item,
+        ("id", "name", "category"),
+        meta_extra={
+            "filterset_class": _ItemFilter,
+            "orderset_class": _ItemOrder,
+            "connection": {"total_count": True},
+        },
+    )
+    _make_type("PropertyType", Property, ("id", "name", "category"))
+    category_type = _make_type(
+        "CategoryType",
+        Category,
+        (
+            "id",
+            "name",
+            "items",
+            "properties",
+        ),
+    )
+
+    sdl = str(_schema_with_root(category_type))
+    items_args = _field_args_block(sdl, "itemsConnection")
+    assert "filter:" in items_args
+    assert "orderBy:" in items_args
+    properties_args = _field_args_block(sdl, "propertiesConnection")
+    assert "filter:" not in properties_args
+    assert "orderBy:" not in properties_args
+    # Only ItemType's connection type (the opt-in) carries totalCount.
+    assert sdl.count("totalCount") == 1
+    assert "ItemTypeConnection" in sdl
 
 
 def test_registry_clear_preserves_replacement_for_synthesized_connection():

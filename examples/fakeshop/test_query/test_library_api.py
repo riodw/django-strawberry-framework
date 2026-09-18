@@ -699,23 +699,42 @@ def test_library_force_select_book_hint_still_prefetches_when_book_is_hooked(
     with ``select_related()``. ``BookType`` still filters repair rows, so the
     walker downgrades to a visibility-scoped ``Prefetch``: the loan root has no
     book JOIN, ``book_id`` stays projected, and books arrive in a second query.
+    The downgraded ``Prefetch`` carries the hook's own filter, so a loan over a
+    repair-status book resolves to no book at all. ``Loan.book`` is a non-null
+    FK and the generated field is ``BookType!``, so the wire shape of a hidden
+    relation target is the masked non-null error at that loan's ``book`` path
+    with ``data`` null - not a ``null`` leaf - and the hidden title never
+    appears in the response body.
     The flag-off sibling is
     ``test_library_optimizer_hints_are_observable_over_http``.
+    """
+    document = """
+    query {
+      allLibraryLoans {
+        book { title }
+      }
+    }
     """
     with override_settings(FAKESHOP_TEST_LOAN_FORCE_SELECT_BOOK=True):
         project_schema_override()
         _seed_library_graph()
 
         with CaptureQueriesContext(connection) as captured:
-            response = _post_graphql(
-                """
-                query {
-                  allLibraryLoans {
-                    book { title }
-                  }
-                }
-                """,
-            )
+            response = _post_graphql(document)
+
+        repair_book = models.Book.objects.create(
+            title="Dune",
+            circulation_status=models.Book.CirculationStatus.REPAIR,
+            shelf=models.Shelf.objects.get(code="A-1"),
+        )
+        models.Loan.objects.create(
+            book=repair_book,
+            patron=models.Patron.objects.get(name="Ada"),
+            note="second checkout",
+        )
+
+        with CaptureQueriesContext(connection) as hidden_captured:
+            hidden_response = _post_graphql(document)
 
     assert response.status_code == 200
     assert response.json() == {
@@ -731,6 +750,17 @@ def test_library_force_select_book_hint_still_prefetches_when_book_is_hooked(
     assert "JOIN" not in loan_sql[0]
     assert "book_id" in loan_sql[0]
     assert len(book_sql) == 1, book_sql
+
+    assert hidden_response.status_code == 200
+    hidden_payload = hidden_response.json()
+    assert hidden_payload["data"] is None, hidden_payload
+    assert [error["path"] for error in hidden_payload["errors"]] == [
+        ["allLibraryLoans", 1, "book"],
+    ]
+    assert "Dune" not in hidden_response.content.decode()
+    hidden_book_sql = _sql_from_table(hidden_captured, "library_book")
+    assert len(hidden_book_sql) == 1, hidden_book_sql
+    assert "circulation_status" in hidden_book_sql[0].lower()
 
 
 #: One document posted twice by the plan-cache row, so the two requests differ
@@ -2522,19 +2552,27 @@ async def test_library_genres_order_by_to_many_desc_applies_over_graphql_async()
 
     ``allLibraryBooks`` calls ``apply_sync`` from a hand-written field.
     ``allLibraryGenresViaListField`` is ``DjangoListField``, so the async view
-    runs ``GenreOrder.apply_async``. ``Zebra`` is inserted first so pk order
-    (and name ASC) cannot satisfy ``MAX(title) DESC``.
+    runs ``GenreOrder.apply_async``. The three genres are named and inserted so
+    that the expected ``MAX(title) DESC`` order ``["Alpha", "Zeta", "Mira"]``
+    agrees with no cheaper order: name ASC and pk both give
+    ``["Alpha", "Mira", "Zeta"]``, name DESC and pk DESC both give
+    ``["Zeta", "Mira", "Alpha"]``. Two genres carry two books each, so the
+    ``MIN`` aggregate orders them ``["Zeta", "Mira", "Alpha"]`` as well.
     """
     branch = await models.Branch.objects.acreate(name="Branch", city="Boston")
     shelf = await models.Shelf.objects.acreate(code="A-1", topic="general", branch=branch)
-    zebra = await models.Genre.objects.acreate(name="Zebra")
-    aardvark = await models.Genre.objects.acreate(name="Aardvark")
-    middling = await models.Book.objects.acreate(title="Beta", shelf=shelf)
-    low = await models.Book.objects.acreate(title="Alpha", shelf=shelf)
-    high = await models.Book.objects.acreate(title="Zulu", shelf=shelf)
-    await middling.genres.aadd(zebra)
-    await low.genres.aadd(aardvark)
-    await high.genres.aadd(aardvark)
+    alpha = await models.Genre.objects.acreate(name="Alpha")
+    mira = await models.Genre.objects.acreate(name="Mira")
+    zeta = await models.Genre.objects.acreate(name="Zeta")
+    for title, genre in (
+        ("Beta", alpha),
+        ("Zulu", alpha),
+        ("Cara", mira),
+        ("Delta", zeta),
+        ("Echo", zeta),
+    ):
+        book = await models.Book.objects.acreate(title=title, shelf=shelf)
+        await book.genres.aadd(genre)
 
     payload = await _post_async_shipped(
         """
@@ -2547,7 +2585,7 @@ async def test_library_genres_order_by_to_many_desc_applies_over_graphql_async()
     )
     assert "errors" not in payload, payload
     names = [row["name"] for row in payload["data"]["allLibraryGenresViaListField"]]
-    assert names == ["Aardvark", "Zebra"]
+    assert names == ["Alpha", "Zeta", "Mira"]
     assert len(names) == len(set(names))
 
 
@@ -3495,6 +3533,10 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
     ``library_loan`` exactly once (the membership re-entry - a second
     ``library_loan`` alias plus ``library_patron`` - lives inside the ``EXISTS``
     subquery, after the outer ``WHERE``). No filter-driven ``SELECT DISTINCT``.
+    The outer alias set is ``library_loan`` alone: no ``JOIN`` and no
+    ``library_book`` before the outer ``WHERE``, and the whole statement owns
+    exactly one ``EXISTS``. Row preservation is read off the payload too - both
+    seeded loans come back, each exactly once.
     """
     branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")
     shelf = models.Shelf.objects.create(branch=branch, code="MED-1", topic="ward")
@@ -3515,7 +3557,10 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
             """,
         )
     assert response.status_code == 200
-    assert "errors" not in response.json(), response.json()
+    payload = response.json()
+    assert "errors" not in payload, payload
+    ids = [row["id"] for row in payload["data"]["allLibraryLoans"]]
+    assert len(ids) == 2 and len(set(ids)) == 2
 
     loan_sql = [q["sql"] for q in captured.captured_queries if "library_loan" in q["sql"].lower()]
     # A plain list field, filter-only: exactly one root query, no count.
@@ -3523,12 +3568,15 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
     sql = loan_sql[0]
     assert "SELECT DISTINCT" not in sql.upper()
     assert "EXISTS(" in sql.upper()
+    assert sql.upper().count("EXISTS(") == 1
 
     # The outer query (everything before the outer WHERE) owns library_loan once;
     # the membership re-entry and library_patron live inside the EXISTS body.
     pre_where = sql.split("WHERE")[0]
     assert pre_where.count('FROM "library_loan"') == 1
+    assert "library_book" not in pre_where.lower()
     assert "library_patron" not in pre_where.lower()
+    assert "JOIN" not in pre_where.upper()
 
 
 @pytest.mark.django_db
@@ -4609,6 +4657,49 @@ def test_node_uncoercible_pk_live():
 
 
 @pytest.mark.django_db
+def test_node_missing_row_null_live():
+    """A well-formed id for a nonexistent row resolves to null with NO error over HTTP."""
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="ExistingBook", shelf=shelf)
+    missing_pk = book.pk + 9999
+    missing_gid = global_id_for(BookType, missing_pk)
+    payload = _post_node(missing_gid, "... on BookType { title }")
+    assert "errors" not in payload, payload
+    assert payload["data"] == {"node": None}
+
+
+@pytest.mark.django_db
+def test_node_hidden_and_missing_issue_equal_queries_live():
+    """Hidden and missing refetches issue the SAME query count (no existence oracle)."""
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    visible = models.Book.objects.create(title="VisibleBook", shelf=shelf)
+    hidden = models.Book.objects.create(
+        title="RepairBook",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+    missing_pk = max(visible.pk, hidden.pk) + 9999
+    hidden_gid = global_id_for(BookType, hidden.pk)
+    missing_gid = global_id_for(BookType, missing_pk)
+
+    with CaptureQueriesContext(connection) as hidden_captured:
+        hidden_payload = _post_node(hidden_gid, "... on BookType { title }")
+    with CaptureQueriesContext(connection) as missing_captured:
+        missing_payload = _post_node(missing_gid, "... on BookType { title }")
+
+    assert "errors" not in hidden_payload, hidden_payload
+    assert "errors" not in missing_payload, missing_payload
+    assert hidden_payload["data"] == {"node": None}
+    assert missing_payload["data"] == {"node": None}
+    assert len(hidden_captured.captured_queries) == len(missing_captured.captured_queries)
+    assert len(hidden_captured.captured_queries) == 1
+
+
+@pytest.mark.django_db
 def test_nodes_batch_mixed_types_order_and_null():
     """``nodes(ids:)`` holds input order across types, with holes for missing, uncoercible, AND hidden rows.
 
@@ -4959,6 +5050,133 @@ def test_genre_books_connection_behavior():
     assert titles_two == ["Circe"]
     assert page_two["pageInfo"]["hasNextPage"] is False
     assert "Withdrawn" not in titles_one + titles_two
+
+
+@pytest.mark.django_db
+def test_nested_books_connection_first_overrun_clamps():
+    """``first: N`` past the remainder returns the actual remainder on a NESTED connection.
+
+    The nested-window sibling of ``test_first_overrun``: the overrun is clamped
+    to the three rows the genre owns, ``hasNextPage`` is false, and no error is
+    raised. ``first`` stays under the ``relay_max_results`` ceiling, which
+    rejects an over-ceiling window before any clamping question arises.
+    """
+    genre = models.Genre.objects.create(name="OverrunGenre")
+    shelf = _seed_shelf()
+    for title in ("Alpha", "Beta", "Gamma"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres(filter: { name: { exact: "OverrunGenre" } }) {
+            booksConnection(orderBy: [{ title: ASC }], first: 10) {
+              edges { node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenres"][0]["booksConnection"]
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Alpha", "Beta", "Gamma"]
+    assert conn["pageInfo"]["hasNextPage"] is False
+
+
+@pytest.mark.django_db
+def test_nested_books_connection_stale_after_is_not_an_error():
+    """A stale ``after`` cursor on a NESTED connection is never an error.
+
+    The nested-window sibling of ``test_stale_after_cursor_no_error``: the row
+    the cursor points at is deleted while its siblings survive, so the
+    continuation page is resolved against a live partition. Only the no-error
+    property plus a non-empty continuation is pinned; positional stability
+    under deletes is not part of the offset-cursor contract.
+    """
+    genre = models.Genre.objects.create(name="StaleAfterGenre")
+    shelf = _seed_shelf()
+    for title in (
+        "Alpha",
+        "Beta",
+        "Gamma",
+        "Delta",
+    ):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    page_one_resp = _post_graphql(
+        """
+        query {
+          allLibraryGenres(filter: { name: { exact: "StaleAfterGenre" } }) {
+            booksConnection(orderBy: [{ title: ASC }], first: 2) {
+              pageInfo { endCursor }
+            }
+          }
+        }
+        """,
+    )
+    assert page_one_resp.status_code == 200
+    page_one = page_one_resp.json()
+    assert "errors" not in page_one, page_one
+    end_cursor = page_one["data"]["allLibraryGenres"][0]["booksConnection"]["pageInfo"][
+        "endCursor"
+    ]
+
+    # Delete the row the cursor position points at (second in title order).
+    models.Book.objects.get(genres=genre, title="Beta").delete()
+
+    page_two_resp = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenres(filter: {{ name: {{ exact: "StaleAfterGenre" }} }}) {{
+            booksConnection(orderBy: [{{ title: ASC }}], first: 2, after: "{end_cursor}") {{
+              edges {{ node {{ title }} }}
+            }}
+          }}
+        }}
+        """,
+    )
+    assert page_two_resp.status_code == 200
+    page_two = page_two_resp.json()
+    assert "errors" not in page_two, page_two
+    edges = page_two["data"]["allLibraryGenres"][0]["booksConnection"]["edges"]
+    assert len(edges) >= 1, page_two
+
+
+@pytest.mark.django_db
+def test_nested_books_connection_first_and_last_rejected():
+    """``first`` + ``last`` on a NESTED connection surface the mutual-exclusivity guard.
+
+    The nested-window sibling of ``test_genre_connection_first_and_last_rejected``:
+    ``connection.py::_guard_first_and_last`` lands as a GraphQL ``errors`` entry
+    on a 200 response with ``data`` null, not a non-200 HTTP status.
+    """
+    genre = models.Genre.objects.create(name="FirstLastGenre")
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="Alpha", shelf=shelf)
+    book.genres.add(genre)
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres(filter: { name: { exact: "FirstLastGenre" } }) {
+            booksConnection(first: 1, last: 1) {
+              edges { node { title } }
+            }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert payload["data"] is None, payload
+    messages = " ".join(error["message"] for error in payload["errors"])
+    assert "mutually exclusive" in messages
 
 
 @pytest.mark.django_db
@@ -9243,8 +9461,10 @@ def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
     ``FAKESHOP_TEST_BOOK_GENRES_REQUIRE_PERM`` installs ``DjangoModelPermission``. The
     pre-save M2M membership snapshot runs at write-step entry, after authorize. An
     anonymous title-only update is refused with ``data: null`` and issues no
-    through-table query. A caller holding ``change_book`` still writes (the must-not
-    is the denial, not a broken mutation).
+    through-table query. On the granted half the snapshot DOES run, and its first
+    through-table statement comes after the first permission read, so the ordering
+    (authorize, then snapshot) is pinned from both sides rather than only by the
+    absence of a query on the denied one.
     """
     from django.contrib.auth.models import Permission
 
@@ -9286,17 +9506,28 @@ def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
         user = get_user_model().objects.get(pk=user.pk)
         client = Client()
         client.force_login(user)
-        allowed = _post_graphql(
-            mutation,
-            client=client,
-            variables={"id": book_id, "d": {"title": "AllowedTitle"}},
-        )
+        with CaptureQueriesContext(connection) as granted_captured:
+            allowed = _post_graphql(
+                mutation,
+                client=client,
+                variables={"id": book_id, "d": {"title": "AllowedTitle"}},
+            )
         allowed_payload = allowed.json()
         assert "errors" not in allowed_payload, allowed_payload
         assert allowed_payload["data"]["updateBookGenresViaSerializer"]["errors"] == []
         assert allowed_payload["data"]["updateBookGenresViaSerializer"]["node"]["title"] == (
             "AllowedTitle"
         )
+        granted_sqls = [q["sql"] for q in granted_captured.captured_queries]
+        through_indices = [i for i, sql in enumerate(granted_sqls) if through_table in sql]
+        auth_indices = [
+            i
+            for i, sql in enumerate(granted_sqls)
+            if "auth_permission" in sql or "auth_user_user_permissions" in sql
+        ]
+        assert len(through_indices) >= 1
+        assert len(auth_indices) >= 1
+        assert through_indices[0] > auth_indices[0]
     book.refresh_from_db()
     assert book.title == "AllowedTitle"
     assert list(book.genres.values_list("name", flat=True)) == ["AuthOrderKept"]
@@ -10152,16 +10383,15 @@ def test_library_prefetch_child_over_unrelated_table_is_refused_over_http():
     """
     _seed_branch_notes()
 
-    response = _post_graphql(
-        """
-        query {
-          allLibraryBranchNotesOverUnrelatedChild {
-            body
-            branch { name }
-          }
-        }
-        """,
-    )
+    query = """
+    query {
+      allLibraryBranchNotesOverUnrelatedChild {
+        body
+        branch { name }
+      }
+    }
+    """
+    response = _post_graphql(query)
 
     assert response.status_code == 200
     payload = response.json()
@@ -10169,8 +10399,21 @@ def test_library_prefetch_child_over_unrelated_table_is_refused_over_http():
     assert [error["path"] for error in payload["errors"]] == [
         ["allLibraryBranchNotesOverUnrelatedChild"],
     ]
-    # The shipped error policy masks the seal's own detail, so the refusal's
-    # wording stays pinned at the package tier by
-    # ``tests/utils/test_querysets.py::test_prefetch_child_over_unrelated_table_still_fails_for_proxy_target``
-    # and what the wire can show is that the field failed closed with no rows.
+    # The shipped error policy masks the seal's own detail; what the default
+    # wire shows is that the field failed closed with no rows.
     assert payload["errors"][0]["message"] == "An unexpected error occurred."
+
+    # Under error policy debug pass-through, the seal's unmasked refusal wording
+    # travels over the wire.
+    with override_settings(**_ERROR_POLICY_PASS_THROUGH):
+        debug_response = _post_graphql(query)
+    assert debug_response.status_code == 200
+    debug_payload = debug_response.json()
+    assert debug_payload["data"] is None, debug_payload
+    debug_message = debug_payload["errors"][0]["message"]
+    assert "prefetch 'branch' queryset is over Genre rows" in debug_message
+    assert "relation targets ProxyBranch rows" in debug_message
+    assert (
+        "a prefetch child over an unrelated table would populate the relation with "
+        "rows the related type's visibility hook never saw"
+    ) in debug_message

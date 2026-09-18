@@ -366,6 +366,10 @@ class TestToolbarPresent:
         because the handler caches its chain on first request.
         """
         seed_data(1)
+        control_response = _post_graphql(Client(), _TOOLBAR_ITEMS_QUERY, "ToolbarItems")
+        assert control_response.status_code == 200
+        _assert_injected_panel_payload(json.loads(control_response.content))
+
         middleware = [*settings.MIDDLEWARE, encoding_middleware]
         with override_settings(MIDDLEWARE=middleware):
             client = Client()

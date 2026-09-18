@@ -348,10 +348,15 @@ def test_every_named_fixture_helper_seeds_into_one_database():
     assert services.seed_cascade_split in helpers.values(), sorted(helpers)
 
     for name, helper in sorted(helpers.items()):
+        before_count = Category.objects.count()
         try:
             helper()
         except IntegrityError as exc:
             raise AssertionError(f"{name} reuses a name an earlier helper seeded") from exc
+        after_count = Category.objects.count()
+        assert after_count - before_count >= 1, (
+            f"fixture helper {name} did not create a Category in the database"
+        )
 
     seeded = Category.objects.filter(name__startswith="zzz_").count()
     assert seeded >= len(helpers), (seeded, sorted(helpers))

@@ -50,6 +50,7 @@ from django_strawberry_framework.keyset import (
     cursor_columns_for,
     decode_keyset_cursor,
     encode_keyset_cursor,
+    from_base64,
     keyset_seek_greater,
     keyset_seek_q,
     keyset_seek_sql,
@@ -239,6 +240,30 @@ def test_decode_rejects_non_base64():
     with pytest.raises(GraphQLError, match="invalid cursor"):
         decode_keyset_cursor(
             "!!not-base64!!",
+            _issue_columns(),
+            fingerprint=_fingerprint(),
+            argument="after",
+        )
+
+
+@pytest.mark.django_db
+def test_decode_rejects_tampered_ciphertext():
+    """A well-framed envelope carrying corrupted ciphertext is still rejected.
+
+    Package-only: the inner ciphertext sits under the base64 envelope
+    ``keyset.py::to_base64`` mints, so no wire value addresses it - a request
+    can only corrupt the outer encoding. The rejection is the same uniform
+    ``GraphQLError`` every other cursor rejection raises.
+    """
+    periodical = Periodical.objects.create(name="P")
+    issue = Issue.objects.create(periodical=periodical, number=1, title="one")
+    cursor = _mint(issue)
+    prefix, encrypted = from_base64(cursor)
+    assert prefix == KEYSET_CURSOR_PREFIX
+    tampered = to_base64(KEYSET_CURSOR_PREFIX, encrypted[:-2] + "xx")
+    with pytest.raises(GraphQLError, match="invalid cursor"):
+        decode_keyset_cursor(
+            tampered,
             _issue_columns(),
             fingerprint=_fingerprint(),
             argument="after",

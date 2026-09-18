@@ -2823,6 +2823,11 @@ def test_cascade_query_count_fixed():
     entry_sql = _from("products_entry")
     item_sql = _from("products_item")
     category_sql = _from("products_category")
+    # Every statement the request issued is one of those three: the anonymous
+    # request reads no auth or session table.
+    assert len(captured) == len(entry_sql) + len(item_sql) + len(category_sql), [
+        query["sql"] for query in captured
+    ]
     assert len(entry_sql) == 1, entry_sql
     assert len(item_sql) == 1, item_sql
     assert len(category_sql) == 1, category_sql
@@ -4314,7 +4319,12 @@ def test_create_item_via_form_wrong_type_global_id_on_category_id_is_field_error
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash():
+@pytest.mark.parametrize(
+    "bad_id",
+    ["not-a-global-id", "raw-pk"],
+    ids=["not-a-global-id", "raw-pk"],
+)
+def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_id):
     """A malformed / raw-pk ``id:`` on ``updateItemViaForm`` is a ``FieldError`` on ``id``.
 
     Decided before locate, never coerced to a bare pk that would 500 at ``.get``.
@@ -4325,18 +4335,18 @@ def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash():
     item = models.Item.objects.create(name="FormUntouched", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
-    for bad_id in ("not-a-global-id", str(item.pk)):
-        response = _post_graphql(
-            _UPDATE_ITEM_VIA_FORM,
-            client=client,
-            variables={"id": bad_id, "d": {"name": "RenamedForm"}},
-        )
-        assert response.status_code == 200
-        payload = response.json()
-        assert "errors" not in payload, payload
-        result = payload["data"]["updateItemViaForm"]
-        assert result["node"] is None
-        assert [e["field"] for e in result["errors"]] == ["id"]
+    lookup_id = str(item.pk) if bad_id == "raw-pk" else bad_id
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": lookup_id, "d": {"name": "RenamedForm"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["id"]
     item.refresh_from_db()
     assert item.name == "FormUntouched"
 

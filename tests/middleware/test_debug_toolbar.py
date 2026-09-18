@@ -235,6 +235,22 @@ def test_install_hint_floor_matches_the_pyproject_dev_group_row(toolbar_leaf):
 # ---------------------------------------------------------------------------
 
 
+class _FakePanel:
+    """A minimal stand-in for a stock panel in the ``_get_payload`` units."""
+
+    def __init__(
+        self,
+        panel_id,
+        has_content,
+        title,
+        nav_subtitle,
+    ):
+        self.panel_id = panel_id
+        self.has_content = has_content
+        self.title = title
+        self.nav_subtitle = nav_subtitle
+
+
 class _FakeToolbar:
     """A protocol-complete fake toolbar for the stock ``_postprocess``.
 
@@ -281,6 +297,35 @@ def test_get_payload_bails_without_request_id(toolbar_leaf):
     request = RequestFactory().post("/graphql/")
     response = HttpResponse(b"{}", content_type="application/json")
     assert toolbar_leaf._get_payload(request, response, _FakeToolbar(request_id=None)) is None
+
+
+def test_get_payload_panel_title_only_when_has_content(toolbar_leaf):
+    """Stock panels expose properties, so the callable arm is package-only.
+
+    Sibling of the missing-``request_id`` row: ``has_content``-false -> ``title``
+    None; callables are called.
+    """
+    request = RequestFactory().post("/graphql/")
+    response = HttpResponse(b"{}", content_type="application/json")
+    toolbar = _FakeToolbar(
+        request_id="riid",
+        enabled_panels=[
+            _FakePanel("QuietPanel", has_content=False, title="Quiet", nav_subtitle="quiet sub"),
+            _FakePanel(
+                "LoudPanel",
+                has_content=True,
+                title=lambda: "Loud",
+                nav_subtitle=lambda: "loud sub",
+            ),
+            _FakePanel("TemplatesPanel", has_content=True, title="Templates", nav_subtitle="t"),
+        ],
+    )
+    payload = toolbar_leaf._get_payload(request, response, toolbar)
+    assert payload["debugToolbar"]["requestId"] == "riid"
+    panels = payload["debugToolbar"]["panels"]
+    assert panels["QuietPanel"] == {"title": None, "subtitle": "quiet sub"}
+    assert panels["LoudPanel"] == {"title": "Loud", "subtitle": "loud sub"}
+    assert "TemplatesPanel" not in panels
 
 
 def test_get_payload_bails_on_non_object_json_body(toolbar_leaf):

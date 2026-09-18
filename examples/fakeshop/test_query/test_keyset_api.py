@@ -197,7 +197,11 @@ def test_root_keyset_cursors_are_deterministic():
     _seed_periodicals()
     first = _root_page(first=1)
     second = _root_page(first=1)
-    assert first["edges"][0]["cursor"] == second["edges"][0]["cursor"]
+    first_cursors = [edge["cursor"] for edge in first["edges"]]
+    second_cursors = [edge["cursor"] for edge in second["edges"]]
+    assert len(first_cursors) == 1
+    assert all(cursor for cursor in first_cursors)
+    assert first_cursors == second_cursors
     assert first["pageInfo"]["endCursor"] == second["pageInfo"]["endCursor"]
 
 

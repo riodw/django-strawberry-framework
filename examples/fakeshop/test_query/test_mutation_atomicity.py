@@ -258,9 +258,15 @@ def test_update_does_not_commit_when_response_completion_fails():
 
     response = _post_update(client, item_pk, name="post-corruption-update")
 
-    # The request is handled (no 500) and the unserializable response surfaces an error...
-    assert response.status_code < 500
-    assert "errors" in response.json()
+    payload = response.json()
+    assert response.status_code == 200
+    assert "errors" in payload
+    assert payload["errors"][0]["path"] == [
+        "updateItem",
+        "node",
+        "category",
+        "createdDate",
+    ]
 
     # ...but the write must NOT have committed: the row keeps its original name.
     assert _stored_item_name(item_pk) == "raw-bad-date-item"
@@ -446,8 +452,15 @@ async def test_update_does_not_commit_when_response_completion_fails_over_graphq
         },
     )
 
-    assert response.status_code < 500
-    assert "errors" in response.json()
+    payload = response.json()
+    assert response.status_code == 200
+    assert "errors" in payload
+    assert payload["errors"][0]["path"] == [
+        "updateItem",
+        "node",
+        "category",
+        "createdDate",
+    ]
     stored = await sync_to_async(_stored_item_name)(item_pk)
     assert stored == "async-raw-bad-date-item"
 

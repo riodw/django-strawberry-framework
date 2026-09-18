@@ -151,6 +151,13 @@ def test_require_session_returns_the_present_django_session():
     assert require_session(request, Transport.DJANGO_HTTP) is request.session
 
 
+def test_require_session_missing_django_middleware_raises_with_the_session_substring():
+    request = RequestFactory().post("/graphql/")  # no SessionMiddleware ran
+    with pytest.raises(ConfigurationError, match="session") as exc_info:
+        require_session(request, Transport.DJANGO_HTTP)
+    assert "session" in str(exc_info.value).lower()
+
+
 def test_require_session_none_channels_session_raises():
     adapter = _adapter({"type": "websocket"})  # no ``session`` key -> adapter.session is None
     with pytest.raises(ConfigurationError, match="session"):

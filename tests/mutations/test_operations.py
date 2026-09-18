@@ -1,4 +1,9 @@
-"""Tests for canonical mutation operation descriptors (operations.py)."""
+"""Tests for canonical mutation operation descriptors (operations.py).
+
+Frozen dataclass identity and the operation -> input-kind / permission-action
+maps. No GraphQL field; shipped create/update/delete argument presence is live
+in ``examples/fakeshop/test_query/test_products_api.py``.
+"""
 
 from __future__ import annotations
 

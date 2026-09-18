@@ -1,9 +1,13 @@
 """``DjangoMutationField`` factory tests (spec-036).
 
-System-under-test is ``mutations/fields.py``: the per-operation argument-signature
-synthesis, the no-class-attribute-annotation form typed via a ``strawberry.lazy``
-payload return-ref, the payload-resolves-only-after-bind timing, the runtime
-sync-vs-async resolver selection, and the construction-time target guard.
+Construction-time factory: annotation-less field typing, lazy payload bind,
+target guards, metadata passthrough, and flavor dispatch identity. The shipped
+create/update/delete argument map is live in
+``examples/fakeshop/test_query/test_products_api.py::test_create_update_delete_item_argument_signatures_over_http``;
+async colour of the same field is
+``examples/fakeshop/test_query/test_products_api.py::test_create_item_over_graphql_async``.
+A request cannot observe ``CreateItemPayload!`` bind identity or a
+``ConfigurationError`` raised at ``DjangoMutationField(...)`` construction.
 """
 
 from __future__ import annotations
@@ -25,7 +29,6 @@ from django_strawberry_framework import (
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import INPUTS_MODULE_PATH
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.testing.relay import global_id_for
 
 
 @pytest.fixture(autouse=True)
@@ -99,35 +102,6 @@ def _field_arg_map(schema: strawberry.Schema, field_name: str) -> dict[str, str]
     return {arg_name: str(arg.type) for arg_name, arg in field.args.items()}
 
 
-# ---------------------------------------------------------------------------
-# Per-operation argument signature (Decision 14)
-# ---------------------------------------------------------------------------
-
-
-def test_per_operation_argument_signatures():
-    """create -> ``data: ItemInput!``; update -> ``id`` + ``data: ItemPartialInput!``; delete -> ``id``."""
-    _declare_item_primaries()
-    CreateItem, UpdateItem, DeleteItem = _operation_mutations()
-
-    @strawberry.type
-    class Mutation:
-        create_item = DjangoMutationField(CreateItem)
-        update_item = DjangoMutationField(UpdateItem)
-        delete_item = DjangoMutationField(DeleteItem)
-
-    finalize_django_types()
-    schema = DjangoSchema(query=_Query, mutation=Mutation)
-
-    create_args = _field_arg_map(schema, "createItem")
-    assert create_args == {"data": "ItemInput!"}
-
-    update_args = _field_arg_map(schema, "updateItem")
-    assert update_args == {"id": "ID!", "data": "ItemPartialInput!"}
-
-    delete_args = _field_arg_map(schema, "deleteItem")
-    assert delete_args == {"id": "ID!"}
-
-
 def test_no_class_attribute_annotation_builds_and_types_payload():
     """A field assigned with NO annotation builds a schema and types to ``<Name>Payload!``.
 
@@ -168,62 +142,6 @@ def test_payload_lazy_ref_resolves_to_materialized_payload_after_bind():
     # The schema's CreateItemPayload type is the one bound to the materialized class.
     payload_type = schema._schema.type_map["CreateItemPayload"]
     assert payload_type is not None
-
-
-@pytest.mark.django_db
-def test_sync_and_async_resolver_selection():
-    """The same field resolves under ``execute_sync`` and ``await execute`` (runtime dispatch)."""
-    CategoryT, _ItemT = _declare_item_primaries()
-    CreateItem, _UpdateItem, _DeleteItem = _operation_mutations()
-
-    @strawberry.type
-    class Mutation:
-        create_item = DjangoMutationField(CreateItem)
-
-    finalize_django_types()
-    schema = DjangoSchema(query=_Query, mutation=Mutation)
-
-    query = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{ field } } }"
-    cat = product_models.Category.objects.create(name="Cat-sync")
-    sync_res = schema.execute_sync(
-        query,
-        variable_values={"d": {"name": "S", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert sync_res.errors is None, sync_res.errors
-    assert sync_res.data["createItem"]["node"]["name"] == "S"
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_async_resolver_selection_works():
-    """The runtime ``in_async_context()`` dispatch resolves the same field on the async surface.
-
-    ``transaction=True`` is load-bearing (spec-036): the async create runs its
-    ``transaction.atomic()`` write inside one ``sync_to_async(thread_sensitive=
-    True)`` call, committing on asgiref's executor-thread connection, which
-    plain ``django_db``'s main-thread rollback cannot reach. Under plain
-    ``django_db`` the committed row escapes per-test rollback and pollutes a later
-    read-side optimizer execution. ``transaction=True`` (the suite-wide async-ORM
-    convention) reaps the cross-thread-committed rows at teardown; the leak is
-    pinned by ``test_resolvers.py::test_async_mutation_does_not_leak_into_later_read_optimizer_execution``.
-    """
-    CategoryT, _ItemT = _declare_item_primaries()
-    CreateItem, _UpdateItem, _DeleteItem = _operation_mutations()
-
-    @strawberry.type
-    class Mutation:
-        create_item = DjangoMutationField(CreateItem)
-
-    finalize_django_types()
-    schema = DjangoSchema(query=_Query, mutation=Mutation)
-
-    query = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{ field } } }"
-    cat = await product_models.Category.objects.acreate(name="Cat-async")
-    res = await schema.execute(
-        query,
-        variable_values={"d": {"name": "A", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createItem"]["node"]["name"] == "A"
 
 
 # ---------------------------------------------------------------------------

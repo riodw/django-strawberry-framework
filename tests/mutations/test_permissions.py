@@ -7,14 +7,17 @@ pinning the operation -> Django-action map and the anonymous-is-denied safe
 default.
 
 The *enforcement* tests (the second section below) run through a
-finalized schema, the resolver invokes ``check_permission`` /
-``Meta.permission_classes`` at the spec-036 Decision 8 / Decision 15 placement
-(before validation for ``create``; after the visibility lookup for ``update`` /
-``delete``) and maps a denial to a **top-level ``GraphQLError``**, distinct from the
-field-keyed validation envelope. The ``Meta.permission_classes`` override is
-pinned here too; the consumer-visible denial and the no-existence-leak ordering
-(a hidden row is not-found before any auth signal) are earned over real HTTP in
-``examples/fakeshop/test_query/test_products_api.py``.
+finalized throwaway schema. Consumer-visible ``DjangoModelPermission`` denial
+and allow, plus ``permission_classes = []`` on a shipped field, are live in
+``examples/fakeshop/test_query/test_products_api.py`` (``createItem`` /
+``submitContact``). What stays here has no second copy on the composed schema:
+async/awaitable ``has_permission`` refused as ``SyncMisuseError``, a hostile
+non-bool result, empty ``permission_classes`` never resolving request auth
+(ExplodingUser), a DenyAll override on a model mutation (shipped ``submitPing``
+is model-less deny-by-default, not an override of ``DjangoModelPermission``),
+and the class-list snapshot seal. One-declaration-per-process: a second
+``CreateItem`` with different ``permission_classes`` cannot share fakeshop's
+composed schema with the shipped mutation.
 """
 
 from __future__ import annotations
@@ -230,66 +233,6 @@ def _execute(
 
 
 _CREATE_Q = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{ field } } }"
-
-
-@pytest.mark.django_db
-def test_under_privileged_create_denied():
-    """A user lacking ``add_item`` is denied (top-level error), no write."""
-    schema, (CategoryT, _ItemT) = _build_auth_schema()
-    cat = product_models.Category.objects.create(name="Cat-noperm")
-    user = _user_with_perms()  # no perms
-    res = _execute(
-        schema,
-        _CREATE_Q,
-        user,
-        {"d": {"name": "Blocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is not None
-    assert not product_models.Item.objects.filter(name="Blocked").exists()
-
-
-@pytest.mark.django_db
-def test_permitted_create_succeeds():
-    """A user holding ``add_item`` creates the row (the allow path)."""
-    schema, (CategoryT, _ItemT) = _build_auth_schema()
-    cat = product_models.Category.objects.create(name="Cat-ok")
-    user = _user_with_perms("add_item")
-    res = _execute(
-        schema,
-        _CREATE_Q,
-        user,
-        {"d": {"name": "Allowed", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createItem"]["node"]["name"] == "Allowed"
-    assert product_models.Item.objects.filter(name="Allowed").exists()
-
-
-@pytest.mark.django_db
-def test_permission_classes_override_allow_all_lets_anonymous_through():
-    """A custom allow-all ``permission_classes`` override lets an anonymous caller create."""
-
-    class AllowAll:
-        def has_permission(
-            self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
-        ):
-            return True
-
-    schema, (CategoryT, _ItemT) = _build_auth_schema(create_permission_classes=[AllowAll])
-    cat = product_models.Category.objects.create(name="Cat-allowall")
-    res = _execute(
-        schema,
-        _CREATE_Q,
-        AnonymousUser(),
-        {"d": {"name": "Open", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createItem"]["node"]["name"] == "Open"
 
 
 @pytest.mark.django_db

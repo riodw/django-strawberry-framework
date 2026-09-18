@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
+"""Live HTTP acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 
 Pins the mutation-atomicity contract shipped at 0.0.14 (commit 1b06c39e;
 tracked pre-renumber as card BETA-055): a ``DjangoMutation`` runs its write inside a
@@ -23,19 +23,24 @@ XPASSed, and the markers were removed - the assertions encode the shipped
 contract (no 500, the completion error is surfaced, the write rolled back).
 The success-side contract (a serializable payload still commits, and serial
 top-level mutation fields keep independent transactions) is pinned alongside.
+Async colour uses a module-local ``/graphql-async/`` mount (``graphql_client.py``
+is sync-only).
 """
 
 from __future__ import annotations
 
 import pytest
 from apps.products.services import create_users
+from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.db import connection
-from django.test import Client
+from django.test import AsyncClient, Client, override_settings
+from django.urls import path
 from strawberry import relay
 
-from django_strawberry_framework.testing import TestClient
+from django_strawberry_framework.testing import AsyncTestClient, TestClient
+from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 _UPDATE_ITEM = """
 mutation($id: ID!, $d: ItemPartialInput!) {
@@ -387,3 +392,89 @@ def test_serial_top_level_mutations_keep_independent_transactions():
     assert payload["data"]["first"]["node"]["name"] == "serial-first-updated"
     assert _stored_item_name(first_pk) == "serial-first-updated"
     assert _stored_item_name(second_pk) == "serial-second-item"
+
+
+async def _async_shipped_graphql_view(request):
+    from config.schema import schema
+
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+
+urlpatterns = [path("graphql-async/", _async_shipped_graphql_view)]
+
+
+async def _post_async(query, *, variables=None, client=None):
+    """POST ``query`` against the shipped schema over ``/graphql-async/``."""
+    with override_settings(ROOT_URLCONF=__name__):
+        result = await AsyncTestClient(client=client).query(
+            query,
+            variables=variables,
+            assert_no_errors=False,
+            url="/graphql-async/",
+        )
+    return result.response
+
+
+async def _async_client_with_perm(username, *codenames):
+    def _login():
+        return _login_with_perm(username, *codenames)
+
+    await sync_to_async(_login)()
+    user = await sync_to_async(get_user_model().objects.get)(username=username)
+    client = AsyncClient()
+    await sync_to_async(client.force_login)(user)
+    return client
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_update_does_not_commit_when_response_completion_fails_over_graphql_async():
+    """Async ``updateItem`` whose response can't be serialized must roll back."""
+    await sync_to_async(create_users)(1)
+    client = await _async_client_with_perm("view_item_1", "view_category", "change_item")
+
+    def _seed():
+        category_pk = _insert_category("async-raw-update-bad-date-category", corrupt=True)
+        return _insert_item("async-raw-bad-date-item", category_pk)
+
+    item_pk = await sync_to_async(_seed)()
+    response = await _post_async(
+        _UPDATE_ITEM,
+        client=client,
+        variables={
+            "id": _global_id("products.item", item_pk),
+            "d": {"name": "async-post-corruption-update"},
+        },
+    )
+
+    assert response.status_code < 500
+    assert "errors" in response.json()
+    stored = await sync_to_async(_stored_item_name)(item_pk)
+    assert stored == "async-raw-bad-date-item"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_successful_update_still_commits_over_graphql_async():
+    """A serializable async ``updateItem`` still commits through completion."""
+    await sync_to_async(create_users)(1)
+    client = await _async_client_with_perm("view_item_1", "view_category", "change_item")
+
+    def _seed():
+        category_pk = _insert_category("async-healthy-commit-category")
+        return _insert_item("async-healthy-commit-item", category_pk)
+
+    item_pk = await sync_to_async(_seed)()
+    response = await _post_async(
+        _UPDATE_ITEM,
+        client=client,
+        variables={
+            "id": _global_id("products.item", item_pk),
+            "d": {"name": "async-committed-update"},
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert "errors" not in payload, payload
+    assert payload["data"]["updateItem"]["errors"] == []
+    stored = await sync_to_async(_stored_item_name)(item_pk)
+    assert stored == "async-committed-update"

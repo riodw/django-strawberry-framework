@@ -1,21 +1,21 @@
 """Write-pipeline resolver tests (spec-036).
 
-System-under-test is ``mutations/resolvers.py`` - the sync + async create /
-update / delete pipeline driven through a package-test ``@strawberry.type
-Mutation`` over a finalized schema (the live products write surface and the
-``CaptureQueriesContext`` assertion live in the fakeshop suite). Fixtures:
-
-- the realistic products ``Item`` / ``Category`` (FK + ``unique_item_per_category``)
-  cover the validation-envelope, ``"__all__"`` sentinel, partial-constraint,
-  unresolvable-``GlobalID``, and the sync/async/transaction cases - all over real
-  DB tables;
-- the library ``Book`` / ``Genre`` / ``Shelf`` (a real M2M) cover the M2M
-  replace / clear / omit, which products cannot (no M2M model).
-
-Each test seeds rows inline (library acceptance idiom) or with the products
-services where convenient; permission is held open with a local allow-all class so
-these tests pin the *resolver*, not the write-auth seam (that is
-``test_permissions.py``).
+Internals a live fakeshop request cannot express: custom ``relay.NodeID`` write
+locate (shipped ``CategoryType`` uses pk; changing it would retarget every
+Category GlobalID), ``_unprovided_exclude`` / ``coerce_lookup_id`` helpers,
+mocked ``IntegrityError`` race, ``async def get_queryset`` ``SyncMisuseError``,
+async-row leak isolation, Relay M2M hide on a second ``Genre`` primary
+(shipped ``GenreType`` has no hide hook; a second primary cannot coexist in the
+live process), raw-pk M2M *update* (no shipped ``updateShelf``), unregistered
+primary existence-only decode, ``TaggedItem.object_id`` GFK indexing, synthetic
+file-column update (no ``UpdateMediaSpecimen``), ``PROTECT`` / ``RESTRICT``
+delete, pipeline pk-drift, and ``ScalarSpecimen`` writes (scalars app exposes
+no mutation). Consumer-visible create/update/delete, empty-name ``full_clean``,
+unresolvable relation ids, M2M replace/clear/omit, choice-enum unwrap, and
+raw-pk create visibility live in
+``examples/fakeshop/test_query/test_products_api.py`` and
+``examples/fakeshop/test_query/test_library_api.py``. Atomicity live in
+``examples/fakeshop/test_query/test_mutation_atomicity.py``.
 """
 
 from __future__ import annotations
@@ -114,56 +114,46 @@ def _schema(mutation_type: type) -> strawberry.Schema:
 # ---------------------------------------------------------------------------
 
 
-def _build_item_schema(
-    *,
-    item_get_queryset=None,
-    category_get_queryset=None,
-    input_cls=None,
-    partial_input_cls=None,
-):
-    """Declare Item/Category primaries + create/update/delete mutations; return (schema, types).
+def _build_item_schema():
+    """Declare Item/Category primaries + create/update/delete mutations; return (schema, types)."""
 
-    ``item_get_queryset`` injects a visibility hook on the ``Item`` primary type;
-    ``category_get_queryset`` does the same on the ``Category`` primary type so the FK
-    relation-visibility check can be driven. Optional ``input_cls`` /
-    ``partial_input_cls`` thread a consumer ``Meta.input_class`` /
-    ``Meta.partial_input_class`` onto the create / update mutation so the consumer-input
-    merge is exercised end-to-end; omitted, the generated inputs are used. One builder
-    for all products-mutation resolver tests.
-    """
-
-    category_body: dict = {
-        "Meta": type(
-            "Meta",
-            (),
-            {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
-        ),
-    }
-    if category_get_queryset is not None:
-        category_body["get_queryset"] = category_get_queryset
-    CategoryT = type("CategoryT", (DjangoType, relay.Node), category_body)
-
-    item_fields = ("id", "name", "category")
-    item_meta_attrs = {"model": product_models.Item, "fields": item_fields, "primary": True}
-    item_body: dict = {"Meta": type("Meta", (), item_meta_attrs)}
-    if item_get_queryset is not None:
-        item_body["get_queryset"] = item_get_queryset
-    ItemT = type("ItemT", (DjangoType, relay.Node), item_body)
+    CategoryT = type(
+        "CategoryT",
+        (DjangoType, relay.Node),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
+            ),
+        },
+    )
+    ItemT = type(
+        "ItemT",
+        (DjangoType, relay.Node),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": product_models.Item,
+                    "fields": ("id", "name", "category"),
+                    "primary": True,
+                },
+            ),
+        },
+    )
 
     create_meta = {
         "model": product_models.Item,
         "operation": "create",
         "permission_classes": [_AllowAll],
     }
-    if input_cls is not None:
-        create_meta["input_class"] = input_cls
     update_meta = {
         "model": product_models.Item,
         "operation": "update",
         "permission_classes": [_AllowAll],
     }
-    if partial_input_cls is not None:
-        update_meta["partial_input_class"] = partial_input_cls
     delete_meta = {
         "model": product_models.Item,
         "operation": "delete",
@@ -203,10 +193,6 @@ _CREATE = (
     "mutation($d: ItemInput!){ createItem(data:$d){ "
     "node{ id name category{ name } } errors{ field messages } } }"
 )
-_UPDATE = (
-    "mutation($id: ID!, $d: ItemPartialInput!){ updateItem(id:$id, data:$d){ "
-    "node{ name } errors{ field messages } } }"
-)
 _DELETE = (
     "mutation($id: ID!){ deleteItem(id:$id){ "
     "node{ id name category{ name } } errors{ field messages } } }"
@@ -215,36 +201,6 @@ _DELETE = (
 
 def _item_gid(item_type: type, pk) -> str:
     return global_id_for(item_type, pk)
-
-
-@pytest.mark.django_db
-def test_update_happy_path_partial_leaves_unprovided_unchanged():
-    """A partial update changes only provided fields; the unprovided FK is unchanged."""
-    schema, (_CategoryT, ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    item = product_models.Item.objects.create(name="Old", category=cat)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": _item_gid(ItemT, item.pk), "d": {"name": "New"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["updateItem"]["node"]["name"] == "New"
-    item.refresh_from_db()
-    assert item.name == "New"
-    assert item.category_id == cat.pk  # unprovided -> unchanged
-
-
-@pytest.mark.django_db
-def test_delete_snapshot_materializes_relation_before_delete():
-    """The delete snapshot carries the selected relation, loaded before ``delete()``."""
-    schema, (_CategoryT, ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    item = product_models.Item.objects.create(name="Doomed", category=cat)
-    res = schema.execute_sync(_DELETE, variable_values={"id": _item_gid(ItemT, item.pk)})
-    assert res.errors is None, res.errors
-    # The related ``category`` is accessible on the detached snapshot after the row
-    # (and its FK source) is deleted - it was loaded before delete().
-    assert res.data["deleteItem"]["node"]["category"]["name"] == cat.name
 
 
 # ---------------------------------------------------------------------------
@@ -315,12 +271,11 @@ def _build_category_node_schema():
 def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
     """A write through a custom ``relay.NodeID[str]`` updates the NAME-matched row, not the pk-coincident one.
 
-    ``CategoryNode`` encodes the non-pk ``name`` column as its Relay id, so the
-    GlobalID a client holds carries the ``name`` string. The decoy is seeded so its
-    pk's STRING form is the target's ``name``: before ``_resolve_real_pk`` the decoded
-    ``name`` (``"<decoy.pk>"``) flowed straight into ``locate_instance``'s
-    ``get(pk=...)`` and updated the DECOY. The write must change the row whose ``name``
-    matches the payload (the target), never the row whose pk coincides with it.
+    Shipped ``CategoryType`` uses the pk as Relay id; retargeting it would change
+    every Category GlobalID. Decode isolation is
+    ``tests/test_relay_node_field.py``; this is the write consumer. Live
+    ``updateItem`` locates by pk GlobalID
+    (``test_products_api.py::test_update_item_non_colliding_partial_update``).
     """
     schema, CategoryNode = _build_category_node_schema()
     decoy = product_models.Category.objects.create(name="decoy", description="decoy-untouched")
@@ -395,36 +350,6 @@ def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
     assert product_models.Category.objects.filter(pk=decoy.pk).exists()
 
 
-@pytest.mark.django_db
-def test_full_clean_validation_error_yields_null_object_envelope():
-    """A single-field validation failure -> one ``FieldError`` on that field, null object."""
-    schema, (CategoryT, _ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    # ``name`` is required and non-blank; an empty string fails ``full_clean``.
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert_mutation_field_error(res, "createItem", "name")
-
-
-@pytest.mark.django_db
-def test_partial_update_constraint_collision_keeps_unprovided_co_member(monkeypatch):
-    """Updating only ``name`` to a taken value under the same category fails."""
-    schema, (_CategoryT, ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    product_models.Item.objects.create(name="Taken", category=cat)
-    target = product_models.Item.objects.create(name="Free", category=cat)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": _item_gid(ItemT, target.pk), "d": {"name": "Taken"}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert NON_FIELD_ERROR_KEY in [e["field"] for e in payload["errors"]]
-
-
 def test_unprovided_exclude_keeps_constrained_co_member_drops_unrelated():
     """``_unprovided_exclude`` pins the constrained-co-member carve-out on ``Item``.
 
@@ -447,18 +372,18 @@ def test_unprovided_exclude_single_field_unique_group_kept():
     assert "description" in exclude
 
 
-def test_coerce_lookup_id_rejects_non_globalid():
-    """A non-GlobalID ``id:`` (raw pk string, garbage, non-string) is a ``FieldError`` on ``id``.
+@pytest.mark.parametrize(
+    "raw_id",
+    ["5", "not-a-global-id", 5],
+    ids=["raw-pk-string", "garbage", "non-string"],
+)
+def test_coerce_lookup_id_rejects_non_globalid(raw_id):
+    """A non-GlobalID ``id:`` is a ``FieldError`` on ``id`` before any pk lookup.
 
-    The update/delete ``id:`` MUST be a well-formed GlobalID (the node-field
-    server-side-decode contract). A raw pk string carries no type slot to check
-    against the target model, and a malformed string cannot decode at all, so both
-    are rejected as a ``FieldError`` on ``id`` BEFORE any pk lookup - never coerced
-    to a bare pk that would skip the relation type guard or raise a Django coercion
-    error at ``.get(pk=...)``. ``coerce_lookup_id`` is always called
-    with the mutation's resolved primary type, so this unit pin passes a real bound
-    ``ItemT`` (the shared ``decode_model_global_id`` reads ``target_type``'s model
-    up front); decode fails on the malformed input with no pk lookup or DB read.
+    Live ``updateItem`` covers the string arms over HTTP
+    (``test_products_api.py::test_update_item_malformed_id_is_field_error_no_coercion_crash``).
+    GraphQL ``ID`` never delivers a Python ``int``, so the non-string arm has no
+    wire shape; this helper pin is the remaining coverage.
     """
 
     class ItemT(DjangoType, relay.Node):
@@ -467,10 +392,9 @@ def test_coerce_lookup_id_rejects_non_globalid():
             fields = ("id", "name")
             primary = True
 
-    for bad in ("5", "not-a-global-id", 5):
-        node_id, error = resolvers.coerce_lookup_id(bad, ItemT)
-        assert node_id is None
-        assert error is not None and error.field == "id"
+    node_id, error = resolvers.coerce_lookup_id(raw_id, ItemT)
+    assert node_id is None
+    assert error is not None and error.field == "id"
 
 
 @pytest.mark.django_db
@@ -496,89 +420,6 @@ def test_integrity_error_race_fallback_via_mocked_save():
     # The catch is broad (``except IntegrityError``), so the message is the honest
     # superset, not an over-claimed "uniqueness".
     assert payload["errors"][0]["messages"] == ["A database constraint was violated."]
-
-
-@pytest.mark.django_db
-def test_relation_unresolvable_type_global_id_yields_field_error():
-    """A well-formed relation ``GlobalID`` naming an unregistered type -> ``FieldError``.
-
-    Distinct from the wrong-MODEL case (which decodes successfully then mismatches):
-    here ``decode_global_id`` itself raises (the ``type_name`` resolves to no
-    installed / registered Relay-Node type), so ``decode_model_global_id`` returns
-    the ``DECODE_FAILED`` status and ``_decode_relation_id_set`` maps it to a
-    ``FieldError`` on ``categoryId`` - the uniformly-field-keyed malformed-relation-id
-    branch, never a top-level error from inside the resolver.
-    """
-    schema, (_CategoryT, _ItemT) = _build_item_schema()
-    bogus = str(relay.GlobalID(type_name="nope.nonexistent", node_id="1"))
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "X", "categoryId": bogus}},
-    )
-    assert_mutation_field_error(res, "createItem", "categoryId")
-    assert product_models.Item.objects.filter(name="X").count() == 0
-
-
-@pytest.mark.django_db
-def test_globalid_relation_override_flows_through_visibility_contract():
-    """A ``GlobalID`` relation override is still relation-visibility-checked (Decision 10).
-
-    The bind-time type-lock (``sets.py::_validate_relation_override_types``) forces a
-    relation override to keep the generated ``relay.GlobalID`` id type precisely so the
-    override CANNOT bypass the id type-check / Decision-10 visibility contract a
-    raw-pk override would have skipped. This pins the end-to-end guarantee: a
-    ``createItem`` whose ``categoryId`` names a ``Category`` hidden by
-    ``Category.get_queryset`` is a ``FieldError`` on ``categoryId`` (hidden
-    indistinguishable from missing, no existence leak) - even though ``categoryId``
-    came from a consumer ``input_class`` override, not the generated input. A raw-pk
-    override would have been passed through unchecked and silently attached the
-    unseeable row; the type-lock is what guarantees this path is reached.
-    """
-
-    @classmethod
-    def _hide_private(cls, queryset, info):
-        return queryset.filter(is_private=False)
-
-    @strawberry.input
-    class GidItemInput:
-        category_id: relay.GlobalID = strawberry.field(description="custom category ref")
-
-    schema, (CategoryT, _ItemT) = _build_item_schema(
-        category_get_queryset=_hide_private,
-        input_cls=GidItemInput,
-    )
-    hidden = product_models.Category.objects.create(name=_category_name(), is_private=True)
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={
-            "d": {"name": "New", "categoryId": global_id_for(CategoryT, hidden.pk)},
-        },
-    )
-    assert_mutation_field_error(res, "createItem", "categoryId")
-    assert product_models.Item.objects.filter(name="New").count() == 0
-
-
-@pytest.mark.django_db(transaction=True)
-def test_transaction_rolls_back_when_post_save_step_fails():
-    """A failure after ``save()`` inside the transaction rolls the write back."""
-    schema, (CategoryT, _ItemT) = _build_item_schema()
-    cat = product_models.Category.objects.create(name=_category_name())
-    # Force the post-save snapshot step to blow up so the atomic block aborts.
-    with mock.patch.object(
-        resolvers,
-        "refetch_optimized",
-        side_effect=RuntimeError("boom after save"),
-    ):
-        res = schema.execute_sync(
-            _CREATE,
-            variable_values={
-                "d": {"name": "Rollback", "categoryId": global_id_for(CategoryT, cat.pk)},
-            },
-        )
-    # The RuntimeError surfaces as a top-level GraphQL error...
-    assert res.errors is not None
-    # ...and the write was rolled back: no row persisted.
-    assert not product_models.Item.objects.filter(name="Rollback").exists()
 
 
 @pytest.mark.django_db
@@ -630,40 +471,6 @@ def test_sync_misuse_async_get_queryset_from_sync_path():
             data=strawberry.UNSET,
             id=str(global_id_for(ItemT, item.pk)),
         )
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_async_pipeline_create_happy_path():
-    """The same create through ``await schema.execute`` (async surface) succeeds.
-
-    ``transaction=True`` is load-bearing, not cosmetic. The async pipeline runs
-    its whole ORM body - the ``transaction.atomic()`` write included - inside one
-    ``sync_to_async(thread_sensitive=True)`` call, so the ``save()``
-    commits on asgiref's executor-thread connection, NOT the main-thread
-    connection the plain ``django_db`` marker wraps in a rollback transaction.
-    Under plain ``django_db`` that committed write escapes the per-test rollback
-    and LEAKS into the next test's database (a category + item survive), which
-    then corrupts a later read-side optimizer execution (the leaked item has a
-    category the read test's visibility hook does not match, so the forward FK
-    re-raises ``RelatedObjectDoesNotExist``). ``transaction=True`` is the
-    suite-wide convention for every async-ORM test (see ``test_list_field.py`` /
-    ``test_relay_connection.py``): real commits with a flush/truncate teardown
-    that reaps the cross-thread-committed rows. The cross-test leak this prevents
-    is pinned order-independently by
-    ``test_async_mutation_does_not_leak_into_later_read_optimizer_execution``.
-    """
-    schema, (CategoryT, _ItemT) = _build_item_schema()
-    cat = await product_models.Category.objects.acreate(name=_category_name())
-    res = await schema.execute(
-        _CREATE,
-        variable_values={
-            "d": {"name": "AsyncWidget", "categoryId": global_id_for(CategoryT, cat.pk)},
-        },
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createItem"]["node"]["name"] == "AsyncWidget"
-    assert await product_models.Item.objects.filter(name="AsyncWidget").aexists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -813,16 +620,12 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
 
 
 # ---------------------------------------------------------------------------
-# Library Book/Genre M2M fixtures (replace/clear/omit)
+# Library Book/Genre M2M: hidden Relay member (GenreType has no hide hook)
 # ---------------------------------------------------------------------------
 
 
 def _build_book_schema(*, genre_get_queryset=None):
-    """Declare Book/Genre/Shelf primaries + create/update mutations over the Book M2M.
-
-    ``genre_get_queryset`` optionally installs a visibility hook on the ``Genre``
-    primary type so the M2M relation-visibility check can be driven.
-    """
+    """Declare Book/Genre/Shelf primaries + a create mutation over the Book M2M."""
 
     genre_body: dict = {
         "Meta": type(
@@ -854,16 +657,9 @@ def _build_book_schema(*, genre_get_queryset=None):
             fields = ("title", "shelf", "genres")
             permission_classes = [_AllowAll]
 
-    class UpdateBook(DjangoMutation):
-        class Meta:
-            model = library_models.Book
-            operation = "update"
-            permission_classes = [_AllowAll]
-
     @strawberry.type
     class Mutation:
         create_book = DjangoMutationField(CreateBook)
-        update_book = DjangoMutationField(UpdateBook)
 
     finalize_django_types()
     return _schema(Mutation), (GenreT, ShelfT, BookT)
@@ -872,60 +668,6 @@ def _build_book_schema(*, genre_get_queryset=None):
 def _make_branch_shelf():
     branch = library_models.Branch.objects.create(name="Main")
     return library_models.Shelf.objects.create(code="S1", branch=branch)
-
-
-@pytest.mark.django_db
-def test_m2m_replace_on_provide():
-    """A provided genre list replaces the M2M set on create."""
-    schema, (GenreT, ShelfT, _BookT) = _build_book_schema()
-    shelf = _make_branch_shelf()
-    g1 = library_models.Genre.objects.create(name="Sci-Fi")
-    g2 = library_models.Genre.objects.create(name="Fantasy")
-    res = schema.execute_sync(
-        "mutation($d: BookGenresShelfTitleInput!){ createBook(data:$d){ "
-        "node{ id title } errors{ field messages } } }",
-        variable_values={
-            "d": {
-                "title": "Dune",
-                "shelfId": global_id_for(ShelfT, shelf.pk),
-                "genres": [global_id_for(GenreT, g1.pk), global_id_for(GenreT, g2.pk)],
-            },
-        },
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createBook"]["errors"] == []
-    book = library_models.Book.objects.get(title="Dune")
-    assert set(book.genres.values_list("name", flat=True)) == {"Sci-Fi", "Fantasy"}
-
-
-@pytest.mark.django_db
-def test_m2m_clear_on_empty_and_unchanged_on_omit():
-    """A provided empty list clears the M2M; an omitted M2M leaves it unchanged."""
-    schema, (_GenreT, _ShelfT, BookT) = _build_book_schema()
-    shelf = _make_branch_shelf()
-    g1 = library_models.Genre.objects.create(name="Sci-Fi")
-    book = library_models.Book.objects.create(title="Seeded", shelf=shelf)
-    book.genres.set([g1])
-
-    update_q = (
-        "mutation($id: ID!, $d: BookPartialInput!){ updateBook(id:$id, data:$d){ "
-        "node{ title } errors{ field } } }"
-    )
-    book_gid = global_id_for(BookT, book.pk)
-
-    # Omit genres: unchanged (still has g1).
-    res = schema.execute_sync(
-        update_q,
-        variable_values={"id": book_gid, "d": {"title": "Renamed"}},
-    )
-    assert res.errors is None, res.errors
-    book.refresh_from_db()
-    assert set(book.genres.values_list("name", flat=True)) == {"Sci-Fi"}
-
-    # Provide empty list: cleared.
-    res = schema.execute_sync(update_q, variable_values={"id": book_gid, "d": {"genres": []}})
-    assert res.errors is None, res.errors
-    assert book.genres.count() == 0
 
 
 _CREATE_BOOK = (
@@ -938,11 +680,11 @@ _CREATE_BOOK = (
 def test_m2m_hidden_related_id_is_field_error():
     """An M2M id for a row the related type hides -> ``FieldError`` on the M2M field.
 
-    ``GenreT.get_queryset`` hides the ``"Secret"`` genre, so a ``createBook`` whose
-    ``genres`` list includes the hidden genre's id is a ``FieldError`` on ``genres``
-    (hidden indistinguishable from missing, no existence leak) - the same
-    visibility contract FK ids get, applied to the whole M2M set in one query. No
-    book is written.
+    Live ``createBookViaCustomInput`` covers visible Genre GlobalIDs. Shipped
+    ``GenreType`` has no ``get_queryset``; adding one (even flag-gated) would
+    change every genre read. A second primary ``Genre`` type cannot coexist with
+    the shipped type in the live process, so the hide arm stays on a throwaway
+    schema. Hidden indistinguishable from missing; no book is written.
     """
 
     @classmethod
@@ -967,204 +709,8 @@ def test_m2m_hidden_related_id_is_field_error():
     assert not library_models.Book.objects.filter(title="Dune").exists()
 
 
-@pytest.mark.django_db
-def test_m2m_explicit_null_is_field_error():
-    """An explicit ``null`` M2M value -> ``FieldError`` on the M2M field, not a resolver crash.
-
-    The generated optional M2M field is ``list[<id>] | None``, so a client can send
-    ``genres: null``. ``null`` is not a valid replace-set (the contract is
-    replace/clear/omit - clear is ``[]``), so it is a field-keyed error rather than
-    iterating ``None`` into a ``TypeError``.
-    """
-    schema, (_GenreT, ShelfT, _BookT) = _build_book_schema()
-    shelf = _make_branch_shelf()
-    res = schema.execute_sync(
-        _CREATE_BOOK,
-        variable_values={
-            "d": {"title": "Dune", "shelfId": global_id_for(ShelfT, shelf.pk), "genres": None},
-        },
-    )
-    assert_mutation_field_error(res, "createBook", "genres")
-    assert not library_models.Book.objects.filter(title="Dune").exists()
-
-
-@pytest.mark.django_db
-def test_m2m_wrong_type_id_is_field_error():
-    """A wrong-type ``GlobalID`` anywhere in the M2M list -> ``FieldError`` on the M2M field.
-
-    A ``Shelf`` id passed where a ``Genre`` id is expected is type-checked against
-    the M2M target (``Genre``) and rejected as a ``FieldError`` on ``genres``,
-    before the visibility / assignment steps.
-    """
-    schema, (_GenreT, ShelfT, _BookT) = _build_book_schema()
-    shelf = _make_branch_shelf()
-    res = schema.execute_sync(
-        _CREATE_BOOK,
-        variable_values={
-            "d": {
-                "title": "Dune",
-                "shelfId": global_id_for(ShelfT, shelf.pk),
-                "genres": [global_id_for(ShelfT, shelf.pk)],  # a Shelf id, not a Genre id
-            },
-        },
-    )
-    assert_mutation_field_error(res, "createBook", "genres")
-    assert not library_models.Book.objects.filter(title="Dune").exists()
-
-
-@pytest.mark.django_db
-def test_m2m_uncoercible_pk_id_is_field_error_no_crash():
-    """A right-type M2M id with an uncoercible ``node_id`` -> ``FieldError`` on the M2M field.
-
-    A ``GenreT`` GlobalID carrying ``node_id="abc"`` is a valid Genre id by type but
-    ``"abc"`` is not a valid integer pk. The whole-set visibility query coerces each
-    id through the related pk field first, so the uncoercible literal is the uniform
-    relation ``FieldError`` on ``genres`` (not found), never the top-level
-    ``ValueError`` that ``filter(pk__in=["abc"])`` would raise. No book is written.
-    """
-    schema, (GenreT, ShelfT, _BookT) = _build_book_schema()
-    shelf = _make_branch_shelf()
-    res = schema.execute_sync(
-        _CREATE_BOOK,
-        variable_values={
-            "d": {
-                "title": "Dune",
-                "shelfId": global_id_for(ShelfT, shelf.pk),
-                "genres": [global_id_for(GenreT, "abc")],  # right type, uncoercible pk
-            },
-        },
-    )
-    assert res.errors is None, res.errors  # NOT a top-level GraphQLError
-    payload = res.data["createBook"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["genres"]
-    assert not library_models.Book.objects.filter(title="Dune").exists()
-
-
 # ---------------------------------------------------------------------------
-# Choice-enum inputs reach Django as the raw choice value
-#
-# A ``choices`` column resolves to a generated Strawberry ``Enum`` on BOTH the
-# read type and the write input (the symmetric wire contract), so the client's
-# enum value arrives at the resolver as the ENUM MEMBER, not the raw string. The
-# resolver must unwrap it to its ``.value`` (the Django choice value) before
-# ``full_clean`` / ``save``, or a valid choice is rejected. ``Book.circulation_status``
-# is the real choice column (products has none, so this is package-tested).
-# ---------------------------------------------------------------------------
-
-
-def _build_book_choices_schema():
-    """Declare Branch/Shelf/Book primaries + full-shape create/update over ``Book``.
-
-    The create/update inputs are NOT narrowed, so the generated ``BookInput`` /
-    ``BookPartialInput`` include the ``circulation_status`` choice column (a
-    generated enum). ``Genre`` is intentionally left unregistered, so the optional
-    M2M ``genres`` input is raw-pk and simply omitted by these tests.
-    """
-
-    class BranchT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Branch
-            fields = ("id", "name")
-            primary = True
-
-    class ShelfT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Shelf
-            fields = ("id", "code", "branch")
-            primary = True
-
-    class BookT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Book
-            fields = (
-                "id",
-                "title",
-                "circulation_status",
-                "shelf",
-            )
-            primary = True
-
-    class CreateBook(DjangoMutation):
-        class Meta:
-            model = library_models.Book
-            operation = "create"
-            permission_classes = [_AllowAll]
-
-    class UpdateBook(DjangoMutation):
-        class Meta:
-            model = library_models.Book
-            operation = "update"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        create_book = DjangoMutationField(CreateBook)
-        update_book = DjangoMutationField(UpdateBook)
-
-    finalize_django_types()
-    return _schema(Mutation), (ShelfT, BookT)
-
-
-@pytest.mark.django_db
-def test_choice_enum_create_saves_raw_choice_value():
-    """A valid choice enum on create succeeds and persists the RAW choice value (bug 4).
-
-    The client sends the GraphQL enum value ``available``; it reaches the resolver
-    as ``BookCirculationStatusEnum.available``. Unwrapped to ``.value`` it is the
-    Django choice ``"available"`` that ``full_clean`` accepts and the column stores.
-    Without the unwrap, ``full_clean`` would reject the enum member as an invalid
-    choice.
-    """
-    schema, (ShelfT, _BookT) = _build_book_choices_schema()
-    shelf = _make_branch_shelf()
-    res = schema.execute_sync(
-        "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }",
-        variable_values={
-            "d": {
-                "title": "Dune",
-                "shelfId": global_id_for(ShelfT, shelf.pk),
-                "circulationStatus": "available",
-            },
-        },
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createBook"]["errors"] == []
-    assert library_models.Book.objects.get(title="Dune").circulation_status == "available"
-
-
-@pytest.mark.django_db
-def test_choice_enum_update_saves_raw_choice_value():
-    """A valid choice enum on update persists the raw choice value too (bug 4)."""
-    schema, (_ShelfT, BookT) = _build_book_choices_schema()
-    shelf = _make_branch_shelf()
-    book = library_models.Book.objects.create(
-        title="Hyperion",
-        shelf=shelf,
-        circulation_status="available",
-    )
-    res = schema.execute_sync(
-        "mutation($id: ID!, $d: BookPartialInput!){ updateBook(id:$id, data:$d){ "
-        "node{ id } errors{ field messages } } }",
-        variable_values={
-            "id": global_id_for(BookT, book.pk),
-            "d": {"circulationStatus": "repair"},
-        },
-    )
-    assert res.errors is None, res.errors
-    assert res.data["updateBook"]["errors"] == []
-    book.refresh_from_db()
-    assert book.circulation_status == "repair"
-
-
-# ---------------------------------------------------------------------------
-# Raw-pk (non-Relay target) M2M existence check
-#
-# An M2M to a NON-Relay-Node target generates a raw-pk ``list[Int]`` input with no
-# GlobalID visibility contract. ``instance.<m2m>.set(pks)`` writes a through-table
-# row for whatever pks it is handed, so a nonexistent pk would create a dangling FK
-# row (an invalid FK SQLite flags at teardown) and return a false success. The
-# decode existence-checks the raw-pk M2M set before assignment.
+# Raw-pk M2M update existence check (no shipped updateShelf)
 # ---------------------------------------------------------------------------
 
 
@@ -1205,12 +751,6 @@ def _build_book_raw_m2m_schema():
             )
             primary = True
 
-    class CreateBook(DjangoMutation):
-        class Meta:
-            model = library_models.Book
-            operation = "create"
-            permission_classes = [_AllowAll]
-
     class UpdateBook(DjangoMutation):
         class Meta:
             model = library_models.Book
@@ -1219,7 +759,6 @@ def _build_book_raw_m2m_schema():
 
     @strawberry.type
     class Mutation:
-        create_book = DjangoMutationField(CreateBook)
         update_book = DjangoMutationField(UpdateBook)
 
     finalize_django_types()
@@ -1227,29 +766,14 @@ def _build_book_raw_m2m_schema():
 
 
 @pytest.mark.django_db
-def test_create_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row():
-    """A nonexistent raw-pk M2M id on create -> ``FieldError`` on the M2M field, no row (bug 5)."""
-    schema, (_GenreT, ShelfT, _BookT) = _build_book_raw_m2m_schema()
-    shelf = _make_branch_shelf()
-    before = library_models.Book.objects.count()
-    res = schema.execute_sync(
-        "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }",
-        variable_values={
-            "d": {
-                "title": "Dangling",
-                "shelfId": global_id_for(ShelfT, shelf.pk),
-                "genres": [99999],
-            },
-        },
-    )
-    assert_mutation_field_error(res, "createBook", "genres")
-    assert library_models.Book.objects.count() == before
-    assert not library_models.Book.objects.filter(title="Dangling").exists()
-
-
-@pytest.mark.django_db
 def test_update_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row():
-    """A nonexistent raw-pk M2M id on update -> ``FieldError`` on the M2M field, set unchanged (bug 5)."""
+    """A nonexistent raw-pk M2M id on update -> ``FieldError`` on the M2M field, set unchanged.
+
+    Live ``createShelf`` covers the create arm
+    (``test_library_api.py::test_create_shelf_model_mutation_nonexistent_alt_branch_is_field_error``).
+    Fakeshop ships no ``updateShelf`` / ``updateBook`` with a raw-pk M2M, so the
+    update arm stays on a throwaway non-Relay ``Genre`` primary.
+    """
     schema, (_GenreT, _ShelfT, BookT) = _build_book_raw_m2m_schema()
     shelf = _make_branch_shelf()
     book = library_models.Book.objects.create(title="Seeded", shelf=shelf)
@@ -1263,28 +787,6 @@ def test_update_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row():
     assert_mutation_field_error(res, "updateBook", "genres")
     # The pre-existing M2M set is untouched (the failed write rolled back).
     assert set(book.genres.values_list("pk", flat=True)) == {existing.pk}
-
-
-@pytest.mark.django_db
-def test_create_raw_pk_m2m_existing_id_succeeds():
-    """A valid raw-pk M2M id on create still succeeds and assigns (positive control, bug 5)."""
-    schema, (_GenreT, ShelfT, _BookT) = _build_book_raw_m2m_schema()
-    shelf = _make_branch_shelf()
-    genre = library_models.Genre.objects.create(name="Sci-Fi")
-    res = schema.execute_sync(
-        "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }",
-        variable_values={
-            "d": {
-                "title": "Valid",
-                "shelfId": global_id_for(ShelfT, shelf.pk),
-                "genres": [genre.pk],
-            },
-        },
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createBook"]["errors"] == []
-    book = library_models.Book.objects.get(title="Valid")
-    assert set(book.genres.values_list("pk", flat=True)) == {genre.pk}
 
 
 @pytest.mark.django_db
@@ -1312,162 +814,18 @@ def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
 
 
 # ---------------------------------------------------------------------------
-# Raw-pk (non-Relay target) relation VISIBILITY
-#
-# A relation to a NON-Relay-Node target generates a raw-pk input (no GlobalID). The
-# original decode visibility-checked only the GlobalID branch, so a raw-pk relation
-# whose related model has a registered (non-Relay) primary type with a get_queryset
-# could attach a row that hook hides - the gap the form path already closes.
-# _decode_relation_id_set now visibility-checks the raw-pk branch too, for both M2M
-# and FK, falling back to existence-only when no primary type is registered.
+# FK explicit-null decode (required-null is live on updateItem.categoryId)
 # ---------------------------------------------------------------------------
-
-
-def _build_book_raw_visibility_schema(*, genre_get_queryset=None, shelf_get_queryset=None):
-    """Declare NON-Relay Genre + Shelf primaries so Book.genres (M2M) and Book.shelf (FK) are raw-pk.
-
-    Optional ``genre_get_queryset`` / ``shelf_get_queryset`` install a visibility
-    hook on the related primary so the raw-pk visibility gap can be driven end to
-    end: a related row the hook hides must be a field-keyed
-    ``FieldError``, never silently attached.
-    """
-    type(
-        "BranchT",
-        (DjangoType, relay.Node),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {"model": library_models.Branch, "fields": ("id", "name"), "primary": True},
-            ),
-        },
-    )
-
-    genre_body: dict = {
-        "Meta": type(
-            "Meta",
-            (),
-            {"model": library_models.Genre, "fields": ("id", "name"), "primary": True},
-        ),
-    }
-    if genre_get_queryset is not None:
-        genre_body["get_queryset"] = genre_get_queryset
-    GenreT = type("GenreT", (DjangoType,), genre_body)  # NON-Relay -> Book.genres is a raw-pk list
-
-    shelf_body: dict = {
-        "Meta": type(
-            "Meta",
-            (),
-            {"model": library_models.Shelf, "fields": ("id", "code"), "primary": True},
-        ),
-    }
-    if shelf_get_queryset is not None:
-        shelf_body["get_queryset"] = shelf_get_queryset
-    ShelfT = type("ShelfT", (DjangoType,), shelf_body)  # NON-Relay -> Book.shelf is a raw-pk FK
-
-    class BookT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Book
-            fields = (
-                "id",
-                "title",
-                "shelf",
-                "genres",
-            )
-            primary = True
-
-    class CreateBook(DjangoMutation):
-        class Meta:
-            model = library_models.Book
-            operation = "create"
-            permission_classes = [_AllowAll]
-
-    @strawberry.type
-    class Mutation:
-        create_book = DjangoMutationField(CreateBook)
-
-    finalize_django_types()
-    return _schema(Mutation), (GenreT, ShelfT, BookT)
-
-
-_RAW_CREATE_BOOK = (
-    "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }"
-)
-
-
-@pytest.mark.django_db
-def test_create_raw_pk_m2m_hidden_member_is_field_error_no_visibility_leak():
-    """A raw-pk M2M id the related type's get_queryset hides -> FieldError, never attached (Finding 2)."""
-
-    @classmethod
-    def _hide_secret(cls, queryset, info, **kwargs):
-        return queryset.exclude(name="Secret")
-
-    schema, (_GenreT, _ShelfT, _BookT) = _build_book_raw_visibility_schema(
-        genre_get_queryset=_hide_secret,
-    )
-    shelf = _make_branch_shelf()
-    hidden = library_models.Genre.objects.create(name="Secret")
-    res = schema.execute_sync(
-        _RAW_CREATE_BOOK,
-        variable_values={"d": {"title": "Probe", "shelfId": shelf.pk, "genres": [hidden.pk]}},
-    )
-    assert_mutation_field_error(res, "createBook", "genres")
-    assert not library_models.Book.objects.filter(title="Probe").exists()
-
-
-@pytest.mark.django_db
-def test_create_raw_pk_fk_hidden_target_is_field_error_no_visibility_leak():
-    """A raw-pk FK id the related type's get_queryset hides -> FieldError, never attached (Finding 2)."""
-
-    @classmethod
-    def _hide_hidden(cls, queryset, info, **kwargs):
-        return queryset.exclude(code="HIDDEN")
-
-    schema, (_GenreT, _ShelfT, _BookT) = _build_book_raw_visibility_schema(
-        shelf_get_queryset=_hide_hidden,
-    )
-    branch = library_models.Branch.objects.create(name="Main")
-    hidden_shelf = library_models.Shelf.objects.create(code="HIDDEN", branch=branch)
-    res = schema.execute_sync(
-        _RAW_CREATE_BOOK,
-        variable_values={"d": {"title": "Probe", "shelfId": hidden_shelf.pk}},
-    )
-    assert_mutation_field_error(res, "createBook", "shelfId")
-    assert not library_models.Book.objects.filter(title="Probe").exists()
-
-
-@pytest.mark.django_db
-def test_create_raw_pk_relation_visible_members_still_attach():
-    """The raw-pk visibility check does not over-reject: a VISIBLE FK + M2M still attach (Finding 2)."""
-
-    @classmethod
-    def _hide_decoy(cls, queryset, info, **kwargs):
-        return queryset.exclude(name="Decoy")
-
-    schema, (_GenreT, _ShelfT, _BookT) = _build_book_raw_visibility_schema(
-        genre_get_queryset=_hide_decoy,
-    )
-    shelf = _make_branch_shelf()
-    library_models.Genre.objects.create(name="Decoy")  # hidden, deliberately not attached
-    visible = library_models.Genre.objects.create(name="Visible")
-    res = schema.execute_sync(
-        _RAW_CREATE_BOOK,
-        variable_values={"d": {"title": "Good", "shelfId": shelf.pk, "genres": [visible.pk]}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["createBook"]["errors"] == []
-    book = library_models.Book.objects.get(title="Good")
-    assert set(book.genres.values_list("pk", flat=True)) == {visible.pk}
 
 
 @pytest.mark.django_db
 def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
     """An explicit ``null`` on a nullable FK clears (``None``), never a relation error.
 
-    ``_decode_single_relation_id`` short-circuits ``None`` on a ``null=True`` FK
-    without a membership / visibility query - so a registered primary type on the
-    related model cannot turn a clear into "Invalid id for relation".
+    Required-FK ``null`` is live
+    (``test_products_api.py::test_update_item_explicit_null_category_id_is_field_error``).
+    Fakeshop write surfaces have no ``null=True`` FK, so the clear-signal branch
+    is a helper pin with ``category.null`` patched True.
     """
     _build_item_schema()
     # Item.attachment is a nullable FileField, not an FK. Use Category.is_private's
@@ -1484,30 +842,6 @@ def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
         )
     assert error is None
     assert pk is None
-
-
-@pytest.mark.django_db
-def test_single_fk_explicit_null_on_required_is_field_keyed_null_error():
-    """Explicit ``null`` on a ``null=False`` FK is a decode-time ``null`` FieldError.
-
-    Rejected before ``full_clean`` / ``save`` so a ``blank=True, null=False`` FK
-    cannot slip past validation into the generic ``__all__`` IntegrityError envelope.
-    """
-    _build_item_schema()
-    fk_field = product_models.Item._meta.get_field("category")
-    assert fk_field.null is False
-    pk, error = resolvers._decode_single_relation_id(
-        None,
-        graphql_name="categoryId",
-        related_model=fk_field.related_model,
-        info=None,
-        relation_field=fk_field,
-    )
-    assert pk is None
-    assert error is not None
-    assert error.field == "categoryId"
-    assert error.codes == ["null"]
-    assert error.messages == ["This field cannot be null."]
 
 
 @pytest.mark.django_db
@@ -1677,59 +1011,6 @@ def test_create_naive_datetime_input_is_made_timezone_aware():
 
 
 # ---------------------------------------------------------------------------
-# Consumer input_class MERGE (spec-010 relation-override)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_create_through_merged_input_class_accepts_generated_remainder():
-    """A partial consumer ``input_class`` still accepts the generated ``categoryId`` and writes.
-
-    The merge fills the generated remainder, so a create supplying BOTH the
-    consumer-customized ``name`` and the generated ``categoryId`` succeeds. Under
-    the old wholesale-replacement behavior the partial input lacked ``categoryId``
-    and this would fail schema validation.
-    """
-
-    @strawberry.input
-    class CustomItemInput:
-        name: str = strawberry.field(description="A custom-described name")
-
-    schema, (CategoryT, _ItemT) = _build_item_schema(input_cls=CustomItemInput)
-    cat = product_models.Category.objects.create(name=_category_name())
-    res = schema.execute_sync(
-        _CREATE,
-        variable_values={"d": {"name": "Widget", "categoryId": global_id_for(CategoryT, cat.pk)}},
-    )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"]["name"] == "Widget"
-    assert payload["node"]["category"]["name"] == cat.name
-    assert product_models.Item.objects.filter(name="Widget", category=cat).exists()
-
-
-@pytest.mark.django_db
-def test_update_through_merged_partial_input_class_accepts_generated_remainder():
-    """A partial consumer ``partial_input_class`` still accepts the generated fields and updates."""
-
-    @strawberry.input
-    class CustomItemPartial:
-        name: str | None = strawberry.field(default=strawberry.UNSET, description="custom partial")
-
-    schema, (_CategoryT, ItemT) = _build_item_schema(partial_input_cls=CustomItemPartial)
-    cat = product_models.Category.objects.create(name=_category_name())
-    item = product_models.Item.objects.create(name="Old", category=cat)
-    res = schema.execute_sync(
-        _UPDATE,
-        variable_values={"id": _item_gid(ItemT, item.pk), "d": {"name": "New"}},
-    )
-    assert res.errors is None, res.errors
-    assert res.data["updateItem"]["node"]["name"] == "New"
-    item.refresh_from_db()
-    assert item.name == "New"
-
-
-# ---------------------------------------------------------------------------
 # Scalar field named ``<x>_id`` regression (spec-036)
 #
 # ``library.TaggedItem`` has a *scalar* ``object_id`` (a ``PositiveIntegerField``,
@@ -1847,19 +1128,14 @@ def test_relation_field_index_excludes_generic_foreign_key():
 
 
 # ---------------------------------------------------------------------------
-# File upload assignment (spec-037) - the verify-first contract
+# File upload assignment (spec-037) - update omit/replace/null
 # ---------------------------------------------------------------------------
 #
-# These tests PROVE the shipped generic scalar-assignment path carries an
-# uploaded file: ``model(**scalar_and_fk_attrs)`` (create) and the ``setattr``
-# loop (update) feed Django's ``FileField`` descriptor a ``SimpleUploadedFile``
-# directly, so NO file-specific resolver branch is needed (spec-037 Decision 6).
-# The schema is built WITHOUT ``config=strawberry_config()`` via the existing
-# ``_schema`` helper: ``Upload`` still resolves because it rides Strawberry's
-# built-in ``DEFAULT_SCALAR_REGISTRY`` (Decision 5), which is itself corroborating
-# evidence. The synthetic model uses ``app_label="products"`` (installed) +
-# ``managed=False`` + ``schema_editor`` + ``override_settings(MEDIA_ROOT=tmp_path)``,
-# mirroring the ``tests/types/test_resolvers.py`` shape.
+# Create through a FileField is live (``test_uploads_api.py`` /
+# ``createMediaSpecimen``). These rows keep UPDATE omit / replace / explicit
+# null on a synthetic required file column: fakeshop ships no
+# ``UpdateMediaSpecimen``.
+# ---------------------------------------------------------------------------
 
 _asset_model_counter = itertools.count(1)
 
@@ -1919,38 +1195,6 @@ def _build_asset_schema(model):
         "updateAsset(id:$id, data:$d){ node{ id name } errors{ field messages } } }"
     )
     return _schema(Mutation), AssetT, create_query, update_query
-
-
-@pytest.mark.django_db(transaction=True)
-def test_create_assigns_uploaded_file_through_generic_path(tmp_path):
-    """A create with a ``SimpleUploadedFile`` writes the row + the saved file (verify-first).
-
-    PROVES the generic ``model(**scalar_and_fk_attrs)`` path carries the upload: no
-    file-specific resolver branch exists, yet the saved ``FieldFile`` holds the
-    uploaded name + content.
-    """
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            schema, _AssetT, create_query, _update_query = _build_asset_schema(model)
-            upload = SimpleUploadedFile("doc.txt", b"hello bytes")
-            res = schema.execute_sync(
-                create_query,
-                variable_values={"d": {"name": "A", "attachment": upload}},
-            )
-            assert res.errors is None, res.errors
-            payload = res.data["createAsset"]
-            assert payload["errors"] == []
-            assert payload["node"]["name"] == "A"
-            row = model.objects.get(name="A")
-            assert row.attachment.name.endswith("doc.txt")
-            with row.attachment.open("rb") as fh:
-                assert fh.read() == b"hello bytes"
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2691,13 +1935,13 @@ def _protector_model(on_delete):
 def test_delete_refused_by_protected_reference_is_envelope_not_graphql_error(on_delete):
     """A PROTECT / RESTRICT-referenced row's delete returns the envelope; the row survives.
 
-    Without the ``_delete_or_field_errors`` guard the deletion collector's
-    ``ProtectedError`` / ``RestrictedError`` escaped ``_run_delete`` as a raw
-    top-level ``GraphQLError`` carrying Django's internal message (model and
-    relation names - an information leak). Both exceptions subclass
-    ``IntegrityError``, so this also pins that the catch is the delete-specific
-    one (the message names the protected-reference refusal, not the generic
-    constraint fallback) and that it leaks no referencing-model name.
+    Fakeshop has no ``on_delete=PROTECT`` FK on a writable model, so this stays on
+    a synthetic protector. Live delete happy path is
+    ``test_products_api.py::test_delete_item_happy_path``. Without the
+    ``_delete_or_field_errors`` guard the collector's ``ProtectedError`` /
+    ``RestrictedError`` escaped as a top-level ``GraphQLError`` naming the
+    referencing model. Both subclass ``IntegrityError``; the delete-specific
+    catch must not collapse to the generic constraint envelope.
     """
     with _protector_model(on_delete) as model:
         schema, (_CategoryT, ItemT) = _build_item_schema()

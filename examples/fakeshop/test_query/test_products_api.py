@@ -506,6 +506,75 @@ def test_create_item_unique_constraint_envelope_uses_all_sentinel():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_create_item_empty_name_is_field_error_no_write():
+    """An empty ``name`` on ``createItem`` is an in-band ``FieldError`` on ``name``, no row.
+
+    ``Item.name`` is required (``blank=False``). A provided empty string reaches
+    ``full_clean`` and maps to the field-keyed envelope; it is not a top-level
+    coercion error (the argument is a valid ``String``) and no row is written.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {"name": "", "categoryId": _global_id("products.category", category.pk)},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["name"]
+    assert models.Item.objects.count() == before
+
+
+@pytest.mark.django_db
+def test_create_update_delete_item_argument_signatures_over_http():
+    """The shipped Mutation publishes create ``data``, update ``id``+``data``, delete ``id``.
+
+    Introspection of the composed schema is the consumer contract for the
+    per-operation argument map ``DjangoMutationField`` synthesizes.
+    """
+    data = _graphql_data(
+        """
+        query {
+          __type(name: "Mutation") {
+            fields {
+              name
+              args { name type { kind name ofType { kind name ofType { name } } } }
+            }
+          }
+        }
+        """,
+    )
+    by_name = {field["name"]: field["args"] for field in data["__type"]["fields"]}
+
+    create_args = {arg["name"]: arg["type"] for arg in by_name["createItem"]}
+    assert create_args["data"]["kind"] == "NON_NULL"
+    assert create_args["data"]["ofType"]["name"] == "ItemInput"
+    assert set(create_args) == {"data"}
+
+    update_args = {arg["name"]: arg["type"] for arg in by_name["updateItem"]}
+    assert update_args["id"]["kind"] == "NON_NULL"
+    assert update_args["id"]["ofType"]["name"] == "ID"
+    assert update_args["data"]["kind"] == "NON_NULL"
+    assert update_args["data"]["ofType"]["name"] == "ItemPartialInput"
+    assert set(update_args) == {"id", "data"}
+
+    delete_args = {arg["name"]: arg["type"] for arg in by_name["deleteItem"]}
+    assert delete_args["id"]["kind"] == "NON_NULL"
+    assert delete_args["id"]["ofType"]["name"] == "ID"
+    assert set(delete_args) == {"id"}
+
+
+@pytest.mark.django_db(transaction=True)
 def test_update_item_partial_collision_on_unique_constraint_changing_only_name():
     """A ``name``-only update colliding on ``unique_item_per_category`` -> ``"__all__"``.
 
@@ -873,6 +942,37 @@ def test_create_item_wrong_type_global_id_on_category_id_is_field_error():
     assert result["errors"][0]["field"] == "categoryId"
     assert models.Item.objects.count() == before
     assert not models.Item.objects.filter(name="WrongTypeWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_unresolvable_type_category_id_is_field_error():
+    """A well-formed ``GlobalID`` naming an unregistered type on ``categoryId`` is in-band.
+
+    Distinct from the wrong-model case: decode itself fails (no installed Relay
+    type for ``nope.nonexistent``), and the relation mapper still returns a
+    ``FieldError`` on ``categoryId`` rather than a top-level error. No row.
+    """
+    create_users(1)
+    seed_data(1)
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+    bogus = _global_id("nope.nonexistent", 1)
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={"d": {"name": "UnresolvableRel", "categoryId": bogus}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["node"] is None
+    assert result["errors"] == [
+        {"field": "categoryId", "messages": ["Invalid id for relation 'categoryId'."]},
+    ]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="UnresolvableRel").exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -4261,6 +4361,43 @@ async def _post_async_shipped(query, *, variables=None, client=None):
         )
     assert result.response.status_code == 200
     return result.response.json()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_create_item_over_graphql_async():
+    """``createItem`` over ``/graphql-async/`` writes the row through the async view."""
+    await sync_to_async(create_users)(1)
+    await sync_to_async(seed_data)(1)
+
+    def _user_and_category():
+        from django.contrib.auth.models import Permission
+
+        user = get_user_model().objects.get(username="view_item_1")
+        perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
+        user.user_permissions.add(perm)
+        user = get_user_model().objects.get(pk=user.pk)
+        return user, models.Category.objects.first()
+
+    user, category = await sync_to_async(_user_and_category)()
+    client = AsyncClient()
+    await sync_to_async(client.force_login)(user)
+
+    payload = await _post_async_shipped(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": "AsyncModelWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "AsyncModelWidget", "category": {"name": category.name}}
+    created = await models.Item.objects.aget(name="AsyncModelWidget")
+    assert created.category_id == category.pk
 
 
 @pytest.mark.django_db(transaction=True)

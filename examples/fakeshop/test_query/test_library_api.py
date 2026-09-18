@@ -7394,6 +7394,52 @@ def test_create_shelf_model_mutation_hidden_alt_branch_m2m_is_field_error():
     assert not models.Shelf.objects.filter(code="MM-2").exists()
 
 
+@pytest.mark.django_db
+def test_create_shelf_model_mutation_nonexistent_alt_branch_is_field_error():
+    """A raw-pk M2M id that names no Branch is a field-keyed error; no dangling row."""
+    visible = models.Branch.objects.create(name="ModelVisibleMissingM2M", city="open")
+    before = models.Shelf.objects.count()
+
+    response = _post_graphql(
+        _CREATE_SHELF_MODEL,
+        variables={
+            "d": {"code": "MM-3", "branchId": visible.pk, "altBranches": [99999]},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelf"]
+    assert result["result"] is None
+    assert [e["field"] for e in result["errors"]] == ["altBranches"]
+    assert models.Shelf.objects.count() == before
+    assert not models.Shelf.objects.filter(code="MM-3").exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_model_mutation_visible_alt_branches_attach():
+    """A visible raw-pk M2M set on ``createShelf`` writes every named Branch."""
+    home = models.Branch.objects.create(name="ModelHomeM2M", city="open")
+    alt1 = models.Branch.objects.create(name="ModelAltOneM2M", city="open")
+    alt2 = models.Branch.objects.create(name="ModelAltTwoM2M", city="open")
+
+    response = _post_graphql(
+        _CREATE_SHELF_MODEL,
+        variables={
+            "d": {"code": "MM-4", "branchId": home.pk, "altBranches": [alt1.pk, alt2.pk]},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelf"]
+    assert result["errors"] == []
+    assert result["result"]["code"] == "MM-4"
+    shelf = models.Shelf.objects.get(code="MM-4")
+    assert shelf.branch_id == home.pk
+    assert set(shelf.alt_branches.values_list("pk", flat=True)) == {alt1.pk, alt2.pk}
+
+
 _UPDATE_BOOK_VIA_FORM = (
     "mutation($id: ID!, $d: BookGenresModelFormPartialInput!){ updateBookViaForm(id:$id, data:$d){ "
     "node{ title } errors{ field messages } } }"
@@ -7612,6 +7658,225 @@ def test_create_book_via_custom_input_happy_path():
     }
     created = models.Book.objects.get(title="CustomBook", shelf=shelf)
     assert created.subtitle == "required by the input_class override"
+
+
+@pytest.mark.django_db
+def test_create_book_via_custom_input_attaches_provided_genres():
+    """A provided ``genres`` list on ``createBookViaCustomInput`` is the replace-set.
+
+    The model pipeline assigns the M2M after save; both given genres stick, and
+    a third seeded genre that was never in the input stays off the row.
+    """
+    from apps.library.schema import GenreType
+
+    shelf = _seed_shelf()
+    g1 = models.Genre.objects.create(name="CreateSciFi")
+    g2 = models.Genre.objects.create(name="CreateFantasy")
+    models.Genre.objects.create(name="CreateUnused")
+
+    response = _post_graphql(
+        _CREATE_BOOK_VIA_CUSTOM_INPUT,
+        variables={
+            "d": {
+                "title": "GenreCreateBook",
+                "subtitle": "with genres",
+                "shelfId": shelf.pk,
+                "genres": [global_id_for(GenreType, g1.pk), global_id_for(GenreType, g2.pk)],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBookViaCustomInput"]
+    assert result["errors"] == []
+    book = models.Book.objects.get(title="GenreCreateBook", shelf=shelf)
+    assert set(book.genres.values_list("name", flat=True)) == {"CreateSciFi", "CreateFantasy"}
+
+
+@pytest.mark.django_db
+def test_create_book_via_custom_input_saves_circulation_status_choice_value():
+    """A GraphQL choice enum on create persists the raw Django choice value.
+
+    ``circulationStatus: available`` arrives as the generated enum member; the
+    write unwraps it to ``"available"`` before ``full_clean`` / ``save``.
+    """
+    shelf = _seed_shelf()
+
+    response = _post_graphql(
+        "mutation($d: BookInput!){ createBookViaCustomInput(data:$d){ "
+        "node{ title circulationStatus } errors{ field messages } } }",
+        variables={
+            "d": {
+                "title": "ChoiceCreateBook",
+                "subtitle": "choice create",
+                "shelfId": shelf.pk,
+                "circulationStatus": "available",
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBookViaCustomInput"]
+    assert result["errors"] == []
+    assert result["node"]["circulationStatus"] == "available"
+    created = models.Book.objects.get(title="ChoiceCreateBook", shelf=shelf)
+    assert created.circulation_status == models.Book.CirculationStatus.AVAILABLE
+
+
+@pytest.mark.django_db
+def test_update_book_via_custom_input_saves_circulation_status_choice_value():
+    """A GraphQL choice enum on update persists the raw Django choice value too.
+
+    The partial pipeline reads the enum member off the provided set and must
+    unwrap it before ``full_clean`` / ``save``, exactly as create does; the row
+    ends at ``"checked_out"``, not at the member object.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(
+        title="ChoiceUpdateBook",
+        subtitle="choice update",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.AVAILABLE,
+    )
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
+        "node{ title circulationStatus } errors{ field messages } } }",
+        variables={
+            "id": global_id_for(BookType, book.pk),
+            "d": {"title": "ChoiceUpdateBook", "circulationStatus": "checked_out"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaCustomInput"]
+    assert result["errors"] == []
+    assert result["node"]["circulationStatus"] == "checked_out"
+    book.refresh_from_db()
+    assert book.circulation_status == models.Book.CirculationStatus.CHECKED_OUT
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("data_extra", "expected_names"),
+    [({}, {"KeepGenre"}), ({"genres": []}, set())],
+    ids=["omit", "empty-list"],
+)
+def test_update_book_via_custom_input_genres_omit_vs_empty_list(data_extra, expected_names):
+    """Omitting ``genres`` leaves membership; ``genres: []`` clears it.
+
+    Both arms send the required ``title`` (the merged partial input pins it).
+    The must-not is the other arm: omit must not clear, empty must not keep.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    genre = models.Genre.objects.create(name="KeepGenre")
+    title = "OmitKeep" if not data_extra else "EmptyClear"
+    book = models.Book.objects.create(title=title, subtitle="keep", shelf=shelf)
+    book.genres.set([genre])
+    data = {"title": f"{title}After", **data_extra}
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
+        "node{ title } errors{ field messages } } }",
+        variables={"id": global_id_for(BookType, book.pk), "d": data},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaCustomInput"]
+    assert result["errors"] == []
+    book.refresh_from_db()
+    assert set(book.genres.values_list("name", flat=True)) == expected_names
+
+
+@pytest.mark.django_db
+def test_create_book_via_custom_input_explicit_null_genres_is_field_error():
+    """``genres: null`` on the model create is a field-keyed error, not a crash.
+
+    Clear is ``[]``; ``null`` is not a replace-set. No row is written.
+    """
+    shelf = _seed_shelf()
+
+    response = _post_graphql(
+        _CREATE_BOOK_VIA_CUSTOM_INPUT,
+        variables={
+            "d": {
+                "title": "NullGenresBook",
+                "subtitle": "null genres",
+                "shelfId": shelf.pk,
+                "genres": None,
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBookViaCustomInput"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["genres"]
+    assert not models.Book.objects.filter(title="NullGenresBook").exists()
+
+
+@pytest.mark.django_db
+def test_create_book_via_custom_input_wrong_type_genre_id_is_field_error():
+    """A Book GlobalID in ``genres`` is a ``FieldError`` on ``genres``, no write."""
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    decoy = models.Book.objects.create(title="WrongTypeDecoy", shelf=shelf)
+
+    response = _post_graphql(
+        _CREATE_BOOK_VIA_CUSTOM_INPUT,
+        variables={
+            "d": {
+                "title": "WrongTypeGenresBook",
+                "subtitle": "wrong type",
+                "shelfId": shelf.pk,
+                "genres": [global_id_for(BookType, decoy.pk)],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBookViaCustomInput"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["genres"]
+    assert not models.Book.objects.filter(title="WrongTypeGenresBook").exists()
+
+
+@pytest.mark.django_db
+def test_create_book_via_custom_input_uncoercible_genre_pk_is_field_error():
+    """A well-formed Genre GlobalID with ``node_id="abc"`` is in-band on ``genres``."""
+    from apps.library.schema import GenreType
+
+    shelf = _seed_shelf()
+
+    response = _post_graphql(
+        _CREATE_BOOK_VIA_CUSTOM_INPUT,
+        variables={
+            "d": {
+                "title": "UncoercibleGenresBook",
+                "subtitle": "uncoercible",
+                "shelfId": shelf.pk,
+                "genres": [global_id_for(GenreType, "abc")],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBookViaCustomInput"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["genres"]
+    assert not models.Book.objects.filter(title="UncoercibleGenresBook").exists()
 
 
 @pytest.mark.django_db

@@ -21,9 +21,11 @@ Covers the spec-036 surface (``django_strawberry_framework/mutations/sets.py``):
 - the namespace-isolation contract (a mutation ``Meta`` key is not a ``DjangoType``
   ``Meta`` key, Decision 12).
 
-System-under-test is the metaclass / validation / bind. The realistic products
-``Item`` / ``Category`` FK fixtures cover the happy path; package-local fixture
-models cover the no-primary / ambiguous cases products lacks.
+Metaclass / validation / bind. The composed schema's bound mutations are live
+in ``examples/fakeshop/test_query/test_products_api.py`` and
+``examples/fakeshop/test_query/test_library_api.py``; a request cannot observe
+``ConfigurationError`` at class creation, ledger dedupe, or post-finalize
+registration refusal.
 """
 
 from __future__ import annotations

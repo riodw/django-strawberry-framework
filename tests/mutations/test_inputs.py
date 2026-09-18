@@ -23,7 +23,11 @@ System-under-test is the generator itself, run against the realistic products
 ``Item`` / ``Category`` FK fixtures plus minimal package-local fixture models for
 the M2M, non-Relay-target, and ``FileField`` / ``ImageField`` shapes products does
 not carry (spec-036 test plan; products is every-Relay and has no M2M /
-file field).
+file field). Generated ``ItemInput`` / ``BookInput`` wire shapes live in
+``examples/fakeshop/test_query/test_products_api.py`` and
+``examples/fakeshop/test_query/test_library_api.py``; this module keeps
+class-creation selection, naming collisions, and payload-slot construction a
+request cannot observe.
 """
 
 from __future__ import annotations

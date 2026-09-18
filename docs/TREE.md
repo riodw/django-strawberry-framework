@@ -680,7 +680,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_list_field_api.py        # Live sync-HTTP contract for ``DjangoListField`` arguments.
 ├── test_list_field_async_api.py  # Live async-HTTP contract for ``DjangoListField`` arguments.
 ├── test_multi_db.py              # Live GraphQL HTTP tests for sharded resolver isolation and multi-database debug capture.
-├── test_mutation_atomicity.py    # Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
+├── test_mutation_atomicity.py    # Live HTTP acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.
 ├── test_products_api.py          # Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
 ├── test_products_visibility_api.py  # Live GraphQL proof that generated relations enforce target visibility themselves.

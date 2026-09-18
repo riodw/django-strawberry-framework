@@ -1,26 +1,11 @@
 """The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 
-System-under-test is the completion-spanning mutation transaction and its
-supporting seams:
-
-- ``schema.py::DjangoMutationExecutionContext`` - sync AND async execution hold
-  each generated top-level mutation field's ``transaction.atomic`` open through
-  GraphQL value completion, roll back on any new execution error, and commit
-  clean completions (the live ``/graphql/`` HTTP acceptance is
-  ``examples/fakeshop/test_query/test_mutation_atomicity.py``; this module owns
-  the async surface and the failure shapes a WSGI request cannot drive);
-- the plain-``strawberry.Schema`` refusal (``require_managed_write`` fires
-  before any database work);
-- the disappearing-row ``conflict`` contract (``force_update=True`` on direct
-  model updates, the zero-target-row delete, the missing post-write re-fetch)
-  including the Django 5.2 untyped-``DatabaseError`` compat disambiguation;
-- alias pinning: the fail-closed hook alias switch, the instance-sensitive
-  router divergence check, and the pinned relation checks;
-- the strict-boolean authorization contract (``check_permission`` /
-  ``has_permission`` / ``user.has_perm`` must return actual bools).
-
-Rows are seeded inline over the real products models (the package-test idiom);
-the sharded live-HTTP alias tests are ``examples/fakeshop/test_query/test_multi_db.py``.
+Completion-spanning transaction internals: the plain-``strawberry.Schema``
+refusal, concurrent async savepoint isolation, ``BaseException`` unwind,
+alias-lock cancel, disappearing-row ``conflict``, and fingerprint helpers.
+Live HTTP (sync ``/graphql/`` and async ``/graphql-async/``) is
+``examples/fakeshop/test_query/test_mutation_atomicity.py``. A WSGI request
+cannot drive worker-connection savepoint nesting or lock cancellation.
 """
 
 from __future__ import annotations
@@ -224,83 +209,8 @@ def test_plain_strawberry_schema_refuses_generated_mutations_before_writing():
 
 
 # ===========================================================================
-# Async execution: the completion-spanning transaction (open/close in the worker)
+# Async execution internals (savepoint nesting, BaseException, lock cancel)
 # ===========================================================================
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_async_update_completion_failure_rolls_back():
-    """Under ``await schema.execute`` a completion failure rolls the write back."""
-    from asgiref.sync import sync_to_async
-
-    def _hidden_after_write(cls, queryset, info, **kwargs):
-        return queryset
-
-    _declare_item_types()
-    UpdateItem = _declare_update_mutation()
-    schema = _mutation_schema(UpdateItem)
-    item = await sync_to_async(_seed_item)("AsyncOriginal")
-
-    # Corrupt the row's category date AFTER seeding, via raw SQL, so the
-    # post-write re-fetch hydrates ``created_date`` to None and the non-nullable
-    # ``createdDate`` fails at completion. SQLite stores datetimes as text and
-    # hydrates an unparseable string to None; Postgres type-checks the column, so
-    # the equivalent stored value is a real NULL and the column's NOT NULL has to
-    # be relaxed first. Both vendors then hand the ORM the same None.
-    def _corrupt():
-        connection = connections["default"]
-        with connection.cursor() as cursor:
-            if connection.vendor == "sqlite":
-                cursor.execute(
-                    "UPDATE products_category SET created_date = 'not-a-date' WHERE id = %s",
-                    (item.category_id,),
-                )
-                return
-            cursor.execute(
-                "ALTER TABLE products_category ALTER COLUMN created_date DROP NOT NULL",
-            )
-            cursor.execute(
-                "UPDATE products_category SET created_date = NULL WHERE id = %s",
-                (item.category_id,),
-            )
-
-    await sync_to_async(_corrupt)()
-
-    query = (
-        "mutation($id: ID!, $d: ItemPartialInput!){ write0(id:$id, data:$d){ "
-        "node{ name category { createdDate } } errors{ field messages } } }"
-    )
-    result = await schema.execute(
-        query,
-        variable_values={"id": _item_gid(item.pk), "d": {"name": "AsyncWritten"}},
-    )
-
-    assert result.errors is not None  # the completion failure surfaced...
-    name = await sync_to_async(lambda: product_models.Item.objects.get(pk=item.pk).name)()
-    assert name == "AsyncOriginal"  # ...and the write rolled back.
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_async_update_success_commits():
-    """Under ``await schema.execute`` a clean completion commits the write."""
-    from asgiref.sync import sync_to_async
-
-    _declare_item_types()
-    UpdateItem = _declare_update_mutation()
-    schema = _mutation_schema(UpdateItem)
-    item = await sync_to_async(_seed_item)("AsyncBefore")
-
-    result = await schema.execute(
-        _UPDATE,
-        variable_values={"id": _item_gid(item.pk), "d": {"name": "AsyncCommitted"}},
-    )
-
-    assert result.errors is None, result.errors
-    assert result.data["write0"]["errors"] == []
-    name = await sync_to_async(lambda: product_models.Item.objects.get(pk=item.pk).name)()
-    assert name == "AsyncCommitted"
 
 
 @pytest.mark.django_db(transaction=True)

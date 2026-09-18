@@ -5197,25 +5197,29 @@ def test_seal_carry_result_cache_refuses_a_cache_that_is_not_an_exact_list(cache
 
 
 def test_visibility_defect_messages():
-    """Visibility helpers format actionable error messages for 'evaluated' and 'combined' defects."""
+    """Visibility helpers word the defects their policies reach and name the ones they cannot.
+
+    No ``get_queryset`` seal policy sets ``require_unevaluated`` and no visibility
+    seal states a routing expectation, so ``evaluated`` and ``routing`` have no arm
+    at either visibility site: were the seal ever to hand one over, the exhaustive
+    dispatch must say so rather than mislabel it.
+    """
 
     class BookType:
         pass
 
-    err_msg_uneval = str(
-        _visibility_result_error(
-            BookType,
-            Category,
-            None,
-            ("evaluated", "the result cache is populated"),
-            None,
-        ),
-    )
-    assert (
-        "BookType.get_queryset returned an evaluated queryset (the result cache is populated)"
-        in err_msg_uneval
-    )
-    assert "Return an unevaluated QuerySet." in err_msg_uneval
+    for code in ("evaluated", "routing"):
+        unrendered = str(
+            _visibility_result_error(
+                BookType,
+                Category,
+                None,
+                (code, "unreachable here"),
+                None,
+            ),
+        )
+        assert f"with the {code!r} defect (unreachable here)" in unrendered
+        assert "declares no wording for" in unrendered
 
     err_msg_comb = str(
         _visibility_result_error(
@@ -5237,7 +5241,7 @@ def test_visibility_defect_messages():
     policy_uneval = _SealPolicy(require_unevaluated=True)
     with pytest.raises(
         ConfigurationError,
-        match="apply_type_visibility for DummyType requires an unevaluated QuerySet",
+        match="with the 'evaluated' defect .* declares no wording for",
     ):
         _prepared_visibility_source(DummyType, evaluated_qs, policy=policy_uneval)
 

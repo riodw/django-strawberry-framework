@@ -254,12 +254,10 @@ def base_queryset(model: type[models.Model], *, using: str | None = None) -> mod
     must NOT route through the registered type - the relation's model is the
     authority there.
 
-    ``using`` pins the seed to a database alias, spelled
-    ``manager.using(alias).all()`` (never ``.all().using(alias)``): a sharded
-    parent must seed its children on the SAME connection, and the
-    conditional-on-``None`` shape was being written out at each such site.
-    ``relay.py`` deliberately does not use this - it takes the raw manager and
-    composes from there.
+    ``using`` pins the seed to a database alias: a sharded parent must seed
+    its children on the SAME connection, and the conditional-on-``None`` shape
+    was being written out at each such site. ``relay.py`` deliberately does
+    not use this - it takes the raw manager and composes from there.
     """
     manager = model._default_manager
     return manager.using(using).all() if using is not None else manager.all()
@@ -3494,10 +3492,10 @@ def _raw_list_source_message(defect: tuple[str, str], name: str) -> str:
     """The wording for a row source the raw-list bound could not take ownership of.
 
     Only the defects ``_RAW_LIST_SOURCE_POLICY`` can actually reach have arms:
-    ``evaluated``, ``sliced`` and ``projection`` are switched off by that policy,
-    and ``routing`` / ``alias`` need an expectation this surface never states. A
-    code added to the seal without an arm here renders as the framework defect it
-    is rather than as one of these.
+    ``evaluated``, ``sliced``, ``combined`` and ``projection`` are switched off
+    by that policy, and ``routing`` / ``alias`` need an expectation this surface
+    never states. A code added to the seal without an arm here renders as the
+    framework defect it is rather than as one of these.
     """
     return _defect_message(
         {
@@ -3518,11 +3516,6 @@ def _raw_list_source_message(defect: tuple[str, str], name: str) -> str:
                 "bound returns. Return a plain django.db.models.QuerySet, or a "
                 "subclass backed by a plain django.db.models.sql.Query with Django's "
                 "own row iterable."
-            ),
-            "combined": (
-                f"A collection resolver returned a {name} combining queries "
-                f"({defect[1]}), which the row bound cannot rebuild, so the bound has "
-                "no framework-owned queryset to slice."
             ),
         },
         defect,
@@ -3651,11 +3644,6 @@ def _visibility_result_error(
                     f"state cannot be faithfully rebuilt. Return a queryset backed by a plain "
                     f"django.db.models.sql.Query over model or .values() rows."
                 ),
-                "evaluated": (
-                    f"{name}.get_queryset returned an evaluated queryset ({detail}); "
-                    f"the visibility contract composes further filters and ordering onto an "
-                    f"unevaluated lazy query. Return an unevaluated QuerySet."
-                ),
                 "sliced": (
                     f"{name}.get_queryset returned a sliced queryset ({detail}); "
                     f"the surface composes further filters and ordering onto the hook result, "
@@ -3679,10 +3667,6 @@ def _visibility_result_error(
                     f"{detail!r}, but this resolution is pinned to alias {required_alias!r}; "
                     f"a visibility hook cannot re-route a pinned resolution. Remove the "
                     f".using(...) call."
-                ),
-                "routing": (
-                    f"{name}.get_queryset changed database routing intent ({detail}); "
-                    "a visibility result must preserve the source routing contract."
                 ),
             },
             defect,
@@ -3784,11 +3768,6 @@ def _prepared_visibility_source(
                         f"malformed deferred-filter state cannot be faithfully rebuilt. Pass a "
                         f"queryset backed by a plain django.db.models.sql.Query."
                     ),
-                    "evaluated": (
-                        f"apply_type_visibility for {name} requires an unevaluated "
-                        f"QuerySet; got an evaluated queryset ({detail}). Pass an unevaluated "
-                        f"QuerySet."
-                    ),
                     "sliced": (
                         f"apply_type_visibility for {name} got a sliced source "
                         f"queryset ({detail}); the visibility hook and the surface compose "
@@ -3806,10 +3785,6 @@ def _prepared_visibility_source(
                         f"source; the visibility contract composes over {model_name} model "
                         f"rows, not a .values() / .values_list() (or custom-iterable) "
                         f"projection."
-                    ),
-                    "routing": (
-                        f"apply_type_visibility for {name} changed database routing intent "
-                        f"({detail}); the source must preserve its routing contract."
                     ),
                 },
                 defect,

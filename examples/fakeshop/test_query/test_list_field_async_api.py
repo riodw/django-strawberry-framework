@@ -26,10 +26,12 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import EmptyResultSet
 from django.db import models
-from django.db.models.expressions import OrderBy, RawSQL
-from django.db.models.functions import Random
+from django.db.models.expressions import Func, OrderBy, RawSQL
+from django.db.models.functions import Lower, Random
+from django.db.models.lookups import Transform
 from django.db.models.sql.compiler import SQLCompiler
 from django.test import AsyncClient, override_settings
+from django.test.utils import register_lookup
 from django.urls import clear_url_caches, path
 
 from django_strawberry_framework import (
@@ -1283,6 +1285,79 @@ async def test_async_offset_accepts_a_conditional_order_over_a_column_alias_pred
     statement = shelf_sql[0].upper()
     assert "OFFSET 1" in statement, statement
     assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+class _ProjectFunc(Func):
+    """A project expression that emits its own SQL regardless of the column it holds."""
+
+    function = "RANDOM"
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return "RANDOM()", []
+
+
+class _ProjectTransform(Transform):
+    """A project transform registered on a built-in field, emitting its own SQL."""
+
+    lookup_name = "jitter"
+    output_field = models.FloatField()
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return "RANDOM()", []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("ordering", "served"),
+    [
+        ((_ProjectFunc(models.F("code")),), False),
+        ((Lower("code"),), True),
+    ],
+    ids=["project-func", "approved-func"],
+)
+async def test_async_offset_reads_an_expression_by_its_approved_form(
+    monkeypatch,
+    ordering,
+    served,
+):
+    """The async coloring names the same approved forms the sync one does."""
+    await _seed_three_shelves_async()
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", ordering)
+    shelf_sql = _record_table_sql(monkeypatch, "library_shelf")
+
+    payload = await _post_async(_shelf_offset_schema(), _ASYNC_RELATION_DEFAULT_OFFSET)
+
+    if not served:
+        err = payload["errors"][0]
+        assert err["extensions"]["reason"] == "order_required"
+        assert err["extensions"]["argument"] == "offset"
+        assert shelf_sql == [], shelf_sql
+        return
+    assert "errors" not in payload, payload
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "LOWER(" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_offset_rejects_a_predicate_chain_of_project_sql(monkeypatch):
+    """A project transform on a built-in field is SQL the predicate wraps its column in."""
+    await _seed_three_shelves_async()
+    monkeypatch.setattr(
+        library_models.Shelf._meta,
+        "ordering",
+        _coin_case_ordering(lookup="code__jitter__gt", threshold=0.5),
+    )
+    shelf_sql = _record_table_sql(monkeypatch, "library_shelf")
+
+    with register_lookup(models.TextField, _ProjectTransform):
+        payload = await _post_async(_shelf_offset_schema(), _ASYNC_RELATION_DEFAULT_OFFSET)
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert shelf_sql == [], shelf_sql
 
 
 @pytest.mark.django_db(transaction=True)

@@ -64,7 +64,7 @@ from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db import models
 from django.db.models import Value
-from django.db.models.functions import Now, Random
+from django.db.models.functions import Lower, Now, Random, RowNumber
 from django.test import RequestFactory
 from graphql import GraphQLError
 from strawberry.schema_directive import Location as _DirectiveLocation
@@ -1734,6 +1734,47 @@ def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(m
     monkeypatch.setattr(library_models.Branch._meta, "ordering", (Random(),))
 
     assert _is_model_default_ordering_active(library_models.Book.objects.all()) is True
+
+
+class _SubclassedLower(Lower):
+    """A subclass of an approved function: an approved name over a different ``as_sql``."""
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return "RANDOM()", []
+
+
+@pytest.mark.parametrize(
+    ("term", "expected"),
+    [
+        (Lower(models.F("code")), True),
+        (_SubclassedLower(models.F("code")), False),
+        (models.Min("id"), True),
+        (models.Count("*"), True),
+        (models.Sum("id"), False),
+        (models.Window(RowNumber()), False),
+    ],
+    ids=[
+        "approved-function",
+        "subclass-of-approved-function",
+        "approved-aggregate",
+        "row-count",
+        "unapproved-aggregate",
+        "window",
+    ],
+)
+def test_order_term_classifier_admits_only_named_forms(term, expected):
+    """A node is read through because this package names its form, never because it has children.
+
+    An expression's sources say nothing about the SQL it wraps them in, and a
+    subclass of a pure function carries an ``as_sql`` of its own under an
+    approved name - so membership is by exact type, and a form nobody listed is
+    refused however ordinary its children look.
+    """
+    from django_strawberry_framework.list_field import _is_deterministic_order_term
+
+    query = library_models.Shelf.objects.all().query
+
+    assert _is_deterministic_order_term(query, term) is expected
 
 
 def test_order_predicate_classifier_refuses_an_unresolvable_reference(monkeypatch):

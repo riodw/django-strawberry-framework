@@ -1,205 +1,201 @@
-# Adversarial review: spec-050 close candidate
+# Adversarial review: spec-050 current candidate
 
-Date: 2026-09-17
+Date: 2026-09-18
 
-Verdict: **the row-carry implementation appears correct, but the card is not yet in a state that
-can honestly be called DONE.** I found no new supported-project, wire-reachable bypass in the
-production delta. I did find two release-integrity blockers, two close-out/test-contract defects,
-and two non-blocking documentation issues.
+Verdict: **the isolation, relation-expansion, predicate-LHS, evaluated-queryset, and
+manager fixes are materially better, but this candidate still has one wire-reachable
+ordering-certification bypass and is not closeable yet.** The bypass is in the same
+Decision 6 contract, not a theoretical hostile-object concern. The build record also
+still correctly says WIP: the exact-tree gate has not been run and the checkout carries
+an uncommitted database change.
 
-I did not run pytest, per the repository rule. The existing full-suite figures are evaluated as
-evidence, not re-used as evidence for this review's current tree.
+I reviewed the current `HEAD` (`02e266df`) and the current working tree. I did not run
+pytest, per the repository rule. I did run direct Django/HTTP probes in fresh Python
+processes, plus the structural tracked-path and tree checks that do not execute pytest.
 
-## P1-1 — The recorded final gate is not for the tree that is about to be committed
+## P1-1 — Generic expression recursion certifies custom SQL as deterministic
 
-**Broken contract:** spec Decision 22 step 2 and the final Definition-of-done row require the
-default, sharded, floor, and structural gates to describe one identified tree, and explicitly say
-that figures from another tree are not evidence. Step 4 says the record names the commit before
-the card is marked DONE.
+**Broken contract:** spec-050 Decision 6 says a positive offset is allowed only when
+the selected order can be read down to columns and literals. It explicitly says that
+`Func`, `RawSQL`, `Subquery`, and other SQL the classifier cannot read must be refused,
+and Test plan row 27 requires the refusal to be observable before row SQL. The same
+contract applies to a model default selected after visibility; it is not limited to
+`OrderSet.apply_*` output.
 
-**What the record says:**
+**Supported project shape:** Django's public expression API permits a project to put a
+custom `Func` or `Transform` in `Meta.ordering`. This does not require a private Django
+write, a forged queryset, or a malicious GraphQL scalar. The application owns the model
+and registers the expression in ordinary Python.
 
-- `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` identifies HEAD `20646db2` plus
-  sixteen paths.
-- The older checklist in that same file still calls the final gate the working tree at
-  `ab98d240`.
-- The status paragraph claims the future maintainer commit of the batch will be the named tree,
-  even though that commit does not yet exist.
+**Wire input:** a normal `DjangoListField` request with a positive `offset` and a
+`limit`, for example `{ shelves(offset: 1, limit: 1) { code } }`. The resolver can be
+the ordinary `Shelf.objects.all()` resolver used by the fakeshop holder probes.
 
-**What exists now:**
+### Reproduction A: a custom `Func` with a readable child
 
-- HEAD is `e3257e25`, one commit after `20646db2`. That commit rewrites twelve test modules. The
-  full default and sharded suites required by Decision 22 necessarily include those files.
-- The close candidate also contains spec-050-owned changes absent from the sixteen-path inventory:
-  `docs/GLOSSARY.md`, `KANBAN.md`, `KANBAN.html`, the board database, and the final review artifact.
-  `docs/GLOSSARY.md` contains executable examples and behavior claims, so it is not disposable
-  bookkeeping.
-- The structural population has already changed: the current formatter sees 451 files, while the
-  recorded review saw 425. The current citation count is 1108, while the gate table records 1104.
-  The current structural checks are green, but that does not substitute for the default, sharded,
-  and supported-floor suites on the current candidate.
+```python
+class Volatile(Func):
+    function = "RANDOM"
 
-There is also a design error in Decision 22 itself: a tracked record cannot contain the hash of the
-same commit that contains the record. Editing the hash changes the tree and therefore changes the
-commit hash. The current placeholder prose is a symptom of an impossible self-reference, not a
-valid identity.
+    def as_sql(self, compiler, connection, **kwargs):
+        return "RANDOM()", []
 
-**Root fix:** make the close protocol implementable, then run it once on the real candidate.
+Shelf._meta.ordering = (Volatile(F("code")),)
+```
 
-1. Amend Decision 22 and its Definition-of-done row to use a two-commit close:
-   - a candidate commit containing all production, tests, shipped docs, board/database transition,
-     spec status, and generated outputs;
-   - the full/default/sharded/floor gate and adversarial review run against that exact commit;
-   - a record-only follow-up commit that names the gated commit and changes only the build record.
-2. Run the structural checks on the record-only follow-up. Do not claim that follow-up itself was
-   the full-suite tree; say plainly that its parent is the gated implementation tree and that the
-   only delta is the evidence record.
-3. Remove every stale tree identifier (`ab98d240`, `20646db2`, “sixteen paths”) from the live gate
-   statement. Historical identifiers may remain only where explicitly labelled superseded.
-4. Return card 050 to WIP until the new exact-commit gate and review are recorded. The existing
-   8333/8353/3169 figures remain useful historical evidence but cannot close the current tree.
+The current `_is_deterministic_order_term` sees a non-empty
+`get_source_expressions()` result, recursively certifies the child `F("code")`, and
+returns `True`. It never certifies the SQL emitted by `Volatile`. The direct helper
+reported `True`; the synchronous HTTP request was served with:
 
-This is a release blocker even though it is not a runtime security defect: the code may be good,
-but the repository currently asserts stronger verification than was performed on the candidate.
+```sql
+ORDER BY RANDOM() ASC LIMIT 1 OFFSET 1
+```
 
-## P1-2 — The board database change is mixed with pre-existing concurrent data
+The asynchronous HTTP request was also served successfully with the same random
+ordering. The guard did not return `order_required`, and row SQL was executed.
 
-**Broken contract:** the repository's concurrent-work rule says pre-existing dirty data belongs to
-another session and must not be silently absorbed. The card's own close plan records that
-`examples/fakeshop/db.sqlite3` was already dirty before this cycle, with library seed rows changed
-while the kanban and glossary tables still matched HEAD.
+### Reproduction B: a custom `Transform` hidden in a conditional predicate
 
-The close then moved card 050 to DONE and updated glossary/board rows in that same binary database.
-Git cannot commit selected SQLite tables: the current binary diff now contains both the earlier
-library-data changes and this card's lifecycle changes. Calling the database out-of-scope in the
-baseline does not isolate it once this cycle writes the same file.
+```python
+class Jitter(Transform):
+    lookup_name = "jitter"
+    output_field = models.FloatField()
 
-**Root fix:** reconstruct the board database from a clean, known base and replay only the card-050
-board/glossary mutations, or first let the owner of the pre-existing database change land it and
-then reapply/regenerate the card transition. Do not overwrite the concurrent database blindly.
-Before committing, compare the database table-by-table against both parents and record which tables
-and rows card 050 owns. Regenerate `KANBAN.md`, `KANBAN.html`, and `docs/GLOSSARY.md` from that
-disentangled database and rerun their consistency checks.
+    def as_sql(self, compiler, connection):
+        return "RANDOM()", []
 
-Until this is done, the binary file cannot safely be included in a spec-050 commit.
+models.TextField.register_lookup(Jitter)
+Shelf._meta.ordering = (
+    Case(When(code__jitter__gt=0.5, then=Value(0)), default=Value(1)),
+)
+```
 
-## P2-1 — The repository simultaneously says WIP, in flight, and DONE
+The current `_is_deterministic_order_predicate_reference` finds `code` as a valid
+field head and accepts the remaining transform/lookup suffix without classifying the
+transform. The helper again reported `True`; the live SQL was:
 
-**Broken contract:** Decision 22 says the card becomes DONE only at the close record, and the
-standing docs describe the current checkout.
+```sql
+ORDER BY CASE WHEN RANDOM() > 0.5 THEN 0 ELSE 1 END ASC
+             LIMIT 1 OFFSET 1
+```
 
-The generated board says `DONE-050-0.0.15`, but:
+This is the same failure mode as the earlier random-alias predicate defect, but it is
+now past the alias check: the unreadable SQL is supplied by a standard Django
+transform rather than by an annotation alias.
 
-- `docs/spec-050-list_field_arguments-0_0_15.md` still says target
-  `WIP-ALPHA-050-0.0.15` and `Status: in flight`.
-- `TODAY.md` explicitly defines “Today” as the current checkout, then says the list-field card is
-  still WIP in its opening note, capability table, and release-work section.
-- The spec's completion checklist remains entirely unchecked, while the board copy of the shorter
-  checklist is entirely checked.
+### Root cause
 
-The rationale's sentence that the card *was authored* as WIP is historical and may remain. The
-spec header and `TODAY.md` are present-tense claims and may not.
+The generic branch in `django_strawberry_framework/list_field.py::_is_deterministic_order_term`
+uses “has source expressions” as a proxy for “transparent composition.” That is not a
+Django contract. `Func`, `Transform`, `Aggregate`, `Window`, and consumer expression
+subclasses can all have readable children while their own compiler method contributes
+arbitrary SQL. The predicate reader has the same gap: it separates a field/annotation
+head from trailing pieces but does not establish that each trailing transform is a
+known, deterministic operation.
 
-**Root fix:** after the exact-commit gate succeeds, update the spec target/status to the shipped
-card id and completion state, reconcile the spec checklist according to the repository's shipped-
-spec convention, and update all three current-checkout statements in `TODAY.md`. Remove the old
-instruction that `TODAY.md` must not change at close; it became false when the card lifecycle
-changed.
+This is not an application-code trust-boundary exception. The project is trusted to
+declare a model default, but the list-field contract still promises not to certify an
+order it cannot read. A page that spans two executions under `RANDOM()` is a concrete
+violation of that promise.
 
-## P2-2 — The live `Manager.from_queryset` proof mounts the manager through private model state
+### Required root fix
 
-**Broken contract row:** the Definition of done says a relation whose manager is a
-`Manager.from_queryset` class with no overrides is proven live under a prefetching plan at two
-parent cardinalities and on the async transport. The repository test rule requires real supported
-usage where the live endpoint can reach it.
+1. Replace the generic source-expression recursion with an explicit classifier for the
+   expression forms the package has decided are transparent. Unknown expression nodes,
+   custom `Func`/`Transform`/`Aggregate`/`Window` subclasses, and any node whose own
+   compiler contributes SQL must fail closed. Do not fix this by adding another
+   `Random` class name to a deny-list.
+2. Keep the existing positive handling for the deliberately supported forms (`F`,
+   `OrderBy`, `Case`/`When`, readable leaves, and the relation-string expansion), but
+   make the exact/approved node boundary explicit. If a built-in function such as a
+   deterministic `Lower` or `Cast` is to remain accepted, name and test it as an
+   approved form; otherwise reject it as opaque. The rule must not depend on the
+   function's runtime name or on whether its children happen to be readable.
+3. In `_is_deterministic_order_predicate_reference`, distinguish a field/annotation
+   reference from its trailing lookups and transforms. A transform suffix is not a
+   certified column reference unless it is one of the explicitly approved forms. The
+   same rule must hold when the head is an annotation, and when a reference is lifted
+   through a related-model ordering prefix.
+4. Add both sync and async live `/graphql` rows in
+   `examples/fakeshop/test_query/test_list_field_api.py` and
+   `examples/fakeshop/test_query/test_list_field_async_api.py` for the two reproductions:
+   each must return `order_required`, execute no model-row SQL, and sit beside a
+   deterministic control. Add package-level classifier tests for the exact expression
+   boundary and for an approved deterministic form if one is retained.
+5. Amend Decision 6, its edge-case bullets, rationale, Test plan row 27, the Slice 2
+   checklist, and the build record so the documented positive-certification rule names
+   custom functions/transforms and the chosen whitelist. Do not leave the prose saying
+   “every other leaf is opaque” while the implementation treats every non-empty source
+   list as transparent.
 
-**Supported project shape:** a normal Django model declaration using
-`objects = LoanQuerySet.as_manager()` or `Manager.from_queryset(LoanQuerySet)()`.
+Until this is fixed, the offset guard can serve a random page while claiming that the
+order is materially active and repeatable. That is a release-blocking implementation
+finding.
 
-**Wire input:** the live `patrons { loans { note } }` request already used by the new tests.
+## P1-2 — The close record still cannot identify a releasable tree
 
-The production behavior works for that shape, but the checked-in live proof does not construct it
-that way. `_project_relation_manager` rewrites `Loan._meta.local_managers`, manually assigns
-manager internals, and calls the private `_expire_cache()` hook for the duration of a request. The
-package-tier proof likewise calls the private related-manager `_apply_rel_filters` method directly.
-Those are useful mechanism probes, but neither is the public project declaration named by the
-contract.
+This is a release-integrity blocker independent of the runtime finding.
 
-I independently exercised the actual public declaration: a model with a no-override queryset from
-`Manager.from_queryset`, a real reverse relation, and a warmed `Prefetch`. The cached relation was
-a project queryset with a pending deferred predicate and an exact-list result cache; normalization
-returned a plain `QuerySet`, retained the same Django cache, bounded it to two rows, and executed
-zero additional queries. That supports the implementation, but it does not repair the repository's
-acceptance-test fidelity.
+- `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` still says `Status: WIP`.
+- Slice 5 and the final exact-commit gate are unchecked, and the final gate section says
+  that no current default, sharded, supported-floor, structural, or adversarial-review
+  result is evidence for this checkout.
+- The spec itself remains explicitly `WIP — pre-candidate` with unchecked completion
+  rows. That is currently the truthful state, not a close.
+- `git status --short` still reports an uncommitted `examples/fakeshop/db.sqlite3`
+  change. The build record documents that this SQLite file contains concurrent library
+  data as well as card-owned lifecycle data; it cannot safely be absorbed into a
+  candidate by staging the binary as one file.
 
-**Root fix:** dogfood the no-op project queryset as the real default manager of the fakeshop `Loan`
-model (a custom manager with `use_in_migrations=False` should not require schema state, which
-`makemigrations --check --dry-run` must confirm). Then run the existing HTTP document against that
-ordinary declaration and retain the absolute two-query assertions at two parent cardinalities plus
-the async payload row. Once the absolute count is pinned, the temporary manager mount and its
-parallel control schemas can be deleted. This both proves the supported shape and makes the test
-substantially simpler.
+The required fix remains the two-commit protocol already written in Decision 22:
+create one candidate implementation commit, run the complete default/sharded/floor and
+structural/documentation gates against that exact parent, perform the final adversarial
+review, then make an evidence-only follow-up that names the gated parent. Disentangle
+the SQLite data before the candidate commit and regenerate its derived outputs. Do not
+mark the card DONE from the current working tree or from figures produced on an earlier
+hash.
 
-## P3-1 — The sealed-queryset glossary overclaims row provenance
+## P2-1 — The build inventory does not describe the latest in-scope fixture changes
 
-`docs/GLOSSARY.md` now correctly says that the raw-list policy alone carries `_result_cache`, but
-the same paragraph still concludes that “no synthetic row ... can cross the boundary.” The carry
-validates the cache container as an exact list; it does not and should not validate the provenance
-of each row. Under Decision 20 application Python is trusted, and the raw-list seam guarantees a
-row ceiling, not that application-produced cached rows came from a particular SQL execution.
+The latest in-scope library test commit (`02e266df`) adds and modifies the proxy-targeted
+prefetch fixture: a new `BranchNote` model and migration, schema surfaces, app-model
+tests, live library tests, and both SQLite databases. The build text still contains the
+sentence that `test_resource_policy_api.py` is the predicted addition and that “no new
+tracked path is added.” That sentence is no longer true for the current candidate.
 
-**Fix:** split the guarantees explicitly. Visibility/order seals drop cached rows and preserve
-query provenance; the final raw-list seal may carry already-fetched rows and guarantees only that
-the package-owned slice cannot exceed the accepted window. Do not describe the latter as a
-synthetic-row exclusion boundary.
+The generated tree and tracked-path checker are currently green, but those checks do not
+make the build record's inventory accurate. A future close reviewer cannot tell whether
+`examples/fakeshop/apps/library/migrations/0005_branchnote.py` and the proxy fixture are
+intentional spec-050 evidence or unrelated concurrent work.
 
-This is documentation accuracy, not a newly admitted security defect.
+Update the build's predicted-file/cohort and floor-scope sections to name every fixture
+path actually carried by the candidate, explain that the proxy fixture is the live proof
+for the prefetch-seal row, and remove the “no new tracked path” assertion. Then rerun
+the tracked-path, tree, citation, and documentation checks on the candidate commit.
 
-## P3-2 — Retired deferred-filter wording still appears in first-party errors
+## What is now fixed and not reopened
 
-The new implementation admits a well-formed pending deferred filter on any queryset class and
-rejects malformed deferred-filter state. Several first-party messages still tell consumers that an
-“unresolved deferred filter” cannot be rebuilt, even though unresolved is now the supported case:
+- Per-operation state is runner-owned and token/lease scoped across sync, async, nested,
+  and streamed execution; the previous shared-instance overlap bypass is not reproduced
+  by the current architecture.
+- Enforcement authorities are schema-owned; direct declarations are folded into the
+  construction record, while mutable factories and authority subclasses fail closed.
+- Relation-name ordering now follows Django's recursive related-model default expansion,
+  while `F` references remain foreign-key column references.
+- Conditional ordering predicates classify both the lookup reference and its value, so
+  random annotation aliases in either `alias()` or `annotate()` are rejected.
+- Evaluated exact querysets, project `as_manager()` relations, pending reverse predicates,
+  and proxy/concrete prefetch targets now have the intended live/package coverage.
+- The current static tree check and tracked-path check pass. No pytest result is claimed
+  here.
 
-- `django_strawberry_framework/permissions.py::_root_error_renderer`
-- `django_strawberry_framework/permissions.py::_edge_error_renderer`
-- `django_strawberry_framework/utils/querysets.py::_visibility_result_error`
-- the module-level querysets boundary description
+## Required disposition
 
-The current build record already classifies this as deferred wording work, so it does not reopen
-spec-050 under Decision 20. The correction is nevertheless mechanical: replace the cause with
-“malformed deferred-filter state” at every live message/docstring site and keep the archived-spec
-quotations historical.
-
-## What passed this review
-
-- The new `carry_result_cache` policy is confined to `_RAW_LIST_SOURCE_POLICY`; visibility and
-  post-OrderSet seals do not inherit it.
-- The cache carry refuses every populated cache that is not an exact built-in list before the
-  package-owned queryset slice can consult it.
-- The pending reverse-relation predicate is baked onto a detached cloned query for exact and
-  project queryset classes, with `negate` pinned to an exact bool before its truth test.
-- An actual public `Manager.from_queryset` reverse relation, including the warmed-prefetch shape
-  that simultaneously has a pending predicate and populated cache, retained the correct rows and
-  incurred zero additional queries in a direct probe.
-- The current tree passes formatter check, Ruff, the trailing-comma/source-layout check, the
-  spec-glossary check (43 terms), citation resolution (1108), tracked-path generation, and
-  `git diff --check`.
-- The extension documentation now distinguishes enforcement configuration, upstream ordinary
-  extension spellings, and package-owned per-operation isolation without claiming to isolate
-  third-party extension state.
-
-## Required disposition before commit
-
-1. Fix the impossible/stale close protocol and return the card to WIP.
-2. Disentangle the binary board database from the concurrent library-data change.
-3. Put every intended spec-050 path into one candidate commit and rerun default, sharded, full
-   declared floor, and structural gates on that exact commit.
-4. Run the final adversarial review against that commit.
-5. Write the evidence-only follow-up record naming the gated commit, then mark the close complete.
-6. Reconcile the spec and `TODAY.md` present-tense status claims.
-7. Replace the private manager mount with a real fakeshop model manager declaration before treating
-   the live Manager.from_queryset row as satisfied.
-
-The implementation itself should be preserved. The required work is to make the acceptance proof
-and repository state as trustworthy as the code now appears to be.
+1. Fix the expression/transform classifier at the production abstraction and add the
+   sync/async live regressions and package controls.
+2. Reconcile the build inventory with the proxy fixture and current tracked paths.
+3. Resolve the concurrent SQLite state and create the exact candidate commit.
+4. Run the declared default, sharded, supported-floor, structural, link, citation,
+   migration, and documentation gates on that candidate.
+5. Re-review that exact tree; only an evidence-only follow-up may then record closure.

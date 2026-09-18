@@ -58,8 +58,19 @@ can close. What the gate covers, beyond the five slices:
 
 The predicted files gain
 [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy] for
-the live hostile-relation rows on both transports; no new tracked path is added, so neither
-generated view moves.
+the live hostile-relation rows on both transports. The prefetch-seal row is proven live through
+a fixture the candidate carries: `BranchNote` in
+[`examples/fakeshop/apps/library/models.py`][fakeshop-library-models] with its migration
+[`0005_branchnote.py`][fakeshop-library-migration-0005], the `ProxyBranchType` and
+`BranchNoteType` surfaces in [`examples/fakeshop/apps/library/schema.py`][fakeshop-library-schema],
+the app-model rows in [`apps/library/tests/test_models.py`][fakeshop-library-test-models], and the
+live rows in [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library], with
+both SQLite databases carrying the migration. The migration is a new tracked path, so the
+tracked-path constants and the generated tree move with it and are regenerated on the candidate.
+The offset guard's ordering classifier certifies only named forms: transparent compositions,
+readable leaves, and exact-type approved Django functions, aggregates, transforms and lookups,
+with a relation string expanded into the related model's default and both sides of a predicate
+read; every custom or subclassed node is refused ([`spec-050`][spec-050] Decision 6).
 
 ## Pre-flight baseline
 - Baseline check: clean (`git status --short` empty at pre-flight).
@@ -210,9 +221,12 @@ execution-mode architecture added or rewrote - `tests/test_schema.py`,
 `examples/fakeshop/test_query/test_products_visibility_api.py`,
 `examples/fakeshop/test_query/test_keyset_api.py`,
 `examples/fakeshop/test_query/test_resource_policy_api.py`,
-`examples/fakeshop/test_query/test_error_policy_api.py`.
+`examples/fakeshop/test_query/test_error_policy_api.py`, plus the prefetch-seal fixture's two
+modules `examples/fakeshop/apps/library/tests/test_models.py` and
+`examples/fakeshop/test_query/test_library_api.py`.
 
-That is twenty-three paths: seventeen package modules or directories and the six live modules. A
+That is twenty-five paths: seventeen package modules or directories, the six live modules and the
+two fixture modules. A
 floor run that narrows this set is not this card's floor verification. The `Schema.stream` rows
 in the four architecture suites skip below strawberry-graphql 0.319.0 by their own gate, so a
 floor run reports them as skips, not as absent. The shared `.venv` is
@@ -360,7 +374,7 @@ on one identified tree, then one review of that tree under Decision 20, then the
 - [x] **Spec reconciliation and final verification (Worker 1)** - five homes agree; rationale
       change record; both cohort artifacts are superseded historical records.
 - [ ] **Gate on one candidate implementation commit** - default suite at `fail_under = 100`,
-      sharded suite, the twenty-three-path floor scope, hooks, citations, tracked-path constants,
+      sharded suite, the twenty-five-path floor scope, hooks, citations, tracked-path constants,
       `manage.py check`, and `makemigrations --check --dry-run`.
 - [ ] **One review of that exact candidate tree under Decision 20** - record the review conclusion
       only after the candidate gate is complete; a finding meeting the three conditions re-loops.
@@ -421,6 +435,11 @@ none is a Definition-of-done row of this card.
 <!-- tests/ -->
 
 <!-- examples/ -->
+[fakeshop-library-migration-0005]: ../../../examples/fakeshop/apps/library/migrations/0005_branchnote.py
+[fakeshop-library-models]: ../../../examples/fakeshop/apps/library/models.py
+[fakeshop-library-schema]: ../../../examples/fakeshop/apps/library/schema.py
+[fakeshop-library-test-models]: ../../../examples/fakeshop/apps/library/tests/test_models.py
+[fakeshop-test-library]: ../../../examples/fakeshop/test_query/test_library_api.py
 [fakeshop-test-resource-policy]: ../../../examples/fakeshop/test_query/test_resource_policy_api.py
 
 <!-- scripts/ -->

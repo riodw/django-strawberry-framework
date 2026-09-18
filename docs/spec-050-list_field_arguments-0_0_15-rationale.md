@@ -264,6 +264,17 @@ Spec: [Decision 6][spec-050-d6].
   resolves to a field certifies a default it never read and serves a positive offset over a
   result set the database re-shuffles. Reading the name as far as the compiler reads it is the
   same rule the annotation and `extra` steps already follow, one indirection further.
+- **Treating a node as transparent because its children are readable:** Django publishes no
+  such contract. `Func`, `Transform`, `Aggregate` and `Window` all emit SQL of their own around
+  their sources, and any expression can be subclassed with an `as_sql` that emits anything -
+  so a rule reading "has source expressions, therefore orders by them" certifies a one-class
+  project expression spelling `RANDOM()` over a column, and a project transform registered on a
+  built-in field does the same inside a predicate. Both reach the wire through `Meta.ordering`
+  and a plain `offset` request. The replacement is an explicit list of approved forms matched by
+  exact type, which inverts the exposure: a form nobody listed costs a refused request, where an
+  unlisted volatile class cost a silently re-shuffled page. Exact type rather than `isinstance`
+  is the load-bearing half - a subclass of a pure function is a different `as_sql` wearing an
+  approved name.
 - **Reading only the value side of a predicate:** A comparison has two operands and both are
   compiled. A classifier that reads the value alone accepts `When(coin__gt=0.5)` over a random
   alias while refusing `order_by("coin")`, which makes the predicate a spelling that buys what

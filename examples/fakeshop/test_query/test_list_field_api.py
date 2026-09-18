@@ -7,6 +7,7 @@ acceptance surface over live HTTP (``/graphql/`` for shipped schema fields and
 
 from __future__ import annotations
 
+import datetime
 from typing import Any
 
 import pytest
@@ -22,8 +23,9 @@ from django.contrib.auth import get_user_model
 from django.db import connection, models
 from django.db.models.expressions import Func, OrderBy, RawSQL
 from django.db.models.functions import Coalesce, Lower, Random
+from django.db.models.lookups import GreaterThan, Transform
 from django.test import Client, override_settings
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, register_lookup
 from django.urls import clear_url_caches, path
 from graphql_client import graphql_payload, post_graphql
 from strawberry.schema.name_converter import NameConverter
@@ -692,6 +694,137 @@ def test_holder_offset_accepts_a_conditional_order_over_a_plain_column_predicate
     assert len(shelf_sql) == 1
     statement = shelf_sql[0].upper()
     assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+class _ProjectFunc(Func):
+    """A project expression that emits its own SQL regardless of the column it holds."""
+
+    function = "RANDOM"
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return "RANDOM()", []
+
+
+class _ProjectLower(Lower):
+    """A subclass of an approved function whose ``as_sql`` emits something else entirely."""
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return "RANDOM()", []
+
+
+class _ProjectTransform(Transform):
+    """A project transform registered on a built-in field, emitting its own SQL."""
+
+    lookup_name = "jitter"
+    output_field = models.FloatField()
+
+    def as_sql(self, compiler, connection, **extra_context):
+        return "RANDOM()", []
+
+
+class _ProjectLookup(GreaterThan):
+    """A project lookup whose SQL has nothing to do with the sides it was given."""
+
+    lookup_name = "jittergt"
+
+    def as_sql(self, compiler, connection):
+        return "RANDOM() > 0.5", []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("ordering", "served"),
+    [
+        ((_ProjectFunc(models.F("code")),), False),
+        ((_ProjectLower("code"),), False),
+        ((Lower("code"),), True),
+    ],
+    ids=["project-func", "subclass-of-approved", "approved-func"],
+)
+def test_holder_offset_reads_an_expression_by_its_approved_form(monkeypatch, ordering, served):
+    """Holding readable children is not a promise about a node's own SQL.
+
+    A ``Func`` emits whatever its ``as_sql`` says around its sources, and a
+    subclass of a pure function is a different ``as_sql`` wearing an approved
+    name. Only the forms this package names are read through, so the project
+    expression and the subclass are both refused while the built-in they imitate
+    still pages.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(monkeypatch, ordering, ("name",))
+
+    if not served:
+        err = payload["errors"][0]
+        assert err["extensions"]["reason"] == "order_required"
+        assert err["extensions"]["argument"] == "offset"
+        assert shelf_sql == []
+        return
+    assert "errors" not in payload, payload
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "LOWER(" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "lookup_class",
+    [_ProjectTransform, _ProjectLookup],
+    ids=["project-transform", "project-lookup"],
+)
+def test_holder_offset_rejects_a_predicate_chain_of_project_sql(monkeypatch, lookup_class):
+    """A predicate's transforms and its lookup are SQL wrapped around the reference.
+
+    Resolving the column the predicate names says nothing about what is done to
+    it afterwards: a project transform or a project lookup registered on a
+    built-in field emits its own fragment, and the rows come back ordered by
+    that fragment.
+    """
+    _seed_three_shelves()
+
+    with register_lookup(models.TextField, lookup_class):
+        payload, shelf_sql = _shelf_offset_page(
+            monkeypatch,
+            _coin_case_ordering(lookup=f"code__{lookup_class.lookup_name}", threshold=0.5),
+            ("name",),
+        )
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert shelf_sql == []
+
+
+@pytest.mark.django_db
+def test_holder_offset_accepts_a_predicate_chain_of_approved_forms(monkeypatch):
+    """The control for the rows above: an approved transform under an approved lookup pages.
+
+    ``stamp__year__gt`` applies Django's own date transform and comparison to a
+    readable reference, which is exactly as repeatable as comparing the
+    reference itself. A guard refusing every chain it had to walk would keep the
+    rejections green while breaking ordinary conditional sorts.
+    """
+    _seed_three_shelves()
+    stamp = models.Value(
+        datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC),
+        output_field=models.DateTimeField(),
+    )
+
+    payload, shelf_sql = _shelf_offset_page(
+        monkeypatch,
+        _coin_case_ordering(lookup="stamp__year__gt", threshold=2000),
+        ("name",),
+        resolver=lambda root, info: library_models.Shelf.objects.alias(stamp=stamp),
+    )
+
+    assert "errors" not in payload, payload
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert "CASE WHEN" in statement, statement
     assert _RANDOM_ORDER_SQL not in statement, statement
 
 

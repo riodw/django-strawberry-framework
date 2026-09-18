@@ -102,7 +102,10 @@ the release wording.
   - [ ] The offset/order guard reads ONE classification of the sealed queryset, mirroring
         `SQLCompiler._order_by_pairs`'s precedence, so a random model default disqualifies an
         active-input request and a random term the compiler does not select disqualifies
-        nothing.
+        nothing. That classification certifies positively, against an explicit list of approved
+        forms matched by exact type - named compositions, pure Django functions, the aggregates
+        the shipped `OrderSet` emits, readable leaves, and the approved transforms and lookups a
+        predicate applies - and refuses every other node, subclasses of approved ones included.
   - [ ] Sync and async paths run visibility, then `OrderSet`, then the offset/order guard,
         then the one raw-list slice.
   - [ ] The result of a public `OrderSet.apply_*` override is validated as an unevaluated,
@@ -1191,17 +1194,31 @@ reference the compiler lifts out of an expanded ordering is rewritten through
 it, so an `F("name")` in the branch's ordering reached through `("branch",)` is the outer
 query's `F("branch__name")` and is read at that full name.
 
-Certification is positive: a term backs an offset window only when it can be read down to
-model columns and literals. A composition is transparent - it orders by whatever its source
-expressions order by, and an unfilled slot such as an aggregate's absent filter contributes
-no SQL of its own - while a leaf carries all of its own SQL, so the readable leaves are a
-column reference, the `*` of a row count, and a literal value. Every other leaf stands for
-SQL this package does not parse: `Random()`, a bare `Func` naming the same database function
-`Random()` wraps, a `RawSQL` fragment, and the inner `Query` a `Subquery` hands the compiler.
-A term it cannot read is one it must not certify as repeatable across the two queries an
-offset window spans, so each of those is refused. A classifier built instead as a list of
-known volatile classes certifies every spelling nobody put on the list, and `Random()` is
-only Django's name for one of them.
+Certification is positive and its boundary is an explicit list of APPROVED FORMS. Holding
+source expressions is not a promise about a node's own SQL: `Func`, `Transform`, `Aggregate`
+and `Window` each emit SQL around their sources, and any of them can be subclassed with an
+`as_sql` emitting anything at all, so "transparent because its children are readable" would
+certify a one-class project expression spelling `RANDOM()` over a column. A node is read
+through only when it is a form this package names, and only if every source expression it
+holds is certified too - an approved wrapper launders nothing, so `Coalesce(Random(),
+Random())` is refused through its children. The named forms are: the transparent compositions
+`Case`, `When`, `CombinedExpression`, `ExpressionWrapper` and `OrderBy`, whose own SQL is
+punctuation around their sources; the pure database functions `Cast`, `Coalesce`, `Concat`,
+`ConcatPair`, `Length`, `Lower` and `Upper`, each a deterministic function of its arguments;
+the aggregates `Count`, `Max` and `Min`, listed because the shipped surface emits them (an
+`OrderSet` annotates `Min` / `Max` for a to-many path, and a row count orders by `Count`); an
+`F` reference; and a `Q` predicate. The readable leaves carry all of their own SQL and are
+named outright: a column reference, the `*` of a row count, and a literal value.
+
+Every match is by EXACT type. A subclass of an approved class is a different `as_sql` under an
+approved name and is refused, which is the difference between naming a form and recognizing a
+family. Everything unlisted is refused: `Random()`, a bare or custom `Func` naming a database
+function, a `Transform`, an aggregate outside the three, a `Window`, a `RawSQL` fragment, and
+the inner `Query` a `Subquery` hands the compiler. A term it cannot read is one it must not
+certify as repeatable across the two queries an offset window spans. A classifier built
+instead as a list of known volatile classes certifies every spelling nobody put on the list,
+and `Random()` is only Django's name for one of them; the approved list inverts that exposure,
+because a form nobody listed costs a refused request rather than a re-shuffled page.
 
 Raw SQL reached through `extra` - a name that is a key in `query.extra`, or the dotted form
 the compiler hands through as `RawSQL` - is unreadable for the same reason: those strings are
@@ -1219,7 +1236,16 @@ when a `When` condition is built: the SHORTEST leading run of pieces naming an a
 and otherwise as many leading pieces as resolve to fields are the reference and the rest are
 lookups and transforms. An annotation is classified like any other term, a field path is a
 column order and is not expanded into its related model's default (a reference is not a string
-ordering term), and a head naming neither is refused. On the value side a lookup taking a
+ordering term), and a head naming neither is refused. The pieces that FOLLOW the reference are
+classified too, because a transform wraps it in a function call and the lookup is the operator
+around the comparison: `code__jitter__gt` resolves a column and then orders the rows by
+whatever `jitter` emits. Each is matched by exact type the same way a node is - a transform
+against the approved transform set (`Length`, `Lower`, `Upper`, and the `Extract` / `Trunc`
+date transforms) and the final lookup against the approved lookup set (Django's comparison,
+membership and null tests, including the integer- and relation-specific spellings Django
+substitutes by field type) - so a project transform or lookup registered on a built-in field is
+refused rather than skipped, while a reference with no trailing pieces is compared under
+Django's implicit `exact`. On the value side a lookup taking a
 sequence holds its operands one bracket deeper - `name__in` a list, `created__range` a pair -
 and the container itself resolves as no expression at all, so a predicate read only at its top
 level reports a fragment boxed inside one as a comparison against literals.
@@ -2039,17 +2065,24 @@ weakens no obligation, it only names which card carries it. See the
 - A term resolving into `query.extra` - a select alias, or the dotted form handed through as
   `RawSQL` - is opaque rather than deterministic and cannot back an offset window. An
   `extra` ordering naming a real field is unaffected.
-- A term is certified only when it reads down to columns and literals. A `RawSQL` fragment, a
-  bare `Func` naming a database function, and the inner query a `Subquery` wraps are each
-  refused as unreadable rather than accepted for matching no known random class. A
-  composition of columns and literals is read end to end and satisfies the guard, including a
-  conditional order's predicate and the slots an aggregate leaves unfilled.
+- A term is certified only when it is a NAMED approved form whose sources are themselves
+  certified. A `RawSQL` fragment, a bare `Func` naming a database function, and the inner query
+  a `Subquery` wraps are each refused as unreadable rather than accepted for matching no known
+  random class; so are a project `Func`, a `Transform`, a `Window`, an aggregate outside
+  `Count` / `Max` / `Min`, and any SUBCLASS of an approved class, because a subclass is a
+  different `as_sql` under an approved name. A composition of approved forms over columns and
+  literals is read end to end and satisfies the guard, including a conditional order's
+  predicate and the slots an aggregate leaves unfilled, and an approved wrapper launders
+  nothing - `Coalesce(Random(), Random())` is refused through its children.
 - A conditional order's predicate is read on BOTH sides of every comparison, and on the value
   side to the depth a lookup can carry SQL. The lookup's reference is separated from its
   trailing lookups and transforms the way the compiler separates them: an annotation reference
   carries that annotation's verdict, so `coin__gt` over `alias(coin=Random())` is refused while
   the same predicate over `alias(coin=F("code"))` is served; a field-path reference such as
-  `code__gt` is a column order; a head naming neither is refused. A fragment inside a sequence a
+  `code__gt` is a column order; a head naming neither is refused. The trailing pieces are
+  classified as well, by exact type against the approved transform and lookup sets, so a
+  project transform or lookup registered on a built-in field (`code__jitter__gt`) is refused
+  while an approved chain (`stamp__year__gt`) satisfies the guard. A fragment inside a sequence a
   lookup takes - `name__in`, `created__range` - is refused, while a sequence of ordinary
   literals is as readable as one literal and satisfies the guard.
 - Reversing a stable model default remains stable; `standard_ordering=False` changes direction
@@ -2342,6 +2375,16 @@ the shipped SDL.
     forms with no second wire spelling: a head that names neither an annotation nor a field, and
     a transform chain (`stamp__year__gt`) whose verdict follows the annotation it names, in both
     directions.
+    The approved-form boundary itself is pinned live in both colorings on the same holder, with
+    the two project shapes that reach it through `Meta.ordering` alone: an expression class
+    emitting its own SQL around a readable column, and a transform registered on a built-in
+    field under a predicate that resolves that column. Both are refused with no row SQL,
+    alongside a SUBCLASS of an approved function and a project lookup on the sync view, and each
+    is paired with the built-in it imitates - `Lower("code")` as the term, `stamp__year__gt` as
+    the chain - served with the raised low mark and no random function, so a guard refusing
+    every expression it had to walk cannot keep the rejections green. The package tier carries
+    the boundary by type: an approved function accepted and its subclass refused, an approved
+    aggregate and a row count accepted, an unlisted aggregate and a `Window` refused.
 28. A live async request whose deadline expires after its resolver has obtained an async-only
     source closes that source exactly once and advances it zero times, for the default window
     and for `limit: 0` alike, with the complete `execution_deadline_seconds` extensions on the
@@ -2911,11 +2954,14 @@ structural checks, and link/kanban verification prescribed by
       Django's compiler selects by precedence rather than against a union of the explicit
       ones: a random model default disqualifies an active-input request, and a random term the
       compiler does not select cannot disqualify anything. A selected term is judged by the
-      form the compiler resolves it into and is certified only when that form reads down to
-      columns and literals, so an annotation alias, an `F` naming one, a nested `Random()`, a
-      `RawSQL` fragment, a bare `Func` naming a database function, and a `Subquery`'s inner
-      query disqualify as a literal `"?"` does, while a composition of columns and literals
-      still backs the window. A STRING term naming a relation is judged by the related model's
+      form the compiler resolves it into and is certified only when that form is one this
+      package NAMES - a listed composition, function or aggregate, or a readable leaf, matched
+      by exact type - and every source it holds is certified too. So an annotation alias, an
+      `F` naming one, a nested `Random()`, a `RawSQL` fragment, a bare or project `Func`, a
+      `Transform`, a `Window`, an unlisted aggregate, a SUBCLASS of an approved class, and a
+      `Subquery`'s inner query all disqualify as a literal `"?"` does, while a composition of
+      approved forms over columns and literals still backs the window. A predicate's trailing
+      transforms and its final lookup are matched against approved sets the same way. A STRING term naming a relation is judged by the related model's
       own `Meta.ordering`, which the compiler expands it into and which the term as written
       never shows, so a random default one or more relations away disqualifies the request
       while the foreign key column named directly does not, and a relation walk Django rejects

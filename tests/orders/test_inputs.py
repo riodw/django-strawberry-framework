@@ -1,11 +1,13 @@
 """Order input tests for Ordering enum, input materialization, reset, and normalization.
 
 Covers ``INPUTS_MODULE_PATH``, the ``Ordering`` enum (members +
-``resolve`` semantics for ``ASC`` / ``DESC`` / ``NULLS_FIRST`` /
-``NULLS_LAST`` shapes), ``_input_type_name_for`` (the
-``ClassBasedTypeNameMixin`` delegate), and ``materialize_input_class``
-(write-to-module-global, idempotent re-write on the same pair,
-``ConfigurationError`` on collision against a different class).
+bare ``ASC`` / ``DESC`` ``resolve`` into ``OrderBy`` flags),
+``_input_type_name_for`` (the ``ClassBasedTypeNameMixin`` delegate),
+and ``materialize_input_class`` (write-to-module-global, idempotent
+re-write on the same pair, ``ConfigurationError`` on collision against
+a different class). Consumer ``NULLS_*`` payload order lives in
+``examples/fakeshop/test_query/test_library_api.py::
+test_library_books_order_by_subtitle_null_positioning``.
 
 The sections below cover ``convert_order_field_to_input_annotation`` /
 ``normalize_input_value`` / ``clear_order_input_namespace`` /
@@ -128,33 +130,6 @@ def test_ordering_resolve_wraps_value_in_f_expression():
     # ``OrderBy.expression`` holds the wrapped ``F("shelf__code")``.
     assert isinstance(expr.expression, F)
     assert expr.expression.name == "shelf__code"
-
-
-def test_ordering_resolve_nulls_variants():
-    """``resolve(value)`` sets nulls_first and nulls_last flags appropriately."""
-    asc_first = Ordering.ASC_NULLS_FIRST.resolve("col")
-    assert isinstance(asc_first, OrderBy)
-    assert asc_first.descending is False
-    assert asc_first.nulls_first is True
-    assert asc_first.nulls_last is None
-
-    asc_last = Ordering.ASC_NULLS_LAST.resolve("col")
-    assert isinstance(asc_last, OrderBy)
-    assert asc_last.descending is False
-    assert asc_last.nulls_first is None
-    assert asc_last.nulls_last is True
-
-    desc_first = Ordering.DESC_NULLS_FIRST.resolve("col")
-    assert isinstance(desc_first, OrderBy)
-    assert desc_first.descending is True
-    assert desc_first.nulls_first is True
-    assert desc_first.nulls_last is None
-
-    desc_last = Ordering.DESC_NULLS_LAST.resolve("col")
-    assert isinstance(desc_last, OrderBy)
-    assert desc_last.descending is True
-    assert desc_last.nulls_first is None
-    assert desc_last.nulls_last is True
 
 
 # ---------------------------------------------------------------------------

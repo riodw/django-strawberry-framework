@@ -20,6 +20,10 @@ Covers:
   idempotent ``finalize_django_types()``.
 - Partial-failure recovery (the partially-materialized state stays consistent
   with the ledger).
+
+Finalize-time bind / orphan / collision have no request. Shipped
+``Meta.orderset_class`` wiring is exercised live by
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 from __future__ import annotations

@@ -10,6 +10,8 @@ resolver-facing ``apply_sync`` / ``apply_async`` classmethods, the
 ``get_flat_orders`` walker, the ``_request_from_info`` context
 resolver, and the per-field / per-branch ``check_*_permission``
 dispatch (active-input-only / double-dispatch / dedup contract).
+To-many ``MIN`` / ``MAX`` SQL and async to-many ``orderBy`` payload
+order live in ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 from __future__ import annotations
@@ -394,7 +396,12 @@ def _book_order_with_factory():
 
 @pytest.mark.django_db
 def test_orderset_apply_async_via_asyncio_run():
-    """Async path produces the same order_by clauses as the sync path."""
+    """``apply_async`` writes a nonempty ``query.order_by`` for a scalar term.
+
+    Consumer to-many async colour is
+    ``test_library_genres_order_by_to_many_desc_applies_over_graphql_async``
+    on ``allLibraryGenresViaListField``.
+    """
     BookOrder, BookInput = _book_order_with_factory()
     input_value = [BookInput(title=Ordering.ASC)]
     info = _make_info()
@@ -795,7 +802,11 @@ def test_path_traverses_to_many_is_cached():
 
 
 def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
-    """A to-many term orders by a ``Min`` aggregate; a scalar term orders directly."""
+    """A to-many term orders by a ``Min`` aggregate; a scalar term orders directly.
+
+    Consumer two-term ``MIN(`` SQL is
+    ``test_library_books_order_by_two_to_many_terms_each_get_their_own_aggregate``.
+    """
     from django.db.models import Min
 
     class _MultBranchOrder(OrderSet):
@@ -817,23 +828,6 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
     assert expressions[1].expression.name == "name"  # scalar ordered directly
 
 
-def test_resolve_order_expressions_uses_max_for_descending_to_many():
-    """A DESCENDING to-many term aggregates with ``Max`` (so the parent's largest child wins)."""
-    from django.db.models import Max
-
-    class _DescBranchOrder(OrderSet):
-        class Meta:
-            model = Branch
-            fields = ["name"]
-
-    annotations, _expressions = _DescBranchOrder._resolve_order_expressions(
-        [("shelves__code", Ordering.DESC_NULLS_LAST)],
-        model=Branch,
-    )
-    ((_alias, aggregate),) = annotations.items()
-    assert isinstance(aggregate, Max)
-
-
 def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
     """``_path_traverses_to_many`` returns False for unresolvable / generic / all-to-one paths.
 
@@ -851,42 +845,6 @@ def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
     assert _path_traverses_to_many(TaggedItem, "content_object") is False
     # All-to-one chain ending on a relation (no scalar terminal, never to-many).
     assert _path_traverses_to_many(Book, "shelf__branch") is False
-
-
-@pytest.mark.django_db
-def test_orderset_apply_async_annotates_to_many_order():
-    """``apply_async`` builds the ``Min`` aggregate annotation for a to-many order (async path).
-
-    The sync path's annotate step is covered by the live connection test; this
-    pins the ``apply_async`` twin -- a reverse-FK (``shelves``) order flattens to
-    ``shelves__code`` and is applied as a row-preserving ``Min`` aggregate
-    annotation + ``order_by(alias)``, not a fan-out JOIN.
-    """
-    from django.db.models import Min
-
-    class ShelfOrderAgg(OrderSet):
-        class Meta:
-            model = Shelf
-            fields = ["code"]
-
-    class BranchOrderAgg(OrderSet):
-        shelves = RelatedOrder(ShelfOrderAgg, field_name="shelves")
-
-        class Meta:
-            model = Branch
-            fields = ["name"]
-
-    factory = OrderArgumentsFactory(BranchOrderAgg)
-    BranchInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderAggInputType"]
-    input_value = [BranchInput(shelves=ShelfInput(code=Ordering.ASC))]
-    info = _make_info()
-    queryset = Branch.objects.all()
-    result = asyncio.run(BranchOrderAgg.apply_async(input_value, queryset, info))
-    # The to-many term produced a Min aggregate annotation (the async annotate branch),
-    # collapsing the reverse-FK fan-out to one row per parent.
-    assert any(isinstance(agg, Min) for agg in result.query.annotations.values())
-    assert list(result.query.order_by)
 
 
 @pytest.mark.django_db

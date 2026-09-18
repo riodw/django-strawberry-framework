@@ -8,6 +8,10 @@ Also covers the target-type gate: a target that RESOLVES to a non-``OrderSet``
 (the cross-family ``FilterSet``, a plain class, or a factory returning a
 non-class) raises ``ConfigurationError`` at the ``.orderset`` read instead of
 surviving until the BFS input builder detonates on it.
+
+These rows are class-creation / lazy-resolution contracts with no GraphQL
+document. Consumer ``orderBy`` walks live in
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 from __future__ import annotations

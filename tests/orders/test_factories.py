@@ -4,6 +4,11 @@ Covers ``OrderArgumentsFactory``'s BFS walk, per-class collision check,
 idempotency, subclass rejection, the leaf / related-branch annotation
 shape produced by ``_build_class_type``, plus the Layer-6
 ``get_orderset_class`` + ``_dynamic_orderset_cache`` plumbing.
+
+Factory construction and collision guards have no wire shape. Published
+``orderBy`` argument types live in
+``examples/fakeshop/test_query/test_library_api.py`` and
+``examples/fakeshop/test_query/test_list_field_api.py``.
 """
 
 from __future__ import annotations

@@ -411,6 +411,13 @@ class Query:
         resolver=_branches_manager_resolver,
     )
 
+    # List-field colour of ``GenreOrder`` (including to-many ``books``) so
+    # ``apply_async`` is reachable over ``/graphql-async/``. ``allLibraryBooks``
+    # is a hand-written field that always calls ``apply_sync``.
+    all_library_genres_via_list_field: list[GenreType] = DjangoListField(
+        GenreType,
+    )
+
     @strawberry.field
     def named_library_records(self, info: strawberry.Info) -> list[Named]:
         """Polymorphic ``list[Named]`` mixing Branch / Genre / Patron rows (spec-015).

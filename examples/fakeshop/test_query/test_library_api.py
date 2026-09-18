@@ -2471,6 +2471,86 @@ def test_library_books_order_by_two_to_many_terms_each_get_their_own_aggregate()
 
 
 @pytest.mark.django_db
+def test_library_books_order_by_to_many_desc_uses_max_aggregate():
+    """A descending to-many ``orderBy`` compiles to ``MAX(``, not ``MIN(``.
+
+    ``orderBy: [{ genres: { name: DESC } }]`` must order each parent by its
+    largest child name. Using ``MIN`` for both directions would put Zebra
+    first (min Beta beats min Alpha). Aardvark carries two genres so a raw
+    JOIN would list it twice; the aggregate keeps one row.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    alpha = models.Genre.objects.create(name="Alpha")
+    beta = models.Genre.objects.create(name="Beta")
+    zulu = models.Genre.objects.create(name="Zulu")
+    zebra = models.Book.objects.create(title="Zebra", shelf=shelf)
+    aardvark = models.Book.objects.create(title="Aardvark", shelf=shelf)
+    aardvark.genres.add(alpha, zulu)
+    zebra.genres.add(beta)
+
+    with CaptureQueriesContext(connection) as captured:
+        data = _post_graphql(
+            """
+            query {
+              allLibraryBooks(orderBy: [{ genres: { name: DESC } }]) {
+                title
+              }
+            }
+            """,
+        ).json()
+
+    assert "errors" not in data, data
+    titles = [row["title"] for row in data["data"]["allLibraryBooks"]]
+    assert titles == ["Aardvark", "Zebra"]
+    assert len(titles) == len(set(titles))
+    book_queries = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "library_book"' in entry["sql"]
+    ]
+    assert len(book_queries) == 1, book_queries
+    assert "MAX(" in book_queries[0], book_queries[0]
+    assert "MIN(" not in book_queries[0], book_queries[0]
+    assert "DISTINCT" not in book_queries[0].upper(), book_queries[0]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_library_genres_order_by_to_many_desc_applies_over_graphql_async():
+    """``apply_async`` orders a to-many term with ``MAX`` over ``/graphql-async/``.
+
+    ``allLibraryBooks`` calls ``apply_sync`` from a hand-written field.
+    ``allLibraryGenresViaListField`` is ``DjangoListField``, so the async view
+    runs ``GenreOrder.apply_async``. ``Zebra`` is inserted first so pk order
+    (and name ASC) cannot satisfy ``MAX(title) DESC``.
+    """
+    branch = await models.Branch.objects.acreate(name="Branch", city="Boston")
+    shelf = await models.Shelf.objects.acreate(code="A-1", topic="general", branch=branch)
+    zebra = await models.Genre.objects.acreate(name="Zebra")
+    aardvark = await models.Genre.objects.acreate(name="Aardvark")
+    middling = await models.Book.objects.acreate(title="Beta", shelf=shelf)
+    low = await models.Book.objects.acreate(title="Alpha", shelf=shelf)
+    high = await models.Book.objects.acreate(title="Zulu", shelf=shelf)
+    await middling.genres.aadd(zebra)
+    await low.genres.aadd(aardvark)
+    await high.genres.aadd(aardvark)
+
+    payload = await _post_async_shipped(
+        """
+        query {
+          allLibraryGenresViaListField(orderBy: [{ books: { title: DESC } }]) {
+            name
+          }
+        }
+        """,
+    )
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["allLibraryGenresViaListField"]]
+    assert names == ["Aardvark", "Zebra"]
+    assert len(names) == len(set(names))
+
+
+@pytest.mark.django_db
 def test_library_books_filter_and_order_compose():
     """Spec-028 test plan - filter + order compose cleanly.
 

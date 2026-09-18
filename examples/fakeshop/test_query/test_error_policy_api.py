@@ -19,6 +19,12 @@ Decision 8):
   structural rule covers them; they get their own rows because a masked surface
   with a hole shaped like the completion phase looks identical to a correct one on
   every other row here.
+- **masked, raised from a HOOK** rather than from a field at all - a consumer
+  extension failing in either half of ``on_validate``, in the teardown half of
+  ``on_operation``, or in ``on_execute``. Upstream converts such an exception into
+  a response only after every teardown has unwound, so no extension is left to
+  mask it and the schema's own return is the seam that does; the halves get their
+  own rows because each escapes from a different stage.
 - **untouched, deliberate** - anything raised as a ``GraphQLError``: the
   ``GLOBALID_INVALID`` boundary, a ``RESOURCE_LIMIT_EXCEEDED`` rejection, the
   mutation pipeline's ``"Not authorized to ..."`` denial, and a consumer's own
@@ -50,6 +56,7 @@ teardown no-ops, and fail-closed degrades over objects no engine builds.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -252,6 +259,94 @@ class _FactoryHookWitness(SchemaExtension):
         yield
 
 
+def _hook_exception():
+    """The plain exception a failing consumer hook raises by default."""
+    return RuntimeError(_SENSITIVE)
+
+
+#: What a hook raising a ``GraphQLError`` says. Deliberate, client-facing, and
+#: therefore the one hook failure that travels unchanged.
+_DELIBERATE_HOOK_MESSAGE = "This hook message was written for the client."
+
+
+def _deliberate_hook_exception():
+    """A hook's own ``GraphQLError`` - a statement written for the client."""
+    return GraphQLError(_DELIBERATE_HOOK_MESSAGE, extensions={"code": "CONSUMER_HOOK_REJECTION"})
+
+
+#: Which hook and half the consumer extension below fails at for the row running
+#: now, and what it raises there. Module state rather than a constructor
+#: argument, because the entry is a CLASS: the schema resolves a fresh extension
+#: per operation, so the row arms the failure before it posts and whatever
+#: extension the operation builds carries it.
+_HOOK_FAILURE = {"where": None, "build": _hook_exception}
+
+
+class _HookFailure(SchemaExtension):
+    """An ordinary consumer extension that raises at one chosen hook and half.
+
+    Nothing about it is an enforcement authority - it is the plain
+    ``DjangoSchema(extensions=[...])`` entry any deployment writes, failing the
+    way consumer code fails.
+    """
+
+    def on_operation(self):
+        """Fail at the teardown half, which unwinds INSIDE the masking authority's."""
+        yield
+        _fail_hook("operation-teardown")
+
+    def on_validate(self):
+        """Fail at either half of the validation stage."""
+        _fail_hook("validate-setup")
+        yield
+        _fail_hook("validate-teardown")
+
+    def on_execute(self):
+        """Fail as execution begins."""
+        _fail_hook("execute-setup")
+        yield
+
+
+def _fail_hook(where):
+    """Raise the armed exception when ``where`` is the armed failure point."""
+    if _HOOK_FAILURE["where"] != where:
+        return
+    failure = _HOOK_FAILURE["build"]()
+    raise failure
+
+
+@contextlib.contextmanager
+def _failing_hook(where, build=_hook_exception):
+    """Arm the consumer extension to fail at ``where`` for the duration of one row."""
+    _HOOK_FAILURE["where"] = where
+    _HOOK_FAILURE["build"] = build
+    try:
+        yield
+    finally:
+        _HOOK_FAILURE["where"] = None
+        _HOOK_FAILURE["build"] = _hook_exception
+
+
+#: Every hook and half a consumer extension can fail at where the failure escapes
+#: into upstream's own error conversion rather than into a located field error.
+HOOK_HALVES = (
+    "validate-setup",
+    "validate-teardown",
+    "operation-teardown",
+    "execute-setup",
+)
+
+#: The two transports every hook row is answered over.
+HOOK_COLORS = ("sync", "async")
+
+HOOK_ROWS = [(where, color) for where in HOOK_HALVES for color in HOOK_COLORS]
+HOOK_IDS = [f"{where}-{color}" for where, color in HOOK_ROWS]
+
+#: Where the hook-failure mounts live, per view color, and the opt-out twin.
+HOOK_MOUNTS = {"sync": "/ep-hook/", "async": "/ep-hook-async/"}
+HOOK_OFF_MOUNTS = {"sync": "/ep-hook-off/", "async": "/ep-hook-off-async/"}
+
+
 #: The four spellings Strawberry accepts for an extension entry. A class and a
 #: fresh entry resolve to a new extension per operation; an instance and a
 #: factory returning a singleton resolve to ONE object every operation shares,
@@ -452,6 +547,16 @@ urlpatterns = [
     path(
         "ep-factory/",
         _probe_view(extensions=[_error_policy_factory, _FactoryHookWitness]),
+    ),
+    path(HOOK_MOUNTS["sync"].lstrip("/"), _probe_view(extensions=[_HookFailure])),
+    path(HOOK_MOUNTS["async"].lstrip("/"), _probe_async_view(extensions=[_HookFailure])),
+    path(
+        HOOK_OFF_MOUNTS["sync"].lstrip("/"),
+        _probe_view(extensions=[_HookFailure], error_policy={"enabled": False}),
+    ),
+    path(
+        HOOK_OFF_MOUNTS["async"].lstrip("/"),
+        _probe_async_view(extensions=[_HookFailure], error_policy={"enabled": False}),
     ),
 ]
 
@@ -999,3 +1104,146 @@ def test_an_overlapping_request_does_not_unmask_a_failing_one(spelling, color):
 
     after = _entry_request(entry, "{ fine }")
     assert after["data"] == {"fine": "fine"}
+
+
+# ---------------------------------------------------------------------------
+# Masked: a plain exception that escaped a consumer extension HOOK
+# ---------------------------------------------------------------------------
+
+
+def _hook_request(color, mount=None, document="{ fine }"):
+    """POST one document to a hook mount of ``color``, returning ``(body, payload)``.
+
+    The color selects both the mount and the client, so an async row cannot be
+    answered by the synchronous transport the moment a mount is renamed.
+    """
+    target = HOOK_MOUNTS[color] if mount is None else mount
+    if color == "sync":
+        response, payload = _post(target, document)
+        return response.content.decode(), payload
+    response = _await_response(
+        AsyncTestClient().query(document, assert_no_errors=False, url=target),
+    )
+    body = response.response.content.decode()
+    return body, json.loads(body)
+
+
+def _package_error_records(caplog):
+    """Every ``ERROR`` the package logger emitted during one row."""
+    return [
+        record
+        for record in caplog.records
+        if record.name == _PACKAGE_LOGGER and record.levelno == logging.ERROR
+    ]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("where", "color"), HOOK_ROWS, ids=HOOK_IDS)
+def test_an_exception_from_a_consumer_hook_is_masked_like_a_resolver_exception(where, color):
+    """A hook failure is an unexpected exception, and reads as one on the wire.
+
+    A consumer extension raising a plain exception is exactly the resolver case
+    one stack frame further out: the message is written by whatever raised, and
+    the client is not the reader it was written for. The four halves are their
+    own rows because each escapes from a DIFFERENT place - the validation stage,
+    the execution stage, and the operation teardown the masking authority itself
+    unwinds behind - and a masked surface with a hole shaped like any one of them
+    looks identical to a correct one on every resolver row in this file.
+    """
+    with _failing_hook(where):
+        body, payload = _hook_request(color)
+    _masked_error(payload)
+    assert payload["data"] is None, payload
+    assert _SENSITIVE not in body, body
+    assert "tenant-42" not in body, body
+    assert "RuntimeError" not in body, body
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("color", HOOK_COLORS, ids=HOOK_COLORS)
+def test_the_hook_correlation_id_reaches_the_server_log_with_the_original_exception(caplog, color):
+    """The id a hook failure hands the client resolves to the exception that raised it.
+
+    The same guarantee the resolver row states, over the seam where the masking
+    authority's own teardown has already unwound: masking that only deleted the
+    message would leave an operator with a support call and nothing to join it to.
+    """
+    caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
+    with _failing_hook("operation-teardown"):
+        _, payload = _hook_request(color)
+    correlation_id = _masked_error(payload)["extensions"]["correlationId"]
+
+    records = _package_error_records(caplog)
+    assert len(records) == 1, caplog.records
+    record = records[0]
+    assert correlation_id in record.getMessage()
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], RuntimeError)
+    assert str(record.exc_info[1]) == _SENSITIVE
+    assert record.exc_info[2] is not None  # the traceback the operator needs
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("where", "color"), HOOK_ROWS, ids=HOOK_IDS)
+def test_one_hook_failure_produces_exactly_one_masked_entry_and_one_log_record(
+    caplog,
+    where,
+    color,
+):
+    """One failure is masked once, whichever seam ends up doing it.
+
+    The operation teardown and the schema's own return of the result upstream
+    built are both masking seams, and a failure that travelled through both would
+    show it here twice over: two entries on the wire, two correlation ids, or two
+    server log records for one exception - and a second id would name a log record
+    the client's first id does not.
+    """
+    caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
+    with _failing_hook(where):
+        _, payload = _hook_request(color)
+
+    assert len(payload["errors"]) == 1, payload
+    records = _package_error_records(caplog)
+    assert len(records) == 1, caplog.records
+    assert payload["errors"][0]["extensions"]["correlationId"] in records[0].getMessage()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("color", HOOK_COLORS, ids=HOOK_COLORS)
+def test_debug_true_restores_the_original_hook_message(color):
+    """The development pass-through covers the hook seam as well as the resolver one."""
+    with _override_settings(**_DEBUG_PASS_THROUGH), _failing_hook("operation-teardown"):
+        _, payload = _hook_request(color)
+    error = payload["errors"][0]
+    assert _SENSITIVE in error["message"], error
+    assert "correlationId" not in (error.get("extensions") or {})
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("color", HOOK_COLORS, ids=HOOK_COLORS)
+def test_the_explicit_opt_out_returns_the_original_hook_message(color):
+    """``error_policy={"enabled": False}`` is honored at the hook seam too."""
+    assert settings.DEBUG is False
+    with _failing_hook("operation-teardown"):
+        _, payload = _hook_request(color, mount=HOOK_OFF_MOUNTS[color])
+    error = payload["errors"][0]
+    assert _SENSITIVE in error["message"], error
+    assert "correlationId" not in (error.get("extensions") or {})
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("where", "color"), HOOK_ROWS, ids=HOOK_IDS)
+def test_a_hook_raising_a_graphql_error_keeps_its_own_message(where, color):
+    """A hook's deliberate ``GraphQLError`` is a client-facing statement and travels.
+
+    The same structural rule the resolver rows state, asked at the seam this file's
+    other hook rows mask: what is masked is an exception nobody wrote for the
+    client, not every exception a hook can raise.
+    """
+    with _failing_hook(where, build=_deliberate_hook_exception):
+        _, payload = _hook_request(color)
+    assert len(payload["errors"]) == 1, payload
+    error = payload["errors"][0]
+    assert error["message"] == _DELIBERATE_HOOK_MESSAGE, error
+    assert error["extensions"]["code"] == "CONSUMER_HOOK_REJECTION", error
+    assert "correlationId" not in error["extensions"], error

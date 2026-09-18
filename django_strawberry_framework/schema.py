@@ -62,7 +62,13 @@ from strawberry.types.graphql import OperationType
 from . import logger
 from .error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, resolve_error_policy
 from .exceptions import ConfigurationError, describe_value
-from .extensions.error_policy import DjangoErrorPolicyExtension
+from .extensions.error_policy import (
+    DjangoErrorPolicyExtension,
+    degraded_result,
+    is_maskable_result,
+    mask_execution_result,
+    masking_is_active,
+)
 from .extensions.operation_state import DjangoExtensionsRunner, _OperationModeMarker
 from .extensions.resource_policy import DjangoResourcePolicyExtension, _AdmissionGuard
 from .mutations.fields import MUTATION_CLASS_MARKER
@@ -705,6 +711,15 @@ class DjangoSchema(strawberry.Schema):
     correlation identifier rather than as whatever the exception happened to say.
     Opting out is explicit: ``DjangoSchema(error_policy={"enabled": False})``.
 
+    **An exception that escapes a HOOK is masked by this class rather than by
+    that extension**, because upstream converts such an exception into a result
+    only after every teardown has unwound, and nothing an extension can hook runs
+    afterwards. :meth:`_masked_return` is that seam, applied to what
+    :meth:`execute` and :meth:`execute_sync` hand back; it shares the extension's
+    one masking implementation and is a no-op on a result the teardown already
+    masked. A consumer assembling a plain ``strawberry.Schema`` around the
+    exported extension has no such seam, so a hook failure is unmasked there.
+
     **Both authorities are the schema's, not entries in ``extensions=``.** They
     are built per operation from the record this constructor settles, so
     ``extensions=`` carries the consumer's own extensions and nothing else, and
@@ -1004,6 +1019,74 @@ class DjangoSchema(strawberry.Schema):
             execution_context=execution_context,
             extensions=extensions,
         )
+
+    def execute_sync(self, *args: Any, **kwargs: Any) -> Any:
+        """Run the operation synchronously and mask what is RETURNED.
+
+        The masking extension's teardown answers for a result upstream assigned
+        to the execution context, and for the ordinary operation that is the same
+        object this returns. It is not the same object when an exception escaped
+        a hook: upstream converts that exception into a fresh result inside the
+        ``except`` behind its operation lifecycle, which runs after every teardown
+        has already unwound over an execution context whose ``result`` was still
+        ``None``. No extension can reach that result, because none is still
+        running when it is built - so the schema masks the value it hands back.
+        """
+        return self._masked_return(super().execute_sync(*args, **kwargs))
+
+    async def execute(self, *args: Any, **kwargs: Any) -> Any:
+        """Run the operation asynchronously and mask what is RETURNED.
+
+        The async twin of :meth:`execute_sync`, for the same reason and with the
+        same one hole to close: upstream's own ``except`` hands the coerced
+        exception to a handler that assigns ``execution_context.result`` only
+        AFTER the operation lifecycle has finished unwinding, so the teardown saw
+        nothing and the leak is identical. Streamed operations are not masked
+        here - each frame is masked at the transport's result source - and
+        nothing about this override touches them.
+        """
+        return self._masked_return(await super().execute(*args, **kwargs))
+
+    def _masked_return(self, result: Any) -> Any:
+        """Apply this schema's error policy to one returned execution result.
+
+        The gates and the masking itself are the extension module's own
+        (``extensions/error_policy.py``), so this seam cannot drift from the
+        operation teardown or the streamed-result source on what counts as
+        active, what shape is maskable, or what a masked error looks like. The
+        policy is read from the accepted enforcement record rather than from
+        ``schema.error_policy``, which answers with a per-read copy any resolver
+        can reach.
+
+        **Masking twice is a no-op, by construction rather than by a flag.** A
+        result the teardown already masked carries errors whose ``original_error``
+        is ``None``, and the structural classifier reads that as a deliberate,
+        client-facing error and returns it unchanged - so the whole error list
+        comes back identical, ``mask_execution_result`` answers with the very
+        object it was handed, and no second correlation id is minted or logged.
+        Nothing here needs to know whether the teardown ran.
+
+        **It fails closed**, exactly as the teardown does: a seam that cannot
+        decide whether to mask publishes the policy message alone rather than
+        whatever the result was carrying. ``mask_execution_result`` already
+        contains its own failures, so what is left for this guard is a policy
+        record or a gate that will not answer at all. The floor is built from the
+        package default until the schema's own policy has been read, because the
+        read is inside what is guarded and a degrade that had to read it again to
+        publish its message would be a floor that can raise.
+        """
+        policy = DEFAULT_ERROR_POLICY
+        try:
+            policy = _enforcement(self).error_policy
+            if not masking_is_active(policy) or not is_maskable_result(result):
+                return result
+            return mask_execution_result(result, policy)
+        except Exception:
+            logger.exception(
+                "The error policy could not be applied to the returned execution result; "
+                "the response degrades to the policy message alone (fail closed).",
+            )
+            return degraded_result(policy)
 
     def _stream(
         self,

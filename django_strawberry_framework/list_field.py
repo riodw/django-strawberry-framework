@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import strawberry
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import Col, Star
@@ -570,7 +571,119 @@ _ORDER_VALUE_CONTAINERS = (
 )
 
 
-def _is_deterministic_order_name(query: Any, name: str) -> bool:
+def _resolve_order_field_path(opts: Any, path: str) -> tuple[Any, Any] | None:
+    """Walk a field path against ``opts``, returning ``(field, related opts)`` or None.
+
+    ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name`` hands
+    the ``LOOKUP_SEP``-joined pieces to ``_setup_joins``, which resolves each one
+    as a field on the model reached so far - ``pk`` naming the primary key and a
+    reverse relation naming its own model the same way a forward one does. A
+    piece that is not a field of the model in hand is a transform or a lookup,
+    which this package does not read: None says the path could not be resolved
+    to a field, and an unresolved path is never certified.
+    """
+    field = None
+    for piece in path.split(LOOKUP_SEP):
+        if opts is None:
+            return None
+        name = opts.pk.name if piece == "pk" else piece
+        try:
+            field = opts.get_field(name)
+        except FieldDoesNotExist:
+            return None
+        related = field.related_model if field.is_relation else None
+        opts = related._meta if related is not None else None
+    return field, opts
+
+
+def _is_deterministic_order_field_path(
+    query: Any,
+    path: str,
+    opts: Any,
+    seen: frozenset[tuple[Any, str]],
+    prefix: str,
+) -> bool:
+    """Classify a resolved field path, expanding a relation the way the compiler does.
+
+    ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name`` does not
+    order by a relation: when the path ends on a relation whose target model has
+    its own ``Meta.ordering``, and the last piece is neither the field's
+    ``attname`` nor ``pk``, the compiler REPLACES the term with that model's
+    ordering and keeps recursing. So the order the rows come back in is the
+    related model's, and it is that ordering - not the relation name standing in
+    front of it - that decides whether the request is repeatable.
+
+    A path Django would reject with ``FieldError("Infinite loop caused by
+    ordering.")`` is refused rather than followed: a term whose compilation
+    raises is not one this package can certify.
+
+    ``prefix`` is the name the expanded terms hang under. The compiler rewrites
+    an expression it lifts out of a related ordering through
+    ``prefix_references``, so a reference written against the related model
+    arrives at the outer query under the relation path that reached it, and a
+    classifier reading references must name them the same way.
+    """
+    resolved = _resolve_order_field_path(opts, path)
+    if resolved is None:
+        return False
+    field, related_opts = resolved
+    if (
+        not field.is_relation
+        or related_opts is None
+        or not related_opts.ordering
+        or getattr(field, "attname", None) == path.split(LOOKUP_SEP)[-1]
+        or path == "pk"
+    ):
+        return True
+    step = (opts.model, path)
+    if step in seen:
+        return False
+    nested = seen | {step}
+    nested_prefix = f"{prefix}{path}{LOOKUP_SEP}"
+    return all(
+        _is_deterministic_order_term(query, item, related_opts, nested, nested_prefix)
+        for item in related_opts.ordering
+    )
+
+
+def _is_deterministic_order_reference(query: Any, name: str, prefix: str) -> bool:
+    """Classify the name an expression reference holds, which is always a column order.
+
+    An ``F`` is not a string ordering term and never reaches
+    ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name``.
+    ``django/db/models/sql/query.py::Query.resolve_ref`` reads it instead: the
+    whole name as an annotation, then the head of a transform chain, and
+    otherwise a field path against the QUERY's own meta - which yields a column
+    and never a related model's ``Meta.ordering``. So ``F("branch")`` orders by
+    the foreign key column exactly as ``"branch_id"`` does, whatever the branch
+    model declares.
+
+    ``prefix`` carries the relation path an expansion lifted this reference out
+    of, because ``find_ordering_name`` rewrites such an expression through
+    ``prefix_references`` before the outer query resolves it. The annotation and
+    ``extra`` steps are read at that same full name, so a reference naming
+    unreadable SQL is refused at any depth.
+    """
+    referenced = f"{prefix}{name}"
+    annotation = query.annotations.get(referenced)
+    if annotation is None:
+        annotation = query.annotations.get(referenced.split(LOOKUP_SEP)[0])
+    if annotation is not None:
+        return _is_deterministic_order_term(query, annotation)
+    if referenced in query.extra:
+        return False
+    if "." in referenced and referenced in query.extra_order_by:
+        return False
+    return _resolve_order_field_path(query.get_meta(), referenced) is not None
+
+
+def _is_deterministic_order_name(
+    query: Any,
+    name: str,
+    opts: Any = None,
+    seen: frozenset[tuple[Any, str]] = frozenset(),
+    prefix: str = "",
+) -> bool:
     """Resolve a string ordering term the way the compiler resolves it, then classify it.
 
     ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` tests
@@ -579,28 +692,47 @@ def _is_deterministic_order_name(query: Any, name: str) -> bool:
     ``FieldError``. Every other name is looked up as an annotation (the whole
     name first, then the head of a transform chain), then as an ``extra`` key,
     and only then as a field path, so the name that survives to the field path
-    is the only one that orders by a column.
+    is the only one that could order by a column.
 
     Raw SQL reached through ``extra`` is opaque, which is not the same as
     deterministic. Those strings are passed through verbatim and this package
     parses no SQL, so it cannot say what such a term orders by - and a term it
     cannot read is one it must not certify as repeatable across the two queries
     an offset window spans.
+
+    Surviving to a field path is still not the end of the resolution:
+    ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name`` expands
+    a path ending on a relation into the related model's own ``Meta.ordering``,
+    so a random default one indirection away is what such a name really orders
+    by. ``opts`` names the model a path is resolved against, which is the related
+    model while such an expansion is being read - and at that depth there are no
+    annotations and no ``extra`` to consult, because the compiler resolves those
+    terms against the related model's fields alone.
     """
     if name == "?":
         return False
     col = name[1:] if name.startswith("-") else name
-    annotation = query.annotations.get(col)
-    if annotation is None:
-        annotation = query.annotations.get(col.split(LOOKUP_SEP)[0])
-    if annotation is not None:
-        return _is_deterministic_order_term(query, annotation)
-    if col in query.extra:
-        return False
-    return not ("." in name and name in query.extra_order_by)
+    if opts is None:
+        annotation = query.annotations.get(col)
+        if annotation is None:
+            annotation = query.annotations.get(col.split(LOOKUP_SEP)[0])
+        if annotation is not None:
+            return _is_deterministic_order_term(query, annotation)
+        if col in query.extra:
+            return False
+        if "." in name and name in query.extra_order_by:
+            return False
+        opts = query.get_meta()
+    return _is_deterministic_order_field_path(query, col, opts, seen, prefix)
 
 
-def _is_deterministic_order_term(query: Any, term: Any) -> bool:
+def _is_deterministic_order_term(
+    query: Any,
+    term: Any,
+    opts: Any = None,
+    seen: frozenset[tuple[Any, str]] = frozenset(),
+    prefix: str = "",
+) -> bool:
     """Classify one selected ordering term by the form Django will compile it into.
 
     A term's own top level is not what the database orders by. A string is
@@ -610,6 +742,19 @@ def _is_deterministic_order_term(query: Any, term: Any) -> bool:
     ordering collection holds whenever it arrives as an annotation alias, an
     ``extra`` select alias, an ``F`` naming either, or an expression nested
     inside a composition.
+
+    A STRING term that resolves to a relation is one more such indirection:
+    ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name``
+    replaces it with the related model's ``Meta.ordering``, and every term of
+    that ordering is classified against THAT model - which is what ``opts``
+    carries, together with ``seen`` so a relation cycle Django would reject is
+    refused instead of followed, and ``prefix`` so a reference lifted out of the
+    expansion is named the way the outer query will resolve it. An EXPRESSION
+    reference is not that indirection and must not be read as one: only strings
+    reach ``find_ordering_name``, while
+    ``django/db/models/sql/query.py::Query.resolve_ref`` resolves an ``F`` to a
+    column, so ``F("branch")`` orders by the foreign key and never by the branch
+    model's own default.
 
     Only a term that can be read down to model columns and literals is
     certified. A composition is transparent - it orders by whatever its source
@@ -627,21 +772,29 @@ def _is_deterministic_order_term(query: Any, term: Any) -> bool:
     an ordinary column order.
     """
     if isinstance(term, str):
-        return _is_deterministic_order_name(query, term)
+        return _is_deterministic_order_name(query, term, opts, seen, prefix)
     if isinstance(term, models.F):
-        return _is_deterministic_order_name(query, term.name)
+        return _is_deterministic_order_reference(query, term.name, prefix)
     if isinstance(term, models.Q):
-        return _is_deterministic_order_condition(query, term)
+        return _is_deterministic_order_condition(query, term, opts, seen, prefix)
     sources = getattr(term, "get_source_expressions", None)
     if sources is None:
         return False
     composed = [source for source in sources() if source is not None]
     if composed:
-        return all(_is_deterministic_order_term(query, source) for source in composed)
+        return all(
+            _is_deterministic_order_term(query, source, opts, seen, prefix) for source in composed
+        )
     return isinstance(term, _READABLE_ORDER_LEAVES)
 
 
-def _is_deterministic_order_value(query: Any, value: Any) -> bool:
+def _is_deterministic_order_value(
+    query: Any,
+    value: Any,
+    opts: Any = None,
+    seen: frozenset[tuple[Any, str]] = frozenset(),
+    prefix: str = "",
+) -> bool:
     """Classify one value a predicate's lookup compares its column against.
 
     A value carries SQL of its own either as an expression or inside a container
@@ -653,13 +806,21 @@ def _is_deterministic_order_value(query: Any, value: Any) -> bool:
     plain literal, which is already as readable as a term gets.
     """
     if hasattr(value, "resolve_expression"):
-        return _is_deterministic_order_term(query, value)
+        return _is_deterministic_order_term(query, value, opts, seen, prefix)
     if isinstance(value, _ORDER_VALUE_CONTAINERS):
-        return all(_is_deterministic_order_value(query, member) for member in value)
+        return all(
+            _is_deterministic_order_value(query, member, opts, seen, prefix) for member in value
+        )
     return True
 
 
-def _is_deterministic_order_condition(query: Any, condition: models.Q) -> bool:
+def _is_deterministic_order_condition(
+    query: Any,
+    condition: models.Q,
+    opts: Any = None,
+    seen: frozenset[tuple[Any, str]] = frozenset(),
+    prefix: str = "",
+) -> bool:
     """Classify the predicate a conditional ordering term picks its value with.
 
     ``Case`` / ``When`` order by a value a ``Q`` selects, so the predicate is
@@ -669,7 +830,7 @@ def _is_deterministic_order_condition(query: Any, condition: models.Q) -> bool:
     """
     for child in condition.children:
         value = child[1] if isinstance(child, tuple) else child
-        if not _is_deterministic_order_value(query, value):
+        if not _is_deterministic_order_value(query, value, opts, seen, prefix):
             return False
     return True
 

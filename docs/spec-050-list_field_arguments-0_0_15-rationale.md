@@ -258,6 +258,19 @@ Spec: [Decision 6][spec-050-d6].
   primary-key tiebreakers changes SQL and usurps a consumer ordering choice; the no-argument fast
   path additionally must remain byte-identical. Unlike a connection, a list mints no cursor that
   requires a package-owned total order.
+- **Classifying a string term from the name as written:** A relation name in a string is not a
+  column. [`SQLCompiler.find_ordering_name`][django-compiler] replaces a path ending on a
+  relation with the related model's own `Meta.ordering`, so a classifier that stops once a name
+  resolves to a field certifies a default it never read and serves a positive offset over a
+  result set the database re-shuffles. Reading the name as far as the compiler reads it is the
+  same rule the annotation and `extra` steps already follow, one indirection further.
+- **Reading an expression reference through that same expansion:** It is the mirror error, and
+  it refuses requests Django answers deterministically. Only strings reach
+  `find_ordering_name`; [`Query.resolve_ref`][django-query] resolves an `F` to a column and
+  never consults the related model's ordering, so `F("branch").asc()` is the foreign key order
+  and classifying it like the string `"branch"` would reject a page over a stable column
+  because a model it never orders by declares `Random()`. One resolution rule for both
+  spellings is wrong in one direction or the other; the compiler's two rules are the contract.
 
 ### Decision 7 — active order is not total order; no pk tiebreaker is appended
 
@@ -699,5 +712,7 @@ criterion; this decision supplies the stop.
 <!-- scripts/ -->
 
 <!-- .venv/ -->
+[django-compiler]: ../.venv/lib/python3.14/site-packages/django/db/models/sql/compiler.py
+[django-query]: ../.venv/lib/python3.14/site-packages/django/db/models/sql/query.py
 
 <!-- External -->

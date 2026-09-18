@@ -145,11 +145,11 @@ extension module's own ``mask_execution_result``, which returns a masked COPY an
 leaves the engine's result object holding its originals for the extensions that
 read them. A query or mutation that arrives here over ``stream`` is masked by the
 same pass and for the same reason (above); one that upstream ran through
-``schema.execute`` needs nothing, because that call runs the extension teardown
-before returning.
+``schema.execute`` needs nothing here, because that call masks both what its
+teardown found and what it returns (``schema.py::DjangoSchema._masked_return``).
 
 Masking is applied only to a value of execution-result SHAPE, gated on the
-extension module's own ``is_maskable_result`` so the two seams cannot drift on the
+extension module's own ``is_maskable_result`` so the seams cannot drift on the
 question. ``stream``'s third element type is a raw graphql-core incremental-delivery
 frame (``@defer`` / ``@stream``), which carries its errors nested inside incremental
 payloads rather than on an ``errors`` attribute. Masking one would degrade it - the

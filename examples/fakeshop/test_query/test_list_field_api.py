@@ -478,6 +478,128 @@ def test_shipped_branches_offset_accepts_a_stable_model_default(monkeypatch):
     assert _RANDOM_ORDER_SQL not in statement, statement
 
 
+def _seed_three_shelves():
+    for name in ("Alpha", "Bravo", "Charlie"):
+        branch = library_models.Branch.objects.create(name=name, city="Boston")
+        library_models.Shelf.objects.create(code=f"{name}-1", branch=branch)
+
+
+_RELATION_DEFAULT_OFFSET = """
+query {
+  shelves(offset: 1, limit: 1) {
+    code
+  }
+}
+"""
+
+
+def _shelf_offset_page(monkeypatch, shelf_ordering, branch_ordering):
+    """Post the shelf page under the two ``Meta.ordering`` values and return it with its SQL."""
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", shelf_ordering)
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", branch_ordering)
+
+    @strawberry.type
+    class _ShelfQuery:
+        shelves: list[library_schema.ShelfType] = DjangoListField(library_schema.ShelfType)
+
+    schema = DjangoSchema(query=_ShelfQuery, config=strawberry_config())
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_sync(schema, _RELATION_DEFAULT_OFFSET)
+    shelf_sql = [
+        entry["sql"] for entry in captured.captured_queries if "library_shelf" in entry["sql"]
+    ]
+    return payload, shelf_sql
+
+
+@pytest.mark.django_db
+def test_holder_offset_rejects_a_relation_default_that_expands_to_a_random_order(monkeypatch):
+    """A relation name orders by the RELATED model's default, so its randomness decides.
+
+    ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name`` does not
+    order by a relation: it replaces the term with the related model's
+    ``Meta.ordering``. A shelf ordering by its branch, under a branch that orders
+    at random, is a re-shuffled result set - and skipping a row out of one is the
+    same silent data loss a bare ``"?"`` produces.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(monkeypatch, ("branch",), (Random(),))
+
+    err = payload["errors"][0]
+    assert err["extensions"]["reason"] == "order_required"
+    assert err["extensions"]["argument"] == "offset"
+    assert shelf_sql == []
+
+
+@pytest.mark.django_db
+def test_holder_offset_accepts_a_relation_default_that_expands_to_a_stable_order(monkeypatch):
+    """The control for the row above: the expansion is read, not assumed random.
+
+    The same relation term under a branch ordering by a column pages exactly as a
+    column order on the shelf itself does.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(monkeypatch, ("branch",), ("name",))
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+def test_holder_offset_accepts_a_relation_attname_over_a_random_related_default(monkeypatch):
+    """Naming the column instead of the relation orders by that column and nothing else.
+
+    Django expands only a term that does NOT name the field's ``attname``, so
+    ``branch_id`` stays an ordinary foreign-key column order and the related
+    model's random default never reaches the statement.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(monkeypatch, ("branch_id",), (Random(),))
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "shelf_ordering",
+    [
+        (models.F("branch").asc(),),
+        (OrderBy(models.F("branch")),),
+        (models.F("branch"),),
+    ],
+    ids=["f-asc", "orderby-f", "f-bare"],
+)
+def test_holder_offset_accepts_an_expression_reference_to_a_relation(monkeypatch, shelf_ordering):
+    """Only a STRING ordering term expands; an expression reference is a column order.
+
+    ``django/db/models/sql/query.py::Query.resolve_ref`` resolves an ``F`` to the
+    foreign key column and never reads the related model's ``Meta.ordering``, so
+    a parent whose default names the relation through an expression pages exactly
+    as one naming the column does, however the branch orders itself.
+    """
+    _seed_three_shelves()
+
+    payload, shelf_sql = _shelf_offset_page(monkeypatch, shelf_ordering, (Random(),))
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["shelves"] == [{"code": "Bravo-1"}]
+    assert len(shelf_sql) == 1
+    statement = shelf_sql[0].upper()
+    assert "OFFSET 1" in statement, statement
+    assert _RANDOM_ORDER_SQL not in statement, statement
+
+
 @pytest.mark.django_db
 def test_shipped_branches_offset_accepts_extra_ordering_over_a_dormant_random_order(monkeypatch):
     """Ordering Django supersedes is dormant, and a dormant ``"?"`` cannot reject the offset.

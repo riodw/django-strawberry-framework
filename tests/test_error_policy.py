@@ -54,6 +54,7 @@ from graphql.execution import ExecutionResult as GraphQLExecutionResult
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 
 from django_strawberry_framework import DjangoSchema
+from django_strawberry_framework import schema as schema_module
 from django_strawberry_framework.error_policy import (
     DEFAULT_ERROR_POLICY,
     ErrorPolicy,
@@ -1020,3 +1021,67 @@ def test_error_policy_extension_on_operation_exploding_execution_context():
     next(gen)
     with contextlib.suppress(StopIteration):
         next(gen)
+
+
+# ---------------------------------------------------------------------------
+# The schema's return seam, over results no engine hands it
+# ---------------------------------------------------------------------------
+
+
+def test_the_return_seam_passes_an_already_masked_result_through_by_identity():
+    """The teardown and the return seam compose without a flag between them.
+
+    The teardown masks whatever it found on the execution context and the schema
+    masks what it returns, so the ordinary operation meets both. The second pass
+    has to be a no-op, and it is one structurally: a masked error carries
+    ``original_error=None``, which the classifier reads as deliberate. Identity is
+    the assertion because it is what proves no id was minted and no record logged.
+    """
+    schema = DjangoSchema(query=_Query)
+    already_masked = GraphQLError(
+        DEFAULT_ERROR_POLICY.message,
+        original_error=None,
+        extensions={DEFAULT_ERROR_POLICY.correlation_extension_key: new_correlation_id()},
+    )
+    result = StrawberryExecutionResult(data=None, errors=[already_masked])
+
+    assert schema._masked_return(result) is result
+
+
+def test_the_return_seam_degrades_when_masking_itself_raises(monkeypatch, caplog):
+    """A seam that cannot decide what is safe publishes the floor, not the result.
+
+    ``mask_execution_result`` contains its own failures, so what is left for this
+    guard is a gate that will not answer at all - and the direction is the one the
+    whole policy takes: the response degrades to the policy message alone rather
+    than falling back to whatever the result was carrying.
+    """
+    caplog.set_level(logging.ERROR, logger="django_strawberry_framework")
+    schema = DjangoSchema(query=_Query)
+
+    def _unanswerable(policy):
+        raise RuntimeError("the masking gate cannot answer")
+
+    monkeypatch.setattr(schema_module, "masking_is_active", _unanswerable)
+    leaky = GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))
+    degraded = schema._masked_return(
+        StrawberryExecutionResult(data={"leaky": None}, errors=[leaky]),
+    )
+
+    assert degraded.data is None
+    assert [error.message for error in degraded.errors] == [DEFAULT_ERROR_POLICY.message]
+    assert not degraded.errors[0].extensions  # no correlation id: nothing to resolve it to
+    assert any(
+        "could not be applied to the returned execution result" in record.message
+        for record in caplog.records
+    )
+
+
+def test_the_return_seam_is_a_no_op_when_the_policy_is_disabled():
+    """``error_policy={"enabled": False}`` reaches this seam like every other one."""
+    schema = DjangoSchema(query=_Query, error_policy={"enabled": False})
+    leaky = GraphQLError(_SENSITIVE, original_error=ValueError(_SENSITIVE))
+    result = StrawberryExecutionResult(data=None, errors=[leaky])
+
+    assert schema._masked_return(result) is result
+    assert result.errors[0].message == _SENSITIVE

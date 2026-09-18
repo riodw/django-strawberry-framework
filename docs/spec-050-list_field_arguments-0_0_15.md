@@ -1158,6 +1158,39 @@ arrives as an annotation alias, an `F` naming one, or a `Random()` nested inside
 composition, and a classifier reading the term as written certifies all three as ordinary
 column orders. Only a name that survives every resolution step orders by a column.
 
+A STRING name surviving to a field path is still not a column when that path ends on a relation.
+[`django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name`][django-compiler] does not
+order by a relation: unless the last piece is the field's own `attname`, the whole name is
+`pk`, or a transform intervenes, it REPLACES the term with the related model's `Meta.ordering`
+and resolves each of those terms against that model, recursively, raising
+`FieldError("Infinite loop caused by ordering.")` when the relation walk repeats a join. A
+relation name is therefore one more indirection of exactly the kind the annotation and `extra`
+steps are: a model declaring `Meta.ordering = ("branch",)` over a branch declaring
+`Meta.ordering = (Random(),)` compiles to a random order, and a classifier built from the term
+as written certifies a related default it never read. Such a name is classified by every term
+of the ordering it expands into, read against the RELATED model - a string as a field path
+against that model, with no annotations and no `extra` to consult at that depth, an expression
+by the same positive certification below, and an `OrderBy` through the expression it wraps.
+Naming the column rather than the relation - `branch_id`, or `branch__pk` - is an ordinary
+column order and still backs the window. A path whose walk repeats, and a piece that is not a
+field of the model in hand, are both refused: a term whose compilation raises, and a transform
+or lookup this package does not read, are neither of them orders it can certify.
+
+Only a string expands. An expression REFERENCE naming the same relation is a column order:
+`find_ordering_name` reads strings, while
+[`django/db/models/sql/query.py::Query.resolve_ref`][django-query] resolves an `F` - bare,
+wrapped in an `OrderBy`, or nested anywhere inside a composition - as the whole name against
+`query.annotations`, then the head of a transform chain, and otherwise as a field path against
+the QUERY's own meta, which yields a column and never a related model's `Meta.ordering`. So
+`Meta.ordering = (F("branch").asc(),)` orders by the foreign key column whatever the branch
+model declares, while the string `("branch",)` orders by the branch's own default, and a
+classifier reading the two the same way inverts one of them. The annotation and `extra` steps
+still apply to a reference, so an `F` naming a `Random()` annotation is refused as before. A
+reference the compiler lifts out of an expanded ordering is rewritten through
+`prefix_references` and resolved against the outer query under the relation path that reached
+it, so an `F("name")` in the branch's ordering reached through `("branch",)` is the outer
+query's `F("branch__name")` and is read at that full name.
+
 Certification is positive: a term backs an offset window only when it can be read down to
 model columns and literals. A composition is transparent - it orders by whatever its source
 expressions order by, and an unfilled slot such as an aggregate's absent filter contributes
@@ -1978,6 +2011,20 @@ weakens no obligation, it only names which card carries it. See the
   `F` naming one, and a `Random()` nested inside a composition all carry the random verdict;
   an alias naming a deterministic expression is an ordinary column order and satisfies the
   guard.
+- A STRING term naming a relation is judged by the related model's own `Meta.ordering`, which
+  the compiler expands it into: a relation whose target orders at random carries the random
+  verdict, and one whose target orders by a column satisfies the guard. The expansion is
+  recursive, so a random default two relations away decides the same way. Naming the foreign
+  key column instead - `branch_id`, or `branch__pk` - is an ordinary column order and is
+  unaffected. A relation walk that repeats, which Django rejects with
+  `FieldError("Infinite loop caused by ordering.")`, and a path piece that is not a field of
+  the model in hand are both refused.
+- An expression REFERENCE to the same relation does not expand and is a column order. Only a
+  string reaches the compiler's expansion; an `F` - bare, inside an `OrderBy`, or nested in a
+  composition - resolves to the foreign key column, so `F("branch").asc()` satisfies the guard
+  over a randomly ordered branch while the string `"branch"` does not. The annotation and
+  `extra` steps still apply to it, so an `F` naming a random annotation is still refused, and a
+  reference lifted out of an expansion is read at the prefixed name the outer query resolves.
 - A term resolving into `query.extra` - a select alias, or the dotted form handed through as
   `RawSQL` - is opaque rather than deterministic and cannot back an offset window. An
   `extra` ordering naming a real field is unaffected.
@@ -2249,6 +2296,25 @@ the shipped SDL.
     them a guard refusing every ordering it had to read would keep all seven rejections green.
     The async coloring carries the alias shape and the raw SQL leaf, which is where the same
     reader is reached through a different pipeline rather than by a different rule.
+    The relation-expansion indirection needs a second model to point at, so it is carried on a
+    holder schema over a type whose model owns a foreign key, in BOTH colorings, with both
+    `Meta.ordering` values supplied for the request: a parent ordering by the relation under a
+    related model ordering by `Random()` is refused with no row SQL, while its two controls -
+    the same relation term under a related model ordering by a column, and the foreign key's
+    own `attname` under a related model ordering at random - are each served with the captured
+    statement carrying the raised low mark and no random function. The attname control is what
+    a guard refusing every relation name outright would fail, and Django compiles no nested
+    `"?"` at all (it resolves as a column named `?` and raises), so the random related default
+    is written as the expression. Beside them, and in both colorings, the three expression
+    spellings of the same relation - `F("branch").asc()`, `OrderBy(F("branch"))`, and a bare
+    `F("branch")` - are each SERVED under the same randomly ordered related model, with the
+    statement carrying the raised low mark and no random function: only a string expands, and a
+    guard that expanded a reference too would refuse three requests Django answers in foreign
+    key order. The package tier carries what needs no second wire spelling: a relation cycle
+    refused rather than followed, a path piece that is not a field refused, a reverse relation
+    read through to its target's default, a chain of two relations whose far end decides the
+    verdict, an `F` naming a random annotation still refused, and a reference lifted out of an
+    expansion still read as a column.
 28. A live async request whose deadline expires after its resolver has obtained an async-only
     source closes that source exactly once and advances it zero times, for the default window
     and for `limit: 0` alike, with the complete `execution_deadline_seconds` extensions on the
@@ -2822,7 +2888,13 @@ structural checks, and link/kanban verification prescribed by
       columns and literals, so an annotation alias, an `F` naming one, a nested `Random()`, a
       `RawSQL` fragment, a bare `Func` naming a database function, and a `Subquery`'s inner
       query disqualify as a literal `"?"` does, while a composition of columns and literals
-      still backs the window. Empty/null order input, cleared or
+      still backs the window. A STRING term naming a relation is judged by the related model's
+      own `Meta.ordering`, which the compiler expands it into and which the term as written
+      never shows, so a random default one or more relations away disqualifies the request
+      while the foreign key column named directly does not, and a relation walk Django rejects
+      as an infinite loop is refused rather than followed; an expression reference to that same
+      relation does NOT expand, resolving to the foreign key column, so it still backs the
+      window. Empty/null order input, cleared or
       replaced model ordering, random ordering, grouping that suppresses the default, and
       opaque Python iterables cannot fake the condition. The shipped contract is stated as
       ORDERED OFFSET; no spec, docstring, glossary, or error text promises a stable or
@@ -3094,6 +3166,7 @@ structural checks, and link/kanban verification prescribed by
 
 <!-- .venv/ -->
 [django-compiler]: ../.venv/lib/python3.14/site-packages/django/db/models/sql/compiler.py
+[django-query]: ../.venv/lib/python3.14/site-packages/django/db/models/sql/query.py
 [django-queryset]: ../.venv/lib/python3.14/site-packages/django/db/models/query.py
 [graphql-execute]: ../.venv/lib/python3.14/site-packages/graphql/execution/execute.py
 [graphql-scalars]: ../.venv/lib/python3.14/site-packages/graphql/type/scalars.py

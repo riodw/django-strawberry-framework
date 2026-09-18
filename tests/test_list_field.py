@@ -57,10 +57,12 @@ from typing import Any
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import services
 from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db import models
+from django.db.models.functions import Random
 from django.test import RequestFactory
 from graphql import GraphQLError
 from strawberry.schema_directive import Location as _DirectiveLocation
@@ -1625,6 +1627,99 @@ def test_order_term_classifier_rejects_a_non_expression_term():
     assert _is_deterministic_order_term(SimpleNamespace(), 42) is False
 
 
+def test_order_term_classifier_refuses_a_relation_ordering_cycle(monkeypatch):
+    """Two models whose defaults order by each other compile to an error, never to a page.
+
+    Django raises ``FieldError("Infinite loop caused by ordering.")`` for such a
+    pair, so the classifier has no order to certify and must stop at the repeat
+    rather than follow the relation forever.
+    """
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("branch",))
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", ("shelves",))
+
+    assert _is_model_default_ordering_active(library_models.Shelf.objects.all()) is False
+
+
+def test_order_term_classifier_refuses_a_piece_that_is_not_a_field(monkeypatch):
+    """A path piece Django reads as a transform or a lookup is not a column this package can name.
+
+    Only a path resolving to a field all the way down says what the rows are
+    ordered by, so an unresolvable piece is refused instead of certified.
+    """
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("code__lower",))
+
+    assert _is_model_default_ordering_active(library_models.Shelf.objects.all()) is False
+
+
+def test_order_term_classifier_reads_a_reverse_relation_target_ordering(monkeypatch):
+    """A reverse relation expands into its own model's default exactly as a forward one does.
+
+    The name in front of the ordering is a relation either way, and the order the
+    rows come back in is the related model's.
+    """
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", ("shelves",))
+
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", (Random(),))
+    assert _is_model_default_ordering_active(library_models.Branch.objects.all()) is False
+
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("code",))
+    assert _is_model_default_ordering_active(library_models.Branch.objects.all()) is True
+
+
+def test_order_term_classifier_follows_a_chain_of_relation_defaults(monkeypatch):
+    """Expansion is recursive, so a random default two relations away still decides.
+
+    ``Book`` orders by its shelf, the shelf by its branch, and the branch at
+    random: the statement the database runs is the random one.
+    """
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(library_models.Book._meta, "ordering", ("shelf",))
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("branch",))
+
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", (Random(),))
+    assert _is_model_default_ordering_active(library_models.Book.objects.all()) is False
+
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", ("name",))
+    assert _is_model_default_ordering_active(library_models.Book.objects.all()) is True
+
+
+def test_order_reference_classifier_reads_the_annotation_a_reference_names():
+    """An ``F`` is resolved through the query's annotations before it is read as a column.
+
+    ``Query.resolve_ref`` looks the whole name up as an annotation first, so a
+    reference naming a random one carries that randomness and is refused.
+    """
+    from django_strawberry_framework.list_field import _has_deterministic_ordering
+
+    queryset = Category.objects.annotate(rnd=Random()).order_by(models.F("rnd"))
+
+    assert _has_deterministic_ordering(queryset) is False
+
+
+def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(monkeypatch):
+    """A reference lifted out of an expanded ordering names a column, not another default.
+
+    Only a string term reaches the compiler's relation expansion. A ``Book``
+    ordering by its shelf reaches a shelf ordering by ``F("branch")``, which the
+    outer query resolves to the foreign key column - so the branch's own random
+    default is never what the rows come back in.
+    """
+    from django_strawberry_framework.list_field import _is_model_default_ordering_active
+
+    monkeypatch.setattr(library_models.Book._meta, "ordering", ("shelf",))
+    monkeypatch.setattr(library_models.Shelf._meta, "ordering", (models.F("branch"),))
+    monkeypatch.setattr(library_models.Branch._meta, "ordering", (Random(),))
+
+    assert _is_model_default_ordering_active(library_models.Book.objects.all()) is True
+
+
 @pytest.mark.django_db
 def test_is_model_default_ordering_active_rejects_a_grouped_queryset(monkeypatch):
     """Grouping suppresses model default ordering the same way ``QuerySet.ordered`` does.
@@ -1744,10 +1839,11 @@ def test_list_arguments_immutability():
         args.extra_attribute = "disallowed"
 
 
-def test_is_model_default_ordering_active_exact_bool_identity():
+def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch):
     """_is_model_default_ordering_active requires exact boolean True identity."""
     from django_strawberry_framework.list_field import _is_model_default_ordering_active
 
+    monkeypatch.setattr(Category._meta, "ordering", ("name",))
     query_mock = SimpleNamespace(
         default_ordering=1,
         order_by=(),
@@ -1755,7 +1851,7 @@ def test_is_model_default_ordering_active_exact_bool_identity():
         group_by=(),
         annotations={},
         extra={},
-        get_meta=lambda: SimpleNamespace(ordering=("name",)),
+        get_meta=lambda: Category._meta,
     )
     qs_mock = SimpleNamespace(query=query_mock)
     assert _is_model_default_ordering_active(qs_mock) is False

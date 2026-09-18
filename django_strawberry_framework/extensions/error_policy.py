@@ -13,9 +13,10 @@ unexpected, replaced by a fresh ``GraphQLError`` carrying the policy's stable
 message and a correlation identifier, while the original exception is logged
 server-side under that same identifier.
 
-**There are two seams, because a response is not always one result.** A query or
-mutation answered through ``schema.execute`` produces exactly one already-torn-down
-result, so this extension's ``on_operation`` teardown is the whole story for it. A
+**There are three seams, because a response is not always one result and is not
+always a result this extension can still reach.** A query or mutation answered
+through ``schema.execute`` normally produces exactly one already-torn-down result,
+and this extension's ``on_operation`` teardown is the story for that one. A
 STREAMED operation is not: a subscription delivers one ``ExecutionResult`` PER EVENT
 through the result source the transport iterates, and a query or mutation run over a
 streaming transport has its single result yielded from inside the operation
@@ -24,8 +25,24 @@ errors would already be on the wire by the time it ran. The per-result seam is
 therefore the transport's own result source
 (``consumers.py::_stop_aware_results``), which masks each yielded value through
 ``mask_execution_result`` below, under the shared ``is_maskable_result`` shape gate.
-One masking implementation, two places it is applied, and neither re-states the
-classification or the replacement.
+
+The third is the one no extension can be: an exception escaping any HOOK - this
+extension's own teardown included - unwinds the whole operation lifecycle and is
+converted into a result by upstream AFTER every teardown has run, so the result
+carrying it was never assigned to the execution context this teardown reads and
+no extension exists at the moment it is built. That result is the value
+``schema.execute`` / ``schema.execute_sync`` RETURN, so the seam is the schema's
+own return (``schema.py::DjangoSchema._masked_return``), applying this module's
+same masking under the same gates. It is idempotent with the teardown by
+construction: a result the teardown already masked carries errors whose
+``original_error`` is ``None``, which the structural classifier reads as
+deliberate and leaves alone, so nothing is masked or logged twice.
+
+One masking implementation, three places it is applied, and none of them
+re-states the classification or the replacement. A plain ``strawberry.Schema``
+that a consumer assembled themselves with ``DjangoErrorPolicyExtension`` in its
+extensions list has no schema seam, so on that schema a hook failure is the one
+case the masking does not cover.
 
 ``mask_execution_result`` RETURNS a masked value rather than editing the result
 it was handed, which is what lets the per-event seam leave the engine's own
@@ -67,6 +84,7 @@ from .operation_state import _OperationBoundExtension
 
 __all__ = [
     "DjangoErrorPolicyExtension",
+    "degraded_result",
     "is_maskable_result",
     "mask_execution_result",
     "masking_is_active",
@@ -192,6 +210,21 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
     return GraphQLError(message=message)
 
 
+def degraded_result(policy: ErrorPolicy) -> StrawberryExecutionResult:
+    """The WHOLE-RESPONSE floor: the policy message alone, and no data.
+
+    Every seam that discovers it cannot produce a safe response lands here, and
+    there is one of these rather than one per seam so that a client meets the
+    same degraded shape whichever seam failed and no caller can drift on what
+    "fail closed" publishes. ``data`` is dropped along with the errors on
+    purpose: the seam that reached this could not certify what was on the result,
+    and publishing half of an uncertified response is the disclosure this exists
+    to prevent. The failure itself is logged by the caller, which is the one that
+    knows what it was doing.
+    """
+    return StrawberryExecutionResult(data=None, errors=[_degraded(policy)])
+
+
 def masking_is_active(policy: ErrorPolicy) -> bool:
     """Whether ``policy`` masks anything for the operation being answered now.
 
@@ -309,7 +342,7 @@ def mask_execution_result(result: Any, policy: ErrorPolicy) -> Any:
             "The error policy could not read the execution result's errors; the response "
             "degrades to the policy message alone (fail closed).",
         )
-        return StrawberryExecutionResult(data=None, errors=[_degraded(policy)])
+        return degraded_result(policy)
 
 
 def _replacement_for(error: Any, policy: ErrorPolicy) -> Any:
@@ -385,19 +418,21 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension):
                     "The error policy could not adopt the safe execution result; the "
                     "response is replaced with the policy message alone (fail closed).",
                 )
-                self.execution_context.result = StrawberryExecutionResult(
-                    data=None,
-                    errors=[_degraded(policy)],
-                )
+                self.execution_context.result = degraded_result(policy)
 
     def on_operation(self) -> Iterator[None]:
         """Apply the policy to the completed result, once, at teardown.
 
-        The completed result is the WHOLE response for a query or a mutation
-        upstream ran through ``schema.execute``, and for anything the transport
-        streamed - every subscription, and a query or mutation over a streaming
-        transport - it is only the operation's end, because each yielded result was
-        already masked at the transport's result source (see the module docstring).
+        The completed result is the whole response for a query or a mutation
+        upstream ran through ``schema.execute`` and finished normally. For
+        anything the transport streamed - every subscription, and a query or
+        mutation over a streaming transport - it is only the operation's end,
+        because each yielded result was already masked at the transport's result
+        source. And when an exception escaped a HOOK there is no completed result
+        here at all: upstream builds one out of that exception after every
+        teardown has unwound, so the response is masked where it is returned
+        instead (see the module docstring for all three seams).
+
         The shape gate is ``is_maskable_result``, which carries what it admits and
         what it excludes.
         """
@@ -420,9 +455,6 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension):
                 policy = DEFAULT_ERROR_POLICY
             try:
                 if hasattr(self, "execution_context") and self.execution_context is not None:
-                    self.execution_context.result = StrawberryExecutionResult(
-                        data=None,
-                        errors=[_degraded(policy)],
-                    )
+                    self.execution_context.result = degraded_result(policy)
             except Exception:
                 pass

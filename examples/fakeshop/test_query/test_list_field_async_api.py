@@ -1270,7 +1270,7 @@ _BRANCH_ORDER_ASYNC_SHAPE_PREFIX = (
 
 
 class _AsyncDeferredFilterQuerySet(models.QuerySet):
-    """A queryset SUBCLASS, which is what makes an unresolved deferred filter untrusted."""
+    """A project queryset class, planted with a deferred-filter state Django never writes."""
 
 
 class _ResidualAwaitable:
@@ -1313,7 +1313,9 @@ async def _async_in_place_routing(cls, order_input, queryset, info, **kwargs):
 
 async def _async_untrusted(cls, order_input, queryset, info, **kwargs):
     candidate = _AsyncDeferredFilterQuerySet(model=library_models.Branch)
-    candidate._deferred_filter = (False, (), {"name": "A"})
+    # ``negate`` decides whether the predicate is inverted and is truth-tested to
+    # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
+    candidate._deferred_filter = (1, (), {"name": "A"})
     return candidate
 
 
@@ -1373,10 +1375,10 @@ _MALFORMED_APPLY_ASYNC_ROWS = (
         ("got db=None, hints={'tenant': 2}",),
     ),
     (
-        "unresolved-deferred-filter",
+        "malformed-deferred-filter",
         _async_untrusted,
         _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "untrusted defect",
-        ("carries an unresolved deferred filter",),
+        ("deferred filter negate is a int",),
     ),
     (
         "sync-override-of-an-async-seam",

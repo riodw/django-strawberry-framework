@@ -32,7 +32,11 @@ Row groups, in the order a request meets them:
   name, with the GlobalID twins and the aggregate kept honest beside them;
 - introspection, charged like any other document shape rather than exempted;
 - the collection bounds the fields enforce (raw-list rows, connection page size,
-  and the list sibling that used to bypass the connection cap);
+  and the list sibling that used to bypass the connection cap), together with
+  what a bounded many-side relation COSTS when its rows arrive already fetched:
+  the fakeshop ``Loan`` model's no-op ``LoanQuerySet.as_manager()`` declaration
+  is rebuilt at that seam and, under a prefetching plan, must answer its payload
+  in the absolute two-query budget (one parent query plus one prefetch);
 - the cooperative deadline, one row per seam that hands work to the database;
 - the enforcement authority a resolver can reach through ``info.schema``, proven
   across two requests because the write and the request it would widen are
@@ -84,6 +88,7 @@ from django_strawberry_framework import (
     DEFAULT_ERROR_POLICY,
     RESOURCE_LIMIT_ERROR_CODE,
     DjangoListField,
+    DjangoOptimizerExtension,
     DjangoSchema,
     ErrorPolicy,
     strawberry_config,
@@ -275,6 +280,69 @@ async def _hostile_relation_async_view(request, *args, **kwargs):
 
 
 _hostile_relation_async_view.csrf_exempt = True
+
+
+#: The bound the carry mounts narrow to. Wide enough that no row in this group is
+#: truncated: the subject is what the relation COSTS, so a ceiling clipping it
+#: would make every payload comparison agree for the wrong reason.
+CARRY_RELATION_ROWS = 10
+
+#: The absolute query count one prefetched ``patrons { loans }`` request costs -
+#: the parent query plus one prefetch. The fakeshop ``Loan`` model declares its
+#: no-op project queryset through ``as_manager()``, so this is measured directly
+#: against the public project shape rather than a test-only manager mount.
+CARRY_RELATION_QUERIES = 2
+
+
+@cache
+def _carry_relation_schema(patron_type: type) -> DjangoSchema:
+    """A real ``LoanQuerySet.as_manager()`` relation under a prefetching plan.
+
+    ``_hostile_relation_schema`` installs no optimizer, so it plans no prefetch
+    and its relation branch never reaches the warm-cache path this group is
+    about.
+
+    The optimizer is a singleton behind a factory, the one spelling the repo
+    permits. The type is an ARGUMENT and the cache is keyed on it, for the reason
+    ``_hostile_relation_schema`` gives.
+    """
+    optimizer = DjangoOptimizerExtension()
+    query_cls = strawberry.type(
+        type(
+            "_CarryRelationQuery",
+            (),
+            {
+                "__annotations__": {"patrons": list[patron_type]},
+                "__doc__": "A raw-list root whose many-side target is planned as a prefetch.",
+                "patrons": DjangoListField(patron_type),
+            },
+        ),
+    )
+    return DjangoSchema(
+        query=query_cls,
+        config=strawberry_config(),
+        resource_policy=ResourcePolicy(max_list_rows=CARRY_RELATION_ROWS),
+        extensions=[lambda: optimizer],
+    )
+
+
+def _carry_relation_view(request, *args, **kwargs):
+    """Mount the public project-manager relation over the synchronous view."""
+    schema = _carry_relation_schema(library_schema.PatronType)
+    return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
+
+
+_carry_relation_view.csrf_exempt = True
+
+
+async def _carry_relation_async_view(request, *args, **kwargs):
+    """The async twin, so the rebuilt relation is proven on a real event loop too."""
+    schema = _carry_relation_schema(library_schema.PatronType)
+    built = AsyncDjangoGraphQLView.as_view(schema=schema)
+    return await built(request, *args, **kwargs)
+
+
+_carry_relation_async_view.csrf_exempt = True
 
 
 MAX_TOKENS = 40
@@ -1164,6 +1232,8 @@ urlpatterns = [
     path("rp-values-async/", _probe_async_view(**_VALUE_BOUNDS)),
     path("rp-hostile-relation/", _hostile_relation_view),
     path("rp-hostile-relation-async/", _hostile_relation_async_view),
+    path("rp-carry-relation/", _carry_relation_view),
+    path("rp-carry-relation-async/", _carry_relation_async_view),
     path(
         "rp-rows/",
         _probe_view(max_list_rows=MAX_LIST_ROWS, max_page_size=MAX_PAGE_SIZE),
@@ -2978,6 +3048,85 @@ def test_a_relation_manager_cannot_widen_the_raw_list_bound_on_the_async_transpo
         ],
     }
     assert len(payload["data"]["patrons"][0]["loans"]) == HOSTILE_RELATION_ROWS
+
+
+def _seed_carry_relation(patrons: int, loans_each: int) -> None:
+    """``patrons`` patrons with ``loans_each`` loans apiece, over one shelf."""
+    branch = library_models.Branch.objects.create(name="carry-branch")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="carry-shelf")
+    for patron_index in range(patrons):
+        patron = library_models.Patron.objects.create(name=f"carry-patron-{patron_index}")
+        for loan_index in range(loans_each):
+            book = library_models.Book.objects.create(
+                shelf=shelf,
+                title=f"carry-{patron_index}-{loan_index}",
+            )
+            library_models.Loan.objects.create(
+                book=book,
+                patron=patron,
+                note=f"loan-{patron_index}-{loan_index}",
+            )
+
+
+CARRY_RELATION_LOANS = 3
+
+
+def _carry_relation_payload(patrons: int) -> dict:
+    """The response the public ``LoanQuerySet.as_manager()`` relation must produce."""
+    return {
+        "patrons": [
+            {
+                "name": f"carry-patron-{patron_index}",
+                "loans": [
+                    {"note": f"loan-{patron_index}-{loan_index}"}
+                    for loan_index in range(CARRY_RELATION_LOANS)
+                ],
+            }
+            for patron_index in range(patrons)
+        ],
+    }
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("patrons", [2, 3], ids=["two-parents", "three-parents"])
+def test_a_project_queryset_class_relation_costs_two_prefetch_queries(patrons):
+    """The real project manager is windowed from the rows prefetch already fetched.
+
+    Two parent cardinalities pin batching rather than merely one request's shape:
+    the absolute number is one parent query plus one prefetch, and the payload
+    comparison stops a cheaper count from meaning fewer rows.
+    """
+    _seed_carry_relation(patrons, CARRY_RELATION_LOANS)
+    expected = _carry_relation_payload(patrons)
+
+    with CaptureQueriesContext(connection) as query_ctx:
+        payload = _post("/rp-carry-relation/", _HOSTILE_RELATION_QUERY)
+
+    _no_rejection(payload)
+    assert payload["data"] == expected
+    assert len(query_ctx.captured_queries) == CARRY_RELATION_QUERIES
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited():
+    """Sync/async parity for the rebuilt relation source.
+
+    Rows rather than a query count: ``CaptureQueriesContext`` binds to the
+    calling thread's connection while the async branch runs its ORM work in
+    ``sync_to_async`` worker threads, so an empty capture here would read exactly
+    like a green zero. The payload cannot be produced without the relation's rows.
+    """
+    _seed_carry_relation(2, CARRY_RELATION_LOANS)
+    response = _await_response(
+        AsyncTestClient().query(
+            _HOSTILE_RELATION_QUERY,
+            assert_no_errors=False,
+            url="/rp-carry-relation-async/",
+        ),
+    )
+    payload = json.loads(response.response.content)
+    _no_rejection(payload)
+    assert payload["data"] == _carry_relation_payload(2)
 
 
 @pytest.mark.django_db

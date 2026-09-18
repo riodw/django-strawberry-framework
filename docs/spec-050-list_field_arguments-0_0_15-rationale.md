@@ -310,7 +310,57 @@ Spec: [Decision 8][spec-050-d8].
   returned unchanged instead, and only the untrusted shape pays.
 - **Reading the relation cache's `_result_cache` with `getattr` after normalizing:** The read is
   the same consumer dispatch point the slice was. The rows come out of Django's own slot on an
-  exact queryset or not at all; a subclass answers no cached rows and costs one query.
+  exact queryset this package owns, never through an attribute lookup a subclass answers; a
+  subclass source reaches that slot by being rebuilt, and the rebuild brings its rows with it.
+
+*Measured fact behind the pending-predicate admission:* Django's
+`RelatedManager._apply_rel_filters` sets `_defer_next_filter` and then calls
+`.filter(**core_filters)`, whose `_filter_or_exclude` stores the `(negate, args, kwargs)` tuple on
+`self._chain()` — an object of the CANDIDATE's class. So **every** relation queryset carries a
+pending `_deferred_filter`, on an exact `QuerySet` and on a `Manager.from_queryset` class alike.
+Measured directly (the same relation built both ways carries the identical tuple), and measured
+at the seal: with the exact-`QuerySet` gate in place, the five `_SealPolicy` values the probe
+exercised (`_DEFAULT_SEAL_POLICY`, `_LIST_ARGUMENT_VISIBILITY_POLICY`, `_ORDERSET_RESULT_POLICY`,
+`_PREFETCH_CHILD_POLICY` and `_RAW_LIST_SOURCE_POLICY`) each refused the subclass relation
+queryset with `("untrusted", "<class> carries an unresolved deferred filter")` while admitting
+the exact one, so a `Manager.from_queryset` relation was refused at the raw-list row source AND
+at the visibility boundary. The gate read the candidate's class and no field of the policy at
+all, which is why those arms answer for every arm. The gate's own stated premise — that a
+subclass carrying the artifact "is not that reverse-relation artifact" — was therefore false,
+and Decision 8's promise that a sealable project queryset class keeps its `LIMIT` was
+unreachable for the relation case.
+
+*Rejected — refusing `Manager.from_queryset` relations as unsupported:* It is the documented way
+to give a model its own queryset class, so this refuses ordinary Django on the strength of a
+premise about Django that measurement disproved. Decision 20 names that shape as standard
+application code the package answers for.
+
+*Rejected — re-querying the relation instead of carrying its rows:* The cached rows are already
+in memory and are the same rows the second query would return. Paying one query per parent row to
+re-fetch them is a database-level regression bought with nothing, and it is precisely the cost
+the carry exists to remove.
+
+*Rejected — mounting the live proof on a shape that never reaches the branch:* replacing the
+reverse relation manager's queryset class. The optimizer seeds the generated `Prefetch` child
+from the related model's `_default_manager.all()`, and Django's `prefetch_one_level` caches
+`manager._apply_rel_filters(lookup.queryset._chain())`, so that mount leaves an exact `QuerySet`
+in the cache. Measured: 2 queries and rows returned, identical to the unmounted control — a row
+that passes while exercising nothing. The proof mounts the model's default manager instead.
+
+*Rejected — confining the admission to a `_SealPolicy` axis on the raw-list row source:* It would
+leave the same project shape refused at the visibility boundary, where it is equally reachable,
+so it is a knowingly partial fix. It would also encode two admission rules for one state slot
+with no mechanical difference between them: the bake dispatches no candidate code and proves the
+same things whichever surface calls it, whereas every existing axis names a real difference (what
+the rows are, whether the surface recomposes, which connection, whether the surface demanded the
+result). Sealability is one rule, defined once.
+
+*Why the `negate` slot gained an exact-`bool` check with the admission:* the bake's contract is
+that it runs only genuine Django machinery over pre-proven arguments, and `negate` was the one
+slot in the tuple still reaching consumer code — `~predicate if negate else predicate` truth-tests
+it, so a planted object's `__bool__` would decide whether the predicate is negated. Pinning it
+completes a proof the `tuple` / `dict` / `list` checks beside it already perform, rather than
+opening a new threat model.
 
 ### Decision 9 — no-argument sync behavior takes the old branch; async only adapts completion
 
@@ -524,6 +574,22 @@ duplication is demonstrated; it is not mandated by line count.
 *Rejected:* Dropping the shipped hardening back to the feature as first implemented. The
 original was simpler partly because it missed failure modes the suite now pins.
 
+*Separated, not absorbed — the connection field's sidecar seam.*
+[`django_strawberry_framework/connection.py::_pipeline_sync`][connection] and
+[`_pipeline_async`][connection] apply `FilterSet.apply_*` / `OrderSet.apply_*` and carry the
+returned value straight to `_finalize_queryset`: no routing snapshot is taken before the call and
+the result is not re-sealed. [`django_strawberry_framework/list_field.py`][list-field] does both
+around the same public hooks - it freezes the routing intent, then validates the sealed output.
+The rule this decision's trust table states for application code is that the package validates
+mechanically what it can establish about a hook's RESULT, and a hook's result contract does not
+depend on which field called it; two fields invoking one public method and validating it
+differently is that rule broken. The row it breaks is [`spec-030`][spec-030] Decision 7's "later
+steps can only narrow" upper bound on the connection pipeline, which nothing currently proves for an
+override that widens, re-routes, or returns an evaluated queryset. It is not remediated here:
+the contract it breaks belongs to the connection field, and Decision 22 closes this card on the
+work the card named, so it opens a card owned by the connection field rather than reopening 050.
+Owner: `maintainer` until a card number exists.
+
 ### Decision 21 — the extension contract is upstream's; per-operation isolation is the guarantee this package adds
 
 Spec: [Decision 21][spec-050-d21].
@@ -559,13 +625,22 @@ than it can make a resolver's globals thread-safe. The package isolates what it 
 
 Spec: [Decision 22][spec-050-d22].
 
-*Decision:* One gate, one tree, one record naming the commit; a finite list of owed work before
-it; a new card rather than a reopened one afterwards.
+*Decision:* One candidate implementation commit, one gate and review over that exact tree, and
+one evidence-only follow-up commit naming the candidate parent; a finite list of owed work before
+the candidate; the candidate carries the final board transition, and closure is recognized only
+by the follow-up; a new card rather than a reopened one afterwards.
 
 *Why:* A gate graded at one tree says nothing about the next, so a record that is re-cited beside
-later edits is not evidence. Recording once at the final tree is the only record that certifies
-the code it names, and naming the owed work makes the finish line something a reader can check
-rather than a feeling that the reviews have stopped.
+later edits is not evidence. The candidate commit gives the suites and review one immutable tree;
+the follow-up record can then name that parent without the impossible self-reference of a record
+that tries to name its own commit. Running the structural and documentation checks on the
+follow-up proves only that evidence record's integrity, not that the full suites ran on it.
+Naming the owed work makes the finish line something a reader can check rather than a feeling that
+the reviews have stopped. Keeping the pre-candidate checkout WIP while placing the board
+transition inside the candidate makes the status change part of the gated tree without pretending
+the evidence record already exists. The placement is fixed rather than permitted: the follow-up
+changes one file, so a transition the candidate merely might carry is one that no commit in the
+sequence is obliged to make.
 
 *Rejected:* Recording the gate after each remediation. Each record certified a tree that the
 next edits left behind, and the figures travelled forward beside code they did not cover.
@@ -614,6 +689,7 @@ criterion; this decision supplies the stop.
 
 <!-- django_strawberry_framework/ -->
 [connection]: ../django_strawberry_framework/connection.py
+[list-field]: ../django_strawberry_framework/list_field.py
 
 <!-- tests/ -->
 

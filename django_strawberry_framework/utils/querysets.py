@@ -51,8 +51,8 @@ ordering, combinators, values projection), database routing / hints, and the
 prefetch metadata Django needs -- everything that determines which rows the SQL
 selects. What it deliberately drops: the consumer's executable override dispatch
 (the subclass identity itself), because that is precisely the leak vector. A
-foreign ``Query`` class, a foreign row-iterable class, or an unresolved deferred
-filter cannot be faithfully rebuilt, so they fail closed (``untrusted``).
+foreign ``Query`` class, a foreign row-iterable class, or malformed deferred-filter
+state cannot be faithfully rebuilt, so they fail closed (``untrusted``).
 
 Caller-specific tails stay with their caller: the connection field keeps its
 GraphQL non-queryset error (it calls ``normalize_query_source`` then guards),
@@ -2410,7 +2410,7 @@ def _sealed_prefetch_related_lookups(
     sliced prefetch queryset (Django >= 4.2 top-N per parent) that nothing
     refilters, while ``require_model_rows`` still holds. A child that cannot be sealed (a
     non-queryset ``.queryset``, a malformed model, a foreign ``Query`` class, a
-    foreign row iterable, a subclass carrying an unresolved deferred filter) fails
+    foreign row iterable, malformed deferred-filter state) fails
     the OUTER seal closed with the ``untrusted`` defect -- carrying the inner
     child's own ``(code: detail)`` in the message rather than a generic string --
     rather than being silently dropped. A ``Prefetch`` whose ``.queryset is None``
@@ -2639,14 +2639,22 @@ def _bake_deferred_filter_or_defect(
     proven inert / genuine-Django FIRST (``_deferred_value_defect``) so ``add_q``'s
     ``resolve_expression`` dispatch (spec-045 Decision 5) only ever runs
     genuine Django code. A malformed shape Django never produces (a non-3-tuple, a
-    non-dict / non-tuple args, a prohibited ``_connector`` / ``_negated`` kwarg, a bad
-    field) fails closed as a typed ``untrusted`` defect, never a raw exception.
+    ``negate`` that is not an exact ``bool``, a non-dict / non-tuple args, a prohibited
+    ``_connector`` / ``_negated`` kwarg, a bad field) fails closed as a typed
+    ``untrusted`` defect, never a raw exception.
     """
     # Exact-shape gate BEFORE the unpack: tuple unpacking dispatches ``__iter__``,
     # so an arbitrary object planted in the slot must be rejected without iteration.
     if type(deferred) is not tuple or len(deferred) != 3:
         return ("untrusted", f"{cls_name} deferred filter is malformed")
     negate, args, kwargs = deferred
+    if type(negate) is not bool:
+        # ``~predicate if negate else predicate`` TRUTH-TESTS this slot, so an object
+        # planted here decides through its own ``__bool__`` whether the predicate is
+        # negated -- the one consumer-dispatch point left inside a helper whose whole
+        # contract is that it runs genuine Django code over pre-proven arguments.
+        # Django stores an exact ``bool`` here, so every other shape fails closed.
+        return ("untrusted", f"{cls_name} deferred filter negate is a {_safe_type_name(negate)}")
     if type(kwargs) is not dict:
         return ("untrusted", f"{cls_name} deferred filter kwargs is a {_safe_type_name(kwargs)}")
     if type(args) not in (tuple, list):
@@ -2671,7 +2679,7 @@ def _bake_deferred_filter_or_defect(
         predicate = models.Q(*args, **kwargs)
         sql.Query.add_q(rebuilt_query, ~predicate if negate else predicate)
     except Exception:
-        return ("untrusted", f"{cls_name} carries a deferred filter that cannot be resolved")
+        return ("untrusted", f"{cls_name} carries malformed deferred-filter state")
     return None
 
 
@@ -2764,6 +2772,13 @@ class _SealPolicy:
       field called it and on whether a client happened to send window arguments.
       A consumer that evaluates inside the hook pays for the discarded
       ``_result_cache`` in one extra query, which is a cost, not a broken seal.
+    - ``carry_result_cache`` -- the rebuild carries the source's fetched rows
+      forward, read from the same instance state every other retained slot comes
+      from, so a source that already holds rows is windowed from them instead of
+      being re-queried. On for the raw-list row source alone, the one surface
+      where nothing is composed after the rebuild and the window is therefore the
+      only operation the rows still have to survive. It is the complement of
+      ``require_unevaluated``, and no policy sets both.
     """
 
     require_model_rows: bool = True
@@ -2771,6 +2786,7 @@ class _SealPolicy:
     reject_combined: bool = False
     require_shared_alias: bool = False
     require_unevaluated: bool = False
+    carry_result_cache: bool = False
 
 
 # Every read surface (Relay node defaults, connection root, list field, the
@@ -2802,12 +2818,16 @@ _ORDERSET_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=
 # that exists to protect a RECOMPOSITION is off, because nothing recomposes here:
 # one ``[start:stop]`` is taken and Django takes it on a sliced query and on a
 # combinator alike. A ``.values()`` projection is a legitimate list of rows, and a
-# source the consumer already evaluated is a cost (one discarded result cache, one
-# more query) rather than a broken seal - the same line ``_DEFAULT_SEAL_POLICY``
-# draws for every ``get_queryset`` return. What is NOT optional is the rebuild
-# itself: the point of sealing here is that the slice runs on a queryset this
-# package built.
-_RAW_LIST_SOURCE_POLICY = _SealPolicy(require_model_rows=False, reject_sliced=False)
+# source the consumer already evaluated brings its rows with it: the fetched rows
+# travel onto the rebuild, so a project queryset class is windowed from what it
+# already holds and costs what Django's own manager costs. What is NOT optional is
+# the rebuild itself: the point of sealing here is that the slice runs on a
+# queryset this package built.
+_RAW_LIST_SOURCE_POLICY = _SealPolicy(
+    require_model_rows=False,
+    reject_sliced=False,
+    carry_result_cache=True,
+)
 
 
 def _routing_hints_equal(cand_hints: Any, orig_hints: Any) -> bool:
@@ -3083,16 +3103,18 @@ def _seal_or_defect(
       a foreign ``select_related`` all fail closed -- consumer-defined expressions /
       lookups are NOT supported across the visibility boundary), the
       ``_iterable_class`` is not one of Django's own row iterables (a synthetic-row
-      iterable), a SUBCLASS instance carries an unresolved ``_deferred_filter`` -- a
-      predicate not yet baked into the query (an EXACT plain ``QuerySet`` carrying
-      one, as ``RelatedManager._apply_rel_filters`` leaves on ``instance.rel.all()``,
-      is baked onto the DETACHED CLONE through the UNBOUND ``sql.Query.add_q`` after
-      every argument is proven inert / genuine-Django, never Django's
-      ``QuerySet.query`` getter -- whose ``_filter_or_exclude_inplace`` / ``add_q``
-      are instance-shadowable and whose ``resolve_expression`` dispatch would run a
-      consumer expression mid-bake; the candidate is never mutated; a MALFORMED
-      deferred filter Django never produces fails closed as a typed defect, not a raw
-      exception) -- or a
+      iterable), the ``_deferred_filter`` STATE is not the exact shape Django writes --
+      a non-3-tuple, a ``negate`` that is not an exact ``bool``, a ``kwargs`` that is
+      not an exact ``dict``, an ``args`` that is neither ``tuple`` nor ``list``, a
+      non-string kwarg key, a prohibited connector kwarg, a value that is neither inert
+      nor genuine Django, or a predicate ``add_q`` cannot resolve (a PENDING predicate
+      itself is not a defect on any class: ``RelatedManager._apply_rel_filters`` leaves
+      one on every relation queryset it builds, so it is baked onto the DETACHED CLONE
+      through the UNBOUND ``sql.Query.add_q`` after every argument is proven inert /
+      genuine-Django, never Django's ``QuerySet.query`` getter -- whose
+      ``_filter_or_exclude_inplace`` / ``add_q`` are instance-shadowable and whose
+      ``resolve_expression`` dispatch would run a consumer expression mid-bake -- and
+      the candidate is never mutated) -- or a
       ``Prefetch`` in ``_prefetch_related_lookups`` carries an inner queryset that
       cannot itself be sealed, a non-exact-``str`` lookup, a consumer
       ``Prefetch`` subclass (rebuilt as an exact ``Prefetch`` so no
@@ -3102,7 +3124,11 @@ def _seal_or_defect(
       related cache, so the sealed boundary proves the child's model is the
       relation's own target or a subclass of it before admitting the entry,
       under either the declared ``related_name`` or the default
-      ``<model>_set`` accessor spelling). This REPLACES the old
+      ``<model>_set`` accessor spelling) -- or, when ``policy.carry_result_cache``
+      carries the fetched rows forward, a populated ``_result_cache`` that is not
+      an exact ``list`` (a ``list`` subclass would answer the windowing subscript
+      with its own ``__getitem__``, which is the ceiling back inside consumer
+      code). This REPLACES the old
       class-level method inventory: ``untrusted`` now means "cannot be sealed",
       not "overrides a listed method".
     - ``routing`` -- an OrderSet result changed the source queryset's database alias or
@@ -3234,9 +3260,13 @@ def _seal_or_defect(
         return None, reconstruction_defect
     # A pending ``_deferred_filter`` -- the ``(negate, args, kwargs)`` tuple Django's
     # ``RelatedManager._apply_rel_filters`` leaves on ``instance.rel.all()`` (baked into
-    # ``_query`` only on first ``.query`` access) -- is baked onto the CLONE for an EXACT
-    # plain ``QuerySet``. A SUBCLASS leaving a predicate pending is not that
-    # reverse-relation artifact and cannot be safely resolved, so it fails closed.
+    # ``_query`` only on first ``.query`` access) -- is baked onto the CLONE for EVERY
+    # candidate. The related-manager machinery leaves that tuple on whatever class the
+    # model's manager builds its querysets from, so the candidate's own class says
+    # nothing about the state: the predicate is added to the DETACHED clone through the
+    # UNBOUND ``sql.Query.add_q``, over arguments proven inert or genuine Django first,
+    # and the candidate is never dispatched through and never mutated. What fails closed
+    # is the pending STATE's shape rather than the class holding it.
     # ``is not None`` -- never truthiness: Django only ever stores ``None`` or the
     # 3-tuple here, and ``if deferred:`` would dispatch a consumer ``__bool__`` on an
     # arbitrary object planted in the slot (the P2 retained-state vector), letting a
@@ -3244,8 +3274,6 @@ def _seal_or_defect(
     # through the bake path, whose exact-shape checks fail a malformed one closed.
     deferred = state.get("_deferred_filter")
     if deferred is not None:
-        if type(candidate) is not models.QuerySet:
-            return None, ("untrusted", f"{cls_name} carries an unresolved deferred filter")
         bake_defect = _bake_deferred_filter_or_defect(rebuilt_query, deferred, cls_name)
         if bake_defect is not None:
             return None, bake_defect
@@ -3286,7 +3314,20 @@ def _seal_or_defect(
     )
     if prefetch_defect is not None:
         return None, prefetch_defect
-    if policy.require_unevaluated and state.get("_result_cache") is not None:
+    result_cache = state.get("_result_cache")
+    if policy.carry_result_cache and result_cache is not None and type(result_cache) is not list:
+        # ``type(...) is list``, never ``isinstance``: a ``list`` SUBCLASS brings its
+        # own ``__getitem__``, and ``QuerySet.__getitem__`` returns
+        # ``self._result_cache[k]`` once the cache is populated - so carrying a
+        # subclass would put the raw-list ceiling back inside consumer code, which is
+        # the one thing this seam exists to prevent. Django stores an exact ``list``
+        # here and nothing else, so refusing every other shape fails closed on state
+        # Django does not produce.
+        return None, (
+            "untrusted",
+            f"{cls_name}._result_cache is a {_safe_type_name(result_cache)}",
+        )
+    if policy.require_unevaluated and result_cache is not None:
         return None, ("evaluated", "the result cache is populated")
     if policy.reject_sliced and rebuilt_query.is_sliced:
         return None, ("sliced", f"rows {rebuilt_query.low_mark}:{rebuilt_query.high_mark}")
@@ -3327,6 +3368,15 @@ def _seal_or_defect(
     sealed._prefetch_related_lookups = sealed_prefetch
     sealed._sticky_filter = state.get("_sticky_filter") is True
     sealed._for_write = state.get("_for_write") is True
+    if policy.carry_result_cache:
+        # The rows the source already fetched travel onto the rebuild, so a surface
+        # that only windows them re-queries nothing. The list object is taken as it
+        # is rather than copied: the row objects are shared either way, ``QuerySet``
+        # hands its own cache out uncopied at every other read of it, and an O(n)
+        # copy here would be a per-parent-row cost on the relation branch the carry
+        # exists to make cheap. Every other policy leaves the ``None`` that
+        # ``models.QuerySet.__init__`` already set.
+        sealed._result_cache = result_cache
     return sealed, None
 
 
@@ -3385,9 +3435,10 @@ def normalized_row_source(value: Any) -> Any:
     - anything else is returned unchanged for the caller's counting path, which
       bounds by building a list of its own and needs no ownership of the source.
 
-    The rebuilt queryset is unevaluated even when the candidate had rows cached,
-    so a subclass source costs one extra query. That is the price of the bound
-    being enforceable at all, and it is paid only by the untrusted shape.
+    The rebuild brings the source's fetched rows with it, so a subclass that
+    arrives evaluated is windowed from the rows it holds and costs no query the
+    exact shape would not have cost either. What the rebuild drops is the
+    subclass's own methods.
     """
     source_type = type(value)
     if source_type is models.QuerySet or not issubclass(source_type, models.QuerySet):
@@ -3410,7 +3461,11 @@ def materialized_rows(value: Any) -> Any:
     whatever a consumer subclass defines - the same object whose ``__getitem__``
     cannot be trusted with the bound cannot be trusted to answer what it has
     already fetched. Every other shape answers ``None`` and is bounded as the
-    source it is.
+    source it is - which is the reason the exact-type rule is correct rather than
+    a claim that a subclass has no rows to give: a subclass answers nothing HERE
+    because its ``__dict__`` is not Django's own slot on a package-owned object,
+    and the rows it does hold reach a caller through ``normalized_row_source``'s
+    rebuild, which carries them onto a queryset this package built.
     """
     if type(value) is not models.QuerySet:
         return None
@@ -3593,8 +3648,8 @@ def _visibility_result_error(
                     f"{name}.get_queryset returned a queryset that cannot be sealed "
                     f"into a framework-owned execution queryset ({detail}); the visibility "
                     f"boundary rebuilds a plain QuerySet from the validated query state, and a "
-                    f"foreign Query class, a foreign row iterable, or an unresolved deferred "
-                    f"filter cannot be faithfully rebuilt. Return a queryset backed by a plain "
+                    f"foreign Query class, a foreign row iterable, or malformed deferred-filter "
+                    f"state cannot be faithfully rebuilt. Return a queryset backed by a plain "
                     f"django.db.models.sql.Query over model or .values() rows."
                 ),
                 "evaluated": (
@@ -3664,14 +3719,16 @@ def _prepared_visibility_source(
     Returns ``(sealed_queryset, required_alias)``. The source is sealed through
     ``_seal_or_defect`` before the hook runs - it must be a real ``QuerySet``
     over the registered type's concrete table, sealable (a plain ``sql.Query``, a
-    Django row iterable, no unresolved deferred filter), and whatever else
+    Django row iterable, a pending deferred filter in the exact shape Django
+    writes), and whatever else
     ``policy`` (a ``_SealPolicy``, default ``_DEFAULT_SEAL_POLICY``) requires:
     model rows, no slice, and for the cascade no combinator. The
     sealed object is a fresh framework-owned plain ``QuerySet`` rebuilt from the
     source's query state, so the hook receives a trusted queryset regardless of
     what the caller passed; an already-evaluated source seals to a fresh,
-    unevaluated queryset (the seal never copies ``_result_cache``), so cached rows
-    never reach the hook. The required alias is then resolved in priority order:
+    unevaluated queryset (this seal's policies do not carry ``_result_cache``
+    forward), so cached rows never reach the hook. The required alias is then
+    resolved in priority order:
 
     1. An active write pipeline's alias - the sealed source is pinned through
        ``pin_write_queryset`` (a genuine ``.using()`` on the trusted object),
@@ -3724,8 +3781,8 @@ def _prepared_visibility_source(
                         f"apply_type_visibility for {name} got a source queryset "
                         f"that cannot be sealed into a framework-owned execution queryset "
                         f"({detail}); the boundary rebuilds a plain QuerySet from the validated "
-                        f"query state, and a foreign Query class, a foreign row iterable, or an "
-                        f"unresolved deferred filter cannot be faithfully rebuilt. Pass a "
+                        f"query state, and a foreign Query class, a foreign row iterable, or "
+                        f"malformed deferred-filter state cannot be faithfully rebuilt. Pass a "
                         f"queryset backed by a plain django.db.models.sql.Query."
                     ),
                     "evaluated": (

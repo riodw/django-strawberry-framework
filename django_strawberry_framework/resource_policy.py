@@ -1007,6 +1007,11 @@ def _windowed_rows(
     before the shape is classified because the classification is what it
     settles.
 
+    A source that arrives evaluated is windowed from the rows it already holds,
+    because ``QuerySet.__getitem__`` reads a populated ``_result_cache`` directly
+    and the rebuild carries that cache forward, so the window costs no query for
+    the exact shape and for a rebuilt subclass alike.
+
     Package-private because a coordinate pair is a claim this seam cannot check:
     a window wider than the request's own ceiling would silently widen the bound
     ``bounded_rows`` advertises to everyone who imports it.
@@ -1049,22 +1054,28 @@ def bounded_rows(
     accepted-row ceiling on what the response can carry, not a guarantee on total
     physical rows scanned by the underlying database query.
 
-    A ``QuerySet`` is bounded by SLICING, so it carries the bound into SQL as
-    ``LIMIT`` and is never evaluated unbounded; a value that is already a
-    materialized sequence (a consumer resolver's return, or Django's prefetch
-    cache) is truncated in Python, which cannot un-fetch those rows but does
-    stop the response from serializing them. Which operation does the truncating
-    follows from what the value IS, never from whether a subscript happened to
-    answer: an exact ``list``, ``tuple``, ``str``, ``bytes``, ``bytearray`` or
-    ``QuerySet`` is sliced and keeps its type, and every other shape - a
-    subclass of one of the sequence types, a mapping, a bare iterable - is
-    counted into a fresh list instead, which is how the ceiling stays a ceiling
-    on a sequence type whose own ``__getitem__`` is consumer code. A mapping
-    therefore still comes back as a bounded list of its keys. A ``QuerySet``
-    subclass is the one shape that is rebuilt rather than reclassified: it is
-    sealed into a plain framework-owned queryset and sliced there, so it keeps
-    the SQL ``LIMIT`` a counted truncation would lose, or fails closed with a
-    typed ``ConfigurationError`` when its state cannot be rebuilt.
+    An unevaluated ``QuerySet`` is bounded by SLICING, so it carries the bound
+    into SQL as ``LIMIT`` and is never evaluated unbounded; a value whose rows
+    are already fetched - a materialized sequence, a consumer resolver's return,
+    Django's prefetch cache, or a queryset the consumer evaluated - is windowed
+    in Python from the rows it holds, which cannot un-fetch them but does stop
+    the response from serializing them and costs no second query.
+    Which operation does the truncating follows from what the value IS, never
+    from whether a subscript happened to answer: an exact ``list``, ``tuple``,
+    ``str``, ``bytes``, ``bytearray`` or ``QuerySet`` is sliced, and every
+    other shape - a subclass of one of the sequence types, a mapping, a bare
+    iterable - is counted into a fresh list instead, which is how the ceiling
+    stays a ceiling on a sequence type whose own ``__getitem__`` is consumer
+    code. The slice answers in the sliced value's own type, except on a
+    queryset whose rows are already fetched: there ``QuerySet.__getitem__``
+    answers from the rows it holds, so the window comes back as a ``list``. A
+    mapping therefore still comes back as a bounded list of its keys. A
+    ``QuerySet`` subclass is the one shape that is rebuilt rather than
+    reclassified: it is sealed into a plain framework-owned queryset and sliced
+    there, so an unevaluated one keeps the SQL ``LIMIT`` a counted truncation
+    would lose and an evaluated one is windowed from the rows the rebuild
+    carried forward; a state that cannot be rebuilt fails closed with a typed
+    ``ConfigurationError``.
 
     A raw list is the one collection shape Relay pagination does not bound, so
     this is the only thing between a client and the whole table. It is

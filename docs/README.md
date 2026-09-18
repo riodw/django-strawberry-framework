@@ -17,7 +17,7 @@ Add `"django_strawberry_framework"` to `INSTALLED_APPS` so Django's check and si
 
 ```python
 import strawberry
-from django_strawberry_framework import DjangoListField, DjangoOptimizerExtension, DjangoType, finalize_django_types, strawberry_config
+from django_strawberry_framework import DjangoListField, DjangoOptimizerExtension, DjangoSchema, DjangoType, finalize_django_types, strawberry_config
 from myapp.models import Category, Item
 
 
@@ -41,7 +41,7 @@ class Query:
 finalize_django_types()
 
 _optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(
+schema = DjangoSchema(
     query=Query,
     config=strawberry_config(),
     extensions=[lambda: _optimizer],
@@ -50,7 +50,13 @@ schema = strawberry.Schema(
 
 The optimizer is a module-level singleton wrapped in a factory. That preserves the instance-bound [plan cache][glossary-plan-cache] (Strawberry runs the callable once per request and gets the same instance back) and emits no deprecation warning, because the entry is a callable rather than an instance.
 
-Because one object answers every operation, what keeps each operation's engine context and optimizer state its own is the schema: `DjangoSchema` binds per-operation state around every framework extension it resolves, and a plain `strawberry.Schema` does not. Build the schema with `DjangoSchema` wherever a shared entry — this singleton included — is in the list, and reserve instance and singleton-factory entries for it; on a plain `strawberry.Schema` the supported spellings are the class and a factory that builds a fresh extension per call. See [per-operation extension isolation][glossary-per-operation-extension-isolation].
+The extension list obeys three separate rules.
+
+**Enforcement is configured, not installed.** The resource and error policies are declared through `DjangoSchema(resource_policy=..., error_policy=...)`, and the schema builds its own authority extension per operation from that record. An exact authority instance in `extensions=` is read once as that same declaration and folded into the schema; a factory that resolves to one instead refuses the operation with the stable `SCHEMA_CONFIGURATION_UNAVAILABLE` code, and a subclass of either extension — supplied as a class or as an instance — is refused at construction with `ConfigurationError`. Moving such an instance into a factory is therefore not a migration — the keyword argument is. [Production error policy](#production-error-policy) states the rule in full.
+
+**Ordinary extensions follow upstream's spellings.** A class or a factory. An instance carries Strawberry's own `DeprecationWarning` unchanged, because an entry that is not this package's own reaches upstream exactly as you wrote it and no instance-only meaning is defined here.
+
+**Per-operation isolation of the package's own extensions is the guarantee this package adds.** `DjangoSchema` gives every extension it manages — its authorities, its optimizer under a class entry or a factory result, the singleton-in-a-factory recipe above included, its debug extension — one state per operation, which is why `extensions=[lambda: _optimizer]` is safe on this schema where upstream says a shared instance is not. A plain `strawberry.Schema` binds none of it, and a third-party extension keeps exactly upstream's lifecycle wherever it is listed. See [per-operation extension isolation][glossary-per-operation-extension-isolation].
 
 Relation fields may point at target types declared earlier or later; `finalize_django_types()` resolves them all once every `DjangoType` module has been imported.
 
@@ -84,19 +90,19 @@ See [the Relay Node integration entry][glossary-relay-node-integration] and [`Me
 
 ## Schema setup
 
-`finalize_django_types()` must run once during single-threaded import/schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed. The most common failure mode is forgetting to import a module that contains a related type before finalization.
+`finalize_django_types()` must run once during single-threaded import/schema setup, after every module that defines `DjangoType` classes has been imported and before the schema is constructed. The most common failure mode is forgetting to import a module that contains a related type before finalization.
 
 ```python
-from django_strawberry_framework import finalize_django_types, strawberry_config
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema, finalize_django_types, strawberry_config
 
 from myapp import types as _types  # noqa: F401
 
 finalize_django_types()
 _optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])
+schema = DjangoSchema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])
 ```
 
-Calling `finalize_django_types()` after the `Schema(...)` construction instead builds the schema before relation targets are finalized, so exposed relations whose target type was still pending cannot resolve into concrete `DjangoType`s.
+Calling `finalize_django_types()` after the `DjangoSchema(...)` construction instead builds the schema before relation targets are finalized, so exposed relations whose target type was still pending cannot resolve into concrete `DjangoType`s.
 
 `manage.py inspect_django_type <type>` prints a finalized type's per-field resolution table when a conversion is not what you expected, and `manage.py export_schema <dotted.path.to.schema>` prints or writes the SDL.
 
@@ -145,7 +151,7 @@ schema = DjangoSchema(query=Query, error_policy={"enabled": False})
 
 The extension runs **first** in every operation's chain, because Strawberry unwinds teardowns LIFO and masking must happen after every extension that reads `GraphQLError.original_error` has had its turn; your own extensions keep their order behind it. Subscriptions served through the package's ASGI router are covered per event rather than per operation, so every event carries the policy message and its own `correlationId`.
 
-The schema owns both, and `extensions=` carries your own extensions. `DjangoSchema` builds one error-policy extension and one resource-policy extension per operation from the configuration it was constructed with, so every request is bounded and masked whatever the extension list says. Configure them with `DjangoSchema(resource_policy=..., error_policy=...)`; passing `DjangoResourcePolicyExtension(policy=...)` as an entry still works and is read as that same declaration, with the entry folded into the schema rather than kept. Declaring the policy twice, and subclassing either extension to supply it, raise `ConfigurationError` at construction - a subclass can override the hook that does the enforcing while still answering every check for it. An entry that would decide enforcement later is refused when the operation resolves it: a factory returning either policy extension, a factory that raises, and a factory returning something other than a `SchemaExtension` instance all answer every request with the `SCHEMA_CONFIGURATION_UNAVAILABLE` error instead of running, with the exception text and the returned object left in the server's log. A refused schema answers every request identically: the refusal is published before the parse stage and replaces both the document and the operation selector with the package's own, so a document that will not parse and an `operationName` no document can carry get the same code as a valid request, over `execute_sync`, `execute` and `stream` alike. It still bounds what it is sent, too - its chain keeps the package's resource extension, so an oversized or deeply nested document is answered with `RESOURCE_LIMIT_EXCEEDED` before anything parses it.
+The schema owns both, and `extensions=` carries your own extensions. `DjangoSchema` builds one error-policy extension and one resource-policy extension per operation from the configuration it was constructed with, so every request is bounded and masked whatever the extension list says. Configure them with `DjangoSchema(resource_policy=..., error_policy=...)`; passing `DjangoResourcePolicyExtension(policy=...)` as an entry still works and is read as that same declaration, with the entry folded into the schema rather than kept. Declaring the policy twice raises `ConfigurationError` at construction, and so does a subclass of either extension - supplied as a class or as an instance, and whether or not it declares a policy of its own - because a subclass can override the hook that does the enforcing while still answering every check for it. An entry that would decide enforcement later is refused when the operation resolves it: a factory returning either policy extension, a factory that raises, and a factory returning something other than a `SchemaExtension` instance all answer every request with the `SCHEMA_CONFIGURATION_UNAVAILABLE` error instead of running, with the exception text and the returned object left in the server's log. A refused schema answers every request identically: the refusal is published before the parse stage and replaces both the document and the operation selector with the package's own, so a document that will not parse and an `operationName` no document can carry get the same code as a valid request, over `execute_sync`, `execute` and `stream` alike. It still bounds what it is sent, too - its chain keeps the package's resource extension, so an oversized or deeply nested document is answered with `RESOURCE_LIMIT_EXCEEDED` before anything parses it.
 
 ## Reading data
 
@@ -613,6 +619,18 @@ One auditable list for taking a schema from "runs" to "internet-facing". Start w
 
 **The declared Django floor is not a secure-version recommendation.** `pyproject.toml` declares `Django>=5.2.16` as an API-compatibility statement frozen at release time; install the newest security patch in whichever supported series you have chosen (`5.2.x`, `6.0.x`, `6.1.x`).
 
+### The trust boundary
+
+Three trust levels, and every row below reads against them.
+
+- **Untrusted: the wire.** Every GraphQL document, variable, header, upload and transport frame. Every bound in this section exists for that input.
+- **Validated, then trusted: configuration.** Schema and policy arguments are canonicalized into exact built-in primitives at construction, read back as copies, and refused when they cannot be read back. After that the package answers from its own record rather than re-deriving it per request.
+- **Trusted: application Python.** A resolver, a `get_queryset` hook, an `OrderSet.apply_*` override, a project `QuerySet` class, an extension factory. The package validates what it can establish mechanically about their **results** — shape, model, routing, evaluation state — and states the contract each must keep; it does not promise to contain code running inside its own process. [Visibility and permissions](#visibility-and-permissions) is the worked example: a hook's return is rebuilt from validated SQL state, and anything unprovable fails closed.
+
+That last boundary is Django's own. A report is a defect here when the code it needs could feasibly exist in a project using supported public API and the input that triggers it arrives over the wire or through ordinary configuration, and not when it depends on calling private internals unsafely ([Django's security policy][django-security-policy]).
+
+This package sits on Django, Strawberry and graphql-core and is no more secure than they are. What it guarantees beyond them — a bounded raw list, per-operation isolation of its own extensions, an error masked for the right operation — it states as its own; [`../GOAL.md`][goal] owns the boundary these rows are read against.
+
 ### What the package already defaults to safe
 
 Verify these on the deployed endpoint rather than configuring them; the two SDL rows read the `manage.py export_schema` output. They hold for the package surfaces, not for plain Strawberry: masking and the operation budget are installed by `DjangoSchema`, the body and UTF-8 boundaries by `DjangoGraphQLView` / `AsyncDjangoGraphQLView`, and the handshake and revalidation rows by the package router with its default consumer.
@@ -715,9 +733,10 @@ A cache-keyed counter is a floor, not a ceiling: it resets on eviction and count
 `DjangoDebugExtension` captures an operation's SQL and raised resolver exceptions into `extensions.debug`. Pass the **class**, not an instance, so Strawberry constructs a fresh one per operation and its capture state stays operation-local:
 
 ```python
+from django_strawberry_framework import DjangoSchema, strawberry_config
 from django_strawberry_framework.extensions import DjangoDebugExtension
 
-schema = strawberry.Schema(
+schema = DjangoSchema(
     query=Query,
     config=strawberry_config(),
     extensions=[lambda: _optimizer, DjangoDebugExtension],
@@ -892,4 +911,5 @@ django-strawberry-framework = { path = "../django-strawberry-framework", editabl
 <!-- External -->
 [django-csrf]: https://docs.djangoproject.com/en/5.2/howto/csrf/
 [django-deploy-checklist]: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+[django-security-policy]: https://docs.djangoproject.com/en/5.2/internals/security/#code-under-test-must-feasibly-exist-in-a-django-project
 [django-test-client-csrf]: https://docs.djangoproject.com/en/5.2/topics/testing/tools/#the-test-client

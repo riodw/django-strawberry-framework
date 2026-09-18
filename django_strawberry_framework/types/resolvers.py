@@ -570,9 +570,9 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
                     # consumer subclass's own attribute access for the value the
                     # bound is then applied to. It is normalized first, so the
                     # rows come out of Django's own slot on an object this
-                    # package owns - or the subclass is rebuilt and answers no
-                    # cached rows at all, which is one extra query and a bound
-                    # that holds.
+                    # package owns, and a rebuilt subclass carries those same
+                    # rows onto the rebuild - so the prefetched path costs no
+                    # query whichever class the relation manager built.
                     cached = normalized_row_source(cached)
                     result_cache = materialized_rows(cached)
                     source = result_cache if result_cache is not None else cached

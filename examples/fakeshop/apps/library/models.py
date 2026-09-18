@@ -237,8 +237,16 @@ class Issue(models.Model):
         return self.title
 
 
+class LoanQuerySet(models.QuerySet):
+    """A no-op project queryset used by the real ``Loan`` manager declaration."""
+
+
 class Loan(models.Model):
     """A checkout record connecting a patron to a book."""
+
+    # ``as_manager()`` keeps this project-only queryset out of migration state while
+    # exercising the public Django manager shape through every real loan relation.
+    objects = LoanQuerySet.as_manager()
 
     book = models.ForeignKey(
         Book,

@@ -338,7 +338,7 @@ Every factory accepts `permission_classes=` through the standard `check_permissi
 
 JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions).
 
-Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) factory on their `strawberry.Schema(...)` call: `strawberry.Schema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])` (the optimizer is a module-level singleton wrapped in a factory — see [`DjangoOptimizerExtension`](#djangooptimizerextension)). Direct `BigInt` annotations (`category: BigInt`, `@strawberry.field def big_id(self) -> BigInt: ...`) continue to work unchanged at the schema-declaration site; the registration path changes, not the symbol. The migration applies to any schema that resolves to `BigInt` — including [`DjangoType`](#djangotype) schemas whose fields are backed by `BigIntegerField` or `PositiveBigIntegerField` (resolved to `BigInt` by the [`Specialized scalar conversions`](#specialized-scalar-conversions) converter table) even when the consumer never imports or annotates `BigInt` directly.
+Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) factory on their schema call: `DjangoSchema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])` (the optimizer is a module-level singleton wrapped in a factory — see [`DjangoOptimizerExtension`](#djangooptimizerextension)). Direct `BigInt` annotations (`category: BigInt`, `@strawberry.field def big_id(self) -> BigInt: ...`) continue to work unchanged at the schema-declaration site; the registration path changes, not the symbol. The migration applies to any schema that resolves to `BigInt` — including [`DjangoType`](#djangotype) schemas whose fields are backed by `BigIntegerField` or `PositiveBigIntegerField` (resolved to `BigInt` by the [`Specialized scalar conversions`](#specialized-scalar-conversions) converter table) even when the consumer never imports or annotates `BigInt` directly.
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [Specialized scalar conversions](#specialized-scalar-conversions).
 
@@ -675,7 +675,7 @@ Non-Relay `list[T]` **root Query field**. The smallest entry point for migrants 
 
 **Ordering.** A `DjangoListField` does **not** guarantee row order unless the query supplies an `orderBy` argument or the model declares `Meta.ordering`: the default resolver appends no tiebreaker, so the response array order is database-dependent. This is deliberately asymmetric with [`DjangoConnectionField`](#djangoconnectionfield), which appends a pk tiebreaker because its positional cursors require a total order; a flat list has no cursors an unstable order could invalidate.
 
-**Row bound (`0.0.14`, spec-047).** Every `DjangoListField` is bounded: the request's [execution resource policy](#execution-resource-policy) supplies `max_list_rows` whether or not the field says anything, and `max_rows=` narrows it further for this field. There is no unbounded spelling - `max_rows=None` means "the policy governs", and a non-positive value raises [`ConfigurationError`](#configurationerror) at the line that constructed the field. `trusted_max_rows=True` is the only way a field can be wider than the policy, and it is the literal `True`: the flag must be an exact boolean at the line that constructed the field, and no merely truthy value widens anything. The two coordinates are capped asymmetrically: client `limit` is capped by `max_list_rows` unless the field declares `trusted_max_rows=True`, which lets a field-declared `max_rows` widen it past the request policy, while client `offset` is capped by `max_list_rows` with no widening spelling at all. Both caps represent accepted-coordinate ceilings on returned rows and skips, not total physical database rows scanned. The bound is applied by SLICING and only AFTER the [`get_queryset`](#get_queryset-visibility-hook) hook and any consumer-resolver post-processing, so a `QuerySet` carries it into SQL as a `LIMIT` / `OFFSET` while the hook still composes onto an unsliced source.
+**Row bound (`0.0.14`, spec-047).** Every `DjangoListField` is bounded: the request's [execution resource policy](#execution-resource-policy) supplies `max_list_rows` whether or not the field says anything, and `max_rows=` narrows it further for this field. There is no unbounded spelling - `max_rows=None` means "the policy governs", and a non-positive value raises [`ConfigurationError`](#configurationerror) at the line that constructed the field. `trusted_max_rows=True` is the only way a field can be wider than the policy, and it is the literal `True`: the flag must be an exact boolean at the line that constructed the field, and no merely truthy value widens anything. The two coordinates are capped asymmetrically: client `limit` is capped by `max_list_rows` unless the field declares `trusted_max_rows=True`, which lets a field-declared `max_rows` widen it past the request policy, while client `offset` is capped by `max_list_rows` with no widening spelling at all. Both caps represent accepted-coordinate ceilings on returned rows and skips, not total physical database rows scanned. The bound is applied by SLICING and only AFTER the [`get_queryset`](#get_queryset-visibility-hook) hook and any consumer-resolver post-processing, so an unevaluated `QuerySet` carries it into SQL as a `LIMIT` / `OFFSET` while the hook still composes onto an unsliced source. A source whose rows are already fetched - a materialized sequence, a warm prefetch cache, or a queryset the consumer evaluated - is windowed in Python from the rows it holds instead, with no further query (`0.0.15`, spec-050).
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [`OrderSet`](#orderset) · [`ListArgumentError`](#listargumenterror) · [List offset order precondition](#list-offset-order-precondition) · [Async queryset completion adapter](#async-queryset-completion-adapter).
 
@@ -748,8 +748,10 @@ Root batch refetch field — the Relay-spec `nodes(ids: [ID!]!): [Node]!` siblin
 Strawberry schema extension that translates selected GraphQL fields into Django ORM optimization calls. Opt-in at Strawberry schema construction time:
 
 ```python
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema
+
 _optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
+schema = DjangoSchema(query=Query, extensions=[lambda: _optimizer])
 ```
 
 Use a module-level singleton wrapped in a factory — that preserves the instance-bound [Plan cache](#plan-cache) (Strawberry runs the callable per request and gets the same instance back) and emits no deprecation warning (the entry is a callable, not an instance).
@@ -933,17 +935,17 @@ class Query:
 
 Synchronization point that resolves pending relation annotations and applies `strawberry.type(cls, ...)` decoration to every collected `DjangoType`. Required because Strawberry resolves field annotations eagerly at decoration time, while Django relations may target a `DjangoType` whose module hasn't been imported yet.
 
-Call it once during single-threaded schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed:
+Call it once during single-threaded schema setup, after every module that defines `DjangoType` classes has been imported and before the schema is constructed:
 
 ```python
-from django_strawberry_framework import finalize_django_types
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema, finalize_django_types
 import apps.products.schema  # registers DjangoType subclasses
 import apps.library.schema
 
 finalize_django_types()
 
 _optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
+schema = DjangoSchema(query=Query, extensions=[lambda: _optimizer])
 ```
 
 The phase order is a build contract:
@@ -1888,7 +1890,9 @@ The rule exists because package tests under root `tests/` call `registry.clear()
 
 **Status:** shipped (`0.0.14`).
 
-The framework-owned plain `django.db.models.QuerySet` the [visibility boundary](#visibility-boundary) rebuilds from a consumer source or `get_queryset` hook result. The consumer object is treated as untrusted query STATE: its `__dict__` is read through `object.__getattribute__` (no descriptor or `__getattribute__` can run code or lie), the query graph is validated, and a fresh `QuerySet` is constructed from the validated `sql.Query`, iterable class, routing, hints, and prefetch metadata. The consumer's subclass identity — its executable override dispatch, the leak vector — is deliberately dropped, and `_result_cache` / `_known_related_objects` are never copied forward, so no cached or synthetic row and no shadowed `.all()` / `.filter()` / `.first()` / `.__aiter__()` / `Query.chain` can cross the boundary. Implemented by [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets].
+**Status:** shipped (`0.0.14`).
+
+The framework-owned plain `django.db.models.QuerySet` the [visibility boundary](#visibility-boundary) rebuilds from a consumer source or `get_queryset` hook result. The consumer object is treated as untrusted query STATE: its `__dict__` is read through `object.__getattribute__` (no descriptor or `__getattribute__` can run code or lie), the query graph is validated, and a fresh `QuerySet` is constructed from the validated `sql.Query`, iterable class, routing, hints, and prefetch metadata. The consumer's subclass identity — its executable override dispatch, the leak vector — is deliberately dropped, and `_known_related_objects` is never copied forward. Visibility and order seals therefore drop `_result_cache` and preserve query provenance by rebuilding from query state; they do not admit cached or synthetic rows, and no shadowed `.all()` / `.filter()` / `.first()` / `.__aiter__()` / `Query.chain` can cross the boundary. The final raw-list seal is different: its policy may carry an already-fetched exact built-in `list` so the package-owned window is applied without a second query, while refusing any other cache container. That carry guarantees the accepted window/ceiling, not row provenance — application Python is trusted under the [trust boundary][goal], and the package does not certify where those in-process rows came from. Implemented by [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets].
 
 **See also:** [visibility boundary](#visibility-boundary) · [prove-then-clone AST trust](#prove-then-clone-ast-trust) · [`get_queryset` visibility hook](#get_queryset-visibility-hook).
 
@@ -1969,13 +1973,13 @@ The engine contract [`DjangoDebugExtension`](#djangodebugextension) rides. Straw
 
 **Status:** shipped (`0.0.7`).
 
-Factory returning a [`StrawberryConfig`](https://strawberry.rocks) pre-populated with the package's `scalar_map` — the registration path consumers use to bind package-defined scalars (today: [`BigInt`](#bigint-scalar)) into their `strawberry.Schema(...)` call.
+Factory returning a [`StrawberryConfig`](https://strawberry.rocks) pre-populated with the package's `scalar_map` — the registration path consumers use to bind package-defined scalars (today: [`BigInt`](#bigint-scalar)) into their schema call.
 
 ```python
-from django_strawberry_framework import strawberry_config
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema, strawberry_config
 
 _optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(
+schema = DjangoSchema(
     query=Query,
     config=strawberry_config(),
     extensions=[lambda: _optimizer],

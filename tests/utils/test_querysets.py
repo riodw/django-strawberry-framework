@@ -741,15 +741,15 @@ def test_foreign_query_class_result_fails_closed():
         apply_type_visibility_sync(hook, Category.objects.all(), info=None)
 
 
-def test_unresolved_deferred_filter_subclass_result_fails_closed():
-    """A SUBCLASS result carrying an unresolved ``_deferred_filter`` cannot be sealed.
+def test_a_subclass_result_with_a_pending_deferred_filter_seals_with_it_baked():
+    """A SUBCLASS result carrying a well-formed pending ``_deferred_filter`` seals.
 
-    A pending deferred filter holds a predicate not yet baked into the query.
-    Resolution is gated on ``type(candidate) is models.QuerySet`` exactly, so a
-    SUBCLASS is left unresolved and fails closed at the unresolved-filter check --
-    the seal never bakes a subclass's pending predicate. Only an EXACT plain
-    ``QuerySet`` is resolved (see
-    ``test_exact_queryset_pending_deferred_filter_is_resolved``).
+    Django's related-manager machinery leaves the pending ``(negate, args,
+    kwargs)`` tuple on whatever class the model's manager builds its querysets
+    from, so the candidate's class says nothing about the state. The rebuild
+    resolves it the same way for every candidate -- onto the detached clone,
+    through the unbound ``sql.Query.add_q`` -- and the predicate lands in the
+    compiled SQL of a plain framework-owned queryset.
     """
 
     class _DeferredSub(models.QuerySet):
@@ -758,8 +758,11 @@ def test_unresolved_deferred_filter_subclass_result_fails_closed():
     result = _DeferredSub(model=Category)
     result._deferred_filter = (False, (), {"name": "later"})
     hook = _sync_hook_type(result)
-    with pytest.raises(ConfigurationError, match="cannot be sealed"):
-        apply_type_visibility_sync(hook, Category.objects.all(), info=None)
+    sealed = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
+    assert type(sealed) is models.QuerySet
+    sql_str, params = sealed.query.get_compiler(using="default").as_sql()
+    assert "name" in sql_str
+    assert "later" in params
 
 
 def test_exact_queryset_pending_deferred_filter_is_resolved():
@@ -914,7 +917,83 @@ def test_malformed_deferred_filter_fails_closed_instead_of_leaking():
     result._deferred_filter = (False, (), {"nonexistent_field": 1})
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
-    assert defect == ("untrusted", "QuerySet carries a deferred filter that cannot be resolved")
+    assert defect == ("untrusted", "QuerySet carries malformed deferred-filter state")
+
+
+class _PendingFilterQuerySet(models.QuerySet):
+    """A project's own queryset class with no overrides, the shape a manager builds."""
+
+
+class _ForeignDeferredValue:
+    """A deferred-filter value that is neither inert nor a genuine Django expression."""
+
+
+@pytest.mark.parametrize(
+    ("deferred", "detail"),
+    [
+        ((False, ()), "_PendingFilterQuerySet deferred filter is malformed"),
+        ((1, (), {"name": "x"}), "_PendingFilterQuerySet deferred filter negate is a int"),
+        ((False, (), []), "_PendingFilterQuerySet deferred filter kwargs is a list"),
+        (
+            (False, (), {"name": _ForeignDeferredValue()}),
+            "_PendingFilterQuerySet deferred filter 'name' is a _ForeignDeferredValue",
+        ),
+    ],
+    ids=[
+        "wrong-arity",
+        "negate-not-a-bool",
+        "kwargs-not-a-dict",
+        "foreign-value",
+    ],
+)
+def test_a_subclass_deferred_filter_state_django_never_writes_fails_closed(deferred, detail):
+    """The pending STATE's shape is what fails closed, on a subclass as on any candidate.
+
+    A pending predicate is baked for every class, so each of these shapes is
+    reachable through a project queryset class and each must still be refused
+    with the typed defect rather than resolved.
+    """
+    candidate = _PendingFilterQuerySet(model=Category)
+    candidate._deferred_filter = deferred
+    sealed, defect = _seal_or_defect(candidate, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", detail)
+
+
+def test_a_deferred_filter_negate_that_is_not_a_bool_fails_closed_on_an_exact_queryset():
+    """``negate`` is truth-tested to decide negation, so it is pinned to an exact ``bool``.
+
+    ``~predicate if negate else predicate`` is the one place inside the bake that
+    consults a value's own truthiness, and Django writes an exact ``bool`` in
+    that slot, so every other shape is refused before the predicate is built.
+    """
+    candidate = Category.objects.all()
+    candidate._deferred_filter = (1, (), {"name": "later"})
+    sealed, defect = _seal_or_defect(candidate, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet deferred filter negate is a int")
+
+
+def test_a_deferred_filter_negate_is_refused_without_reaching_its_own_bool():
+    """The exact-``bool`` proof precedes the truth test rather than accompanying it.
+
+    An object planted in the slot would otherwise decide through its own
+    ``__bool__`` whether the relation predicate is negated, which is consumer
+    dispatch inside a helper that runs genuine Django code alone.
+    """
+    dispatched = []
+
+    class _NegateSpy:
+        def __bool__(self):  # pragma: no cover - must never run
+            dispatched.append(True)
+            return True
+
+    candidate = Category.objects.all()
+    candidate._deferred_filter = (_NegateSpy(), (), {"name": "later"})
+    sealed, defect = _seal_or_defect(candidate, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "QuerySet deferred filter negate is a _NegateSpy")
+    assert dispatched == []
 
 
 @pytest.mark.django_db
@@ -5057,6 +5136,66 @@ def test_seal_require_unevaluated():
     sealed, defect = _seal_or_defect(qs_eval, Category, None, policy_uneval)
     assert sealed is None
     assert defect == ("evaluated", "the result cache is populated")
+
+
+class _RowList(list):
+    """A ``list`` subclass, whose own ``__getitem__`` would answer the window."""
+
+
+class _NotASequence:
+    """A populated result cache Django never builds."""
+
+
+@pytest.mark.django_db
+def test_seal_carry_result_cache_carries_the_rows_the_source_holds():
+    """Under ``carry_result_cache`` the fetched rows travel onto the rebuild.
+
+    The list object itself travels - not a copy - so the window reads the rows
+    the source already holds and the rebuild costs no query. Every other policy
+    leaves the rebuild unevaluated.
+    """
+    qs = Category.objects.all()
+    list(qs)
+    held = object.__getattribute__(qs, "__dict__")["_result_cache"]
+
+    sealed, defect = _seal_or_defect(
+        qs,
+        Category,
+        None,
+        _SealPolicy(carry_result_cache=True),
+    )
+    assert defect is None
+    assert sealed._result_cache is held
+
+    unchanged, defect = _seal_or_defect(qs, Category, None, _DEFAULT_SEAL_POLICY)
+    assert defect is None
+    assert unchanged._result_cache is None
+
+
+@pytest.mark.parametrize(
+    "cache",
+    [_RowList(), (), _NotASequence()],
+    ids=["list-subclass", "tuple", "foreign-object"],
+)
+def test_seal_carry_result_cache_refuses_a_cache_that_is_not_an_exact_list(cache):
+    """A cache that is not an exact ``list`` brings its own subscript, so it is refused.
+
+    The carried rows are windowed by subscripting them, and at an exact ``list``
+    that subscript is the interpreter's own. Every case here is empty or falsy,
+    so the refusal is keyed on the slot being populated rather than on
+    truthiness.
+    """
+    qs = Category.objects.all()
+    qs._result_cache = cache
+
+    sealed, defect = _seal_or_defect(
+        qs,
+        Category,
+        None,
+        _SealPolicy(carry_result_cache=True),
+    )
+    assert sealed is None
+    assert defect == ("untrusted", f"QuerySet._result_cache is a {type(cache).__name__}")
 
 
 def test_visibility_defect_messages():

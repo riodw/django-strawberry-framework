@@ -1678,11 +1678,12 @@ _BRANCH_ORDER_SHAPE_PREFIX = (
 
 
 class _DeferredFilterQuerySet(models.QuerySet):
-    """A queryset SUBCLASS, which is what makes an unresolved deferred filter untrusted.
+    """A project queryset class, used here to carry a deferred filter Django never writes.
 
-    Django leaves a ``_deferred_filter`` only on an EXACT plain queryset, so a
-    subclass carrying one is not that artifact and the seal cannot faithfully
-    rebuild the predicate it names.
+    A PENDING predicate is ordinary: Django's related-manager machinery leaves
+    one on every relation queryset whatever class built it, and the seal bakes
+    it. What cannot be faithfully rebuilt is a deferred-filter STATE outside the
+    exact shape Django writes, which is what this class is planted with.
     """
 
 
@@ -1717,7 +1718,9 @@ def _override_untrusted(
     info,
 ):
     candidate = _DeferredFilterQuerySet(model=library_models.Branch)
-    candidate._deferred_filter = (False, (), {"name": "A"})
+    # ``negate`` decides whether the predicate is inverted and is truth-tested to
+    # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
+    candidate._deferred_filter = (1, (), {"name": "A"})
     return candidate
 
 
@@ -1793,10 +1796,10 @@ _MALFORMED_APPLY_SYNC_ROWS = (
         0,
     ),
     (
-        "unresolved-deferred-filter",
+        "malformed-deferred-filter",
         _override_untrusted,
         _BRANCH_ORDER_SHAPE_PREFIX + "untrusted defect",
-        ("carries an unresolved deferred filter",),
+        ("deferred filter negate is a int",),
         0,
     ),
 )

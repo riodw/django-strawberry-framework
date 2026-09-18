@@ -3,13 +3,11 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: the final gate is GREEN at HEAD `207c7328`, which carries the tenth round's
-remediation - default 7868, sharded 7885, both at 100.00% package coverage, focused floor
-463. Those are the only gate figures this plan states; `## Final gate record` below owns the
-scope, the commands and the standing evidence. **That gate covers the tree it names and
-nothing later.** Every change on a descendant of it is ungated at the time of writing, and
-the card's delivery gate is owed as one same-tree full, sharded and declared-floor run
-rather than as another figure beside the one above:
+Status: WIP. The prior close record is superseded because it described a tree that is not the
+current candidate and treated a future maintainer commit as an existing identity. No current
+default, sharded, supported-floor, or adversarial-review result is evidence for this checkout.
+The candidate and evidence-only follow-up protocol in spec Decision 22 must run before the card
+can close. What the gate covers, beyond the five slices:
 
 - the policy-authority remediation - the object every bound is read from is no longer
   reachable from any consumer-visible name, a policy subclass is canonicalized at schema
@@ -126,66 +124,72 @@ generated view moves.
         tracked-path constants after the path is in the index so governance sees the file.
   - [x] Add the new suite and its shared-helper exemption to
         `examples/fakeshop/test_query/README.md`.
-- [x] **Slice 5 — documentation fold-in**
+- [ ] **Slice 5 — documentation fold-in**
   - [x] Update the list-field docstring and the shipped-surface descriptions in
         `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, and `README.md` where the new
         arguments are enumerated.
   - [x] Update `ResourcePolicy` and bounding-helper docstrings to distinguish returned/skip
         ceilings from total database rows scanned.
-  - [x] Update the KANBAN database when the implementation card closes; `TODAY.md` is
-        deliberately not edited (no waiting entry exists to move - see Doc updates).
+  - [ ] Update the KANBAN database and the current-checkout statements in `TODAY.md` when the
+        candidate implementation commit carries the final board transition; the pre-candidate
+        generated outputs and milestone statements remain WIP.
   - [x] Leave the version literal, version assertion, package-version glossary row, release
         wording, and `CHANGELOG.md` to card 053's joint cut; `pyproject.toml` and `uv.lock`
         have no duplicate root-package version to bump.
 - [x] **Cross-slice integration pass (Worker 1)**
-- [x] **Final test-run gate (Worker 1)** — run on ONE tree, the working tree at `ab98d240`;
-      figures in `## Final gate record` below
+- [ ] **Final exact-commit gate** — the maintainer must create the candidate implementation
+      commit, then run the default, sharded, supported-floor, structural and documentation gates
+      on that exact candidate.
 
-## Final gate record (folded in from `bld-final.md` before its deletion)
+## Final gate record
 
-`docs/builder/bld-final.md` and the six per-slice and integration artifacts were deleted at
-close on the maintainer's instruction; this plan is the only surviving artifact of the cycle.
-All seven are readable at commit `63a132be` (`git show 63a132be:docs/builder/<name>`).
+No gate is currently recorded. The prior close evidence is superseded because it did not identify
+the tree that the full suites and review actually covered, and a tracked record cannot name the
+commit that contains the record itself.
 
-The ten rounds of finding-by-finding remediation, the superseded command tables and the
-gate narratives are NOT restated here: every fix they describe is in the commit that landed
-it, in one of the spec's five homes, or in the code's own docstrings. What follows is what
-nothing else in the tree records.
+The maintainer's next close uses two commits:
 
-**The gate, measured.** One tree: the working tree at HEAD `207c7328`, carrying the tenth
-round's production changes (the exact-built-in domain extended from the policy's stored bounds
-to the consumer-written deadline mirror, an upload's reported size, a variable-supplied page
-bound and every amount charged against a bound) on top of the ninth's (the operation budget
-moved off the request context onto an armed `ContextVar`, the bound domain narrowed to exact
-built-in types, the non-finite deadline refusal) and the live-node split that gave each bundled
-claim its own node id.
+1. The candidate implementation commit contains all production and test changes, shipped docs,
+   the final board/database transition, the spec status, and generated outputs. The current
+   pre-candidate checkout stays WIP; the candidate atomically carries the board's DONE state.
+   Its commit id is the exact tree for every default, sharded, supported-floor, structural, link,
+   citation, tracked-path and adversarial-review result.
+2. After a green gate and a review that admits no finding under Decision 20, an evidence-only
+   follow-up commit changes this build record alone. Its parent must be the gated candidate; the
+   record must name that parent, list the commands and results, and say that the follow-up's
+   structural checks do not turn it into the full-suite tree.
 
-| Tier | Command | Result |
-|---|---|---|
-| format / lint | `uv run ruff format .`, `uv run ruff check --fix .` | clean |
-| structural + link | `uvx pre-commit run --files <changed>` | 6 hooks Passed |
-| citations | `scripts/check_citations.py --check` | 1010 resolve (832 in 441 `.py`, 178 in `KANBAN.md`) |
-| default | `uv run pytest` | **7868 passed / 40 skipped / 100.00%** |
-| sharded | `FAKESHOP_SHARDED=1 uv run pytest` | **7885 passed / 37 skipped / 100.00%** |
-| floor | focused seam scope, Python 3.10.19 / Django 5.2.16 / strawberry 0.316.0 | **463 passed** - not the declared floor scope |
+This pre-candidate checkout remains WIP until the candidate commit exists. The candidate's DONE
+board state is not treated as closure evidence until the exact-tree gate, review and evidence-only
+follow-up are complete. No result from another tree is carried forward as current evidence.
 
-That floor row is a focused re-check of the seam this round touched - the resource-policy
-budget and the two list-field surfaces that read it: `tests/test_resource_policy.py`,
-`tests/test_list_field.py`, `examples/fakeshop/test_query/test_list_field_api.py`,
-`examples/fakeshop/test_query/test_list_field_async_api.py`. Four of the seventeen paths
-declared under `### Floor-verification scope`, so by that section's own rule it is not this
-card's floor verification, and the row above does not stand in for one. The declared scope
-last ran green at HEAD `96b9e047`, before the rounds that followed it; a gate graded at one
-HEAD answers nothing about a later one, so the card's floor verification is OWED at the
-delivery HEAD alongside the full and sharded gates, exactly as the spec's `Status:` line
-records. What the focused row does answer is the load-bearing floor question for this seam:
-whether the armed budget survives the `sync_to_async` hand-off on 3.10, since a per-thread
-authority would read back empty there and fall open to the context; the row asserting it passes
-at the floor.
+### Board database state
 
-Superseded figures are dropped rather than kept beside the ones above: default 7775 / sharded
-7792 / floor 2397 at HEAD `96b9e047`, and default 7849 / sharded 7866 / floor 444 at HEAD
-`ab98d240`. Each described a tree that no longer exists.
+The tracked SQLite file is one binary, so Git cannot stage card-owned tables separately from a
+concurrent owner's rows. The earlier reconstruction from `HEAD` therefore was not a safe carve:
+it removed the concurrent library data. The workspace now carries that data back in the real
+tracked file, rather than leaving the only copy in `/private/tmp`:
+
+- `library_book`: 20 rows and sequence `23`;
+- `library_branch`: 7 rows and sequence `10`;
+- `library_loan`: 16 rows and sequence `16`;
+- `library_patron`: 6 rows and sequence `6`;
+- `library_shelf`: 7 rows and sequence `8`.
+
+The concurrent timestamp-only changes in `glossary_glossaryspecmention` and
+`kanban_cardglossaryterm` are present as well. Card 050's own glossary bodies remain in
+`glossary_glossaryterm` ids `442`, `455`, `459`, `465`, `507`, and `553`; its board state remains
+WIP (`kanban_card` id `73`, status WIP, and `kanban_carditem` id `1519`, incomplete). The merged
+database passes `PRAGMA integrity_check` and `PRAGMA foreign_key_check`; a semantic comparison
+with the dirty source differs only in those two deliberate WIP fields.
+
+This is a WIP workspace state, not a disentangled candidate. Until the concurrent database owner
+lands the library change or provides a coordinated merge point, card 050 cannot safely commit
+`examples/fakeshop/db.sqlite3` as its own candidate input: the same binary would absorb both
+owners' rows, even though the board transition and glossary edits are card-owned. The generated
+`KANBAN.md`, `KANBAN.html`, and `docs/GLOSSARY.md` therefore remain WIP outputs to regenerate at
+the coordinated candidate step. Card 050's final DONE transition belongs in the later candidate
+commit; closure is recognized only in the evidence-only follow-up described above.
 
 ### Floor-verification scope
 
@@ -286,6 +290,113 @@ Attributing them took a method worth keeping. Run the failing selection in a det
 without it the editable install resolves the package back to the dirty main checkout and the
 comparison measures the tree you were trying to exclude.
 
+
+## Close cycle (Decision 22)
+
+Opened 2026-09-17 against the spec's Decision 22, which names the owed work as finite: the
+evaluation-state carry of Decision 8 with its query-count controls at both tiers, the Slice 5
+statements of Decisions 20 and 21 with the shipped examples corrected, and the widened floor
+scope above (already declared). The cycle runs the builder worker cycle per cohort, then one gate
+on one identified tree, then one review of that tree under Decision 20, then the record.
+
+- Session scratchpad `<scratch>`:
+  `/private/tmp/claude-501/-Users-riordenweber-projects-django-strawberry-framework/87545721-0f0a-4259-b47e-4e5f7c9a1695/scratchpad`
+- Pre-flight: index empty; no `docs/builder/bld-050-*` artifact exists; worker memory seeded at
+  `docs/builder/worker-memory/050-worker-{0,1,2,3}.md`; temp tests under
+  `docs/builder/temp-tests/050/`.
+- Baseline-dirty out-of-scope files at the start of this close cycle (concurrent session; workers
+  neither edit nor revert):
+  `START.md`, `docs/bug_hunt/HUNT.md`, `docs/bug_hunt/bug_hunt-0_0_15.md` (deleted),
+  `docs/bug_hunt/bug_hunt-0_0_1555.md`, `docs/bug_hunt/worker-1.md`, `docs/bug_hunt/worker-2.md`,
+  `docs/dry/DRY.md`, `docs/dry/export_dry_review.py`, `docs/dry/worker-0.md`,
+  `docs/dry/worker-1.md`, `docs/dry/worker-2.md`, `docs/dry/dry-0_0_15.md`,
+  `docs/dry/dry-file-utils__querysets.md`, `docs/feedback.md`, `examples/fakeshop/db.sqlite3`
+  (library seed rows differed from HEAD; kanban and glossary tables were identical to HEAD before
+  the card-owned carve recorded above),
+  `tests/test_export_dry_review.py`; joined mid-cycle by the same session: `docs/GLOSSARY.md`,
+  `docs/TREE.md`, `examples/fakeshop/test_query/README.md`,
+  `examples/fakeshop/test_query/test_debug_toolbar_api.py`, `tests/middleware/__init__.py`,
+  `tests/middleware/test_debug_toolbar.py`. A concurrent DRY cycle names `utils/querysets.py`: a
+  builder confirms `git diff HEAD -- <path>` is empty for every file it owns before its first
+  edit and stops if it is not.
+- Ownership partition (concurrent dispatch licensed):
+  - **Cohort A, row carry** - `django_strawberry_framework/utils/querysets.py`,
+    `django_strawberry_framework/resource_policy.py`,
+    `django_strawberry_framework/types/resolvers.py`, `tests/test_resource_policy.py`,
+    `tests/utils/test_querysets.py`, `examples/fakeshop/apps/library/models.py`,
+    `examples/fakeshop/test_query/test_resource_policy_api.py`,
+    `examples/fakeshop/test_query/test_library_api.py`,
+    `examples/fakeshop/test_query/test_relations_async_api.py`,
+    `examples/fakeshop/test_query/test_list_field_api.py`,
+    `examples/fakeshop/test_query/test_list_field_async_api.py`,
+    `django_strawberry_framework/permissions.py` (the last three folded in at the plan
+    revision: the seal's admission change flips their deferred-filter rows and one docstring
+    clause, and no other cohort owns them), artifact `docs/builder/bld-050-close-row_carry.md`.
+  - **Cohort B, trust docs** - `docs/README.md`, `README.md`,
+    `django_strawberry_framework/schema.py` (the `DjangoSchema` class docstring only, folded in
+    at re-review: it is the last home of the authority-subclass qualifier the cohort retired),
+    artifact `docs/builder/bld-050-close-trust_docs.md`.
+  - Spec, rationale and this plan: Worker 1 (spec, rationale) and Worker 0 (plan) only.
+- Hot-path declaration: Cohort A touches the generated many-side relation resolver and the
+  raw-list seam (per parent row); the number owed is the query count for a prefetched
+  `Manager.from_queryset` relation before and after, beside Django's own manager on the same
+  request shape. Cohort B: none.
+- Floor-verification scope: `### Floor-verification scope` above, in full, owned by the final
+  gate (Worker 0 runs it on the identified tree); Cohort A additionally re-runs
+  `tests/test_resource_policy.py` and `tests/utils/test_querysets.py` at the floor in its build
+  pass.
+- One cohort at a time per artifact; DRY first (`BUILD.md`).
+
+### Close-cycle checklist
+
+- [x] **Cohort A - evaluation-state carry at the raw-list seam** (spec Decision 8, Slice 3 row
+      "The raw-list seam windows a source that arrives evaluated", test plan "The raw-list row
+      source", DoD "A source that arrives evaluated"); artifact
+      `docs/builder/bld-050-close-row_carry.md`.
+- [x] **Cohort B - trust and extension contract in the shipped docs** (spec Decisions 20 and
+      21, Slice 5 rows "State the trust contract" and "Correct the executable examples", DoD
+      "The shipped docs state the trust contract"); artifact
+      `docs/builder/bld-050-close-trust_docs.md`.
+- [x] **Spec reconciliation and final verification (Worker 1)** - five homes agree; rationale
+      change record; both cohort artifacts are superseded historical records.
+- [ ] **Gate on one candidate implementation commit** - default suite at `fail_under = 100`,
+      sharded suite, the twenty-three-path floor scope, hooks, citations, tracked-path constants,
+      `manage.py check`, and `makemigrations --check --dry-run`.
+- [ ] **One review of that exact candidate tree under Decision 20** - record the review conclusion
+      only after the candidate gate is complete; a finding meeting the three conditions re-loops.
+- [ ] **Evidence-only follow-up and card** - the candidate carries card 050's final DONE state in
+      the board DB and generated exports; the follow-up changes this build record alone, names
+      its candidate parent, and only then recognizes closure.
+
+## Closing record
+
+No closing gate table exists yet. The close-cycle artifacts remain available as superseded history;
+they are not evidence for the candidate or its evidence-only follow-up.
+
+### Deferred work catalog
+
+Every item below left the card under spec Decision 20 or Decision 22 with a named owner;
+none is a Definition-of-done row of this card.
+
+- **Connection-field sidecar results are not re-sealed** - `connection.py::_pipeline_sync` /
+  `_pipeline_async` apply `FilterSet.apply_*` and `OrderSet.apply_*` with no routing snapshot and
+  no post-apply seal, where `list_field.py` does both; a hook's result contract does not depend
+  on which field called it, and the row it breaks is spec-030 Decision 7's "later steps can only
+  narrow". Owner: `maintainer`, as a new card against that row (rationale, Decision 20 entry).
+- **An exact `QuerySet` carrying a foreign `_result_cache` escapes the raw-list ceiling** - only
+  in-process application Python can write that slot, so the wire-input condition fails; a
+  robustness row. Owner: `maintainer`, `BACKLOG.md` (`bld-050-close-row_carry.md`, final
+  verification).
+- **Retired "unresolved deferred filter" vocabulary** was identified by the historical review at
+  the first-party visibility messages and module boundary. The live sites now name the refused
+  condition as **malformed deferred-filter state**; the archived
+  `docs/SPECS/spec-045-visibility_boundary-0_0_14.md` and
+  `docs/SPECS/spec-034-permissions-0_0_10.md` quotations remain historical records. The seal
+  admits Django's well-formed pending predicate and refuses only malformed state.
+- **Archived `docs/SPECS/spec-047-resource_policy-0_0_14.md`** states the raw-list slice as a SQL
+  `LIMIT` without the evaluated-source case; a dated `0.0.14` record. Owner: `maintainer`.
+- **`_UNRECOMPOSED_CHILD_POLICY` has zero production readers** - an existence question for the
+  next DRY cycle. Owner: `maintainer`.
 
 <!-- LINK DEFINITIONS -->
 

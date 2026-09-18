@@ -56,7 +56,7 @@ from typing import Any
 
 import pytest
 import strawberry
-from apps.products.models import Category
+from apps.products.models import Category, Item
 from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
 from django.db.models import QuerySet
@@ -105,7 +105,7 @@ from django_strawberry_framework.resource_policy import (
     validate_trusted_flag,
 )
 from django_strawberry_framework.schema import _consumer_extension_entries
-from django_strawberry_framework.utils.querysets import materialized_rows
+from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
 
 #: ``Schema.stream`` landed in strawberry-graphql 0.319.0. Below it the package
 #: has no streamed seam to answer for - ``consumers.py::_StopAwareSchema.stream``
@@ -2162,16 +2162,219 @@ def test_rows_a_source_already_fetched_are_read_from_the_frameworks_own_slot():
 
 @pytest.mark.django_db
 def test_a_queryset_subclass_is_never_asked_what_it_has_already_fetched():
-    """The object whose slice cannot be trusted cannot be trusted for its cache either.
+    """This read is Django's own slot on an exact queryset, so a subclass answers nothing.
 
-    Reading ``_result_cache`` off the relation cache with ``getattr`` is another
+    Reading ``_result_cache`` off the relation cache with ``getattr`` is a
     consumer dispatch point on exactly the value the bound is about to be
-    applied to.
+    applied to. The rows a subclass holds are not lost by the rule: they reach a
+    caller through the rebuild, which carries them onto a queryset this package
+    owns.
     """
     seed_data(3)
     hostile = _EscapingQuerySet(model=Category)
     hostile._result_cache = list(Category.objects.all())
     assert materialized_rows(hostile) is None
+
+
+class _ProjectQuerySet(QuerySet):
+    """A project's own queryset class with no overrides.
+
+    The shape ``QuerySet.as_manager()`` and ``Manager.from_queryset(...)`` put
+    behind a model's default manager, and the one every relation built from such
+    a manager hands the raw-list seam.
+    """
+
+
+class _LyingResultCache:
+    """A populated result cache that is not a list and answers every subscript with everything."""
+
+    def __getitem__(self, key):
+        return list(Category.objects.all())
+
+    def __len__(self):
+        return 50
+
+
+def _evaluated(queryset_cls: type) -> QuerySet:
+    """A source of ``queryset_cls`` that has already fetched its rows."""
+    source = queryset_cls(model=Category)
+    list(source)
+    return source
+
+
+def _held_rows(source: QuerySet) -> list:
+    """The list a source holds, read the way the seal reads it."""
+    return object.__getattribute__(source, "__dict__")["_result_cache"]
+
+
+@pytest.mark.django_db
+def test_an_evaluated_exact_queryset_is_windowed_from_the_rows_it_holds(
+    django_assert_num_queries,
+):
+    """A source that arrives evaluated is windowed from its own rows, not re-queried."""
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = _evaluated(QuerySet)
+    held = _held_rows(source)
+
+    with django_assert_num_queries(0):
+        rows = bounded_rows(source, info)
+
+    assert type(rows) is list
+    assert list(rows) == held[:2]
+    assert [row is held[index] for index, row in enumerate(rows)] == [True, True]
+
+
+@pytest.mark.django_db
+def test_an_evaluated_project_queryset_class_is_windowed_from_the_rows_it_holds(
+    django_assert_num_queries,
+):
+    """The rebuild carries the fetched rows, so a project queryset class costs no query.
+
+    The subclass is rebuilt - that is what makes the window an operation this
+    package owns - and the rows it had already fetched travel onto the rebuild,
+    so the window reads them instead of asking the database a second time.
+    """
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = _evaluated(_ProjectQuerySet)
+    held = _held_rows(source)
+
+    with django_assert_num_queries(0):
+        rebuilt = normalized_row_source(source)
+        rows = bounded_rows(source, info)
+
+    assert type(rebuilt) is QuerySet
+    assert materialized_rows(rebuilt) is held
+    assert type(rows) is list
+    assert list(rows) == held[:2]
+    assert [row is held[index] for index, row in enumerate(rows)] == [True, True]
+
+
+@pytest.mark.django_db
+def test_a_coordinate_window_over_an_evaluated_project_queryset_class_reads_carried_rows(
+    django_assert_num_queries,
+):
+    """The offset window is taken over the carried rows, so it too costs nothing."""
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    source = _evaluated(_ProjectQuerySet)
+    held = _held_rows(source)
+
+    with django_assert_num_queries(0):
+        rows = _windowed_rows(source, info, offset=1, requested_limit=2)
+
+    assert list(rows) == held[1:3]
+    # Identity, not equality: a window that re-queried would answer with equal
+    # rows built from a second fetch, which no count taken around a lazily
+    # sliced queryset can tell apart from this one.
+    assert [row is held[index + 1] for index, row in enumerate(rows)] == [True, True]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_an_evaluated_exact_queryset_is_windowed_from_its_own_rows_when_awaited():
+    """The awaited seam reaches the same window, so it reads the same held rows.
+
+    A query count is not the instrument here: the awaited call runs on the event
+    loop thread while any ORM work would run on a ``sync_to_async`` worker
+    thread, and a capture bound to the calling thread reads empty either way.
+    Row IDENTITY answers the same question without that ambiguity - a second
+    fetch cannot return the objects the source already holds.
+    """
+    await sync_to_async(seed_data)(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = await sync_to_async(_evaluated)(QuerySet)
+    held = _held_rows(source)
+
+    rows = await bounded_rows_async(source, info)
+
+    assert type(rows) is list
+    assert list(rows) == held[:2]
+    assert [row is held[index] for index, row in enumerate(rows)] == [True, True]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_an_evaluated_project_queryset_class_is_windowed_from_its_own_rows_when_awaited():
+    """The awaited seam takes the rebuilt source's carried rows rather than a second fetch."""
+    await sync_to_async(seed_data)(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = await sync_to_async(_evaluated)(_ProjectQuerySet)
+    held = _held_rows(source)
+
+    rows = await bounded_rows_async(source, info)
+
+    assert type(rows) is list
+    assert list(rows) == held[:2]
+    assert [row is held[index] for index, row in enumerate(rows)] == [True, True]
+
+
+@pytest.mark.django_db
+def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried():
+    """A cache Django did not build answers the window with its own subscript, so it is refused.
+
+    The carried rows are windowed by subscripting them. An exact ``list`` is the
+    interpreter's own subscript; anything else brings its own, which would put
+    the ceiling back inside the object being bounded.
+    """
+    seed_data(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = _ProjectQuerySet(model=Category)
+    source._result_cache = _LyingResultCache()
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        bounded_rows(source, info)
+
+    assert "_ProjectQuerySet._result_cache is a _LyingResultCache" in str(excinfo.value)
+    assert "cannot be sealed" in str(excinfo.value)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_result_cache_that_is_not_a_list_is_refused_when_awaited():
+    """The awaited seam refuses the same cache, so neither color carries one."""
+    await sync_to_async(seed_data)(6)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    source = _ProjectQuerySet(model=Category)
+    source._result_cache = _LyingResultCache()
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        await bounded_rows_async(source, info)
+
+    assert "_ProjectQuerySet._result_cache is a _LyingResultCache" in str(excinfo.value)
+
+
+@pytest.mark.django_db
+def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_predicate():
+    """A relation's pending predicate is baked onto the rebuild, whatever class carries it.
+
+    Django's own ``_apply_rel_filters`` builds the source, so the pending state
+    is what Django writes rather than a hand-planted tuple. The rebuild resolves
+    it, so the window is the relation's own rows and the predicate is in the SQL
+    the sealed queryset compiles.
+    """
+    seed_data(3)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    parent = Category.objects.order_by("pk").first()
+    source = parent.items._apply_rel_filters(_ProjectQuerySet(model=Item))
+    assert type(source) is _ProjectQuerySet
+    assert object.__getattribute__(source, "__dict__")["_deferred_filter"] is not None
+
+    rebuilt = normalized_row_source(source)
+    assert type(rebuilt) is QuerySet
+    sql_str, params = rebuilt.query.get_compiler(using="default").as_sql()
+    assert "category" in sql_str.lower()
+    assert parent.pk in params
+
+    rows = bounded_rows(source, info)
+    assert list(rows) == list(parent.items.all())[:2]
+    assert {row.category_id for row in rows} == {parent.pk}
 
 
 # ---------------------------------------------------------------------------

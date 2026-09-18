@@ -366,8 +366,8 @@ def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
                     f"apply_cascade_permissions for {name} got a root queryset that "
                     f"cannot be sealed into a framework-owned execution queryset ({detail}); "
                     f"the cascade narrows a rebuilt queryset rather than the caller's object, "
-                    f"and a foreign Query class, a foreign row iterable, or an unresolved "
-                    f"deferred filter cannot be faithfully rebuilt. Pass plain query state."
+                    f"and a foreign Query class, a foreign row iterable, or malformed "
+                    f"deferred-filter state cannot be faithfully rebuilt. Pass plain query state."
                 ),
                 "sliced": (
                     f"apply_cascade_permissions for {name} got a sliced "
@@ -397,7 +397,7 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
     The ``type`` / ``table`` / ``alias`` / ``sliced`` / ``combined`` wordings are
     the cascade's established strings; ``untrusted`` (a queryset whose state the
     boundary cannot seal into a framework-owned execution queryset -- a foreign
-    ``Query`` class, a foreign row iterable, or an unresolved deferred filter)
+    ``Query`` class, a foreign row iterable, or malformed deferred-filter state)
     is boundary-new and gets cascade-flavored prose of its own. The cascade runs
     under ``_CASCADE_SEAL_POLICY``, whose ``require_model_rows=False`` means the
     boundary never raises the ``projection`` code here - a ``.values()`` return
@@ -429,8 +429,8 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
                     f"sealed into a framework-owned execution queryset ({detail}) for the "
                     f"cascade subquery on {edge}; the cascade "
                     f"re-projects the sealed queryset to the edge's target column, and a "
-                    f"foreign Query class, a foreign row iterable, or an unresolved deferred "
-                    f"filter cannot be faithfully rebuilt. Return plain rows."
+                    f"foreign Query class, a foreign row iterable, or malformed deferred-filter "
+                    f"state cannot be faithfully rebuilt. Return plain rows."
                 ),
                 "sliced": (
                     f"{name}.get_queryset returned a sliced queryset "

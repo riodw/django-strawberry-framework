@@ -1,7 +1,12 @@
 # Spec: `DjangoListField` argument surface (`offset`, `limit`, and `orderBy`)
 
 Target card: [`WIP-ALPHA-050-0.0.15`][kanban]
-Status: in flight (`0.0.15`)
+Status: **WIP — pre-candidate.** The current checkout contains the implementation and
+documentation work listed below, but no exact candidate commit, gate, review, or evidence-only
+follow-up exists. Decision 22 therefore keeps this card WIP; this `Status:` line is the lifecycle
+source of truth. Following the repository's shipped-card convention, the Slice checklist remains
+the contract ledger rather than implementation-history evidence; its boxes are not closure
+evidence until that sequence completes.
 Revision: 2026-09-17 - the completion contract is specified in Decisions 20-22 and drawn
 into the Definition of done: application Python is trusted and its documented result contracts
 are validated mechanically, wire input and configuration are the bounded parties, and a finding
@@ -9,7 +14,8 @@ is admitted against this card only by reachability through a feasible project sh
 20); the extension contract is upstream's class-or-factory spelling with per-operation
 isolation stated as the guarantee this package adds (Decision 21); and the card closes on one
 recorded gate, after which a new finding opens a new card (Decision 22). Decision 8 carries
-evaluation state through the raw-list seam so a project queryset class costs what Django's
+evaluation state through the raw-list seam and admits the pending reverse-relation predicate
+Django leaves on every relation queryset, so a project queryset class costs what Django's
 manager costs. The enforcement, operation-state and execution-mode architecture is Decisions
 14-19 (revision history in
 [`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
@@ -126,8 +132,12 @@ the release wording.
         publish into nor claim from a closed ledger.
   - [ ] The raw-list seam windows a source that arrives evaluated from the rows it already
         holds, exact queryset and rebuilt subclass alike, with the query count pinned at zero
-        in the package tier and a `Manager.from_queryset` relation pinned live at Django's own
-        manager's count.
+        in the package tier and the fakeshop `Loan` model's no-op `LoanQuerySet.as_manager()`
+        declaration pinned live at an absolute two-query prefetch cost, its pending
+        reverse-relation predicate baked onto the rebuild by the same unbound `Query.add_q` an
+        exact queryset's is, and a deferred-filter state Django never writes refused with the
+        typed error at both tiers. The dynamic manager remains migration-safe through Django's
+        `use_in_migrations=False` default.
   - [ ] Package proofs arm a definition-read counter and a decoy definition through a real
         `DjangoSchema` with the optimizer installed, parametrized over hook flavour and
         relation vocabulary and over cold and warm plans, requiring a custom hook to have RUN
@@ -172,9 +182,9 @@ the release wording.
         schema-setup example that pairs a plain `strawberry.Schema` with
         `extensions=[lambda: _optimizer]` is rewritten onto `DjangoSchema`, which is the only
         schema the isolation guarantee holds for.
-  - [ ] Update the KANBAN database when the implementation card closes;
-        [`TODAY.md`][today] is deliberately not edited (no waiting entry exists to move - see
-        Doc updates).
+  - [ ] Update the KANBAN database and the current-checkout statements in [`TODAY.md`][today]
+        when the candidate implementation commit carries the final board transition; the
+        pre-candidate generated outputs and milestone statements remain WIP.
   - [ ] Leave the version literal, version assertion, package-version glossary row, release
         wording, and [`CHANGELOG.md`][changelog] to card 053's joint cut; `pyproject.toml`
         and `uv.lock` have no duplicate root-package version to bump.
@@ -876,17 +886,19 @@ For a request carrying any non-null list argument, the color-specific queryset p
    concrete table, preserving the input's effective database routing. A `Manager`, list,
    `None`, wrong-model queryset, values/values-list queryset, populated `_result_cache`, or
    malformed query state is a schema-author defect and raises an actionable
-   `ConfigurationError` naming the public apply method. The one subclass that still fails is
-   the seal's shipped rule rather than a new one: a subclass carrying an unresolved
-   `_deferred_filter` cannot be safely baked and fails closed as `untrusted`. A sync-path
+   `ConfigurationError` naming the public apply method. A pending `_deferred_filter` is not a
+   failure on any class: the seal bakes it onto the detached clone for a subclass exactly as for
+   an exact queryset, and what fails closed as `untrusted` is a deferred-filter STATE that is not
+   the exact shape Django writes (Decision 8). A sync-path
    awaitable is likewise disposed and rejected under the existing one-await policy. Like
    `reject_combined`, the require-unevaluated option is enforced inside
    [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets] and emits the
-   `evaluated` defect rather than a reuse of an existing code: the seal is a rebuild boundary
-   that never copies `_result_cache`, so today an evaluated candidate is silently normalized into
-   a fresh unevaluated queryset - an override that ran its own SQL and returned rows would be
-   turned into a second identical query instead of rejected. Both options default off, so no
-   shipped seal verdict changes.
+   `evaluated` defect rather than a reuse of an existing code: no seal that recomposes onto its
+   result carries `_result_cache` forward, so without the option an evaluated candidate is
+   silently normalized into a fresh unevaluated queryset - an override that ran its own SQL and
+   returned rows would be turned into a second identical query instead of rejected. The raw-list
+   row source is the one policy that does carry it, and it recomposes nothing (Decision 8). Both
+   options default off, so no shipped seal verdict changes.
 
    A new code owes two things the shipped codes already have. First, a fixed position in the
    seal's documented canonical ordering, which today runs `type`, `table`, `untrusted`,
@@ -907,8 +919,9 @@ For a request carrying any non-null list argument, the color-specific queryset p
    therefore legible rather than silent, but an unarmed code still reaches the schema author
    as an unactionable message, so both new codes owe both arms. The retained-state
    helper `_queryset_state_defect` is not its home: that helper pins the `QuerySet.__dict__`
-   fields the seal carries forward (`_db`, `_hints`, `_fields`, `_sticky_filter`, `_for_write`)
-   and emits only `untrusted`, and `_result_cache` is not among them.
+   fields every seal carries forward (`_db`, `_hints`, `_fields`, `_sticky_filter`,
+   `_for_write`) and emits only `untrusted`, and `_result_cache` is not among them - the one
+   policy that carries it pins its exact `list` shape in the seal itself (Decision 8).
 
    Same-route needs its own definition, because `_db` equality alone is not it. Django
    resolves an unrouted queryset's alias through the database router using both the model and
@@ -1242,7 +1255,33 @@ normalized first, by the one shared seam every raw-list caller runs
 queryset through the same sealer the visibility boundary uses — preserving model, query graph,
 routing, row iterable and prefetch state — and then slices that. A subclass that cannot be
 faithfully rebuilt is refused with a typed `ConfigurationError`; the fallback is never its own
-`__getitem__`. Counting a sealable subclass into a Python list was rejected as the whole fix
+`__getitem__`.
+
+A pending reverse-relation predicate is not that case. Django's related-manager machinery leaves
+a `_deferred_filter` — the `(negate, args, kwargs)` tuple it has not yet baked into the query —
+on every relation queryset it builds, whatever class the model's manager was made from, so
+refusing it for a subclass would refuse `Manager.from_queryset` at every relation it is used on.
+The rebuild resolves it identically for every candidate: each argument is proven inert or a
+genuine, unshadowed Django expression first, and the predicate is then added to the DETACHED
+clone through the UNBOUND `sql.Query.add_q`, never through the candidate's own methods and never
+mutating the candidate. What fails closed is the pending STATE rather than the class holding it —
+a shape Django never writes (a non-3-tuple, a `negate` that is not an exact `bool`, a `kwargs`
+that is not an exact `dict`, an `args` that is neither `tuple` nor `list`, a non-string kwarg
+key, a prohibited connector kwarg, a value that is neither inert nor genuine Django, or a
+predicate `add_q` cannot resolve) is the typed `ConfigurationError`, never a raw exception. The
+`negate` slot is pinned to an exact `bool` for the same reason the others are pinned: it is
+truth-tested to decide whether the predicate is negated, and an object planted there would decide
+that through its own `__bool__`. Sealability therefore does not depend on which surface seals: a
+`Manager.from_queryset` relation is admitted at the raw-list row source, at the visibility
+boundary, and at the post-`OrderSet` result seal alike.
+
+The fakeshop acceptance model dogfoods that supported declaration directly: `Loan` defines a
+no-op `LoanQuerySet` and assigns `objects = LoanQuerySet.as_manager()`. No request rewrites model
+metadata or calls a private cache-expiration hook; Django's ordinary manager and reverse-relation
+machinery create the queryset class the live plan receives. The dynamic manager is deliberately
+left out of migration state through Django's `use_in_migrations=False` default.
+
+Counting a sealable subclass into a Python list was rejected as the whole fix
 because it restores the row ceiling while losing the SQL `LIMIT` for a legitimate project
 queryset class. The shape is read from `type(value)` rather than `isinstance`, because
 `isinstance` falls back to a consumer-defined `__class__` and an object that merely claims to be
@@ -1263,10 +1302,16 @@ used on, a database-level regression that buys nothing: the count is bounded eit
 the rows are the same rows. The rebuild therefore carries the fetched rows forward when the
 source it rebuilt held them, and drops nothing but the subclass's own methods. That carry
 belongs to the raw-list seam alone, the one place where nothing is composed after the rebuild.
-Every other seal keeps its `require_unevaluated` verdict: a visibility hook's input and result
-and an `OrderSet.apply_*` result are still refused when evaluated, because a filter or an order
-applied to a queryset that already holds rows is a query Django re-runs against a cache the
-caller believes it is reading.
+No other seal carries it, and what the others do with an evaluated source is two rules, not one.
+`require_unevaluated` - the axis that refuses an evaluated candidate outright - is on for the
+post-`OrderSet` result seal alone: the list field invoked that ordering method one step earlier
+and takes its window on what comes back, so rows already fetched mean the override ordered and
+paged something other than the query about to run. A visibility seal ADMITS an evaluated source
+and drops its `_result_cache` in the rebuild, on the hook's input and on the hook's result
+alike, so no cached or injected row crosses the boundary and a consumer that evaluates inside
+the hook pays one extra query - a cost, not a broken seal. That hook's contract is shared with
+the Relay node, connection and relation surfaces, so holding it to the stricter rule here would
+make one hook's verdict depend on which field called it.
 
 That lower-level arithmetic remains shape-complete and is
 unit-pinned, but it does not widen the list field's order precondition, and the two tiers must
@@ -1512,8 +1557,8 @@ So the admission ladder is exact, and every rung is decided where it is actionab
 | Entry spelling | Where it is answered | Answer |
 |---|---|---|
 | exact class or exact instance of an authority | schema construction | folded into the record; the entry is dropped |
-| subclass of an authority | schema construction | `ConfigurationError` |
-| factory resolving to either authority | `get_extensions` | the operation is refused |
+| subclass of an authority, as a class or as an instance | schema construction | `ConfigurationError` |
+| factory resolving to either authority, subclasses included | `get_extensions` | the operation is refused |
 | factory that raises, or returns a non-`SchemaExtension` | `get_extensions` | the operation is refused |
 | any other class, instance or factory | unchanged | runs between the two authorities |
 
@@ -1687,9 +1732,14 @@ through `DjangoSchema(resource_policy=..., error_policy=...)`; the schema builds
 authority extension per operation from that record (Decision 15). An exact instance of an
 authority in `extensions=[...]` is a package-specific compatibility reading - read once as a
 declaration, dropped from the chain before upstream sees it, so upstream's deprecation warning
-does not fire for it - and a factory or subclass resolving to one refuses the operation. Moving
-such an instance into a factory is therefore NOT a migration; the migration is to the keyword
-argument, and the docs say so.
+does not fire for it. A SUBCLASS of either authority is refused at schema construction with
+`ConfigurationError` - supplied as a class or as an instance, and whether or not it supplies a
+policy of its own, because what disqualifies it is the override it may carry on the hook that
+charges or masks. Only a factory is opaque until it is called, so a factory resolving to an
+authority, subclasses included, is the one spelling refused at the operation instead, with the
+stable `SCHEMA_CONFIGURATION_UNAVAILABLE` code (Decision 15's ladder). Moving such an instance
+into a factory is therefore NOT a migration; the migration is to the keyword argument, and the
+docs say so.
 
 **Ordinary extensions follow upstream's spellings.** A class or a factory; an instance carries
 upstream's `DeprecationWarning` unchanged, because `DjangoSchema` passes ordinary entries to
@@ -1718,18 +1768,30 @@ The close is one sequence, in this order and no other:
    and 21 in Slice 5, including correcting the shipped examples that pair a plain
    `strawberry.Schema` with the singleton optimizer recipe; the floor scope of
    [`build-050`][build-050] widened to the suites the architecture of Decisions 14-19 added.
-   Nothing else is owed to this card.
-2. Run the gate on one identified tree: the full default suite at `fail_under = 100`, the
+   Nothing else is owed to this card. While this pre-candidate working tree is being assembled,
+   the card remains WIP. Its final status and generated board views move to their shipped state
+   in the candidate commit described below, and in no earlier one.
+2. Create one candidate implementation commit containing the production and test changes, the
+   shipped docs including the [`TODAY.md`][today] statements the transition falsifies, the final
+   board/database transition, the spec status, and every generated output. This commit is the tree
+   to be gated; it must exist before any gate result or review conclusion is recorded.
+3. Run the gate on that exact candidate commit: the full default suite at `fail_under = 100`, the
    sharded suite, the complete declared supported-floor scope, and the formatting, lint,
    structural, link, citation and tracked-path checks.
-3. Review that identified tree once, reading each finding against Decision 20's three
+4. Review that exact candidate tree once, reading each finding against Decision 20's three
    conditions. A finding meeting them is fixed and steps 2 and 3 repeat on the new tree; a
    review that admits none ends the loop.
-4. Record the gate in [`build-050`][build-050] naming the commit, and mark the card DONE.
-   Figures from any other tree are not evidence for this one; a run carrying a failing test is
-   not recorded as green.
+5. Write an evidence-only follow-up commit whose parent is the gated candidate commit and whose
+   only file change is [`build-050`][build-050]. The record names the candidate commit, the exact
+   commands and results, and the review conclusion. Run the structural, link, citation and
+   tracked-path checks on this follow-up as well, and state plainly that its parent is the full
+   suite's tree and that the follow-up itself is not the suite tree. Figures from any other tree
+   are not evidence for the candidate, and a run carrying a failing test is not recorded as green.
+   The candidate carries the board's final DONE transition, and card closure is recognized only
+   after this evidence-only follow-up is recorded; the follow-up itself changes no board state,
+   and no record names its own commit.
 
-After step 4 the spec moves under the [`NEXT.md`][next] sweep, and a later finding that meets
+After step 5 the spec moves under the [`NEXT.md`][next] sweep, and a later finding that meets
 the three conditions opens a new card against the row it breaks; a security finding that meets
 them is release-blocking for that new card exactly as it would have been here, so the close
 weakens no obligation, it only names which card carries it. See the
@@ -1743,7 +1805,7 @@ weakens no obligation, it only names which card carries it. See the
 | 2 | [`django_strawberry_framework/list_field.py`][list-field], [`django_strawberry_framework/orders/sets.py`][orders-sets], [`django_strawberry_framework/utils/querysets.py`][querysets], [`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize`][optimizer-extension] | Sync/async Meta-order pipeline, OrderSet-owned active-term detection, post-apply and combined-query guards, async-only queryset completion adapter, optimizer preservation, combined offset/limit application. |
 | 3 | [`tests/test_list_field.py`][test-list-field], [`tests/test_resource_policy.py`][test-resource-policy], [`tests/orders/test_sets.py`][test-orders-sets], [`tests/base/test_init.py`][test-base-init] | Construction/direct-call mechanics, naming fallback, `ListArgumentError` pickle round trip, active-term/override call-count, post-apply validator arms, exact iterator consumption/cleanup precedence, model-order state, query low/high marks, and removal of adapter-masking async-unsafe setup where HTTP cannot isolate the mechanic. |
 | 4 | Planned `examples/fakeshop/test_query/test_list_field_api.py` and `examples/fakeshop/test_query/test_list_field_async_api.py`, [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy], [`examples/fakeshop/test_query/test_multi_db.py`][fakeshop-test-multi-db], [`examples/fakeshop/apps/kanban/constants.py`][fakeshop-kanban-constants] | Dogfood arguments on the three existing shipped Branch list fields from a dedicated sync suite, mount exceptional fields only in test-local schemas, cover ordered pages/visibility/caps/errors/naming/sync-async shapes/routing/SQL, and regenerate tracked paths after both new files enter the index. No new field is added to the shipped library schema. |
-| 5 | [`django_strawberry_framework/resource_policy.py`][resource-policy], [`docs/GLOSSARY.md`][glossary] (DB), [`docs/README.md`][docs-readme], [`docs/TREE.md`][tree], [`README.md`][readme], [`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme], KANBAN DB/exports | Fold in the shipped argument/returned-row/skip semantics, add the new async suite and its shared-helper exemption to the live-tier guide, include the new async test in the generated tree, and close the card; no version, `TODAY.md`, or changelog edit. |
+| 5 | [`django_strawberry_framework/resource_policy.py`][resource-policy], [`docs/GLOSSARY.md`][glossary] (DB), [`docs/README.md`][docs-readme], [`docs/TREE.md`][tree], [`README.md`][readme], [`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme], KANBAN DB/exports | Fold in the shipped argument/returned-row/skip semantics, add the new async suite and its shared-helper exemption to the live-tier guide, include the new async test in the generated tree, and carry the candidate's board/`TODAY.md` transition; no version or changelog edit. |
 
 ## Helper-reuse obligations (DRY)
 
@@ -2427,9 +2489,13 @@ sync or async HTTP request cannot isolate:
   successes cost; and malformed published-argument metadata is a `ConfigurationError`, so a
   shared consumer converter is never invoked concurrently by the error path;
 - seal-axis mechanics the live tier cannot isolate: a sealable `QuerySet` SUBCLASS post-apply
-  result is normalized into a plain queryset and accepted, while a subclass carrying an
-  unresolved `_deferred_filter` still fails closed as `untrusted` - the latter also proven
-  live on both public overrides; and routing-INTENT equality, where two candidates both
+  result is normalized into a plain queryset and accepted, a subclass carrying a well-formed
+  pending `_deferred_filter` seals with that predicate baked into the compiled SQL, and a
+  deferred-filter state Django never writes fails closed as `untrusted` on a subclass and on an
+  exact queryset alike - a non-3-tuple, a `negate` that is not an exact `bool` (proven not to
+  reach its own `__bool__`), a non-`dict` `kwargs`, and a value that is neither inert nor genuine
+  Django - the malformed case also proven live on both public overrides; and routing-INTENT
+  equality, where two candidates both
   carrying `_db is None` are accepted when their `_hints` match the sealed source's and
   rejected when they differ. The expected routing is a frozen RECORD - `_db`, copied `_hints`,
   and the effective alias resolved through `ConnectionRouter` - taken before the public apply
@@ -2526,22 +2592,37 @@ admission: a value whose `__class__` raises, and one whose `__class__` names `Qu
 both the typed `type` defect rather than a raw exception or an admission.
 
 Evaluation state is pinned beside them: an evaluated exact queryset and an evaluated project
-subclass (a `QuerySet.as_manager()` class with no overrides) are each windowed through
-`bounded_rows` and `bounded_rows_async` with the query count asserted zero and the rows asserted
-equal to the leading window of what the source held, and the async row is the same rows under
-the async adapter rather than a second fetch.
+queryset class with no overrides are each windowed through `bounded_rows` and
+`bounded_rows_async` with the query count asserted zero and the rows asserted equal to the
+leading window of what the source held, and the async row is the same rows under the async
+adapter rather than a second fetch. `QuerySet.as_manager()` and `Manager.from_queryset` name the
+same shape throughout this spec — a project queryset class behind a model's default manager —
+and a row proving one proves the other.
+
+The pending reverse-relation predicate every relation queryset carries is pinned at the same
+tier. A no-override subclass whose predicate is left pending by Django's own
+`_apply_rel_filters` — built through that machinery rather than hand-planted, so the row cannot
+drift from what Django writes — is windowed from the rows it holds, and the SQL its rebuild
+compiles carries the relation predicate. Beside it, a deferred-filter state Django never writes
+is refused with the typed error on a subclass and on an exact queryset alike, including the
+`negate` slot proven not to reach its own `__bool__`.
 
 Live rows in [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy]
 mount a `DjangoListField` root over `PatronType`, whose many-side `loans` target declares no
 custom `get_queryset`, at `max_list_rows=1` over a patron seeded with four loans. The reverse
 manager's `.all()` is made to return a `QuerySet` subclass, and the complete wire payload must
 carry one loan on the sync transport and one on `AsyncDjangoGraphQLView`; the same document with
-Django's own manager is the control. A second control mounts the relation through a
-`Manager.from_queryset` class with no overrides under a prefetching plan and asserts the query
-count equal to Django's own manager's for the same document, so the rebuild is proven to cost no
-query of its own. No shipped root pairs a `DjangoListField` with a
-no-custom-visibility many-side target, so the root is declared in the suite, and its schema is
-built from the type the module reload left in place rather than one captured at import.
+Django's own manager is the control. A second pair of rows exercises the fakeshop `Loan` model's
+real no-op `LoanQuerySet.as_manager()` declaration under a prefetching plan, at two parent
+cardinalities, and asserts the expected payload and an ABSOLUTE two-query count - one parent
+query plus one prefetch. Equality alone would be vacuous, and the second cardinality is what
+distinguishes a prefetch from an N+1. No test mounts a manager by rewriting `_meta` or calls
+`_expire_cache()`; `makemigrations --check --dry-run` confirms the dynamic manager remains outside
+migration state. The async transport row asserts the same rows rather than a count, because a
+query capture opened on the event-loop thread cannot see work a `sync_to_async` worker thread does
+and an empty capture reads exactly like a green zero. No shipped root pairs a `DjangoListField`
+with a no-custom-visibility many-side target, so the root is declared in the suite, and its
+schema is built from the type the module reload left in place rather than one captured at import.
 
 ### Failability and commands
 
@@ -2605,15 +2686,16 @@ structural checks, and link/kanban verification prescribed by
   pre-existing omission of ten other shipped suites is standing tier debt and is not silently
   absorbed here.
 - [`README.md`][readme] - update the collection-field example if it enumerates list arguments.
-- [`TODAY.md`][today] - **not touched, deliberately.** There is no waiting entry to move: the
-  file mentions `offset` nowhere, and its "What products is still waiting for" section
-  enumerates only [`Meta.fields_class`][glossary-metafields-class],
+- [`TODAY.md`][today] - the current checkout already records the list-field argument work as
+  WIP and keeps the card out of the shipped surface. Preserve that present-tense statement
+  through the pre-candidate slices; when the candidate implementation commit carries the
+  final board transition, update the matching current-checkout and release statements in the
+  same generated-output cycle. A Slice 5 executor must not claim closure before the candidate,
+  gate, review, and evidence-only follow-up sequence is recorded. The separate waiting list
+  remains [`Meta.fields_class`][glossary-metafields-class],
   [`Meta.search_fields`][glossary-metasearch-fields], and
-  [`Meta.aggregate_class`][glossary-metaaggregate-class].
-  `DjangoListField` appears once, in the sentence attributing capabilities that ship but are
-  not exercised by products to the sibling apps, and this card's arguments do not falsify it.
-  Card 051's parity close owns whatever `TODAY.md` prose the offset/limit gap eventually owes.
-  A Slice 5 executor must not invent an edit to satisfy a checklist row.
+  [`Meta.aggregate_class`][glossary-metaaggregate-class]; this card does not move those
+  capabilities.
 - [`django_strawberry_framework/__init__.py`][package-init] and
   [`tests/base/test_init.py`][test-base-init] - the `ListArgumentError` root export and the
   pinned `__all__` tuple, star-import, and export-identity rows, plus the stale comment there
@@ -2718,8 +2800,9 @@ structural checks, and link/kanban verification prescribed by
       instance. The extension that arms the budget is the schema's own, built per operation
       from that construction record: an enforcement authority is never an extension ENTRY, so
       no factory, closure, singleton selector or subclass a resolver can reach through
-      `info.schema` decides what a later request is bounded by, and an entry that resolves
-      into one refuses the operation instead.
+      `info.schema` decides what a later request is bounded by. A subclass supplied directly,
+      as a class or as an instance, is refused with `ConfigurationError` at construction, and
+      an entry that RESOLVES into one refuses the operation instead.
 - [ ] A bound stored on a `ResourcePolicy`, and a field's declared `max_rows`, is an exact
       built-in `int` (or `float` for the deadline); every numeric subclass is refused with a
       typed `ConfigurationError` before any comparison, arithmetic or formatting runs, so no
@@ -2745,11 +2828,18 @@ structural checks, and link/kanban verification prescribed by
       ORDERED OFFSET; no spec, docstring, glossary, or error text promises a stable or
       repeatable page, and a published `offset` is documented as a runtime precondition rather
       than a per-field pagination capability.
-- [ ] No raw-list row source decides its own ceiling. An exact `QuerySet` is sliced and keeps
-      its SQL `LIMIT`; a `QuerySet` SUBCLASS is rebuilt into a plain framework-owned queryset
-      through the shared sealer and sliced there, so a sealable project queryset class keeps
-      that `LIMIT` and an unrebuildable one is refused with a typed `ConfigurationError`
-      instead of falling back to its own `__getitem__`; an object whose `__class__` merely
+- [ ] No raw-list row source decides its own ceiling. An unevaluated exact `QuerySet` is
+      sliced and keeps its SQL `LIMIT`; a `QuerySet` SUBCLASS is rebuilt into a plain
+      framework-owned queryset through the shared sealer and sliced there, so a sealable,
+      unevaluated project queryset class keeps that `LIMIT` and an unrebuildable one is
+      refused with a typed `ConfigurationError`
+      instead of falling back to its own `__getitem__`. A pending reverse-relation predicate
+      does not make a subclass unrebuildable: Django leaves one on every relation queryset it
+      builds whatever class the manager was made from, and the seal bakes it onto the detached
+      clone through the unbound `Query.add_q` for every candidate, while a deferred-filter
+      state that is not the exact shape Django writes - the `negate` slot's exact `bool`
+      included, proven not to reach its own `__bool__` - is refused with that same typed
+      error. Sealability does not depend on which surface seals. An object whose `__class__` merely
       claims to be a queryset cannot select the slice arm at all. The shape is read from
       `type(value)` at every admission, including the sealer's own, so a `__class__` property
       can neither be consulted nor raise out of a shape proof.
@@ -2760,9 +2850,12 @@ structural checks, and link/kanban verification prescribed by
       response carries `max_list_rows` rows, not the relation's.
 - [ ] A source that arrives evaluated is windowed from the rows it holds with no further
       query, exact queryset and rebuilt subclass alike, through `bounded_rows` and
-      `bounded_rows_async`; a relation whose manager is a `Manager.from_queryset` class with
-      no overrides costs the same query count as Django's own manager, proven live under a
-      prefetching plan (Decision 8).
+      `bounded_rows_async`; the fakeshop `Loan` model's ordinary no-op
+      `LoanQuerySet.as_manager()` declaration returns the expected rows at an ABSOLUTE two-query
+      prefetch cost at two parent cardinalities, and returns those same rows on the async
+      transport, where a query capture opened on the calling thread cannot see the work a
+      `sync_to_async` worker thread does (Decision 8). `makemigrations --check --dry-run`
+      confirms the dynamic manager's migration-safe configuration produces no schema state.
 - [ ] Visibility runs before order; order runs before one combined slice; order permission
       failures occur before slicing.
 - [ ] Public `OrderSet.apply_*` results are mechanically validated as unevaluated, unsliced,
@@ -2775,7 +2868,9 @@ structural checks, and link/kanban verification prescribed by
       limit/order contracts and never silently ignore `orderBy`.
 - [ ] No pk tiebreaker and no `DISTINCT` are injected; to-many ordering preserves the shipped
       aggregate behavior.
-- [ ] Querysets retain SQL `LIMIT/OFFSET`; sequences, iterables, and async-only iterables are
+- [ ] Unevaluated querysets retain SQL `LIMIT/OFFSET`, and a source that arrives evaluated is
+      windowed from the rows it holds instead (Decision 8); sequences, iterables, and
+      async-only iterables are
       bounded without over-consuming beyond the accepted window. Leak-free early-exit cleanup
       is promised for ASYNC-ONLY sources on every exit that abandons the source, argument
       rejection and deadline rejection alike, through one shared cleanup utility that sits
@@ -2842,11 +2937,16 @@ structural checks, and link/kanban verification prescribed by
       resume after the owning scope ended, without regressing live child delegation or the
       disagreement rejection inside an open scope.
 - [ ] Full implementation suite passes at `fail_under = 100` with formatting and structural
-      checks clean; the sharded suite and supported-floor verification are run and recorded on
-      the SAME identified tree, and a run carrying any failing test is not recorded as green.
-      The record lives in [`build-050`][build-050], names the commit, and is written after the
-      one review of that tree admits no finding under Decision 20; the card is DONE at that
-      record, and a later qualifying finding opens a new card (Decision 22).
+      checks clean; the sharded suite and supported-floor verification are run on the SAME
+      candidate implementation commit, and a run carrying any failing test is not recorded as
+      green. The candidate contains the implementation, tests, shipped docs, final board/database
+      transition, spec status, and generated outputs. An evidence-only follow-up commit whose
+      parent is that candidate changes only [`build-050`][build-050], names the candidate and
+      records the one review that admits no finding under Decision 20; structural, link,
+      citation and tracked-path checks are rerun on the follow-up and it is explicitly not
+      described as the full-suite tree. The candidate carries the board's DONE transition, and
+      card closure is recognized only at that follow-up record; a later qualifying finding opens a
+      new card (Decision 22).
 - [ ] No version literal, version assertion, package-version glossary row,
       [`pyproject.toml`][pyproject] / `uv.lock` pseudo-bump, or
       [`CHANGELOG.md`][changelog] entry is changed; card 053 owns the joint `0.0.15` cut.
@@ -2939,6 +3039,7 @@ structural checks, and link/kanban verification prescribed by
 <!-- docs/SPECS/ -->
 [spec-020]: SPECS/spec-020-list_field-0_0_7.md
 [spec-028]: SPECS/spec-028-orders-0_0_8.md
+[spec-029]: SPECS/spec-029-consumer_dx_cleanup-0_0_9.md
 [spec-030]: SPECS/spec-030-connection_field-0_0_9.md
 [spec-047]: SPECS/spec-047-resource_policy-0_0_14.md
 [spec-053]: SPECS/spec-053-boundary_dry_squeeze-0_0_15.md

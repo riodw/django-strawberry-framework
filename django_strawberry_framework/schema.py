@@ -711,12 +711,15 @@ class DjangoSchema(strawberry.Schema):
     the two arguments above are the only way to configure what enforces a
     request. Supplying ``DjangoResourcePolicyExtension(policy=...)`` as an entry
     still works and is read as a declaration of that policy - the entry is
-    folded into the record rather than kept - and declaring the same policy
-    twice, or subclassing either enforcement extension to supply it, is refused
-    here. An entry that would decide enforcement later, rather than at the
-    construction that accepted it, is refused when the operation resolves it
-    (:meth:`get_extensions`): a factory is consumer code, and what it returns
-    next request is not something accepting it this request can answer for.
+    folded into the record rather than kept - and declaring the policy twice is
+    refused here, as is a subclass of either enforcement extension -
+    supplied as a class or as an instance, and whether or not it declares a
+    policy of its own - because a subclass can override the hook that does the
+    enforcing while still answering every check for it. An entry that would
+    decide enforcement later, rather than at the construction that accepted it,
+    is refused when the operation resolves it (:meth:`get_extensions`): a
+    factory is consumer code, and what it returns next request is not something
+    accepting it this request can answer for.
     """
 
     def __init__(

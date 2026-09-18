@@ -1,208 +1,205 @@
-# Adversarial review: raw-list QuerySet admission and release evidence
+# Adversarial review: spec-050 close candidate
 
 Date: 2026-09-17
 
-Reviewed tree: `HEAD 92e4efeb` plus the current working-tree changes
+Verdict: **the row-carry implementation appears correct, but the card is not yet in a state that
+can honestly be called DONE.** I found no new supported-project, wire-reachable bypass in the
+production delta. I did find two release-integrity blockers, two close-out/test-contract defects,
+and two non-blocking documentation issues.
 
-Scope: [`spec-050`][spec-050], [`build-050`][build-050], the implementation, and the
-repository rules in [`AGENTS.md`][agents]. I used focused runtime probes with the installed
-fakeshop; I did not run pytest because the repository rule reserves it for an explicit request.
+I did not run pytest, per the repository rule. The existing full-suite figures are evaluated as
+evidence, not re-used as evidence for this review's current tree.
 
-## Verdict
+## P1-1 — The recorded final gate is not for the tree that is about to be committed
 
-Do not mark this card DONE yet. The policy-authority, runner-owned extension state, refusal,
-executor-mode, and stream-lease claims reviewed in the preceding rounds appear structurally
-fixed. A new, independent boundary failure remains: the universal raw-list ceiling trusts a
-consumer `QuerySet` subclass's `__getitem__` implementation. The failure is reachable through a
-real `DjangoListField` relation over a package `DjangoSchema`, so it is a release blocker rather
-than a package-only curiosity.
+**Broken contract:** spec Decision 22 step 2 and the final Definition-of-done row require the
+default, sharded, floor, and structural gates to describe one identified tree, and explicitly say
+that figures from another tree are not evidence. Step 4 says the record names the commit before
+the card is marked DONE.
 
-The implementation currently has no safe admission rule between “this value is a QuerySet” and
-“call its slice.” The shared visibility sealer already has the right architectural idea (rebuild
-a framework-owned plain queryset), but the raw-list bounding seam and the no-visibility relation
-resolver do not use it.
+**What the record says:**
 
-## P1 — a QuerySet subclass can return every row past `max_list_rows`
+- `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` identifies HEAD `20646db2` plus
+  sixteen paths.
+- The older checklist in that same file still calls the final gate the working tree at
+  `ab98d240`.
+- The status paragraph claims the future maintainer commit of the batch will be the named tree,
+  even though that commit does not yet exist.
 
-### Reproduction
+**What exists now:**
 
-[`django_strawberry_framework/resource_policy.py::_bounds_by_its_own_slice`][resource-policy]
-classifies every `isinstance(result, QuerySet)` value as slice-bounded. It then calls
-`result[start:stop]` in [`resource_policy.py::_windowed_rows`][resource-policy]. A consumer
-subclass owns that `__getitem__` call and can ignore the slice:
+- HEAD is `e3257e25`, one commit after `20646db2`. That commit rewrites twelve test modules. The
+  full default and sharded suites required by Decision 22 necessarily include those files.
+- The close candidate also contains spec-050-owned changes absent from the sixteen-path inventory:
+  `docs/GLOSSARY.md`, `KANBAN.md`, `KANBAN.html`, the board database, and the final review artifact.
+  `docs/GLOSSARY.md` contains executable examples and behavior claims, so it is not disposable
+  bookkeeping.
+- The structural population has already changed: the current formatter sees 451 files, while the
+  recorded review saw 425. The current citation count is 1108, while the gate table records 1104.
+  The current structural checks are green, but that does not substitute for the default, sharded,
+  and supported-floor suites on the current candidate.
 
-```text
-ResourcePolicy(max_list_rows=1)
-Evil(QuerySet).__getitem__(slice) -> list(self)
-bounded_rows(evil_queryset, info)        -> 75 rows
-bounded_rows_async(evil_queryset, info)  -> 75 rows
-```
+There is also a design error in Decision 22 itself: a tracked record cannot contain the hash of the
+same commit that contains the record. Editing the hash changes the tree and therefore changes the
+commit hash. The current placeholder prose is a symptom of an impossible self-reference, not a
+valid identity.
 
-The same seam accepts a non-QuerySet object whose `__class__` property reports `QuerySet`:
+**Root fix:** make the close protocol implementable, then run it once on the real candidate.
 
-```text
-isinstance(fake, QuerySet)               -> True
-bounded_rows(fake, info)                 -> 50 rows
-```
+1. Amend Decision 22 and its Definition-of-done row to use a two-commit close:
+   - a candidate commit containing all production, tests, shipped docs, board/database transition,
+     spec status, and generated outputs;
+   - the full/default/sharded/floor gate and adversarial review run against that exact commit;
+   - a record-only follow-up commit that names the gated commit and changes only the build record.
+2. Run the structural checks on the record-only follow-up. Do not claim that follow-up itself was
+   the full-suite tree; say plainly that its parent is the gated implementation tree and that the
+   only delta is the evidence record.
+3. Remove every stale tree identifier (`ab98d240`, `20646db2`, “sixteen paths”) from the live gate
+   statement. Historical identifiers may remain only where explicitly labelled superseded.
+4. Return card 050 to WIP until the new exact-commit gate and review are recorded. The existing
+   8333/8353/3169 figures remain useful historical evidence but cannot close the current tree.
 
-That is not only a direct-helper issue. The generated many-side resolver in
-[`django_strawberry_framework/types/resolvers.py::_make_relation_resolver`][types-resolvers]
-does this on the no-custom-visibility path:
+This is a release blocker even though it is not a runtime security defect: the code may be good,
+but the repository currently asserts stronger verification than was performed on the candidate.
 
-1. call the relation manager's consumer-overridable `.all()`;
-2. optionally read `_result_cache` from the returned object;
-3. pass the resulting object straight to `bounded_rows` / `bounded_rows_async`.
+## P1-2 — The board database change is mixed with pre-existing concurrent data
 
-There is no visibility seal on this path because the target has no custom hook. I patched a
-reverse-FK manager to return the hostile queryset, mounted a real `DjangoListField` over a
-`DjangoSchema` with `ResourcePolicy(max_list_rows=1)`, and posted through a real GraphQL view.
-The response contained four related `Loan` rows for one patron, not one:
+**Broken contract:** the repository's concurrent-work rule says pre-existing dirty data belongs to
+another session and must not be silently absorbed. The card's own close plan records that
+`examples/fakeshop/db.sqlite3` was already dirty before this cycle, with library seed rows changed
+while the kanban and glossary tables still matched HEAD.
 
-```json
-{"data":{"patrons":[{"name":"evil-probe2",
-  "loans":[{"note":"e0"},{"note":"e1"},{"note":"e2"},{"note":"e3"}]}]}}
-```
+The close then moved card 050 to DONE and updated glossary/board rows in that same binary database.
+Git cannot commit selected SQLite tables: the current binary diff now contains both the earlier
+library-data changes and this card's lifecycle changes. Calling the database out-of-scope in the
+baseline does not isolate it once this cycle writes the same file.
 
-The same result occurs in direct `execute_sync` and in the exported sync/async bounding helpers.
-This contradicts Decision 8 and the Definition of done: a raw list is supposed to have one
-unconditional ceiling, and the spec says that a QuerySet slice is the package-owned operation
-that carries the limit into SQL. A consumer subclass is not package-owned merely because
-`isinstance` returns true.
+**Root fix:** reconstruct the board database from a clean, known base and replay only the card-050
+board/glossary mutations, or first let the owner of the pre-existing database change land it and
+then reapply/regenerate the card transition. Do not overwrite the concurrent database blindly.
+Before committing, compare the database table-by-table against both parents and record which tables
+and rows card 050 owns. Regenerate `KANBAN.md`, `KANBAN.html`, and `docs/GLOSSARY.md` from that
+disentangled database and rerun their consistency checks.
 
-### Root-cause fix (required)
+Until this is done, the binary file cannot safely be included in a spec-050 commit.
 
-Create one shared package-private “raw-list source normalization” seam and make both the
-exported helpers and the generated relation resolver use it. Keep the public signatures of
-`bounded_rows` and `bounded_rows_async` unchanged.
+## P2-1 — The repository simultaneously says WIP, in flight, and DONE
 
-The seam must:
+**Broken contract:** Decision 22 says the card becomes DONE only at the close record, and the
+standing docs describe the current checkout.
 
-1. Inspect the actual class with `type(value)` (never an `isinstance` check that can consult a
-   hostile `__class__` property). An exact framework `models.QuerySet` may retain the SQL-slice
-   fast path.
-2. Treat a `QuerySet` subclass as untrusted execution state, not as an object whose methods can
-   enforce the ceiling. Normalize it through the existing sealed-queryset rebuild machinery
-   (or a smaller shared rebuild primitive with the same guarantees) into a plain
-   framework-owned `models.QuerySet`, then slice that rebuilt object. If its state cannot be
-   faithfully rebuilt, fail closed with a typed `ConfigurationError`; never fall back to the
-   subclass's `__getitem__`.
-3. Preserve model, query graph, routing, iterable shape, and prefetch state according to the
-   existing seal contract. Do not use “exact type then `islice`” as the whole fix: that would
-   restore the row-count ceiling but lose the SQL `LIMIT` guarantee for a legitimate, sealable
-   project QuerySet subclass.
-4. Make the admission test in the reused sealer itself identity-safe. Its current initial
-   `isinstance(candidate, models.QuerySet)` can execute a hostile `__class__` property; the
-   following probe currently escapes as a raw `RuntimeError`:
+The generated board says `DONE-050-0.0.15`, but:
 
-   ```text
-   _seal_or_defect(BombWithRaisingClass(), Patron, None)
-       -> RuntimeError("class bomb")
-   ```
+- `docs/spec-050-list_field_arguments-0_0_15.md` still says target
+  `WIP-ALPHA-050-0.0.15` and `Status: in flight`.
+- `TODAY.md` explicitly defines “Today” as the current checkout, then says the list-field card is
+  still WIP in its opening note, capability table, and release-work section.
+- The spec's completion checklist remains entirely unchecked, while the board copy of the shorter
+  checklist is entirely checked.
 
-   A failed shape proof must remain a typed, fail-closed defect.
-5. Normalize before relation-cache inspection. Reading `_result_cache` with ordinary `getattr`
-   on a subclass is another consumer dispatch point; use the framework-owned state read or
-   normalize first. The relation manager's `.all()` result must enter the same seam whether it
-   came from a warm prefetch cache or an unloaded descriptor.
-6. Keep the common exact-queryset path cheap. Do not run the full recursive seal once per parent
-   row when the value is already an exact framework queryset; only the subclass/untrusted path
-   should pay the rebuild cost. This preserves the spec's accepted SQL behavior and avoids
-   turning nested relation lists into an N+1 validation cost.
+The rationale's sentence that the card *was authored* as WIP is historical and may remain. The
+spec header and `TODAY.md` are present-tense claims and may not.
 
-### Required regression proof
+**Root fix:** after the exact-commit gate succeeds, update the spec target/status to the shipped
+card id and completion state, reconcile the spec checklist according to the repository's shipped-
+spec convention, and update all three current-checkout statements in `TODAY.md`. Remove the old
+instruction that `TODAY.md` must not change at close; it became false when the card lifecycle
+changed.
 
-Add independent, named cases (no loop over asserted cases in a live test body, per the live-tier
-guide):
+## P2-2 — The live `Manager.from_queryset` proof mounts the manager through private model state
 
-- package tests for a hostile QuerySet subclass through `bounded_rows` and
-  `bounded_rows_async`, with the private `_windowed_rows` / `_windowed_rows_async` arms also
-  covering a zero-width window (the exported helpers must keep their coordinate-free
-  signatures);
-- a package control for an exact framework QuerySet asserting the SQL `high_mark` remains the
-  effective ceiling;
-- a package case for a class-spoofing non-QuerySet, proving it cannot select the SQL-slice arm or
-  escape as an untyped exception;
-- a live sync `/graphql` case with a `DjangoSchema`, `DjangoListField`, a no-custom-visibility
-  many-side relation, and a manager returning a QuerySet subclass; `max_list_rows=1` must yield
-  one related row;
-- the corresponding live async `DjangoSchema`/`AsyncDjangoGraphQLView` case. The existing async
-  relation suite uses a plain `strawberry.Schema`, which does not install the package resource
-  policy and therefore cannot prove this card's bound;
-- a warm-prefetch control and an unloaded-manager control, both through the same normalization
-  seam, plus an exact QuerySet control showing SQL limiting is retained.
+**Broken contract row:** the Definition of done says a relation whose manager is a
+`Manager.from_queryset` class with no overrides is proven live under a prefetching plan at two
+parent cardinalities and on the async transport. The repository test rule requires real supported
+usage where the live endpoint can reach it.
 
-The live rows belong in [`examples/fakeshop/test_query/`][fakeshop-query]; package mechanics
-belong in [`tests/test_resource_policy.py`][test-resource-policy] and, if the shared sealer is
-changed, [`tests/utils/test_querysets.py`][test-querysets]. Each row should assert the complete
-wire payload and the row count, not merely “no errors.”
+**Supported project shape:** a normal Django model declaration using
+`objects = LoanQuerySet.as_manager()` or `Manager.from_queryset(LoanQuerySet)()`.
 
-## Spec/build correction required with the code fix
+**Wire input:** the live `patrons { loans { note } }` request already used by the new tests.
 
-Decision 8 currently distinguishes exact built-in sequences from their subclasses, but treats
-“QuerySet” as one undifferentiated sliceable category. Amend it to say:
+The production behavior works for that shape, but the checked-in live proof does not construct it
+that way. `_project_relation_manager` rewrites `Loan._meta.local_managers`, manually assigns
+manager internals, and calls the private `_expire_cache()` hook for the duration of a request. The
+package-tier proof likewise calls the private related-manager `_apply_rel_filters` method directly.
+Those are useful mechanism probes, but neither is the public project declaration named by the
+contract.
 
-- an exact framework-owned `models.QuerySet` is sliced directly;
-- a consumer QuerySet subclass is first sealed/rebuilt to a framework-owned plain queryset, or
-  is rejected with a typed configuration error if sealing is impossible;
-- no `isinstance`/consumer `__getitem__` result can define the ceiling.
+I independently exercised the actual public declaration: a model with a no-override queryset from
+`Manager.from_queryset`, a real reverse relation, and a warmed `Prefetch`. The cached relation was
+a project queryset with a pending deferred predicate and an exact-list result cache; normalization
+returned a plain `QuerySet`, retained the same Django cache, bounded it to two rows, and executed
+zero additional queries. That supports the implementation, but it does not repair the repository's
+acceptance-test fidelity.
 
-Add the hostile-queryset relation row to the Definition of done, the package/live test plan, and
-the build's predicted-file ledger. The current hostile list-subclass rows do not cover this
-shape: they exercise the `islice` fallback, while the bug is specifically the QuerySet slice
-arm. The current visibility-hook adversary is also insufficient because the visibility boundary
-already rebuilds its result before bounding; the no-custom-visibility relation branch is the
-uncovered path.
+**Root fix:** dogfood the no-op project queryset as the real default manager of the fakeshop `Loan`
+model (a custom manager with `use_in_migrations=False` should not require schema state, which
+`makemigrations --check --dry-run` must confirm). Then run the existing HTTP document against that
+ordinary declaration and retain the absolute two-query assertions at two parent cardinalities plus
+the async payload row. Once the absolute count is pinned, the temporary manager mount and its
+parallel control schemas can be deleted. This both proves the supported shape and makes the test
+substantially simpler.
 
-## P1 release gate — the recorded green run is not this tree
+## P3-1 — The sealed-queryset glossary overclaims row provenance
 
-[`build-050`][build-050] records the final gate at historical commit `207c7328` and explicitly
-says every descendant is ungated. The current `HEAD` is `92e4efeb`, a descendant, and the
-working tree also contains uncommitted implementation/test changes. Therefore the recorded
-7868/7885/463 figures do not certify this code. Before DONE, run and record on one exact final
-tree:
+`docs/GLOSSARY.md` now correctly says that the raw-list policy alone carries `_result_cache`, but
+the same paragraph still concludes that “no synthetic row ... can cross the boundary.” The carry
+validates the cache container as an exact list; it does not and should not validate the provenance
+of each row. Under Decision 20 application Python is trusted, and the raw-list seam guarantees a
+row ceiling, not that application-produced cached rows came from a particular SQL execution.
 
-- the full default suite at `fail_under = 100`;
-- the sharded suite;
-- the complete declared supported-floor scope (not the earlier focused 463-row seam run);
-- formatting, lint, structural, link, citation, and tracked-path checks.
+**Fix:** split the guarantees explicitly. Visibility/order seals drop cached rows and preserve
+query provenance; the final raw-list seal may carry already-fetched rows and guarantees only that
+the package-owned slice cannot exceed the accepted window. Do not describe the latter as a
+synthetic-row exclusion boundary.
 
-Do not copy the historical figures beside new edits. A failing or partial run is evidence that
-the gate is still open, not a green record.
+This is documentation accuracy, not a newly admitted security defect.
 
-## Review conclusion
+## P3-2 — Retired deferred-filter wording still appears in first-party errors
 
-The operation-state and enforcement ownership design is now the right foundation. The remaining
-work is to make the raw-list boundary honor that same ownership rule for QuerySets and for the
-relation resolver that bypasses visibility sealing. Until that is fixed and the same-tree gates
-are recorded, the package's central promise—every non-Relay list is bounded—has a reproducible
-wire-level counterexample.
+The new implementation admits a well-formed pending deferred filter on any queryset class and
+rejects malformed deferred-filter state. Several first-party messages still tell consumers that an
+“unresolved deferred filter” cannot be rebuilt, even though unresolved is now the supported case:
 
-<!-- LINK DEFINITIONS -->
+- `django_strawberry_framework/permissions.py::_root_error_renderer`
+- `django_strawberry_framework/permissions.py::_edge_error_renderer`
+- `django_strawberry_framework/utils/querysets.py::_visibility_result_error`
+- the module-level querysets boundary description
 
-<!-- Root -->
-[agents]: ../AGENTS.md
+The current build record already classifies this as deferred wording work, so it does not reopen
+spec-050 under Decision 20. The correction is nevertheless mechanical: replace the cause with
+“malformed deferred-filter state” at every live message/docstring site and keep the archived-spec
+quotations historical.
 
-<!-- docs/ -->
-[spec-050]: spec-050-list_field_arguments-0_0_15.md
+## What passed this review
 
-<!-- docs/SPECS/ -->
+- The new `carry_result_cache` policy is confined to `_RAW_LIST_SOURCE_POLICY`; visibility and
+  post-OrderSet seals do not inherit it.
+- The cache carry refuses every populated cache that is not an exact built-in list before the
+  package-owned queryset slice can consult it.
+- The pending reverse-relation predicate is baked onto a detached cloned query for exact and
+  project queryset classes, with `negate` pinned to an exact bool before its truth test.
+- An actual public `Manager.from_queryset` reverse relation, including the warmed-prefetch shape
+  that simultaneously has a pending predicate and populated cache, retained the correct rows and
+  incurred zero additional queries in a direct probe.
+- The current tree passes formatter check, Ruff, the trailing-comma/source-layout check, the
+  spec-glossary check (43 terms), citation resolution (1108), tracked-path generation, and
+  `git diff --check`.
+- The extension documentation now distinguishes enforcement configuration, upstream ordinary
+  extension spellings, and package-owned per-operation isolation without claiming to isolate
+  third-party extension state.
 
-<!-- docs/builder/ -->
-[build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
+## Required disposition before commit
 
-<!-- django_strawberry_framework/ -->
-[resource-policy]: ../django_strawberry_framework/resource_policy.py
-[types-resolvers]: ../django_strawberry_framework/types/resolvers.py
+1. Fix the impossible/stale close protocol and return the card to WIP.
+2. Disentangle the binary board database from the concurrent library-data change.
+3. Put every intended spec-050 path into one candidate commit and rerun default, sharded, full
+   declared floor, and structural gates on that exact commit.
+4. Run the final adversarial review against that commit.
+5. Write the evidence-only follow-up record naming the gated commit, then mark the close complete.
+6. Reconcile the spec and `TODAY.md` present-tense status claims.
+7. Replace the private manager mount with a real fakeshop model manager declaration before treating
+   the live Manager.from_queryset row as satisfied.
 
-<!-- tests/ -->
-[test-resource-policy]: ../tests/test_resource_policy.py
-[test-querysets]: ../tests/utils/test_querysets.py
-
-<!-- examples/ -->
-[fakeshop-query]: ../examples/fakeshop/test_query/README.md
-
-<!-- scripts/ -->
-
-<!-- .venv/ -->
-
-<!-- External -->
+The implementation itself should be preserved. The required work is to make the acceptance proof
+and repository state as trustworthy as the code now appears to be.

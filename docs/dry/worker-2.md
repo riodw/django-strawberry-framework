@@ -31,15 +31,18 @@ artifact. Never Worker 1's `worker-memory/`.
    assignment and route any candidate to its holding family; never demand a production edit.
 6. Confirm every rejected candidate carries its contract difference and trigger, that the
    freshness field carries fingerprints, that each structural gate fails its negative control, that
-   `## Pending execution` lists every deferred proof with its command, and that coupled findings
-   are marked so neither can be accepted alone.
+   `## Pending execution` lists every deferred proof as `proof: <command>` and every witness as
+   `gate: <command>`, and that coupled findings are marked so neither can be accepted alone.
 7. Check the item-scoped diff against the `AGENTS.md` prose rules: no process provenance,
-   `path::Symbol` citations, tests at the mandated tier. A violation is `revision-needed`.
+   `path::Symbol` citations, tests at the mandated tier; run `uv run ruff format --check` and
+   `uv run ruff check` on the touched paths. A violation or a failure is `revision-needed`.
    Record any defect you find under `## Defects` marked `(Worker 2)`; do not spend the verdict
    asking Worker 1 to write it.
 8. For the final gate, confirm the bound inputs still match the tree and every pending command
-   ran, and that each failure is routed to an item or recorded pre-existing.
+   ran, and that each failure is routed by type: a `proof:` failure to its item, a `gate:` failure
+   to `## Defects` or the environment record, never to an item.
 
-Set `Status: verified` and tick the plan item (marking it `pending execution` when deferred proofs
-remain), or `Status: revision-needed` with concrete named candidates and reproducible feedback.
+Set `Status: verified` and tick the plan item (marking it `pending execution` only when a `proof:`
+entry remains), or `Status: revision-needed` with concrete named candidates and reproducible
+feedback.
 Preserve unrelated work; do not commit.

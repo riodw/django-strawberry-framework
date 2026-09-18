@@ -28,9 +28,10 @@ another worker's `worker-memory/`.
   one a consolidation depends on is named in that finding's Coupling.
 - **Folder and project items:** audit the unassigned remainder and the families that cross
   ownership boundaries. Do not summarize prior artifacts.
-- **Final gate:** run `uv run pytest` and every `## Pending execution` command; record result,
-  coverage, skips, xfails, counts, mode, and the input bindings. A failure in a path no item
-  touched is checked against `git show HEAD:` and reported pre-existing when it reproduces.
+- **Final gate:** run `uv run pytest` and every `## Pending execution` command (`proof:` and
+  `gate:` alike); record result, coverage, skips, xfails, counts, mode, and the input bindings.
+  A failure in a path no item touched is checked against `git show HEAD:` and reported
+  pre-existing when it reproduces.
 
 Before editing a dirty path the item touches, attribute every hunk to the ledger or the cycle
 baseline; an unattributed hunk there stops the item, dirt elsewhere is left alone. A test failing
@@ -38,7 +39,8 @@ before your first edit is pre-existing: reproduce it in a workspace copy taken b
 record it under `## Defects`. Source-mutating proofs run only in the disposable workspace `DRY.md`
 "Tests" describes; the entry command authorizes runs inside it, one focused `--no-cov` test in the
 shared tree, and nothing else. Write the artifact in `DRY.md`'s shape with its `Run:` line. After
-an edit run `uv run ruff format .` and `uv run ruff check --fix .`. Append `## Implementation
+an edit run `uv run ruff check --fix .` then `uv run ruff format .` until `uv run ruff format
+--check` and `uv run ruff check` both pass on the paths you touched. Append `## Implementation
 (Worker 1)` when tracked changes are made; on a later pass append to `## Iterations`. Set
 `Status: ready-for-verification/<n>` (n = submission pass) only when the complete item, edited or
 zero-edit, is ready for independent verification; without edit rights, set `Status: designed`

@@ -238,7 +238,8 @@ Every finding, consolidated or rejected:
   `static-reviewed` | `execution-deferred` | `execution-verified`, each naming the wrong result it
   rejects + what discharges it (inspection alone: import moves, body composed by name; execution:
   anything ordering, transactional, async). `execution-deferred` = listed under the artifact's
-  `## Pending execution` w/ the exact command.
+  `## Pending execution` as `proof: <command>`. A command the gate runs that discharges no
+  finding (regression witness, suite-is-green confirmation) is listed as `gate: <command>`.
 - **Structural gate** — oracle that fails when the owner is bypassed, w/ its negative control: a
   behavior-preserving hand copy of the owner's body. Every behavior oracle passes that control
   (the copy is correct); so does a name/existence assertion
@@ -361,7 +362,12 @@ ticks are history; every item is re-verified under the new run.
 Cycle entry: Worker 0 appends `CYCLE_BASELINE=$(git stash create)` (empty → `HEAD`) + untracked
 files under the package to the plan's `## Cycle baseline`, once. Stash object = tracked changes
 only; listings = the rest. Everything dirty there = concurrent work: never edited, reverted,
-tidied; final net change = diff vs this object + the untracked listing.
+tidied; final net change = diff vs this object + the untracked listing. The block is the entry
+snapshot and is never rewritten or extended; freshness fingerprints, not the block, decide
+staleness. When `HEAD` moves or `git status --short` names a path the block lacks, Worker 0
+appends one `Drift: <date> HEAD <old>..<new>; dirty + <paths>` line under the current run
+heading (the header `Run:` line on the first run, `## Run <release> <date>-<n>` afterwards),
+continuation lines indented two spaces. A drifted path is concurrent work like the rest.
 
 Per item: `ITEM_BASELINE=$(git stash create)` + the same listings, for the item-scoped comparison
 only. Item-scoped diff = `git diff <item baseline> -- <paths touched>` PLUS every file the item
@@ -421,16 +427,21 @@ scoped: the owner, its tests, the ledger rows the item lands.
    confirms matrix discharged against the target's REAL surface (claimed inapplicability judged
    on its reason); confirms each gate fails its negative control; checks the item-scoped diff
    against [AGENTS.md][agents] prose rules (no process provenance, `path::Symbol` citations, test
-   tier); records defects it finds under `## Defects` marked `(Worker 2)`. Zero-edit family /
+   tier) and runs `uv run ruff format --check` + `uv run ruff check` on the paths it touched (a
+   failure is `revision-needed`); records defects it finds under `## Defects` marked
+   `(Worker 2)`. Zero-edit family /
    folder / project item → searches for a real consolidation before accepting; zero-edit FILE
    item → validates coverage + assignment and routes any candidate to its holding family (a file
-   item never owes a production edit). `verified` (`## Pending execution` intact → plan item
-   marked `verified, pending execution`) or `revision-needed` w/ concrete named candidates.
+   item never owes a production edit). `verified` (a `proof:` entry remains → plan item marked
+   `verified, pending execution`; `gate:` entries alone leave it `verified`) or
+   `revision-needed` w/ concrete named candidates.
    Worker 2 alone completes a plan item; verification goes stale (item reopens) when any
    freshness fingerprint changes.
 
 Cross-file changes expected when a family reveals a package-owned rule. Unrelated cleanup out of
-scope. After an edit: `uv run ruff format .`, `uv run ruff check --fix .`. Test runs only as
+scope. After an edit: `uv run ruff check --fix .`, then `uv run ruff format .` last, until
+`uv run ruff format --check <paths touched>` and `uv run ruff check <paths touched>` both pass.
+Test runs only as
 "Tests" authorizes; worker prose never converts dispatch into more. Changelog edits need explicit
 authorization. Only Rio commits.
 
@@ -470,7 +481,8 @@ Non-duplication defects found while tracing, each w/ the owner it routes to.
 
 ## Pending execution
 
-Each `execution-deferred` proof: exact command, what it discharges. Absent when none.
+One entry per command, typed: `proof: <command>` for an `execution-deferred` proof, w/ the
+finding it discharges; `gate: <command>` for a witness that routes nowhere. Absent when none.
 
 ## Judgment
 
@@ -492,9 +504,10 @@ unverified unless Rio also authorizes a `FAKESHOP_SHARDED=1` run. Bind the resul
 `git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + mode. Change to
 package source, tests, fixtures, pytest/coverage config, dependencies or mode invalidates it; prose
 doesn't. Worker 2 completes the gate row by confirming the bound inputs still match the tree and
-each pending command ran. Failure in a path an item touched → that item back to Worker 1;
-failure reproduced against `git show HEAD:` of its test + target → pre-existing, `## Defects`,
-gate row `blocked` on it for Rio; environment failure → recorded precisely, `blocked`.
+each pending command ran. Failure in a path an item touched, or of a `proof:` command → that
+item back to Worker 1; a failing `gate:` command reopens no item; failure reproduced against
+`git show HEAD:` of its test + target → pre-existing, `## Defects`, gate row `blocked` on it for
+Rio; environment failure → recorded precisely, `blocked`.
 
 Worker 0 fills `## Outcomes` BEFORE deleting anything. Artifacts are untracked; Outcomes is the
 only record a later run can invalidate a verdict from. Per finding: rule, owner before/after, each

@@ -399,7 +399,7 @@ def _cycle_baseline_block(status_output: str | None) -> list[str]:
         "reverted,",
         "tidied, or attributed to an item. Worker 0 appends the `CYCLE_BASELINE` stash object "
         "once at",
-        "start and nothing afterwards.",
+        "start and nothing afterwards; drift goes on `Drift:` lines under the run heading.",
         "",
         *body,
     ]

@@ -131,7 +131,11 @@ Blocked: <condition and the decision Rio must make>.
 
 Cycle baseline = the generator's `## Cycle baseline` + `CYCLE_BASELINE=$(git stash create)` (empty
 → `HEAD`) that Worker 0 records at start. Dirty there = concurrent work: never edited, reverted,
-tidied, attributed to an item.
+tidied, attributed to an item. The block is the entry snapshot, never rewritten or extended;
+recorded digests, not the block, decide staleness. When `HEAD` moves or `git status --short`
+names a path the block lacks, Worker 0 appends one `Drift: <date> HEAD <old>..<new>; dirty +
+<paths>` line directly under the header's `Baseline commit:` line, continuation lines indented
+two spaces. A drifted path is concurrent work like the rest.
 
 Per item Worker 0 records `ITEM_BASELINE=$(git stash create)` + `git status --short`. Item-scoped
 diff = `git diff <item baseline> -- <paths touched>` PLUS every file the item added, shown via
@@ -267,7 +271,8 @@ permanent test that fails w/o the fix and passes w/ it). Then `Status: candidate
 Best root-cause correction at the owner, cross-file when the invariant requires (name why each file
 moved). Apply to the shared tree by hand from the workspace; attribute hunks first ("Baseline and
 ownership"). Permanent tests same change; focused `uv run pytest <path> --no-cov`; never the full
-suite. Then `uv run ruff format .`, `uv run ruff check --fix .`.
+suite. Then `uv run ruff check --fix .`, then `uv run ruff format .` last, until
+`uv run ruff format --check <paths touched>` and `uv run ruff check <paths touched>` both pass.
 
 Report: target + result (`No bugs` / `Fixed <severity>` / `Inconclusive` / `Blocked`); contract
 rows recorded; system paths and behavior examined; matrix per axis; confirmed defects w/ evidence
@@ -293,7 +298,8 @@ diagnosis and report AFTER recording its own expectation.
 7. Confirm severity factors; dispute product semantics → `blocked` for Rio, never a regrade by
    fiat.
 8. Check the item-scoped diff against [AGENTS.md][agents] prose rules: no process provenance,
-   `path::Symbol` citations, tests at the mandated tier. A violation is `revision-needed`.
+   `path::Symbol` citations, tests at the mandated tier; run `uv run ruff format --check` and
+   `uv run ruff check` on the touched paths. A violation or a failure is `revision-needed`.
 
 Verdict `verified` w/ the `Verification:` line, or `revision-needed` w/ concrete reproducible
 challenges. Worker 2 never edits the production fix or its tests.
@@ -302,7 +308,8 @@ challenges. Worker 2 never edits the production fix or its tests.
 
 - Start: read [AGENTS.md][agents], [START.md][start], this file, `README.md`, `GOAL.md`,
   [docs/README.md][docs-readme], `docs/TREE.md`, [docs/GLOSSARY.md][glossary]; generate or resume;
-  record `CYCLE_BASELINE`; append nothing to `## Cycle baseline` afterwards.
+  record `CYCLE_BASELINE`; append nothing to `## Cycle baseline` afterwards; drift goes on
+  `Drift:` lines under `Baseline commit:` ("Baseline and ownership").
 - Dispatch the next unchecked item: baseline, fresh Worker 1, workspace path. File items in
   inventory order; a scenario item as soon as its entry-point files are done or when a file item
   names it; integration + gate last.

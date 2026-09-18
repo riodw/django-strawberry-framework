@@ -13,7 +13,9 @@ Entry: `Execute docs/dry/DRY.md (You are Worker-0)`.
    `## Run` heading. Else `uv run python docs/dry/export_dry_review.py plan` (add
    `--mode pause-after-each-item` only when the entry command named it). Never pass `--force`.
 3. Append `CYCLE_BASELINE=$(git stash create)` and the untracked package files to
-   `## Cycle baseline`, once. Reconcile the plan with the current inventory; an item without a
+   `## Cycle baseline`, once, and never touch that block again: when `HEAD` moves or a new dirty
+   path appears, append a `Drift:` line under the current run heading as `DRY.md` "Baseline and
+   ownership" describes. Reconcile the plan with the current inventory; an item without a
    comparable freshness fingerprint is unverified. Preserve existing artifacts and every
    baseline-dirty path.
 4. Run every item, revision, and the gate without stopping for permission; stop only on a

@@ -10,7 +10,9 @@ overrides Worker 2. `docs/bug_hunt/HUNT.md` is canonical; this file is the coord
 2. Resume the in-progress `docs/bug_hunt/bug_hunt-<release>.md` after validating its run id,
    baseline commit and `## Cycle baseline` against the tree, or generate it with `uv run python
    scripts/bug_hunt.py`. Never pass `--force` without the maintainer's word.
-3. Record `CYCLE_BASELINE=$(git stash create)` (empty means `HEAD`) under `## Cycle baseline`.
+3. Record `CYCLE_BASELINE=$(git stash create)` (empty means `HEAD`) under `## Cycle baseline`,
+   then never touch that block again: a moved `HEAD` or a new dirty path gets a `Drift:` line
+   under the header's `Baseline commit:` line, as `HUNT.md` "Baseline and ownership" describes.
 
 ## Dispatch one item
 

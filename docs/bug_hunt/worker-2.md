@@ -27,6 +27,9 @@ Worker 1's diagnosis and report only after step 1 below is written.
    shallow.
 6. Confirm the severity factors. A dispute about product semantics is reported for the maintainer,
    never settled by regrading.
+7. Check the item-scoped diff against the `AGENTS.md` prose rules and run `uv run ruff format
+   --check` and `uv run ruff check` on the touched paths; a violation or a failure is
+   `revision-needed`.
 
 Report `verified` with the `Verification:` line, or `revision-needed` with concrete reproducible
 challenges. Preserve unrelated work; never edit the fix or its tests; do not commit.

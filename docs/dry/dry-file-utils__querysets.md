@@ -679,21 +679,21 @@ edit.
 Three commands this run is not authorized to issue. None blocks the item; all are listed so the
 gate carries them.
 
-1. `FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop/test_query -k prefetch --no-cov`
+1. `proof:` `FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop/test_query -k prefetch --no-cov`
    — discharges D1's observable half: that a nested-connection prefetch child whose target
    `get_queryset` returns `.using("shard_b")` actually reads the other shard at fetch time.
    Needs Rio's separate authorization for the sharded mode; until then D1's cross-connection
    *consequence* stays `unverified` (the policy asymmetry itself is already
    `execution-verified` by the read-only probe).
 
-2. `uv run pytest tests/utils/test_querysets.py tests/test_list_field.py tests/optimizer/test_extension.py --no-cov`
+2. `gate:` `uv run pytest tests/utils/test_querysets.py tests/test_list_field.py tests/optimizer/test_extension.py --no-cov`
    — the one focused shared-tree run this item is authorized for was not spent, because the item
    landed no edit and every finding's proof is either a package-wide search or the two read-only
    probes already run. Listed so the gate can confirm the three suites that own this file's
    oracles are green at the cycle's end, and so F9's claim (that only tests read
    `is_async_queryset_adapter`) is exercised rather than only searched.
 
-3. *(revision 1)* `uv run python docs/dry/temp-tests/dry-file-utils__querysets-w2/probe_defect_arms.py`
+3. *(revision 1)* `gate:` `uv run python docs/dry/temp-tests/dry-file-utils__querysets-w2/probe_defect_arms.py`
    — re-runs D5's reachability measurement at gate time. It is read-only and I already ran it
    against the shared tree during this revision (output reproduced in `## Iterations` I-R4), so
    it is listed not as a deferred proof but as a **regression witness**: if a family item deletes

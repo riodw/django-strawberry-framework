@@ -365,6 +365,39 @@ def test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids()
 
 
 @pytest.mark.django_db
+def test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http():
+    """Selecting ``id`` and ``name`` on shipped ``CategoryType`` does not lazy-load under ``raise``.
+
+    Holder mount with ``DjangoOptimizerExtension(strictness="raise")``. The root
+    returns a queryset so the walker plans the page; if Relay ``id`` failed to
+    project the loaded pk, ``strictness="raise"`` would refuse the unplanned
+    fetch. Payload names are derived from the ORM, not memorized.
+    """
+    services.seed_data(1)
+    from apps.products.schema import CategoryType
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return Category.objects.order_by("pk")
+
+    optimizer = DjangoOptimizerExtension(strictness="raise")
+    payload = _post_visibility_query(
+        strawberry.Schema(
+            query=Query,
+            extensions=[lambda: optimizer],
+            config=strawberry_config(),
+        ),
+        "{ categories { id name } }",
+    )
+    assert payload.get("errors") is None, payload
+    expected = list(Category.objects.order_by("pk").values_list("name", flat=True))
+    assert [row["name"] for row in payload["data"]["categories"]] == expected
+    assert all(row["id"] for row in payload["data"]["categories"])
+
+
+@pytest.mark.django_db
 def test_cascading_target_hook_blocks_fk_id_elision_over_http():
     """A cascading target hook costs a second query rather than eliding the FK read.
 

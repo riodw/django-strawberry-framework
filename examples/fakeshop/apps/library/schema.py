@@ -90,14 +90,16 @@ class Named:
 class LoanType(DjangoType):
     """Loan declared before Book and Patron to exercise finalization.
 
-    Default-OFF acceptance flag ``FAKESHOP_TEST_LOAN_CONNECTION`` (mirrors the
-    ``HIDE_FLAT_FILTERS`` settings-gated idiom): when set, ``relay.Node`` is added
-    to ``Meta.interfaces`` so a ``DjangoConnectionField(LoanType)`` has a
-    Node-shaped target. Read in the ``Meta`` body so a project-schema reload under
-    ``override_settings`` re-executes it; when the flag is absent (the default),
-    ``interfaces`` is not defined and the type stays exactly as shipped -
-    fakeshop's public loan API is permanently list-only (see
-    ``test_book_loans_relation_stays_list_only``).
+    Default-OFF acceptance flags (read in the ``Meta`` body so a project-schema
+    reload under ``override_settings`` re-executes them):
+
+    - ``FAKESHOP_TEST_LOAN_CONNECTION``: add ``relay.Node`` so a
+      ``DjangoConnectionField(LoanType)`` has a Node-shaped target. When absent,
+      the type stays list-only (see ``test_book_loans_relation_stays_list_only``).
+    - ``FAKESHOP_TEST_LOAN_FORCE_SELECT_BOOK``: replace the shipped
+      ``prefetch_related()`` book hint with ``select_related()`` so live SQL can
+      pin that ``BookType.get_queryset`` still forces a Prefetch. When absent,
+      the book hint stays ``prefetch_related()``.
     """
 
     class Meta:
@@ -110,7 +112,12 @@ class LoanType(DjangoType):
         )
         filterset_class = filters.LoanFilter
         orderset_class = orders.LoanOrder
-        optimizer_hints = {"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint.SKIP}
+        _book_hint = (
+            OptimizerHint.select_related()
+            if getattr(settings, "FAKESHOP_TEST_LOAN_FORCE_SELECT_BOOK", False)
+            else OptimizerHint.prefetch_related()
+        )
+        optimizer_hints = {"book": _book_hint, "patron": OptimizerHint(skip=True)}
         if getattr(settings, "FAKESHOP_TEST_LOAN_CONNECTION", False):
             interfaces = (relay.Node,)
             connection = {"total_count": True}

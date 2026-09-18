@@ -1,8 +1,8 @@
 """OptimizerHint tests for Meta.optimizer_hints normalization and validation.
 
-Covers the SKIP sentinel, the three factory classmethods, frozen
-immutability, and the identity/equality contracts consumers and the
-walker will rely on.
+SKIP identity, factory classmethods, frozen immutability, and invalid-state
+``ConfigurationError`` have no GraphQL envelope. Shipped skip / prefetch SQL is
+``examples/fakeshop/test_query/test_library_api.py::test_library_optimizer_hints_are_observable_over_http``.
 """
 
 import pytest

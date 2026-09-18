@@ -1,25 +1,20 @@
-"""Optimizer tests for Relay GlobalID projection and connector-column invariants.
+"""Optimizer tests for Relay GlobalID projection when the pk attname is not ``id``.
 
-Pins Decision 7 (spec #"Decision 7: optimizer and projection invariants"): when a Relay-declared type selects
-``id`` the optimizer's ``only()`` projection must still include the
-concrete pk attname; ``_resolve_id_default`` must read from the loaded
-``__dict__`` cache without triggering a lazy load. The default-pk half of that
-projection contract is live at
-``test_products_visibility_api.py::test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids``;
-the custom-pk half stays here because fakeshop ships no model whose pk attname
-differs from ``id``. Ordinary relation traversal across Relay-declared fakeshop
-targets is pinned through live HTTP in
-``examples/fakeshop/test_query/test_products_api.py``.
+The default-pk half is live at
+``examples/fakeshop/test_query/test_products_visibility_api.py::test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids``
+and
+``examples/fakeshop/test_query/test_products_visibility_api.py::test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http``.
+Every fakeshop model uses the default ``id`` pk, so no live query can put a
+custom pk attname in front of the walker (rung 1 refused: retargeting a shipped
+pk would change every GlobalID). The ``managed=False`` + ``schema_editor``
+pattern stands in.
 """
 
 from types import SimpleNamespace
 
 import pytest
 import strawberry
-from apps.products import services
-from apps.products.models import Category
 from django.db import connection, models
-from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
@@ -34,74 +29,14 @@ def _isolate_registry():
     registry.clear()
 
 
-@pytest.mark.django_db
-def test_relay_id_does_not_trigger_lazy_load():
-    """Selecting ``{ id name }`` on a Relay-declared type is clean under ``strictness="raise"``."""
-    services.seed_data(1)
-
-    class CategoryNode(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryNode]:
-            return Category.objects.all()
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension(strictness="raise")
-    schema = strawberry.Schema(
-        query=Query,
-        extensions=[lambda: ext],
-    )
-    result = schema.execute_sync("{ allCategories { id name } }")
-    assert result.errors is None
-
-
-@pytest.mark.django_db
-def test_relay_resolve_id_uses_loaded_pk():
-    """``CategoryNode.resolve_id`` reads the loaded pk via ``__dict__`` (no extra query)."""
-    services.seed_data(1)
-
-    class CategoryNode(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    finalize_django_types()
-
-    row = Category.objects.only("id", "name").first()
-    assert row is not None
-    expected = str(row.id)
-    with CaptureQueriesContext(connection) as captured:
-        assert CategoryNode.resolve_id(row, info=None) == expected
-    # The dict-cache hit on the loaded pk avoids any additional query.
-    assert len(captured) == 0
-
-
 @pytest.mark.django_db(transaction=True)
 def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_queries):
-    """End-to-end regression for custom-pk Relay projection
-    (``spec-015-relay_interfaces-0_0_5`` Decision 7).
+    """A Relay type whose pk attname is not ``id`` still answers ``{ id name }`` in one query.
 
-    A Relay-declared ``DjangoType`` backed by a model whose pk attname is
-    not ``"id"`` must produce exactly one query for ``{ id name }`` -
-    the walker resolves the configured ``id_attr``, projects the real
-    pk column into ``only()``, and ``_resolve_id_default`` reads the
-    loaded value from ``root.__dict__`` instead of falling back to
-    ``getattr`` and triggering a per-row pk fetch (Decision 7).
-
-    Every fakeshop model uses the default ``id`` pk, so no live query can put a
-    custom pk attname in front of the walker - a gap in the fixture, not a
-    property a request is unable to observe. The ``managed=False`` + manual
-    ``schema_editor`` pattern from
-    ``test_walker.py::test_plan_elides_forward_fk_when_target_pk_is_not_named_id``
-    stands in: the model exists for ``_meta.pk.attname`` introspection and the
-    table exists for a real query.
+    The walker resolves the configured ``id_attr``, projects the real pk column
+    into ``only()``, and ``_resolve_id_default`` reads the loaded value from
+    ``root.__dict__`` instead of falling back to ``getattr`` (spec-015 Decision
+    7).
     """
 
     class CustomPKItem(models.Model):
@@ -120,12 +55,6 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
         class CustomPKItemNode(DjangoType):
             class Meta:
                 model = CustomPKItem
-                # ``Meta.fields`` lists Django field names; the model's pk
-                # is ``uuid`` (not ``id``), so the user must include
-                # ``"uuid"`` here. Relay id-suppression then strips
-                # the synthesized ``uuid`` annotation so the schema
-                # surface is ``id: GlobalID!`` (from ``relay.Node``)
-                # plus ``name``, without leaking ``uuid: str!``.
                 fields = ("uuid", "name")
                 interfaces = (relay.Node,)
 
@@ -144,20 +73,11 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
 
         assert result.errors is None
         plan = ctx.dst_optimizer_plan
-        # The walker projected the real pk attname (``uuid``), not the
-        # GraphQL literal ``id``: without this, the optimizer would fail to
-        # project a custom primary key for a Relay node
-        # (``spec-015-relay_interfaces-0_0_5``).
         assert "uuid" in plan.only_fields
         assert "id" not in plan.only_fields
         assert result.data == {
             "allItems": [{"id": result.data["allItems"][0]["id"], "name": "widget"}],
         }
-        # The Relay GlobalID round-trip carries the custom-pk value. The
-        # type-name slot is the Django model label (``tests.custompkitem``)
-        # under the package-default ``model`` GlobalID strategy (spec-031
-        # Decision 9 default flip); derive it from the ORM rather than
-        # hardcoding so the assertion tracks the model, not a literal.
         node_id = relay.GlobalID.from_id(result.data["allItems"][0]["id"])
         assert node_id.type_name == CustomPKItem._meta.label_lower
         assert node_id.node_id == "abc-123"

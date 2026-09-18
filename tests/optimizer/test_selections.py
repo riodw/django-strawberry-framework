@@ -1,15 +1,8 @@
 """Tests for the selection-traversal substrate (``optimizer/selections.py``).
 
-This module single-sites the
-selection-tree rules the optimizer had split between the AST cache-key walk
-(``optimizer/extension.py``), the converted-selection plan walker
-(``optimizer/walker.py``), and the connection ``totalCount`` detection
-(``connection.py``). The plan cache and nested-connection windows depend on
-those rules being aligned, so a fragment/directive fix landing on one traversal
-but not the others is a real bug class. These tests pin the shared primitives
-directly; the deep behavioral coverage lives in ``tests/optimizer/test_walker.py``
-/ ``test_extension.py`` and ``tests/test_connection.py`` (which reach these same
-functions through the underscore aliases the two modules re-bind).
+Fragment/directive AST helpers and connection-field-name converters are not
+request-observable. Cache-key and window behavior through a real document is
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 import copy

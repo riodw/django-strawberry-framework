@@ -1,4 +1,12 @@
-"""Optimizer tests for definition-order-independent DjangoType relation graphs."""
+"""Optimizer tests for definition-order-independent DjangoType relation graphs.
+
+``plan_relation`` return tuples after cyclic finalize, ``check_schema`` warning
+absence, definition ``field_map`` identity, and annotation-only relation
+metadata have no wire shape. Reverse-O2O JOIN SQL is
+``examples/fakeshop/test_query/test_library_api.py::test_library_optimizer_reverse_o2o_card_joins_in_root_sql``;
+hooked-target Prefetch SQL is
+``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_http_query``.
+"""
 
 import pytest
 import strawberry
@@ -37,7 +45,11 @@ def _model_field(model: type, name: str):
 
 
 def test_plan_relation_decisions_match_cardinality_after_finalization():
-    """Cyclic finalization preserves select/prefetch planning decisions."""
+    """Cyclic finalization still returns the cardinality ``plan_relation`` tuples.
+
+    The callable's return pair is not a wire value. Reverse-O2O JOIN SQL is
+    ``examples/fakeshop/test_query/test_library_api.py::test_library_optimizer_reverse_o2o_card_joins_in_root_sql``.
+    """
 
     class CategoryType(DjangoType):
         class Meta:
@@ -94,30 +106,6 @@ def test_plan_relation_decisions_match_cardinality_after_finalization():
     assert plan_relation(_model_field(Genre, "books"), BookType, info=None) == (
         "prefetch",
         "default",
-    )
-
-
-def test_plan_relation_downgrades_custom_get_queryset_target_after_finalization():
-    """A custom target get_queryset still forces Prefetch after finalization."""
-
-    class MembershipCardType(DjangoType):
-        class Meta:
-            model = MembershipCard
-            fields = ("id", "barcode", "patron")
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset
-
-    class PatronType(DjangoType):
-        class Meta:
-            model = Patron
-            fields = ("id", "name", "card")
-
-    finalize_django_types()
-    assert plan_relation(_model_field(Patron, "card"), MembershipCardType, info=None) == (
-        "prefetch",
-        "custom_get_queryset",
     )
 
 

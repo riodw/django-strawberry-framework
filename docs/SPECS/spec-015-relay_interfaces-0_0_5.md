@@ -74,8 +74,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] `test_non_relay_interface_works`
   - [ ] Optimizer / projection tests (`tests/optimizer/test_relay_id_projection.py`, Decision 7)
     - [ ] `test_relay_id_only_projection_includes_pk_attname`
-    - [ ] `test_relay_id_does_not_trigger_lazy_load`
-    - [ ] `test_relay_resolve_id_uses_loaded_pk`
+    - [ ] Lazy-load-free `{ id name }` under `strictness="raise"` and `resolve_id` reading the loaded pk, both live in `examples/fakeshop/test_query/test_products_visibility_api.py` (`::test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http`, `::test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids`)
     - [ ] Relation traversal across Relay-declared targets, pinned live in `examples/fakeshop/test_query/test_products_api.py`
   - [ ] Schema-construction coverage, live in `examples/fakeshop/test_query/test_library_api.py`
     - [ ] Schema includes the `Node` interface and the GlobalID-scalar `id` on Relay-declared types
@@ -494,8 +493,8 @@ Two assertions, both earned over live `/graphql/` HTTP against the `library` app
 These pin Decision 7's projection invariants:
 
 - `test_relay_id_only_projection_includes_pk_attname` — selecting `{ allCategories { id } }` on a Relay-declared type produces an `only()` projection that includes the model's concrete pk attname.
-- `test_relay_id_does_not_trigger_lazy_load` — selecting `{ allCategories { id name } }` produces zero N+1 warnings under the strictness sentinel.
-- `test_relay_resolve_id_uses_loaded_pk` — `resolve_id` uses the loaded primary-key value without triggering an avoidable lazy load when the optimizer already selected it.
+- `examples/fakeshop/test_query/test_products_visibility_api.py::test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http` — selecting `{ categories { id name } }` on the shipped `CategoryType` completes without error under `strictness="raise"`, so Relay `id` never lazy-loads the pk.
+- `examples/fakeshop/test_query/test_products_visibility_api.py::test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids` — an id-only page costs one query and every emitted GlobalID decodes, so `resolve_id` read the loaded primary-key value.
 
 Decision 7's relation-traversal invariant is pinned live instead, across the four Relay-declared `products` types: `examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_selects_nested_forward_fk_depth_2_over_http` (depth-2 forward FK) and `::test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http` (depth-2 reverse FK) each pin a deterministic query count for a nested traversal whose targets are Relay-declared.
 ### `tests/test_registry.py` (extend)

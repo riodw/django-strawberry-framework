@@ -550,8 +550,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 │   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
-│   ├── test_predicates.py        # Executable ORM tests for the neutral correlated-EXISTS predicate primitive.
-│   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
+│   ├── test_predicates.py        # Executable ORM tests for the correlated-EXISTS predicate primitive.
+│   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection when the pk attname is not ``id``.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
 │   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).
 │   └── test_walker.py            # Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.
@@ -795,8 +795,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 │   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
-│   ├── test_predicates.py        # Executable ORM tests for the neutral correlated-EXISTS predicate primitive.
-│   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
+│   ├── test_predicates.py        # Executable ORM tests for the correlated-EXISTS predicate primitive.
+│   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection when the pk attname is not ``id``.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
 │   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).
 │   └── test_walker.py            # Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.

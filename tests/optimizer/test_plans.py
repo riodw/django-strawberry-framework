@@ -1,9 +1,9 @@
 """OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 
-The plan is a simple dataclass, so the test surface is small and focused
-on the ``is_empty`` property and the ``apply`` method. The walker tests
-in ``test_walker.py`` exercise construction; these tests verify that the
-plan's own methods work correctly in isolation.
+The plan dataclass, ``apply``, path helpers, and window-pagination functions are
+not GraphQL fields. Consumer-visible SQL is
+``examples/fakeshop/test_query/test_library_api.py`` and
+``examples/fakeshop/test_query/test_single_parent_fastpath_api.py``.
 """
 
 import sys

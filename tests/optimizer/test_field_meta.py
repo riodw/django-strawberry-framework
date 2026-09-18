@@ -1,7 +1,8 @@
 """FieldMeta tests for precomputed relation metadata used by optimizer planning.
 
-Covers ``FieldMeta.from_django_field``, definition-backed field maps on
-``DjangoType`` subclasses, and the walker's use of the cached map.
+``FieldMeta.from_django_field``, definition-backed field maps, and cached
+walker metadata have no wire shape. Relation SQL on shipped types is
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 import copy

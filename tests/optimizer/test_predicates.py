@@ -1,24 +1,17 @@
-"""Executable ORM tests for the neutral correlated-EXISTS predicate primitive.
+"""Executable ORM tests for the correlated-EXISTS predicate primitive.
 
-Covers ``optimizer/predicates.py`` end to end against real ``apps.library``
-models: correlation on the outer pk, reserved-alias allocation across every
-effective alias namespace, the three runtime guards, row preservation with no
-injected ``DISTINCT``, same-table inner aliasing, evaluated-outer parity, and
-the ``_base_manager`` start.
-
-These tests assert the production multiset contract for framework-generated
-relational predicates: attaching an existence test is a row-preserving selection
-that never multiplies outer rows (no framework fan-out, no injected ``DISTINCT``,
-no framework dedup of consumer duplicates). The old accidental global
-deduplication of generated to-many leaves was legacy behavior and has been
-removed.
+Guards, reserved-alias allocation, evaluated-outer parity, composite-pk
+correlation, and ``_base_manager`` start have no GraphQL envelope. Row-preserving
+EXISTS SQL without ``SELECT DISTINCT`` is
+``examples/fakeshop/test_query/test_library_api.py::test_genre_connection_flat_leaf_sql_shape_is_row_preserving``
+and
+``examples/fakeshop/test_query/test_library_api.py::test_library_loans_deep_leaf_sql_shape_is_row_preserving``.
 """
 
 import pytest
-from apps.library.models import Book, Branch, Genre, Loan, Patron, Shelf
+from apps.library.models import Book, Branch, Genre, Loan, Shelf
 from django.db import connection, router
-from django.db.models import Q, Value
-from django.test.utils import CaptureQueriesContext
+from django.db.models import Value
 
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.optimizer.predicates import (
@@ -48,67 +41,6 @@ def _shelf():
     return Shelf.objects.create(code="A1", branch=branch)
 
 
-def test_row_preservation_direct_m2m():
-    shelf = _shelf()
-    matching = Book.objects.create(title="One", shelf=shelf)
-    nonmatching = Book.objects.create(title="Two", shelf=shelf)
-    g1 = Genre.objects.create(name="science fiction")
-    g2 = Genre.objects.create(name="hard science")
-    g3 = Genre.objects.create(name="romance")
-    matching.genres.add(g1, g2)
-    nonmatching.genres.add(g3)
-
-    _qs, _cond, result = _compose(Book.objects.all(), {"genres__name__icontains": "scien"})
-
-    assert list(result.order_by("pk").values_list("pk", flat=True)) == [matching.pk]
-    assert result.query.distinct is False
-    tables = {j.table_name for j in result.query.alias_map.values()}
-    assert "library_book_genres" not in tables
-    assert "library_genre" not in tables
-    sql = str(result.query)
-    assert "EXISTS" in sql.upper()
-    # Correlated on the outer root pk column.
-    assert '"library_book"."id"' in sql
-
-
-def test_same_table_inner_aliasing_from_loan_root():
-    shelf = _shelf()
-    shared = Book.objects.create(title="Shared", shelf=shelf)
-    other = Book.objects.create(title="Other", shelf=shelf)
-    p1 = Patron.objects.create(name="P1", email="p1@match.example")
-    p2 = Patron.objects.create(name="P2", email="p2@match.example")
-    p3 = Patron.objects.create(name="P3", email="p3@nope.example")
-    p4 = Patron.objects.create(name="P4", email="p4@nope.example")
-
-    # Ascending pk order: relation_and_direct, relation_only, direct_only, unrelated.
-    relation_and_direct = Loan.objects.create(book=shared, patron=p1, note="keyword note")
-    relation_only = Loan.objects.create(book=shared, patron=p2, note="")
-    direct_only = Loan.objects.create(book=other, patron=p3, note="keyword note")
-    Loan.objects.create(book=other, patron=p4, note="")
-
-    qs, cond, result = _compose(
-        Loan.objects.all(),
-        {"book__loans__patron__email__icontains": "match.example"},
-    )
-
-    # Pure relational term: both loans on the shared book, each exactly once.
-    assert list(result.order_by("pk").values_list("pk", flat=True)) == [
-        relation_and_direct.pk,
-        relation_only.pk,
-    ]
-    # Caller composes the direct note predicate on top of the returned branch.
-    composed = qs.filter(Q(note__icontains="keyword") | cond)
-    assert list(composed.order_by("pk").values_list("pk", flat=True)) == [
-        relation_and_direct.pk,
-        relation_only.pk,
-        direct_only.pk,
-    ]
-    # Outer query keeps exactly one library_loan alias (the root); no DISTINCT.
-    outer_tables = [j.table_name for j in result.query.alias_map.values()]
-    assert outer_tables.count("library_loan") == 1
-    assert result.query.distinct is False
-
-
 def test_reserved_alias_not_selected():
     shelf = _shelf()
     book = Book.objects.create(title="One", shelf=shelf)
@@ -121,20 +53,6 @@ def test_reserved_alias_not_selected():
     sql = str(result.query)
     select_clause = sql.split("FROM", 1)[0]
     assert "_dst_predicate_0" not in select_clause
-
-
-def test_count_emits_no_distinct_wrapper():
-    shelf = _shelf()
-    book = Book.objects.create(title="One", shelf=shelf)
-    book.genres.add(Genre.objects.create(name="science fiction"))
-
-    _qs, _cond, result = _compose(Book.objects.all(), {"genres__name__icontains": "scien"})
-
-    with CaptureQueriesContext(connection) as ctx:
-        assert result.count() == 1
-    sql = ctx.captured_queries[-1]["sql"].upper()
-    assert "SELECT DISTINCT" not in sql
-    assert "COUNT(*)" in sql
 
 
 def test_primitive_injects_no_distinct():

@@ -1,13 +1,14 @@
 """Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).
 
-Everything here runs on SQLite (the coverage tier). Plan-time eligibility
-(``single_parent_spec``) and fetch-time recognition (``_fetch_single_parent_rows``)
-are pure state inspection - they never touch the DB and fall back to ``None`` for
-any shape they do not fully recognize, so the windowed body the strategy already
-planned runs instead. The ``@pytest.mark.django_db`` block re-proves that the
-recognized shape synthesizes the same ``_dst_row_number`` / probe / nested-prefetch
-contract the windowed body would, and that a refused shape still returns correct
-rows via that body.
+Plan-time eligibility (``single_parent_spec``) and fetch-time recognition
+(``_fetch_single_parent_rows``) are queryset-shape inspection: they return a spec
+or ``None`` with no HTTP envelope. A request cannot observe those return values.
+Wire SQL (``OVER (`` present/absent, ``LIMIT 3`` probe, M2M window kept, setting
+off) is
+``examples/fakeshop/test_query/test_single_parent_fastpath_api.py``.
+``test_spec_rejects_a_keyset_seek`` stays because the seek is guarded twice in
+series; live
+``test_single_parent_keyset_seek_page_keeps_window_over_http`` pins the pair.
 
 ``_parent_in_values`` carries the keyword ``column=`` / ``table=`` signature;
 its defensive matrix is owned by
@@ -69,25 +70,6 @@ def _prefetch_filtered(request, field_name, parents):
 # ---------------------------------------------------------------------------
 
 
-def test_spec_accepts_the_plain_first_page():
-    """A count-free plain ``first: N`` DIRECT_FK page resolves to a spec."""
-    spec = single_parent_spec(_shelf_books_request())
-    assert spec is not None
-    assert spec.fetch_limit == 2  # no probe -> LIMIT equals the page size (limit 2).
-    assert spec.order_by == ("title", "id")
-    assert spec.parent_link_attname == "shelf_id"
-    assert spec.parent_link_column == "shelf_id"
-    assert spec.parent_link_table == "library_book"
-    assert spec.pristine_child_queryset is not None
-
-
-def test_spec_probe_overfetches_one_row():
-    """The count-free ``hasNextPage`` probe sets ``fetch_limit == limit + 1``."""
-    spec = single_parent_spec(_shelf_books_request(next_page_probe=True))
-    assert spec is not None
-    assert spec.fetch_limit == 3  # limit 2 + 1 probe sentinel.
-
-
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
@@ -136,11 +118,6 @@ def test_spec_rejects_a_custom_queryset_subclass():
     assert single_parent_spec(_shelf_books_request(child_queryset=stateful)) is None
 
 
-def test_spec_rejects_a_through_table_join():
-    """M2M / THROUGH_TABLE is excluded in v1 (correction 2)."""
-    assert single_parent_spec(_request(Book, "genres", with_total_count=False)) is None
-
-
 # ---------------------------------------------------------------------------
 # Fetch-time recognizer refusal matrix (_fetch_single_parent_rows -> None)
 # ---------------------------------------------------------------------------
@@ -149,13 +126,6 @@ def test_spec_rejects_a_through_table_join():
 def test_fetch_returns_none_without_a_spec():
     """A ``SingleParentWindowQuerySet`` built outside the strategy falls straight back."""
     assert _fetch_single_parent_rows(SingleParentWindowQuerySet(model=Book)) is None
-
-
-def test_fetch_returns_none_when_the_setting_is_disabled(settings):
-    """``SINGLE_PARENT_FAST_PATH=False`` is observed live at fetch time."""
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": False}
-    queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
-    assert _fetch_single_parent_rows(queryset) is None
 
 
 @pytest.mark.parametrize(
@@ -298,18 +268,6 @@ def test_fast_path_populates_a_nested_prefetch():
     rows = list(queryset)  # drive _fetch_all so the nested prefetch pass runs.
     assert "genres" in rows[0]._prefetched_objects_cache
     assert list(rows[0].genres.all()) == [genre]
-
-
-@pytest.mark.django_db
-def test_refused_shape_falls_back_to_the_windowed_body(settings):
-    """A refused fast path still serves correct rows via the windowed body (degrade, not break)."""
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": False}
-    shelf = _seed_shelf(["t1", "t2", "t3"])
-    queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [shelf])
-    assert _fetch_single_parent_rows(queryset) is None
-    rows = list(queryset)  # the superclass windowed body runs instead.
-    assert [row.title for row in rows] == ["t1", "t2"]
-    assert [getattr(row, WINDOW_ROW_NUMBER) for row in rows] == [1, 2]
 
 
 def test_clone_carries_the_spec():

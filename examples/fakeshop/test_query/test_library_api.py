@@ -562,16 +562,17 @@ def test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_htt
 def test_library_optimizer_hints_are_observable_over_http():
     """Both ``LoanType.Meta.optimizer_hints`` entries are readable from the SQL alone.
 
-    ``{"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint.SKIP}``
+    ``{"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint(skip=True)}``
     (``apps/library/schema.py::LoanType``) has two halves, each with a must-not:
 
     - forced prefetch on a forward FK: the relation is fetched by a SECOND
       query keyed on the FK column the root projection kept (``book_id``), and
       the root query carries NO join - the default ``select_related`` for a
       forward FK is genuinely overridden, not merely accompanied.
-    - ``SKIP``: the relation is not planned at all, so nothing joins it and
-      nothing prefetches it; each row's ``patron`` lazy-loads on access, which
-      is one query per row rather than one batched query for the set.
+    - skip (non-sentinel ``OptimizerHint(skip=True)``): the relation is not
+      planned at all, so nothing joins it and nothing prefetches it; each row's
+      ``patron`` lazy-loads on access, which is one query per row rather than
+      one batched query for the set.
     """
     _seed_library_graph()
     book = models.Book.objects.get(title="Kindred")
@@ -644,6 +645,91 @@ def test_library_optimizer_hints_are_observable_over_http():
     assert "library_patron" in captured_skip[1]["sql"]
     assert "library_patron" in captured_skip[2]["sql"]
     assert "library_patron" not in captured_skip[0]["sql"]
+
+
+@pytest.mark.django_db
+def test_library_optimizer_reverse_o2o_card_joins_in_root_sql():
+    """Reverse O2O ``Patron.card`` is selected by a JOIN on the patron root query.
+
+    ``MembershipCardType`` has no ``get_queryset`` hook, so the walker keeps
+    ``select_related`` for the reverse OneToOne. Selecting ``card { barcode }``
+    therefore emits one ``library_patron`` statement that JOINs
+    ``library_membershipcard``. Grace is seeded without a card and still resolves
+    ``card: null``.
+    """
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryPatrons {
+                name
+                card { barcode }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
+            "allLibraryPatrons": [
+                {"name": "Ada", "card": {"barcode": "CARD-1"}},
+                {"name": "Grace", "card": None},
+            ],
+        },
+    }
+    patron_sql = _sql_from_table(captured, "library_patron")
+    assert len(patron_sql) == 1, patron_sql
+    assert "JOIN" in patron_sql[0]
+    assert "library_membershipcard" in patron_sql[0]
+    card_from = _sql_from_table(captured, "library_membershipcard")
+    assert card_from == []
+
+
+@pytest.mark.django_db
+def test_library_force_select_book_hint_still_prefetches_when_book_is_hooked(
+    project_schema_override,
+):
+    """``OptimizerHint.select_related()`` on ``Loan.book`` does not JOIN past ``BookType.get_queryset``.
+
+    ``FAKESHOP_TEST_LOAN_FORCE_SELECT_BOOK`` replaces the shipped prefetch hint
+    with ``select_related()``. ``BookType`` still filters repair rows, so the
+    walker downgrades to a visibility-scoped ``Prefetch``: the loan root has no
+    book JOIN, ``book_id`` stays projected, and books arrive in a second query.
+    The flag-off sibling is
+    ``test_library_optimizer_hints_are_observable_over_http``.
+    """
+    with override_settings(FAKESHOP_TEST_LOAN_FORCE_SELECT_BOOK=True):
+        project_schema_override()
+        _seed_library_graph()
+
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(
+                """
+                query {
+                  allLibraryLoans {
+                    book { title }
+                  }
+                }
+                """,
+            )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
+            "allLibraryLoans": [
+                {"book": {"title": "Kindred"}},
+            ],
+        },
+    }
+    loan_sql = _sql_from_table(captured, "library_loan")
+    book_sql = _sql_from_table(captured, "library_book")
+    assert len(loan_sql) == 1, loan_sql
+    assert "JOIN" not in loan_sql[0]
+    assert "book_id" in loan_sql[0]
+    assert len(book_sql) == 1, book_sql
 
 
 #: One document posted twice by the plan-cache row, so the two requests differ

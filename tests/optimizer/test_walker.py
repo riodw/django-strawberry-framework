@@ -1,18 +1,10 @@
 """Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.
 
-The walker is a pure function (``plan_optimizations``) tested in
-isolation against synthetic selection objects - no Strawberry execution
-required. This makes the three load-bearing details (fragments, aliases,
-``@skip``/``@include``) each testable with a tight, focused case.
-
-All tests use ``SimpleNamespace`` objects mimicking Strawberry's
-``SelectedField`` / ``FragmentSpread`` / ``InlineFragment`` shape.
-The walker dispatches on duck-typed attributes (``name``, ``alias``,
-``directives``, ``selections``, ``type_condition``), so synthetic
-objects exercise exactly the same code paths as real Strawberry nodes.
-
-Nested prefetch chains, FK-id elision, optimizer hints, and ``Prefetch``
-downgrades extend this same walker surface.
+``plan_optimizations`` is a pure function over synthetic selections; defensive
+noops, hint-object identity, and plan slots are not HTTP facts. Relation SQL
+on shipped types is ``examples/fakeshop/test_query/test_library_api.py``,
+elision SQL is ``examples/fakeshop/test_query/test_scalars_api.py``, and nested
+windows are ``examples/fakeshop/test_query/test_single_parent_fastpath_api.py``.
 """
 
 from types import SimpleNamespace

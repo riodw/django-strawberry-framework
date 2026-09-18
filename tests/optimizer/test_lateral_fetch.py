@@ -6,7 +6,8 @@ parent-id extraction runs against real querysets shaped by Django's own
 ``_filter_prefetch_queryset``, and the raw-SQL execution path runs through a
 Postgres facade over the real connection with a scripted cursor. The
 ``@pytest.mark.pg`` live tier re-proves the same SQL against a real Postgres
-server (``tests/test_lateral_pg_parity.py``).
+server (``tests/test_lateral_pg_parity.py``). Routed strategy selection over
+HTTP is ``examples/fakeshop/test_query/test_optimizer_auto_api.py``.
 """
 
 import dataclasses

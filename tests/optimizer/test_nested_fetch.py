@@ -1,12 +1,8 @@
 """Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 
-The seam contract: the walker rules out every strategy-independent refusal arm,
-then hands one ``NestedConnectionRequest`` to the active strategy;
-``WindowedPrefetchStrategy`` (the default) must reproduce the spec-033
-windowed prefetch byte-for-byte (the existing walker/plans/connection pins
-run unchanged - the seam's Definition of Done); strategy selection is fixed
-per extension instance and published per execution via a ``ContextVar``, while
-``"auto"`` defers its backend choice to the planned queryset's fetch-time alias.
+Strategy registry identity, ``ConfigurationError`` at construction, and the
+``ContextVar`` active-strategy seam have no HTTP envelope. Routed strategy SQL
+is ``examples/fakeshop/test_query/test_optimizer_auto_api.py``.
 """
 
 from types import SimpleNamespace

@@ -1994,8 +1994,10 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
     permission gate guards ``id``, so this works anonymously (the targets
     are PUBLIC rows, visible under the activated cascade - spec-034).
 
-    The two target categories carry EXPLICIT multi-digit pks: the ``in``
-    filter must consume the whole decoded id list in ONE predicate.
+    The two target categories carry EXPLICIT multi-digit pks selected above
+    every row created by ``seed_data``: the ``in`` filter must consume the
+    whole decoded id list in ONE predicate without assuming that a database
+    sequence begins at a fixed value.
     Regression pin for the first-Postgres-run find: per-element delegation
     applied ``pk__in="26"`` and Django iterated the STRING, exploding the
     clause to ``IN ('2','6')`` - correct by accident for the single-digit
@@ -2004,11 +2006,24 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
     passed 9.
     """
     seed_data(1)
-    models.Category.objects.create(name="gid-in-alpha", description="d", is_private=False, pk=126)
-    models.Category.objects.create(name="gid-in-beta", description="d", is_private=False, pk=128)
+    highest_pk = models.Category.objects.order_by("-pk").values_list("pk", flat=True).first()
+    alpha_pk = max(126, (highest_pk or 0) + 1)
+    beta_pk = alpha_pk + 2
+    models.Category.objects.create(
+        name="gid-in-alpha",
+        description="d",
+        is_private=False,
+        pk=alpha_pk,
+    )
+    models.Category.objects.create(
+        name="gid-in-beta",
+        description="d",
+        is_private=False,
+        pk=beta_pk,
+    )
     gids = ", ".join(
         f'"{relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(pk))}"'
-        for pk in (126, 128)
+        for pk in (alpha_pk, beta_pk)
     )
     _assert_graphql_data(
         f"query {{ allCategories(filter: {{ id: {{ in: [{gids}] }} }}) "

@@ -444,7 +444,7 @@ Then the remaining contract:
 - `test_cascading_target_downgrades_join_to_prefetch` — a relation whose target hook cascades plans a `Prefetch` (not `select_related`), with the cascade baked into the child queryset **using the live request user** (asserts the prefetch child narrows by `info.context.user`, not just that a `Prefetch` is planned — the [Decision 12](#decision-12--connection--node--list-composition-is-contract-pinning-not-new-code) `_build_child_queryset(..., info)` dependency).
 - `test_plan_with_cascading_hook_uncacheable` — `cacheable = False`; B1 hit/miss counters unaffected for non-cascading types.
 - `test_fk_id_elision_falls_back_for_cascading_target` (re-affirmation of the shipped safety rule against the new hook shape).
-- `test_strictness_raise_silent_across_cascaded_shape`.
+- `examples/fakeshop/test_query/test_list_field_api.py::test_cascaded_item_list_stays_silent_under_strictness_raise`.
 - Queryset-diff no-regression: a consumer `select_related` on a cascading relation still reconciles per B8 (existing suites stay green).
 
 ### Slice 3 — `tests/test_permissions.py` + `tests/test_connection.py` + `tests/test_relay_node_field.py` + `tests/test_list_field.py` (extend)

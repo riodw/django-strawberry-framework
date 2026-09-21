@@ -84,6 +84,7 @@ def test_set_card_status_happy_path():
     assert payload["data"]["setCardStatus"] == {"ok": True, "errors": []}
     card.refresh_from_db()
     assert card.status.key == "wip"
+    assert card.transitions.filter(to_status__key="wip").exists()
 
 
 @pytest.mark.django_db
@@ -121,6 +122,25 @@ def test_set_card_status_permission_denied_anonymous():
 
 
 @pytest.mark.django_db
+def test_set_card_status_unknown_lookup_envelope_uses_all_sentinel():
+    """An unknown ``statusKey`` is an in-band ``unknown_lookup`` on ``__all__``."""
+    card = kf.make_card(status=kf.make_status("todo"))
+    client = _staff_client()
+
+    payload = _run(
+        _SET_STATUS,
+        {"d": {"cardId": _card_gid(card), "statusKey": "nope", "actorKey": "maintainer"}},
+        client=client,
+    )
+
+    assert "errors" not in payload, payload
+    envelope = payload["data"]["setCardStatus"]
+    assert envelope["ok"] is False
+    assert envelope["errors"][0]["codes"] == ["unknown_lookup"]
+    assert envelope["errors"][0]["field"] == "__all__"
+
+
+@pytest.mark.django_db
 def test_create_card_from_spec_happy_path():
     version = kf.make_target_version("9.9.9")
     client = _staff_client()
@@ -140,7 +160,7 @@ def test_create_card_from_spec_happy_path():
     )
 
     assert "errors" not in payload, payload
-    assert payload["data"]["createCardFromSpec"]["ok"] is True
+    assert payload["data"]["createCardFromSpec"] == {"ok": True, "errors": []}
     assert models.Card.objects.filter(title="Live card").exists()
 
 
@@ -197,6 +217,7 @@ def test_move_card_number_out_of_range_envelope():
         client=client,
     )
 
+    assert "errors" not in payload, payload
     envelope = payload["data"]["moveCardNumber"]
     assert envelope["ok"] is False
     assert envelope["errors"][0]["codes"] == ["card_number_out_of_range"]
@@ -306,6 +327,7 @@ def test_verify_card_item_happy_path():
     assert "errors" not in payload, payload
     assert payload["data"]["verifyCardItem"]["ok"] is True
     item.refresh_from_db()
+    assert item.is_complete is True
     assert item.verified_at is not None
     assert item.verification_kind.key == "manual"
 
@@ -341,6 +363,7 @@ def test_record_and_finish_work_attempt_happy_path():
     assert "errors" not in opened, opened
     assert opened["data"]["recordWorkAttempt"]["ok"] is True
     attempt = models.WorkAttempt.objects.get(card=card)
+    assert attempt.outcome_id is None
 
     finished = _run(
         "mutation($d: FinishWorkAttemptFormInput!) { finishWorkAttempt(data: $d) "
@@ -352,6 +375,7 @@ def test_record_and_finish_work_attempt_happy_path():
     assert finished["data"]["finishWorkAttempt"]["ok"] is True
     attempt.refresh_from_db()
     assert attempt.outcome.key == "succeeded"
+    assert attempt.ended_at is not None
 
 
 @pytest.mark.django_db
@@ -384,7 +408,7 @@ def test_record_decision_happy_path():
 
     assert "errors" not in payload, payload
     assert payload["data"]["recordDecision"]["ok"] is True
-    assert models.Decision.objects.filter(question="Ship?").exists()
+    assert models.Decision.objects.filter(question="Ship?", card__isnull=True).exists()
 
 
 @pytest.mark.django_db
@@ -416,6 +440,7 @@ def test_set_card_files_outside_root_envelope():
         client=client,
     )
 
+    assert "errors" not in payload, payload
     envelope = payload["data"]["setCardFiles"]
     assert envelope["ok"] is False
     assert envelope["errors"][0]["codes"] == ["tracked_path_outside_roots"]
@@ -456,6 +481,7 @@ def test_set_card_files_changed_on_undone_card_envelope():
         client=client,
     )
 
+    assert "errors" not in payload, payload
     envelope = payload["data"]["setCardFiles"]
     assert envelope["ok"] is False
     assert envelope["errors"][0]["codes"] == ["changed_files_on_undone_card"]
@@ -485,7 +511,7 @@ def test_create_card_from_spec_number_branch_places_and_shifts():
     )
 
     assert "errors" not in payload, payload
-    assert payload["data"]["createCardFromSpec"]["ok"] is True
+    assert payload["data"]["createCardFromSpec"] == {"ok": True, "errors": []}
     inserted = models.Card.objects.get(title="Inserted card")
     assert inserted.number == 2
     second.refresh_from_db()

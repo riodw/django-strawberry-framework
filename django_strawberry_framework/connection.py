@@ -114,6 +114,11 @@ from .utils.connections import (
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
+    _DEFAULT_SEAL_POLICY,
+    _LIST_ARGUMENT_VISIBILITY_POLICY,
+    _SealPolicy,
+    apply_filterset_async,
+    apply_filterset_sync,
     apply_orderset_async,
     apply_orderset_sync,
     apply_type_visibility_async,
@@ -1780,12 +1785,11 @@ def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> t
     deliberately stays at each caller: the ``await`` is written where it
     happens, never hidden behind a maybe-await.
 
-    ``kind`` is ``"filter"`` or ``"order"``, because the two arms do not run the
-    same boundary: an ``OrderSet`` return is re-sealed through
-    ``django_strawberry_framework/utils/querysets.py::apply_orderset_sync``
-    exactly as the list field seals it, while a ``FilterSet`` return is passed
-    through unsealed: no seal for that return exists yet at either field, and
-    this arm does not invent one.
+    ``kind`` is ``"filter"`` or ``"order"`` so each caller can hand the step to
+    its own public entry point
+    (``django_strawberry_framework/utils/querysets.py::apply_filterset_sync`` /
+    ``::apply_orderset_sync`` and their async twins); both run the one
+    post-sidecar seal.
     """
     steps = []
     if is_supplied(filter_input) and definition.filterset_class is not None:
@@ -1793,6 +1797,20 @@ def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> t
     if is_supplied(order_by_input) and definition.orderset_class is not None:
         steps.append(("order", definition.orderset_class, order_by_input))
     return tuple(steps)
+
+
+def _sidecar_visibility_policy(steps: tuple[tuple, ...]) -> _SealPolicy:
+    """Pick the visibility seal policy for a pipeline that will run ``steps``.
+
+    A request carrying a sidecar input recomposes the sealed ``get_queryset``
+    result (a filter narrows it, an ordering re-sorts it), and Django raises a
+    raw error when either is applied to a combinator, so the read-surface seal
+    switches on ``reject_combined`` for exactly those requests. That is the list
+    field's argument-path rule (``_LIST_ARGUMENT_VISIBILITY_POLICY``), and the
+    two fields answer to it identically; a request with no sidecar input keeps
+    the default policy the hook always answered to.
+    """
+    return _LIST_ARGUMENT_VISIBILITY_POLICY if steps else _DEFAULT_SEAL_POLICY
 
 
 def _pipeline_sync(
@@ -1823,14 +1841,18 @@ def _pipeline_sync(
     target metaclass cannot answer a request-time read differently and silently
     drop a supplied ``filter:`` / ``orderBy:``.
 
-    The ``orderBy`` step runs the SAME post-OrderSet seal the list field runs
-    (``django_strawberry_framework/utils/querysets.py::apply_orderset_sync``):
-    routing intent is frozen before the override is handed the queryset, and the
-    value it returns must still be a lazy, unsliced, uncombined queryset of the
-    captured model's rows on the captured connection, because every later step
-    here (default ordering, optimizer, the Relay window) can only NARROW it. The
-    ``filter`` step's return is NOT sealed: neither field seals a ``FilterSet``
-    return yet, and this pipeline matches the list field on that too.
+    Both sidecar steps run the SAME post-sidecar seal the list field runs on
+    its ordering step
+    (``django_strawberry_framework/utils/querysets.py::apply_filterset_sync`` /
+    ``::apply_orderset_sync``): routing intent is frozen before the override is
+    handed the queryset, and the value it returns must still be a lazy,
+    unsliced, uncombined queryset of the captured model's rows on the captured
+    connection, because every later step here (the next sidecar, default
+    ordering, optimizer, the Relay window) can only NARROW it. When a sidecar
+    input is supplied the visibility seal runs under
+    ``_LIST_ARGUMENT_VISIBILITY_POLICY`` exactly as the list field's argument
+    path does, so a combinator ``get_queryset`` fails closed before a sidecar
+    recomposes it.
     """
     source, is_queryset = _prepare_pipeline_source(
         source,
@@ -1841,19 +1863,17 @@ def _pipeline_sync(
     )
     if not is_queryset:
         return source
-    qs = apply_type_visibility_sync(target_type, source, info, model=definition.model)
-    for kind, set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
-        if kind == "order":
-            qs = apply_orderset_sync(
-                target_type,
-                set_class,
-                qs,
-                value,
-                info,
-                model=definition.model,
-            )
-        else:
-            qs = set_class.apply_sync(value, qs, info)
+    steps = _sidecar_steps(definition, filter_input, order_by_input)
+    qs = apply_type_visibility_sync(
+        target_type,
+        source,
+        info,
+        model=definition.model,
+        policy=_sidecar_visibility_policy(steps),
+    )
+    for kind, set_class, value in steps:
+        apply = apply_orderset_sync if kind == "order" else apply_filterset_sync
+        qs = apply(target_type, set_class, qs, value, info, model=definition.model)
     return _finalize_queryset(target_type, qs, info, definition=definition)
 
 
@@ -1877,10 +1897,10 @@ async def _pipeline_async(
     before ``_prepare_pipeline_source`` can treat it as a plain iterable.
 
     ``definition`` is the factory's one construction-time read, exactly as the
-    sync sibling takes it. The ``orderBy`` step runs the same post-OrderSet seal
-    the list field runs
-    (``django_strawberry_framework/utils/querysets.py::apply_orderset_async``);
-    the ``filter`` step's return stays unsealed, as at the list field.
+    sync sibling takes it. Both sidecar steps run the same post-sidecar seal
+    (``django_strawberry_framework/utils/querysets.py::apply_filterset_async`` /
+    ``::apply_orderset_async``), and a supplied sidecar input selects the same
+    argument-path visibility policy the sync sibling uses.
     """
     source, is_queryset = _prepare_pipeline_source(
         source,
@@ -1891,19 +1911,17 @@ async def _pipeline_async(
     )
     if not is_queryset:
         return source
-    qs = await apply_type_visibility_async(target_type, source, info, model=definition.model)
-    for kind, set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
-        if kind == "order":
-            qs = await apply_orderset_async(
-                target_type,
-                set_class,
-                qs,
-                value,
-                info,
-                model=definition.model,
-            )
-        else:
-            qs = await set_class.apply_async(value, qs, info)
+    steps = _sidecar_steps(definition, filter_input, order_by_input)
+    qs = await apply_type_visibility_async(
+        target_type,
+        source,
+        info,
+        model=definition.model,
+        policy=_sidecar_visibility_policy(steps),
+    )
+    for kind, set_class, value in steps:
+        apply = apply_orderset_async if kind == "order" else apply_filterset_async
+        qs = await apply(target_type, set_class, qs, value, info, model=definition.model)
     return _finalize_queryset(target_type, qs, info, definition=definition)
 
 

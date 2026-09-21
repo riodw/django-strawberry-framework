@@ -3233,3 +3233,231 @@ def test_a_warm_connection_cache_refuses_alternate_metadata_for_its_target():
         _connection_type_for(CacheProvenanceNode, replacement)
     # And the rejection did not disturb the entry the real definition owns.
     assert _connection_type_for(CacheProvenanceNode, real) is warm
+
+
+# --- Post-FilterSet seal at the connection field -----------------------------
+
+
+_CATEGORY_FILTER_SHAPE_PREFIX = (
+    "_CategoryFilter.apply_sync must return an unevaluated, unsliced, uncombined "
+    "QuerySet of Category rows; got "
+)
+
+_FILTERED_CONNECTION_QUERY = (
+    '{ items(filter: {name: {iContains: ""}}) { edges { node { name } } } }'
+)
+
+
+def _filter_override_in_place_routing(
+    cls,
+    input_value,
+    queryset,
+    info,
+):
+    queryset._hints = {"tenant": 2}
+    return queryset
+
+
+def _filter_override_passthrough(
+    cls,
+    input_value,
+    queryset,
+    info,
+):
+    return super(_CategoryFilter, cls).apply_sync(input_value, queryset, info)
+
+
+#: The post-``FilterSet`` seal at the connection field, one row per defect shape.
+#: ``(id, override, expected message start, required substrings)``. The filter
+#: step runs BEFORE ordering and the Relay window, so an unsealed return would
+#: hand every later step a widened, re-routed or already-evaluated queryset.
+_CONNECTION_MALFORMED_FILTER_ROWS = (
+    (
+        "evaluated",
+        lambda cls, input_value, queryset, info: (list(queryset), queryset)[1],
+        _CATEGORY_FILTER_SHAPE_PREFIX + "evaluated defect",
+        (),
+    ),
+    (
+        "none",
+        lambda cls, input_value, queryset, info: None,
+        _CATEGORY_FILTER_SHAPE_PREFIX + "type defect",
+        (),
+    ),
+    (
+        "projection",
+        lambda cls, input_value, queryset, info: queryset.values("name"),
+        _CATEGORY_FILTER_SHAPE_PREFIX + "projection defect",
+        (),
+    ),
+    (
+        "wrong-model",
+        lambda cls, input_value, queryset, info: Item.objects.all(),
+        _CATEGORY_FILTER_SHAPE_PREFIX + "table defect",
+        (),
+    ),
+    (
+        "sliced",
+        lambda cls, input_value, queryset, info: queryset.order_by("name")[:1],
+        _CATEGORY_FILTER_SHAPE_PREFIX + "sliced defect",
+        (),
+    ),
+    (
+        "combined",
+        lambda cls, input_value, queryset, info: queryset.filter(name="a").union(
+            queryset.filter(name="b"),
+        ),
+        _CATEGORY_FILTER_SHAPE_PREFIX + "combined defect",
+        (),
+    ),
+    (
+        "awaitable-in-sync",
+        lambda cls, input_value, queryset, info: _awaitable_queryset(queryset),
+        "_CategoryFilter.apply_sync returned an awaitable in a sync resolver context.",
+        (),
+    ),
+    (
+        "routing-rewritten-in-place",
+        _filter_override_in_place_routing,
+        "_CategoryFilter.apply_sync changed database routing intent",
+        ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
+    ),
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("override", "message_start", "substrings"),
+    [row[1:] for row in _CONNECTION_MALFORMED_FILTER_ROWS],
+    ids=[row[0] for row in _CONNECTION_MALFORMED_FILTER_ROWS],
+)
+def test_connection_seals_a_malformed_filter_apply_sync_result(
+    monkeypatch,
+    override,
+    message_start,
+    substrings,
+):
+    """Each malformed ``FilterSet.apply_sync`` result is rejected by name at the connection.
+
+    The filter arm runs the same post-sidecar seal as the ordering arm
+    (``utils/querysets.py::apply_filterset_sync``), so every defect shape the
+    seal names has to arrive here too.
+    """
+    services.seed_data(2)
+    monkeypatch.setattr(_CategoryFilter, "apply_sync", classmethod(override))
+
+    schema = _field_schema(_make_sidecar_node_type("SealedFilterNode"))
+    result = schema.execute_sync(_FILTERED_CONNECTION_QUERY, context_value=HttpRequest())
+
+    assert result.errors is not None
+    assert result.data is None
+    message = str(result.errors[0].message)
+    assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
+
+
+@pytest.mark.django_db
+def test_connection_healthy_filter_apply_sync_override_still_filters(monkeypatch):
+    """A ``super()`` pass-through ``FilterSet`` override is ACCEPTED and the filter applies."""
+    services.seed_data(3)
+    Category.objects.create(name="zz-needle", is_private=False)
+    monkeypatch.setattr(_CategoryFilter, "apply_sync", classmethod(_filter_override_passthrough))
+
+    schema = _field_schema(_make_sidecar_node_type("HealthyFilterNode"))
+    result = schema.execute_sync(
+        '{ items(filter: {name: {iContains: "needle"}}) { edges { node { name } } } }',
+        context_value=HttpRequest(),
+    )
+
+    assert result.errors is None, result.errors
+    assert [edge["node"]["name"] for edge in result.data["items"]["edges"]] == ["zz-needle"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_connection_async_seal_rejects_a_non_awaitable_filter_apply_async(monkeypatch):
+    """``FilterSet.apply_async`` returning a plain value is rejected on the async path."""
+    monkeypatch.setattr(
+        _CategoryFilter,
+        "apply_async",
+        classmethod(lambda cls, input_value, queryset, info: queryset),
+    )
+
+    async def resolver(root, info):
+        return Category.objects.all()
+
+    schema = _field_schema(
+        _make_sidecar_node_type("AsyncFilterSealNonAwaitableNode"),
+        resolver=resolver,
+    )
+    request = HttpRequest()
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    result = asyncio.run(
+        schema.execute(_FILTERED_CONNECTION_QUERY, context_value=SimpleNamespace(request=request)),
+    )
+
+    assert result.errors is not None
+    assert str(result.errors[0].message).startswith(
+        "_CategoryFilter.apply_async returned a non-awaitable value",
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(monkeypatch):
+    """A sliced ``FilterSet.apply_async`` result is rejected with the shared shape wording."""
+
+    async def _sliced(
+        cls,
+        input_value,
+        queryset,
+        info,
+    ):
+        return queryset.order_by("name")[:1]
+
+    monkeypatch.setattr(_CategoryFilter, "apply_async", classmethod(_sliced))
+
+    async def resolver(root, info):
+        return Category.objects.all()
+
+    schema = _field_schema(_make_sidecar_node_type("AsyncFilterSealSlicedNode"), resolver=resolver)
+    request = HttpRequest()
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    result = asyncio.run(
+        schema.execute(_FILTERED_CONNECTION_QUERY, context_value=SimpleNamespace(request=request)),
+    )
+
+    assert result.errors is not None
+    assert str(result.errors[0].message).startswith(
+        "_CategoryFilter.apply_async must return an unevaluated, unsliced, uncombined "
+        "QuerySet of Category rows; got sliced defect",
+    )
+
+
+def _combined_get_queryset(cls, qs, info):
+    return qs.filter(name__startswith="a").union(qs.filter(name__startswith="b"))
+
+
+@pytest.mark.django_db
+def test_connection_visibility_rejects_a_combinator_hook_only_when_a_sidecar_runs():
+    """``get_queryset`` returning a combinator: refused with a sidecar input, admitted without.
+
+    The list field's argument path seals visibility under
+    ``_LIST_ARGUMENT_VISIBILITY_POLICY`` because a filter or ordering applied to a
+    union raises inside Django; the connection selects the same policy for the
+    same requests (``connection.py::_sidecar_visibility_policy``) and keeps the
+    default read-surface policy when no sidecar will recompose the result.
+    """
+    services.seed_data(2)
+    node_type = _make_sidecar_node_type("CombinatorHookNode", get_queryset=_combined_get_queryset)
+    schema = _field_schema(node_type)
+
+    plain = schema.execute_sync(
+        "{ items { edges { node { name } } } }",
+        context_value=HttpRequest(),
+    )
+    assert plain.errors is None, plain.errors
+
+    filtered = schema.execute_sync(_FILTERED_CONNECTION_QUERY, context_value=HttpRequest())
+    assert filtered.errors is not None
+    assert filtered.data is None
+    assert "combined" in str(filtered.errors[0].message)

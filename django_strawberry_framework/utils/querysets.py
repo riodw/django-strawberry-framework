@@ -2768,7 +2768,7 @@ class _SealPolicy:
       query is a defect. On for the cascade, which narrows by ``.filter(...)``
       and re-projects to a single column, neither of which Django supports
       after a combinator, and for both list-argument seals
-      (``_LIST_ARGUMENT_VISIBILITY_POLICY`` / ``_ORDERSET_RESULT_POLICY``),
+      (``_LIST_ARGUMENT_VISIBILITY_POLICY`` / ``_SIDECAR_RESULT_POLICY``),
       which window the result with one ``[start:stop]`` slice a combined query
       cannot take after ordering.
     - ``require_shared_alias`` -- the candidate's explicit ``_db`` must EQUAL the
@@ -2839,8 +2839,11 @@ _LIST_RELATION_CHILD_POLICY = _SealPolicy(require_shared_alias=True)
 # and on no other, which is what keeps ``get_queryset`` answering to one contract whether or
 # not the request carried arguments.
 _LIST_ARGUMENT_VISIBILITY_POLICY = _SealPolicy(reject_combined=True)
-# Post-OrderSet result policy: model rows, unevaluated, unsliced, uncombined.
-_ORDERSET_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=True)
+# Post-sidecar result policy, one for both public ``FilterSet.apply_*`` and
+# ``OrderSet.apply_*`` returns: model rows, unevaluated, unsliced, uncombined. The
+# two sidecars hand back the same kind of object to the same downstream steps, so
+# they answer to one policy (Decision 8: a second constant would differ on nothing).
+_SIDECAR_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=True)
 # A raw-list row source about to be windowed by ``resource_policy.py``. Every axis
 # that exists to protect a RECOMPOSITION is off, because nothing recomposes here:
 # one ``[start:stop]`` is taken and Django takes it on a sliced query and on a
@@ -3009,7 +3012,11 @@ def _validate_post_orderset_result(
     *,
     model: type[models.Model] | None = None,
 ) -> models.QuerySet:
-    """Validate and seal the result returned by ``OrderSet.apply_sync`` / ``apply_async``.
+    """Validate and seal a public sidecar ``apply_sync`` / ``apply_async`` return.
+
+    ``method_name`` names the ``FilterSet`` or ``OrderSet`` method that produced
+    ``post_order_candidate``; the wording is the same for both because the
+    contract is.
 
     ``expected_routing`` is the record :func:`_snapshot_routing_intent` froze
     before the public method ran; the validator never reads the source queryset
@@ -3027,7 +3034,7 @@ def _validate_post_orderset_result(
         post_order_candidate,
         model,
         expected_routing.effective_alias,
-        _ORDERSET_RESULT_POLICY,
+        _SIDECAR_RESULT_POLICY,
         expected_routing=expected_routing,
     )
     if defect is not None:
@@ -3085,33 +3092,33 @@ def require_orderset_class(target_type: type, orderset_class: type | None) -> ty
     return orderset_class
 
 
-def apply_orderset_sync(
+def _apply_sidecar_sync(
     target_type: type,
-    orderset_class: type | None,
+    set_class: type,
     queryset: models.QuerySet,
-    order_by: Any,
+    input_value: Any,
     info: Any,
     *,
     model: type[models.Model],
 ) -> models.QuerySet:
-    """Call ``OrderSet.apply_sync`` and re-seal what it returned.
+    """Call a sidecar set's ``apply_sync`` and re-seal what it returned.
 
-    The ONE post-OrderSet seal both the list field and the Relay connection
-    field run: routing intent is frozen before the consumer override receives
-    the queryset, and the value it hands back is validated against
-    ``_ORDERSET_RESULT_POLICY`` (lazy, model rows of the captured model,
+    The ONE post-sidecar seal the list field and the Relay connection field run
+    over a public ``FilterSet.apply_sync`` / ``OrderSet.apply_sync`` return:
+    routing intent is frozen before the consumer override receives the
+    queryset, and the value it hands back is validated against
+    ``_SIDECAR_RESULT_POLICY`` (lazy, model rows of the captured model,
     unsliced, uncombined, same routing) before any later step sees it. Every
-    step after ordering can only NARROW the sealed queryset (spec-030
+    step after a sidecar can only NARROW the sealed queryset (spec-030
     Decision 7), so an override that widens, re-routes, re-tables or
     pre-evaluates its result is rejected here rather than silently serving
     foreign rows or a wrong page.
     """
-    orderset_class = require_orderset_class(target_type, orderset_class)
-    method_name = f"{orderset_class.__name__}.apply_sync"
+    method_name = f"{set_class.__name__}.apply_sync"
     # Frozen BEFORE the override receives the queryset: it can mutate the
     # object it was handed, so a post-call read is not a baseline.
     expected_routing = _snapshot_routing_intent(queryset, method_name)
-    candidate = orderset_class.apply_sync(order_by, queryset, info)
+    candidate = set_class.apply_sync(input_value, queryset, info)
     if inspect.isawaitable(candidate):
         _dispose_sync_awaitable(candidate)
         raise SyncMisuseError(
@@ -3127,25 +3134,24 @@ def apply_orderset_sync(
     )
 
 
-async def apply_orderset_async(
+async def _apply_sidecar_async(
     target_type: type,
-    orderset_class: type | None,
+    set_class: type,
     queryset: models.QuerySet,
-    order_by: Any,
+    input_value: Any,
     info: Any,
     *,
     model: type[models.Model],
 ) -> models.QuerySet:
-    """Async sibling of :func:`apply_orderset_sync`, running the same one seal.
+    """Async sibling of :func:`_apply_sidecar_sync`, running the same one seal.
 
-    The awaited result carries the same ``_ORDERSET_RESULT_POLICY`` contract;
+    The awaited result carries the same ``_SIDECAR_RESULT_POLICY`` contract;
     the extra arms reject a public method that never returned an awaitable at
     all, and one that awaited to a second awaitable.
     """
-    orderset_class = require_orderset_class(target_type, orderset_class)
-    method_name = f"{orderset_class.__name__}.apply_async"
+    method_name = f"{set_class.__name__}.apply_async"
     expected_routing = _snapshot_routing_intent(queryset, method_name)
-    candidate_awaitable = orderset_class.apply_async(order_by, queryset, info)
+    candidate_awaitable = set_class.apply_async(input_value, queryset, info)
     if not inspect.isawaitable(candidate_awaitable):
         raise ConfigurationError(
             f"{method_name} returned a non-awaitable value "
@@ -3163,6 +3169,90 @@ async def apply_orderset_async(
         expected_routing,
         candidate,
         method_name,
+        model=model,
+    )
+
+
+def apply_orderset_sync(
+    target_type: type,
+    orderset_class: type | None,
+    queryset: models.QuerySet,
+    order_by: Any,
+    info: Any,
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    """Run ``OrderSet.apply_sync`` through the shared post-sidecar seal.
+
+    Both the list field and the Relay connection field enter here; see
+    :func:`_apply_sidecar_sync` for the seal itself.
+    """
+    orderset_class = require_orderset_class(target_type, orderset_class)
+    return _apply_sidecar_sync(target_type, orderset_class, queryset, order_by, info, model=model)
+
+
+async def apply_orderset_async(
+    target_type: type,
+    orderset_class: type | None,
+    queryset: models.QuerySet,
+    order_by: Any,
+    info: Any,
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    """Async sibling of :func:`apply_orderset_sync`."""
+    orderset_class = require_orderset_class(target_type, orderset_class)
+    return await _apply_sidecar_async(
+        target_type,
+        orderset_class,
+        queryset,
+        order_by,
+        info,
+        model=model,
+    )
+
+
+def apply_filterset_sync(
+    target_type: type,
+    filterset_class: type,
+    queryset: models.QuerySet,
+    filter_input: Any,
+    info: Any,
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    """Run ``FilterSet.apply_sync`` through the shared post-sidecar seal.
+
+    The Relay connection field is the one field publishing ``filter:``; its
+    pipeline enters here so a filter override answers to the same contract as
+    an ordering override (:func:`_apply_sidecar_sync`).
+    """
+    return _apply_sidecar_sync(
+        target_type,
+        filterset_class,
+        queryset,
+        filter_input,
+        info,
+        model=model,
+    )
+
+
+async def apply_filterset_async(
+    target_type: type,
+    filterset_class: type,
+    queryset: models.QuerySet,
+    filter_input: Any,
+    info: Any,
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    """Async sibling of :func:`apply_filterset_sync`."""
+    return await _apply_sidecar_async(
+        target_type,
+        filterset_class,
+        queryset,
+        filter_input,
+        info,
         model=model,
     )
 

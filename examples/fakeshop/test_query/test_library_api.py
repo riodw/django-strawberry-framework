@@ -3582,6 +3582,161 @@ query {
 """
 
 
+_GENRE_FILTER_SHAPE_PREFIX = (
+    "GenreFilter.apply_sync must return an unevaluated, unsliced, uncombined "
+    "QuerySet of Genre rows; got "
+)
+
+_GENRE_CONNECTION_FILTERED_QUERY = """
+query {
+  allLibraryGenresConnection(filter: { name: { iContains: "a" } }) {
+    edges { node { name } }
+  }
+}
+"""
+
+
+def _genre_filter_in_place_routing(
+    cls,
+    input_value,
+    queryset,
+    info,
+):
+    queryset._hints = {"tenant": 2}
+    return queryset
+
+
+#: One row per defect class the post-``FilterSet`` seal names on the shipped
+#: connection: ``(override, expected message start, required substrings,
+#: genre queries)``. The query count is the must-not half: a defect the seal
+#: catches before the window is taken leaves ``library_genre`` untouched, and
+#: the one row that evaluates inside the override proves the count is measured.
+_MALFORMED_GENRE_FILTER_ROWS = (
+    (
+        "evaluated",
+        lambda cls, input_value, queryset, info: (list(queryset), queryset)[1],
+        _GENRE_FILTER_SHAPE_PREFIX + "evaluated defect",
+        (),
+        1,
+    ),
+    (
+        "none",
+        lambda cls, input_value, queryset, info: None,
+        _GENRE_FILTER_SHAPE_PREFIX + "type defect",
+        (),
+        0,
+    ),
+    (
+        "projection",
+        lambda cls, input_value, queryset, info: queryset.values("name"),
+        _GENRE_FILTER_SHAPE_PREFIX + "projection defect",
+        (),
+        0,
+    ),
+    (
+        "wrong-model",
+        lambda cls, input_value, queryset, info: models.Book.objects.all(),
+        _GENRE_FILTER_SHAPE_PREFIX + "table defect",
+        (),
+        0,
+    ),
+    (
+        "sliced",
+        lambda cls, input_value, queryset, info: queryset.order_by("name")[:1],
+        _GENRE_FILTER_SHAPE_PREFIX + "sliced defect",
+        (),
+        0,
+    ),
+    (
+        "combined",
+        lambda cls, input_value, queryset, info: queryset.filter(name="Alpha").union(
+            queryset.filter(name="Gamma"),
+        ),
+        _GENRE_FILTER_SHAPE_PREFIX + "combined defect",
+        (),
+        0,
+    ),
+    (
+        "routing-rewritten-in-place",
+        _genre_filter_in_place_routing,
+        "GenreFilter.apply_sync changed database routing intent",
+        ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
+        0,
+    ),
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    (
+        "override",
+        "message_start",
+        "substrings",
+        "genre_queries",
+    ),
+    [row[1:] for row in _MALFORMED_GENRE_FILTER_ROWS],
+    ids=[row[0] for row in _MALFORMED_GENRE_FILTER_ROWS],
+)
+def test_genre_connection_a_malformed_filter_apply_sync_result_names_its_own_defect(
+    monkeypatch,
+    override,
+    message_start,
+    substrings,
+    genre_queries,
+):
+    """Each malformed ``GenreFilter.apply_sync`` result is refused by name over ``/graphql/``.
+
+    The shipped connection runs the same post-sidecar seal on its filter step as
+    on its ordering step, so a filter override that widens, re-routes, slices or
+    pre-evaluates its result is rejected before the Relay window is taken. SQL
+    is captured so a row that must not reach the database proves it did not.
+    """
+    from apps.library.filters_genre import GenreFilter
+
+    _seed_genres("Gamma", "Alpha")
+    monkeypatch.setattr(GenreFilter, "apply_sync", classmethod(override))
+
+    with (
+        override_settings(**_ERROR_POLICY_PASS_THROUGH),
+        CaptureQueriesContext(connection) as ctx,
+    ):
+        response = _post_graphql(_GENRE_CONNECTION_FILTERED_QUERY)
+
+    payload = response.json()
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
+    genre_sql = [q["sql"] for q in ctx.captured_queries if "library_genre" in q["sql"].lower()]
+    assert len(genre_sql) == genre_queries, genre_sql
+
+
+@pytest.mark.django_db
+def test_genre_connection_healthy_filter_override_still_filters(monkeypatch):
+    """A ``super()`` pass-through ``GenreFilter`` override is admitted and the filter applies."""
+    from apps.library.filters_genre import GenreFilter
+
+    def _passthrough(
+        cls,
+        input_value,
+        queryset,
+        info,
+    ):
+        return super(GenreFilter, cls).apply_sync(input_value, queryset, info)
+
+    _seed_genres("Gamma", "Alpha", "Echo")
+    monkeypatch.setattr(GenreFilter, "apply_sync", classmethod(_passthrough))
+
+    response = _post_graphql(_GENRE_CONNECTION_FILTERED_QUERY)
+    payload = response.json()
+    assert "errors" not in payload, payload
+    names = {
+        edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
+    }
+    assert names == {"Gamma", "Alpha"}
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("as_staff", [False, True], ids=["anonymous", "staff"])
 def test_genre_connection_filter_order_and_slice_compose(as_staff):

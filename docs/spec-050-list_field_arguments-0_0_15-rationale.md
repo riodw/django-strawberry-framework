@@ -366,7 +366,7 @@ Spec: [Decision 8][spec-050-d8].
 pending `_deferred_filter`, on an exact `QuerySet` and on a `Manager.from_queryset` class alike.
 Measured directly (the same relation built both ways carries the identical tuple), and measured
 at the seal: with the exact-`QuerySet` gate in place, the five `_SealPolicy` values the probe
-exercised (`_DEFAULT_SEAL_POLICY`, `_LIST_ARGUMENT_VISIBILITY_POLICY`, `_ORDERSET_RESULT_POLICY`,
+exercised (`_DEFAULT_SEAL_POLICY`, `_LIST_ARGUMENT_VISIBILITY_POLICY`, `_SIDECAR_RESULT_POLICY`,
 `_PREFETCH_CHILD_POLICY` and `_RAW_LIST_SOURCE_POLICY`) each refused the subclass relation
 queryset with `("untrusted", "<class> carries an unresolved deferred filter")` while admitting
 the exact one, so a `Manager.from_queryset` relation was refused at the raw-list row source AND
@@ -638,13 +638,14 @@ the consumer override receives the queryset and validate what it hands back on t
 axes - lazy, model rows of the captured model, unsliced, uncombined, same routing - before any
 later step, including the Relay window, sees it.
 
-The remaining deferral is the `FilterSet.apply_*` return, which neither field seals. It is not
-remediated here: Decision 22 closes this card on the work the card named, so it belongs to a
-card owned by the connection field rather than reopening 050. Owner: card
-`TODO-ALPHA-053-0.0.15`, which names the same symbols, the same frozen routing intent and the
-same `_ORDERSET_RESULT_POLICY` axes, plus the adjacent seal-policy asymmetry between
-the `_DEFAULT_SEAL_POLICY` the connection field seals under and the list field's
-`_LIST_ARGUMENT_VISIBILITY_POLICY`.
+The remaining deferral was the `FilterSet.apply_*` return. Decision 22 closes this card on the
+work the card named, so it went to a card owned by the connection field rather than reopening
+050: card `TODO-ALPHA-053-0.0.15` carries the row, discharged. Both sidecar returns now run one
+seal, `django_strawberry_framework/utils/querysets.py::_apply_sidecar_sync` and its async
+twin, under the same frozen routing intent and the one `_SIDECAR_RESULT_POLICY`, from both
+`connection.py` pipelines; the adjacent seal-policy asymmetry is closed with it, a connection
+request carrying a sidecar input sealing `get_queryset` under
+`_LIST_ARGUMENT_VISIBILITY_POLICY` as the list field's argument path does.
 
 ### Decision 21 — the extension contract is upstream's; per-operation isolation is the guarantee this package adds
 

@@ -86,6 +86,7 @@ from strawberry.extensions.validation_cache import _get_validate_cache
 
 from django_strawberry_framework import (
     DEFAULT_ERROR_POLICY,
+    DEFAULT_RESOURCE_POLICY,
     RESOURCE_LIMIT_ERROR_CODE,
     DjangoListField,
     DjangoOptimizerExtension,
@@ -407,6 +408,13 @@ _OPAQUE_SCALAR = strawberry.scalar(
 )
 
 
+#: A raw list longer than the package's default ``max_list_rows`` and shorter
+#: than the widened bound the tampering row writes over the exported default, so
+#: a response bounded by one cannot be mistaken for a response bounded by the
+#: other.
+_UNCONFIGURED_SOURCE_ROWS = [str(index) for index in range(150)]
+
+
 @strawberry.type
 class _AuthorityQuery:
     """The seams a resolver can reach through ``info.schema``, plus a bounded list."""
@@ -485,6 +493,16 @@ class _AuthorityQuery:
     @strawberry.field
     def rows(self, info: strawberry.Info) -> list[str]:
         return list(bounded_rows(["a", "b", "c"], info, None))
+
+    @strawberry.field
+    def many_rows(self, info: strawberry.Info) -> list[str]:
+        """A raw list long enough to meet the package's OWN default row ceiling.
+
+        The source is longer than ``max_list_rows`` leaves on a schema that
+        configured nothing, so the rows a response carries name the ceiling the
+        request was actually held to.
+        """
+        return list(bounded_rows(_UNCONFIGURED_SOURCE_ROWS, info, None))
 
     @strawberry.field
     def take(self, payload: OpaqueValue = None) -> str:
@@ -1057,6 +1075,26 @@ def _retained_view(request, *args, **kwargs):
 _retained_view.csrf_exempt = True
 
 
+def _unconfigured_view(request, *args, **kwargs):
+    """Mount a schema that configures NO resource policy at all, built per request.
+
+    Deliberately not cached, unlike every other schema factory here: the row this
+    mount serves writes the exported default BEFORE the schema exists, and a
+    schema built once per worker would be one that write could never have
+    reached.
+    """
+    built = DjangoGraphQLView.as_view(
+        schema=DjangoSchema(
+            query=_AuthorityQuery,
+            config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
+        ),
+    )
+    return built(request, *args, **kwargs)
+
+
+_unconfigured_view.csrf_exempt = True
+
+
 #: Aliases one operation may carry on the shared-entry mounts. An ordinary
 #: two-alias document is over it, so the oversized and benign documents differ in
 #: nothing but the alias the bound is about.
@@ -1202,6 +1240,7 @@ urlpatterns = [
     path("rp-rewritten-entries/", _membership_view("rewritten")),
     path("rp-forged-entries/", _droppable_view("forged")),
     path("rp-dropped-entries/", _droppable_view("dropped")),
+    path("rp-unconfigured/", _unconfigured_view),
     path("rp-census/", _census_view),
     path("rp-witness-cache-first/", _witness_view("cache-first")),
     path("rp-witness-cache-last/", _witness_view("cache-last")),
@@ -2532,6 +2571,33 @@ def test_a_policy_the_deployment_still_holds_cannot_widen_a_later_request():
         RETAINED_POLICY.__dict__["max_list_rows"] = 1
     _no_rejection(second)
     assert second["data"]["rows"] == ["a"]
+
+
+def test_a_written_exported_default_cannot_widen_an_unconfigured_schema():
+    """The exported default is a value template; a bound is read from the package's own.
+
+    ``DEFAULT_RESOURCE_POLICY`` is a root export, so any consumer module holds
+    it, and a frozen dataclass admits ``policy.__dict__[bound] = wider``. The
+    write lands before this mount's schema exists - it builds one per request -
+    so a schema that read the exported object would serve every later request of
+    the process on a bound no deployment configured. The response carries the
+    package's own ceiling instead.
+    """
+    declared = dict(DEFAULT_RESOURCE_POLICY.__dict__)
+    DEFAULT_RESOURCE_POLICY.__dict__["max_list_rows"] = 999
+    try:
+        widened = _post("/rp-unconfigured/", "{ manyRows }")
+    finally:
+        # The export is process-global: a write left behind would answer every
+        # later row in the session.
+        DEFAULT_RESOURCE_POLICY.__dict__.update(declared)
+    _no_rejection(widened)
+    assert len(_UNCONFIGURED_SOURCE_ROWS) > declared["max_list_rows"]
+    assert len(widened["data"]["manyRows"]) == declared["max_list_rows"]
+
+    control = _post("/rp-unconfigured/", "{ manyRows }")
+    _no_rejection(control)
+    assert control["data"]["manyRows"] == widened["data"]["manyRows"]
 
 
 def _opaque_request(source, width):

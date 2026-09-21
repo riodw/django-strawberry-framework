@@ -5,7 +5,9 @@ resolve_error_policy`` are deliberately the same shape - a consumer who has
 learned how one schema-construction policy is configured has learned both -
 so that shape lives here once: an explicit policy instance is canonicalized into
 a private validated duplicate and used, an absent one falls back to the
-configured setting and then to the fail-closed package default, a non-mapping
+configured setting and then to the fail-closed package default - which is
+canonicalized on exactly the same terms, so no resolution hands back an object
+another schema, or a consumer, already holds - a non-mapping
 override is rejected, unknown keys are rejected naming the valid vocabulary, and
 a mapping is applied over the dataclass defaults. A mapping override is
 MATERIALIZED ONCE into a plain ``dict`` before
@@ -123,12 +125,20 @@ def resolve_policy(
     ``unit`` is what one override key is called there ("bound" / "option"); the
     wire-visible wording of both rejections is produced from these, so the two
     resolvers cannot drift apart in text any more than in behavior.
+
+    The no-override path is canonicalized like every other one. ``default`` is a
+    module-level object shared by every schema in the process, so returning it
+    would make one schema's stored policy the same object as another's - and the
+    same object as whatever name the package exposes it under, which is the one
+    thing :func:`canonical_policy` exists to prevent. A deployment that
+    configures nothing gets the same guarantee as one that configures
+    everything.
     """
     if isinstance(explicit, policy_cls):
         return canonical_policy(explicit, policy_cls=policy_cls, display_name=display_name)
     overrides = explicit if explicit is not None else read_setting()
     if overrides is None:
-        return default
+        return canonical_policy(default, policy_cls=policy_cls, display_name=display_name)
     if isinstance(overrides, policy_cls):
         # An instance behind the SETTING slot is the same declaration the
         # explicit argument accepts - the two override sources are one ladder

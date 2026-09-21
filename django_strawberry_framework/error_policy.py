@@ -34,6 +34,12 @@ Resolved once at schema construction (``schema.py::DjangoSchema``) through
 ``resolve_error_policy``, exactly as the resource policy is: an invalid
 deployment fails at startup rather than on a request, and no resolver re-reads
 a setting.
+
+``DEFAULT_ERROR_POLICY`` is exported as an inspectable value TEMPLATE, never as
+the object a mask is decided from. What the package falls back to is
+``_PACKAGE_ERROR_POLICY``, a canonical copy taken at import, so a write to the
+exported constant reaches no schema, no extension, and no request - the same
+separation ``resource_policy.py`` draws for its own default.
 """
 
 from __future__ import annotations
@@ -45,7 +51,7 @@ from typing import Any
 
 from .conf import error_policy_setting
 from .exceptions import ConfigurationError, describe_value
-from .utils.policies import resolve_policy
+from .utils.policies import canonical_policy, resolve_policy
 
 __all__ = (
     "DEFAULT_ERROR_POLICY",
@@ -91,24 +97,56 @@ class ErrorPolicy:
     correlation_extension_key: str = "correlationId"
 
     def __post_init__(self) -> None:
-        """Reject a malformed policy at construction, naming the offending field."""
-        if not isinstance(self.enabled, bool):
+        """Reject a malformed policy at construction, naming the offending field.
+
+        Every type test is EXACT, for the reason
+        ``resource_policy.py::_require_positive_int`` states for a bound: a
+        SUBCLASS is consumer code wearing a built-in's type, and every dunder the
+        package then reaches for is that code. A ``str`` subclass stored as
+        ``message`` is formatted into the masked error on the one path that
+        exists to keep an untrusted reader from seeing anything the deployment
+        did not choose, so a ``__str__`` / ``__format__`` hook there degrades the
+        whole response instead of publishing the configured policy; one stored as
+        ``correlation_extension_key`` is the key an operator's whole audit trail
+        is looked up by. Admitting only the built-in types is what keeps the
+        masking path on values the package owns.
+        """
+        if type(self.enabled) is not bool:
             raise ConfigurationError(
                 f"ErrorPolicy.enabled must be a bool; got {describe_value(self.enabled)}.",
             )
         for name in ("message", "correlation_extension_key"):
             value = getattr(self, name)
-            if not isinstance(value, str) or not value:
+            if type(value) is not str or not value:
                 raise ConfigurationError(
                     f"ErrorPolicy.{name} must be a non-empty string; got {describe_value(value)}.",
                 )
 
 
-#: The package default: masking on, a stable neutral message, the ``correlationId``
-#: extensions key. Read whenever neither the schema argument nor the setting
-#: supplies an override - so the fail-closed answer is the one a deployment gets
-#: by doing nothing.
+#: The package default, as an inspectable value template: masking on, a stable
+#: neutral message, the ``correlationId`` extensions key. A deployment reads it to
+#: learn what it gets by doing nothing, and copies it to build a policy of its own.
+#:
+#: It is a TEMPLATE and not the authority. It is exported, so consumer code holds
+#: it, and a frozen dataclass admits ``DEFAULT_ERROR_POLICY.__dict__["enabled"] =
+#: False`` - which, on an object every masking fallback read, would be one write
+#: after startup that puts raw exception text on the wire for every schema in the
+#: process, including schemas built before it. Nothing in the package reads this
+#: name: what the fallbacks read is :data:`_PACKAGE_ERROR_POLICY`, and what a
+#: schema stores is a fresh copy taken at resolution
+#: (``utils/policies.py::resolve_policy``).
 DEFAULT_ERROR_POLICY = ErrorPolicy()
+
+#: The package's own fail-closed policy, and the one every seam in the package
+#: falls back to. Built once, at import, from the values the template was
+#: declared with, so it carries the package's answer rather than whatever the
+#: exported object holds now; being reachable from no exported name is what makes
+#: reading a tampered default impossible rather than merely discouraged.
+_PACKAGE_ERROR_POLICY = canonical_policy(
+    DEFAULT_ERROR_POLICY,
+    policy_cls=ErrorPolicy,
+    display_name="error policy",
+)
 
 
 def resolve_error_policy(explicit: ErrorPolicy | Mapping[str, Any] | None) -> ErrorPolicy:
@@ -130,7 +168,7 @@ def resolve_error_policy(explicit: ErrorPolicy | Mapping[str, Any] | None) -> Er
     return resolve_policy(
         explicit,
         policy_cls=ErrorPolicy,
-        default=DEFAULT_ERROR_POLICY,
+        default=_PACKAGE_ERROR_POLICY,
         read_setting=error_policy_setting,
         display_name="error policy",
         unit="option",

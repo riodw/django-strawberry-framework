@@ -1,179 +1,186 @@
-# Adversarial review: spec-050 current tree
+# Adversarial review: spec-050 candidate
 
-Date: 2026-09-18
+Date: 2026-09-21
 
-Verdict: **not ready to close.** The recent expression whitelist work fixed the
-generic `Func`/`Transform` recursion problem, but the exact-type boundary is not
-propagated to the two reference forms that can still carry arbitrary compiler
-behavior. Both bypasses are reachable from an ordinary Django model declaration
-and a normal positive-offset GraphQL request. Independently, the checkout is still
-the WIP/pre-candidate tree described by the build record, so it cannot yet provide
-release evidence.
+Reviewed the committed candidate implementation at `08801efb` (the current branch is
+`69a25369`, with only documentation/test commits after that candidate) against the complete
+specification, the builder record, `GOAL.md`, `AGENTS.md`, and the live policy/list-field code.
+The working tree also has concurrent production edits in `connection.py`, `list_field.py`, and
+`utils/querysets.py`; those were not attributed to spec-050 or changed here. The findings below
+are against the candidate implementation, not those uncommitted edits.
 
-I reviewed the current `HEAD` (`ccf46e11`), the complete spec, the build record, the
-classifier and its package/live tests. I also ran fresh Django probes against the
-current code. I did not run pytest, per the repository rule. The non-pytest
-governance checks currently pass: glossary consistency (43 terms), citations (1,121
-resolved), generated tree freshness, and tracked-path constants.
+Verdict: **not ready to close.** There is one release-blocking authority escape, one lower-severity
+configuration-domain violation, and no exact-tree gate or evidence-only closeout yet.
 
-## P1-1 — `F` and `Q` subclasses bypass the exact approved-node boundary
+## P1 — exported default policies remain live enforcement authorities
 
-**Broken contract.** Spec-050 Decision 6 defines positive certification as an
-explicit whitelist of exact approved forms and says that *any subclass of an
-approved class is refused*. The same rule appears in the Decision 6 edge cases,
-the Slice 2 acceptance rule, Test plan row 27, and the build inventory. A model
-default that is certified as stable must therefore not emit SQL whose ordering
-semantics this package cannot inspect.
+### Broken contract
 
-**Supported project shape and wire input.** Django applications may declare custom
-expression subclasses in ordinary model Python and place them in `Meta.ordering`.
-No private queryset mutation, forged GraphQL value, or unsupported transport is
-needed. A client then sends the normal list-field request:
+Spec-050 Decision 14 requires configuration to be canonicalized once into private schema state,
+with the object a resolver can reach being only a copy. It explicitly rejects a frozen dataclass
+as an authority because `__dict__`/`object.__setattr__` can still alter it. The same guarantee is
+part of the builder's enforcement-authority rows and the production error-policy contract: a
+resolver or ordinary application setup must not be able to widen bounds or turn masking off for
+subsequent operations by changing a process-lived policy object.
 
-```graphql
-{ shelves(offset: 1, limit: 1) { code } }
-```
+### Reachable project shape and input
 
-### Reproduction A: an `F` subclass
+`DEFAULT_RESOURCE_POLICY` and `DEFAULT_ERROR_POLICY` are public exports. A project that uses the
+documented default `DjangoSchema(query=...)` needs no private extension wiring and no malformed
+GraphQL input. A resolver, startup hook, or other ordinary application code can mutate the public
+dataclass instance through its normal `__dict__`:
 
 ```python
-class VolatileF(models.F):
-    def resolve_expression(
-        self, query=None, allow_joins=True, reuse=None,
-        summarize=False, for_save=False,
-    ):
-        return Random()
+from django_strawberry_framework import DEFAULT_ERROR_POLICY, DEFAULT_RESOURCE_POLICY
 
-class ProbeShelf(models.Model):
-    code = models.CharField(max_length=100)
-
-    class Meta:
-        app_label = "probe050"
-        managed = False
-        db_table = "library_shelf"
-        ordering = (VolatileF("code"),)
+DEFAULT_RESOURCE_POLICY.__dict__["max_list_rows"] = 999
+DEFAULT_ERROR_POLICY.__dict__["enabled"] = False
+schema = DjangoSchema(query=Query)  # no policy arguments supplied
 ```
 
-The public model declaration reached a real `DjangoListField`/`DjangoSchema`
-request. The classifier returned `True`, the response was successful, and the
-captured row query contained:
+### Evidence
 
-```sql
-ORDER BY RAND() ASC LIMIT 1 OFFSET 1
+In an isolated fakeshop process on the candidate code:
+
+```text
+DEFAULT_RESOURCE_POLICY.max_list_rows: 100 -> 999
+DjangoSchema(...).resource_policy.max_list_rows: 999
+DEFAULT_ERROR_POLICY.enabled: True -> False
+DjangoSchema(...).error_policy.enabled: False
 ```
 
-The implementation takes this path in
-`django_strawberry_framework/list_field.py::_is_deterministic_order_term`: the
-`isinstance(term, models.F)` branch trusts the name and never asks what the
-subclass's `resolve_expression` returns.
+The wire consequence is reproducible without any nonstandard transport. With the public default
+error policy changed as above, a normal resolver that raises `RuntimeError("SECRET-DEFAULT-POLICY")`
+returns that raw message in the GraphQL error response. The schema's automatic masker is disabled
+because `resolve_policy(..., default=DEFAULT_ERROR_POLICY)` returns the singleton itself when no
+override is configured; `DjangoSchema` then stores that same object in its private record.
 
-### Reproduction B: a `Q` subclass inside a conditional ordering
+The shared resolver has the same identity defect for resources:
+
+```text
+mutate DEFAULT_RESOURCE_POLICY.__dict__["max_list_rows"] = 999
+resolve_policy(..., default=DEFAULT_RESOURCE_POLICY).max_list_rows == 999
+resolve_policy(..., default=DEFAULT_RESOURCE_POLICY) is DEFAULT_RESOURCE_POLICY == True
+```
+
+### Root cause
+
+`utils/policies.py::resolve_policy` canonicalizes explicit instances and mappings, but returns
+`default` directly on the no-override path. Both `resource_policy.py::DEFAULT_RESOURCE_POLICY` and
+`error_policy.py::DEFAULT_ERROR_POLICY` are public mutable dataclass objects despite `frozen=True`.
+The private authority therefore holds an object that remains reachable by public import.
+
+### Required fix
+
+Fix the shared owner, not each schema call site:
+
+1. Make the no-override/default branch of `utils/policies.py::resolve_policy` return a fresh,
+   validated canonical copy of `default` (the same primitive field read used for explicit policy
+   instances), never `default` itself.
+2. Ensure `_FALLBACK_ENFORCEMENT` and every default used by the standalone extension path also
+   hold private canonical copies, or otherwise ensure no enforcement seam ever reads an exported
+   singleton.
+3. Keep the public constants as value templates for inspection, but never use them as authority
+   objects. Do not weaken the guarantee by merely documenting that callers must not mutate them.
+4. Replace identity assertions such as `resolve_resource_policy(None) is DEFAULT_RESOURCE_POLICY`
+   and their error-policy twins with equality plus `is not` checks. Add a live `/graphql` row that
+   mutates each public default before schema construction and proves the schema still uses the
+   package's original bounded/masking defaults; retain the direct resolver pin as a package test.
+5. Prove the resource row reaches an actual list-field ceiling and the error row reaches an
+   actual unexpected resolver exception. A test that only reads `schema.resource_policy` is not
+   enough to establish the wire/configuration boundary.
+
+Until this is fixed, the candidate can silently widen every default raw-list budget and can expose
+unexpected resolver exception text in production. This meets Decision 20's admission rule: the
+input is a public package configuration object, the schema shape is supported, and the effect is
+observable on the GraphQL wire.
+
+## P2 — `ErrorPolicy` does not canonicalize string subclasses to built-in strings
+
+### Broken contract
+
+Decision 14 says policy configuration is canonicalized into exact built-in primitives. The
+resource policy enforces that rule for numeric bounds, but `error_policy.py::ErrorPolicy.__post_init__`
+uses `isinstance(value, str)` for `message` and `correlation_extension_key`. A consumer-supplied
+`str` subclass is therefore accepted and copied into the private enforcement record unchanged.
+
+### Reachable input and evidence
+
+This is ordinary configuration, not a forged GraphQL value:
 
 ```python
-class VolatileQ(models.Q):
-    def resolve_expression(self, query, *args, **kwargs):
-        return Random()
+class StringSubclass(str):
+    def __format__(self, spec):
+        raise RuntimeError("format hook")
 
-ordering = (
-    models.Case(
-        models.When(VolatileQ(code__gt="x"), then=models.Value(0)),
-        default=models.Value(1),
-    ),
-)
+policy = ErrorPolicy(message=StringSubclass("safe"))
+schema = DjangoSchema(query=Query, error_policy=policy)
 ```
 
-The current classifier again returned `True`, while Django compiled the selected
-ordering as:
+The constructor and `utils/policies.py::canonical_policy` both accept the value, and the resolved
+policy still contains `StringSubclass`, not exact `str`. The masking path then dispatches the
+subclass's formatting hook while building the replacement. Current fail-closed handling prevents
+raw text from reaching the client in this particular shape, but it logs/degrades the whole result
+instead of honoring the configured policy. A hostile correlation-key subclass similarly turns a
+single masked error into a degraded response. The accepted configuration therefore violates its
+declared domain and makes normal masking behavior depend on consumer dunder code.
 
-```sql
-ORDER BY CASE WHEN RAND() THEN 0 ELSE 1 END ASC
-```
+### Required fix
 
-The `isinstance(term, models.Q)` branch has the same flaw. This is a second spelling
-of the same contract breach, not a hypothetical extension of the first example:
-`Q` is a public Django predicate class and `Case`/`When` is an approved transparent
-composition in the spec.
+At `ErrorPolicy` construction, require `type(value) is str` for both string fields (and preserve
+the existing exact-bool rule for `enabled`). Either reject subclasses with `ConfigurationError`
+or normalize them with `str.__str__` into exact strings before constructing the private copy; use
+one policy-domain decision consistently with `ResourcePolicy`. Add direct construction tests,
+schema-construction tests, and a failability row proving the old `isinstance` acceptance fails.
+This is a robustness/configuration finding rather than a separate wire disclosure once P1 is fixed,
+because the current masking floor degrades safely.
 
-### Root cause and required fix
+## P1 — the required exact-tree release gate has not run
 
-The whitelist is exact for the expression sets, but the two early reference arms
-still use subclass admission. Replace those arms with exact-type checks (or an
-equivalent identity check) so only `type(term) is models.F` and `type(term) is
-models.Q` enter the reference/predicate logic. A subclass must fall through to the
-unapproved-node refusal before any consumer override can run. Do not add deny-list
-names for `Random`, and do not rely on inspecting a subclass's method or source
-expressions: the contract is exact approved identity.
+This is a release-process blocker independent of the two code findings.
 
-Add the missing evidence in the same change:
+`docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` still says `Status: Candidate`, leaves
+the **Final exact-commit gate**, the exact-tree review, and the evidence-only follow-up unchecked,
+and explicitly says no gate is recorded. The builder's Decision 22 requires, in order:
 
-- package classifier cases for exact `models.F`/`models.Q` acceptance and custom
-  subclasses' refusal;
-- synchronous and asynchronous live `/graphql` rows for both model-default shapes,
-  each asserting `order_required` and zero row SQL, beside stable controls;
-- a conditional-order row proving the `Q` subclass is rejected through the predicate
-  path, including the normal `Case`/`When` composition;
-- Decision 6, its edge cases, Test plan row 27, the Slice 2 checklist, and the build
-  inventory updated to name this exact boundary.
+1. the candidate implementation commit;
+2. the default suite at 100% coverage, sharded suite, declared supported-floor scope, and all
+   structural/documentation/citation/tracked-path checks on that exact commit;
+3. this adversarial review on that exact tree, with any admitted finding looping back through a new
+   candidate; and
+4. an evidence-only follow-up whose parent is the gated candidate and whose only file change is
+   the build record.
 
-Until this is fixed, a positive offset can silently page a random result while the
-package claims that the selected order is repeatable. That is a release-blocking
-implementation defect under the spec's own trust-boundary rule.
+The candidate implementation commit is identifiable from history as `08801efb`; the build record
+does not name that SHA, and the current branch has later commits plus concurrent dirty production
+files. Historical suite numbers and checks from other trees cannot discharge this gate. Do not mark
+the card DONE or write a green follow-up until the P1 authority fix is in a new candidate and all
+required commands are run against that exact parent.
 
-## P1-2 — The checkout still cannot establish a releasable exact tree
+## What this review did not classify as a new spec defect
 
-This is independent of the classifier defect.
-
-- `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` still declares
-  `Status: WIP`.
-- Slice 5 and the final exact-commit gate remain unchecked; the final gate section
-  explicitly says no current default, sharded, supported-floor, structural, or
-  adversarial-review result is evidence for this checkout.
-- The spec remains `WIP — pre-candidate` with its completion protocol still open.
-- The working tree contains unrelated concurrent modifications, including the
-  tracked SQLite database. Because the database is one binary shared by multiple
-  owners, it cannot be treated as a clean card-050 candidate input merely by
-  staging the file.
-
-The required disposition is the protocol already specified in Decision 22: make one
-candidate implementation commit after reconciling concurrent database work and
-regenerating derived outputs; run the default, sharded, supported-floor, structural,
-documentation, citation, link, migration, and adversarial gates against that exact
-parent; then make an evidence-only follow-up that names the gated parent. Do not
-mark the card DONE from this working tree or carry results from an earlier hash.
-
-## P2-1 — Historical build measurements need to be refreshed at candidate time
-
-The build record labels its pre-flight counts as historical, but the recorded spec
-sizes (147,842 bytes/2,056 lines before and 141,617 bytes/1,979 lines after) do not
-describe the current spec (247,637 bytes/3,260 lines). This is not a runtime defect,
-and it is not evidence that the specification is wrong; it is an evidence-integrity
-hazard if those figures are read as measurements of the candidate.
-
-At the candidate step, replace the stale measurements with counts from the exact
-candidate parent, state which generated/documentation checks were run on that tree,
-and keep the evidence-only follow-up limited to the gated parent it names.
-
-## What this pass confirms
-
-- The generic “any readable children means deterministic” bug is no longer present:
-  unknown `Func`/`Transform`/`Window`/aggregate forms and subclasses of approved
-  functions are rejected by the named-node whitelist.
-- Relation-string expansion follows Django's related-model defaults, while ordinary
-  expression references do not accidentally expand relations.
-- Conditional predicates inspect both the reference and value sides, including
-  annotation aliases and approved transform/lookup chains.
-- The runner-owned operation state, authority construction, lease cleanup, refusal
-  chain, row-source sealing, evaluated-queryset handling, and manager/proxy coverage
-  remain aligned with the current spec on code inspection.
-- The four non-pytest governance checks listed at the top of this review pass. No
-  full-suite, sharded, or supported-floor result is claimed here.
+- The uncommitted `connection.py`, `list_field.py`, and `utils/querysets.py` edits are concurrent
+  work and were not folded into this candidate review. They must receive their own attribution and
+  verification before any final gate that runs on the working tree.
+- The build record's documented deferred connection-sidecar filter seal and the foreign evaluated
+  queryset-cache case remain explicitly outside this card's Decision 20 trust boundary; they are
+  separate work/robustness items, not silently accepted as spec-050 closure evidence.
+- The candidate's exact `F`/`Q` type boundary and selected-ordering classifier changes are
+  structurally consistent with Decision 6. They are not evidence that the final gate has passed.
 
 ## Required disposition
 
-1. Close the exact-type `F`/`Q` subclass bypass in the production classifier.
-2. Add the package and live sync/async regressions and update the corresponding spec
-   and build rows.
-3. Reconcile the concurrent SQLite/working-tree state and create the exact candidate
-   implementation commit.
-4. Run every declared gate on that candidate, perform one final adversarial review of
-   that exact tree, and only then write the evidence-only closure record.
+Fix the default-policy authority at the shared policy resolver, tighten `ErrorPolicy`'s primitive
+domain, add live/package failability coverage for both, create the resulting candidate commit,
+then run the complete Decision 22 gate and repeat this review against that exact commit. Until the
+gate and evidence-only follow-up exist, spec-050 remains a candidate rather than a closed release.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+[agents]: ../AGENTS.md
+[goal]: ../GOAL.md
+
+<!-- docs/ -->
+

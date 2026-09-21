@@ -79,7 +79,7 @@ from graphql.execution import ExecutionResult as GraphQLExecutionResult
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 
 from .. import logger
-from ..error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, new_correlation_id
+from ..error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, new_correlation_id
 from .operation_state import _OperationBoundExtension
 
 __all__ = [
@@ -206,7 +206,7 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
     except Exception:
         message = None
     if not isinstance(message, str) or not message:
-        message = DEFAULT_ERROR_POLICY.message
+        message = _PACKAGE_ERROR_POLICY.message
     return GraphQLError(message=message)
 
 
@@ -285,15 +285,15 @@ def schema_error_policy(schema: Any) -> ErrorPolicy:
     ``ErrorPolicy`` cannot be asked whether masking is enabled, and treating its
     truthiness as an answer would let an unrelated ``schema.error_policy``
     silently disable masking. Either way the fallback is the MASKING one -
-    ``DEFAULT_ERROR_POLICY`` - because an extension whose whole job is to mask
+    the package's own policy - because an extension whose whole job is to mask
     must not become a no-op because it could not find its configuration.
     ``DjangoSchema`` always supplies a valid one, validated at construction.
     """
     try:
         policy = getattr(schema, "error_policy", None)
     except Exception:
-        return DEFAULT_ERROR_POLICY
-    return policy if isinstance(policy, ErrorPolicy) else DEFAULT_ERROR_POLICY
+        return _PACKAGE_ERROR_POLICY
+    return policy if isinstance(policy, ErrorPolicy) else _PACKAGE_ERROR_POLICY
 
 
 def mask_execution_result(result: Any, policy: ErrorPolicy) -> Any:
@@ -452,7 +452,7 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension):
             try:
                 policy = self._policy()
             except Exception:
-                policy = DEFAULT_ERROR_POLICY
+                policy = _PACKAGE_ERROR_POLICY
             try:
                 if hasattr(self, "execution_context") and self.execution_context is not None:
                     self.execution_context.result = degraded_result(policy)

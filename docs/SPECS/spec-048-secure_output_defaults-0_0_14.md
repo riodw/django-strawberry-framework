@@ -699,8 +699,8 @@ Four new surfaces, each mirroring an existing one:
   only when the attribute is ABSENT, so a schema carrying something that is not an
   `ErrorPolicy` — a mapping, a string, a stray assignment on a consumer subclass — would be
   asked `policy.enabled` and either raise or be read for truthiness, silently disabling
-  masking. Any wrong shape falls back to `DEFAULT_ERROR_POLICY`, which is the masking
-  answer.
+  masking. Any wrong shape falls back to the package's own masking policy - the values
+  `DEFAULT_ERROR_POLICY` declares, held in an object no export names.
 - **`schema.py::DjangoSchema.__init__`** grows
   `error_policy: ErrorPolicy | Mapping[str, Any] | None = None`, resolves it once at
   construction, exposes `schema.error_policy`, and installs the extension.

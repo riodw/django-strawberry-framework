@@ -152,6 +152,56 @@ def test_a_non_string_or_empty_correlation_key_is_rejected_at_construction(value
         ErrorPolicy(correlation_extension_key=value)
 
 
+class _HostileMessage(str):
+    """A ``str`` SUBCLASS: ``isinstance``-valid, and consumer code in every dunder."""
+
+    def __format__(self, spec):
+        raise RuntimeError("Hostile message format")
+
+
+@pytest.mark.parametrize("field", ["message", "correlation_extension_key"])
+def test_a_str_subclass_is_rejected_at_construction(field):
+    """The string fields take the built-in type only, the bound rule's own terms.
+
+    ``isinstance`` admits a subclass, whose ``__str__`` / ``__format__`` are
+    consumer code - and the place they would run is the masking path, whose whole
+    job is to publish one string the deployment chose. A policy carrying one is a
+    policy whose message can raise or rewrite itself at the moment an unexpected
+    exception is being hidden, so it never becomes a policy at all
+    (``resource_policy.py::_require_positive_int`` states the rule for a bound).
+    """
+    with pytest.raises(
+        ConfigurationError,
+        match=f"ErrorPolicy.{field} must be a non-empty string",
+    ):
+        ErrorPolicy(**{field: _HostileMessage("Nope.")})
+
+
+def test_a_schema_refuses_a_policy_option_carrying_a_str_subclass():
+    """The rejection is a deployment-time failure, not a per-request surprise."""
+    with pytest.raises(ConfigurationError, match="ErrorPolicy.message must be a non-empty string"):
+        DjangoSchema(query=_Query, error_policy={"message": _HostileMessage("Nope.")})
+
+
+def test_a_str_subclass_cannot_survive_into_the_private_record():
+    """The bypass shape: a policy built without ever running the validation.
+
+    ``object.__new__`` plus a ``__dict__`` write produces an ``isinstance``-valid
+    ``ErrorPolicy`` whose fields were never checked, which is how a subclass would
+    reach a schema even with construction closed. Canonicalization re-validates
+    what it reads, so the object an enforcement seam ends up with cannot carry
+    one.
+    """
+    smuggled = object.__new__(ErrorPolicy)
+    smuggled.__dict__.update(
+        enabled=True,
+        message=_HostileMessage("Nope."),
+        correlation_extension_key="correlationId",
+    )
+    with pytest.raises(ConfigurationError, match="ErrorPolicy.message must be a non-empty string"):
+        resolve_error_policy(smuggled)
+
+
 def test_the_policy_is_frozen_so_a_resolver_cannot_widen_its_own_request():
     """Frozen is the point: a request holding the policy cannot loosen it."""
     with pytest.raises(Exception, match="cannot assign to field"):
@@ -184,7 +234,39 @@ def test_an_explicit_mapping_is_applied_over_the_package_defaults():
 
 
 def test_no_source_at_all_resolves_to_the_package_defaults():
-    assert resolve_error_policy(None) is DEFAULT_ERROR_POLICY
+    """The values of the exported template, in an object the exported name is not.
+
+    A deployment that configures nothing is on exactly the same footing as one
+    that passes an instance: what the schema masks with is a private duplicate.
+    """
+    resolved = resolve_error_policy(None)
+    assert resolved == DEFAULT_ERROR_POLICY
+    assert resolved is not DEFAULT_ERROR_POLICY
+
+
+def test_a_written_exported_default_reaches_no_resolution():
+    """The exported constant is a value template, never the object masking reads.
+
+    ``DEFAULT_ERROR_POLICY`` is a public export, so consumer code holds it, and a
+    frozen dataclass admits a ``__dict__`` write. Were the no-override path to
+    answer with it, one write after startup would disable masking for every
+    schema in the process - including schemas already built - and put raw
+    exception text on the wire. The resolution carries the package's own values
+    instead.
+    """
+    declared = dict(DEFAULT_ERROR_POLICY.__dict__)
+    DEFAULT_ERROR_POLICY.__dict__["enabled"] = False
+    DEFAULT_ERROR_POLICY.__dict__["message"] = "Written after startup."
+    try:
+        resolved = resolve_error_policy(None)
+        assert resolved.enabled is True
+        assert resolved.message == "An unexpected error occurred."
+        assert resolved is not DEFAULT_ERROR_POLICY
+        assert schema_error_policy(SimpleNamespace()).enabled is True
+    finally:
+        # The export is process-global: a write left behind would answer every
+        # later test in the session.
+        DEFAULT_ERROR_POLICY.__dict__.update(declared)
 
 
 def test_the_setting_supplies_the_policy_when_no_argument_does(settings):
@@ -495,12 +577,16 @@ def test_a_schema_attribute_that_is_not_a_policy_falls_back_to_the_default(attri
     consumer subclass or a stray assignment can.
     """
     schema = SimpleNamespace(error_policy=attribute)
-    assert schema_error_policy(schema) is DEFAULT_ERROR_POLICY
+    fallback = schema_error_policy(schema)
+    assert fallback == DEFAULT_ERROR_POLICY
+    assert fallback is not DEFAULT_ERROR_POLICY
 
 
 def test_an_absent_attribute_and_a_real_policy_are_both_read_correctly():
     """The two shapes that are not failures: no attribute at all, and a real policy."""
-    assert schema_error_policy(SimpleNamespace()) is DEFAULT_ERROR_POLICY
+    fallback = schema_error_policy(SimpleNamespace())
+    assert fallback == DEFAULT_ERROR_POLICY
+    assert fallback is not DEFAULT_ERROR_POLICY
     policy = ErrorPolicy(message="Mine.")
     assert schema_error_policy(SimpleNamespace(error_policy=policy)) is policy
 
@@ -513,7 +599,9 @@ def test_a_raising_schema_error_policy_property_falls_back_to_the_default():
         def error_policy(self):
             raise RuntimeError("Hostile error_policy read")
 
-    assert schema_error_policy(_RaisingSchema()) is DEFAULT_ERROR_POLICY
+    fallback = schema_error_policy(_RaisingSchema())
+    assert fallback == DEFAULT_ERROR_POLICY
+    assert fallback is not DEFAULT_ERROR_POLICY
 
 
 # ---------------------------------------------------------------------------

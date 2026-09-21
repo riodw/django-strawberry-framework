@@ -297,7 +297,38 @@ def test_an_explicit_mapping_is_applied_over_the_package_defaults():
 
 
 def test_no_source_at_all_resolves_to_the_package_defaults():
-    assert resolve_resource_policy(None) is DEFAULT_RESOURCE_POLICY
+    """The values of the exported template, in an object the exported name is not.
+
+    A deployment that configures nothing is on exactly the same footing as one
+    that passes an instance: what the schema bounds requests with is a private
+    duplicate.
+    """
+    resolved = resolve_resource_policy(None)
+    assert resolved == DEFAULT_RESOURCE_POLICY
+    assert resolved is not DEFAULT_RESOURCE_POLICY
+
+
+def test_a_written_exported_default_reaches_no_resolution():
+    """The exported constant is a value template, never the object a bound is read from.
+
+    ``DEFAULT_RESOURCE_POLICY`` is a public export, so consumer code holds it, and
+    a frozen dataclass admits a ``__dict__`` write. Were the no-override path to
+    answer with it, one write after startup would widen every bound for every
+    schema in the process, including schemas already built. The resolution and
+    the miss path both carry the package's own bounds instead.
+    """
+    declared = dict(DEFAULT_RESOURCE_POLICY.__dict__)
+    DEFAULT_RESOURCE_POLICY.__dict__["max_list_rows"] = 999
+    try:
+        resolved = resolve_resource_policy(None)
+        assert resolved.max_list_rows == declared["max_list_rows"]
+        assert resolved is not DEFAULT_RESOURCE_POLICY
+        read = policy_from_info(SimpleNamespace(context={}))
+        assert read.max_list_rows == declared["max_list_rows"]
+    finally:
+        # The export is process-global: a write left behind would answer every
+        # later test in the session.
+        DEFAULT_RESOURCE_POLICY.__dict__.update(declared)
 
 
 def test_an_instance_through_the_setting_slot_resolves_on_the_same_terms(settings):
@@ -487,6 +518,8 @@ def test_the_policy_round_trips_or_fails_closed_on_every_context_shape(context_f
     stash_resource_policy(context, policy)
     read = policy_from_info(SimpleNamespace(context=context))
     assert read in (policy, DEFAULT_RESOURCE_POLICY)
+    assert read is not policy
+    assert read is not DEFAULT_RESOURCE_POLICY
 
 
 def test_clearing_the_context_restores_the_default_policy():
@@ -3134,7 +3167,9 @@ def test_a_schema_without_a_policy_falls_back_to_the_package_defaults():
     """A plain ``strawberry.Schema`` carries no ``resource_policy`` attribute."""
     extension = DjangoResourcePolicyExtension()
     extension.execution_context = SimpleNamespace(schema=SimpleNamespace())
-    assert extension._resolved_policy() is DEFAULT_RESOURCE_POLICY
+    resolved = extension._resolved_policy()
+    assert resolved == DEFAULT_RESOURCE_POLICY
+    assert resolved is not DEFAULT_RESOURCE_POLICY
 
 
 def test_an_operation_with_no_parsed_document_charges_no_document_budget():
@@ -3469,7 +3504,9 @@ def test_an_extension_configured_with_no_policy_reads_the_schemas():
     extension.execution_context = SimpleNamespace(schema=SimpleNamespace())
 
     assert extension._policy is None
-    assert extension._resolved_policy() is DEFAULT_RESOURCE_POLICY
+    resolved = extension._resolved_policy()
+    assert resolved == DEFAULT_RESOURCE_POLICY
+    assert resolved is not DEFAULT_RESOURCE_POLICY
 
 
 def test_a_refused_reconstruction_leaves_an_inheriting_extension_inheriting():

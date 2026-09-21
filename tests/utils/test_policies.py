@@ -56,8 +56,21 @@ def test_an_explicit_instance_supplies_the_values_of_a_private_duplicate():
     assert resolved is not policy
 
 
-def test_no_source_at_all_resolves_to_the_default():
-    assert _resolve(None, None) is _PROBE_DEFAULT
+def test_no_source_at_all_resolves_to_a_duplicate_of_the_default():
+    """The no-override path is canonicalized like every other one.
+
+    The ``default`` is one module-level object shared by every schema in the
+    process, and each flavor exports its own under a name consumer code holds, so
+    answering with it would make one schema's policy the same object as another's
+    and as the one a consumer can write.
+
+    Which object each flavor hands in as its ``default`` is that flavor's own
+    decision, pinned in ``tests/test_error_policy.py`` and
+    ``tests/test_resource_policy.py``: this resolver copies whatever it is given.
+    """
+    resolved = _resolve(None, None)
+    assert resolved == _PROBE_DEFAULT
+    assert resolved is not _PROBE_DEFAULT
 
 
 def test_an_instance_through_the_setting_slot_is_taken_on_the_same_terms():

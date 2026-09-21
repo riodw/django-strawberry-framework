@@ -1004,6 +1004,37 @@ def test_a_resolver_cannot_turn_masking_off_by_writing_the_schemas_policy():
 
 
 @pytest.mark.django_db
+def test_a_written_exported_default_cannot_unmask_a_later_schema():
+    """The exported default is a value template; masking reads the package's own policy.
+
+    ``DEFAULT_ERROR_POLICY`` is a root export, so any consumer module holds it,
+    and a frozen dataclass admits a ``__dict__`` write. The write lands before the
+    schema exists - this mount builds one per request - so a schema that read the
+    exported object would be built with masking off and would put the resolver's
+    own exception text on the wire for every client of the process. The response
+    is masked with the package's message and a correlation id instead.
+
+    The assertions run after the write is undone, because the shared helpers read
+    the exported policy at call time and a row that compared the response against
+    a tampered template would agree with the tampering.
+    """
+    assert settings.DEBUG is False
+    declared = dict(DEFAULT_ERROR_POLICY.__dict__)
+    DEFAULT_ERROR_POLICY.__dict__["enabled"] = False
+    DEFAULT_ERROR_POLICY.__dict__["message"] = "Written after startup."
+    try:
+        response, payload = _post("/ep/", "{ boom fine }")
+    finally:
+        # The export is process-global: a write left behind would answer every
+        # later row in the session.
+        DEFAULT_ERROR_POLICY.__dict__.update(declared)
+    error = _masked_error(payload)
+    assert error["path"] == ["boom"]
+    assert payload["data"] == {"boom": None, "fine": "fine"}
+    assert _SENSITIVE not in response.content.decode()
+
+
+@pytest.mark.django_db
 def test_the_explicit_opt_out_returns_the_original_message_under_debug_false():
     """``error_policy={"enabled": False}`` is the recorded decision to own your own masking.
 

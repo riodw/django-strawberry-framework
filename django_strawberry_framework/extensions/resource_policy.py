@@ -103,7 +103,7 @@ from strawberry.extensions.base_extension import SchemaExtension
 
 from ..mutations.fields import MUTATION_CLASS_MARKER
 from ..resource_policy import (
-    DEFAULT_RESOURCE_POLICY,
+    _PACKAGE_RESOURCE_POLICY,
     DST_RESOURCE_DEADLINE,
     DST_RESOURCE_POLICY,
     ResourceLimitExceeded,
@@ -1271,7 +1271,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
         return (
             schema_policy
             if isinstance(schema_policy, ResourcePolicy)
-            else (DEFAULT_RESOURCE_POLICY)
+            else (_PACKAGE_RESOURCE_POLICY)
         )
 
     def on_operation(self) -> Iterator[None]:

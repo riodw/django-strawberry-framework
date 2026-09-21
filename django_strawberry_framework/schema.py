@@ -60,7 +60,7 @@ from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types.graphql import OperationType
 
 from . import logger
-from .error_policy import DEFAULT_ERROR_POLICY, ErrorPolicy, resolve_error_policy
+from .error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, resolve_error_policy
 from .exceptions import ConfigurationError, describe_value
 from .extensions.error_policy import (
     DjangoErrorPolicyExtension,
@@ -72,7 +72,7 @@ from .extensions.error_policy import (
 from .extensions.operation_state import DjangoExtensionsRunner, _OperationModeMarker
 from .extensions.resource_policy import DjangoResourcePolicyExtension, _AdmissionGuard
 from .mutations.fields import MUTATION_CLASS_MARKER
-from .resource_policy import DEFAULT_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
+from .resource_policy import _PACKAGE_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
 from .utils.execution_mode import OperationMode, async_execution
 from .utils.policies import copy_policy
 from .utils.private_state import PrivateAuthority, PrivateMembership
@@ -463,8 +463,8 @@ _SCHEMA_EXTENSIONS: PrivateMembership[Any] = PrivateMembership("_django_extensio
 #: fallback for a configuration that was tampered with: a settled record cannot
 #: go missing while its schema is alive.
 _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
-    resource_policy=DEFAULT_RESOURCE_POLICY,
-    error_policy=DEFAULT_ERROR_POLICY,
+    resource_policy=_PACKAGE_RESOURCE_POLICY,
+    error_policy=_PACKAGE_ERROR_POLICY,
 )
 
 
@@ -1075,7 +1075,7 @@ class DjangoSchema(strawberry.Schema):
         read is inside what is guarded and a degrade that had to read it again to
         publish its message would be a floor that can raise.
         """
-        policy = DEFAULT_ERROR_POLICY
+        policy = _PACKAGE_ERROR_POLICY
         try:
             policy = _enforcement(self).error_policy
             if not masking_is_active(policy) or not is_maskable_result(result):

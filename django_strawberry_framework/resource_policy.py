@@ -52,7 +52,7 @@ an explicit ``trusted=True`` opt-in at the call site.
 
 Fail-closed defaults. Every bound is a positive integer with a package default;
 there is no "disable this bound" spelling, and a context with no stashed policy
-reads back ``DEFAULT_RESOURCE_POLICY`` rather than "unbounded". The one optional
+reads back the package's own baseline rather than "unbounded". The one optional
 bound is ``execution_deadline_seconds``, which defaults to ``None`` because a
 wall-clock deadline that a deployment did not choose is a correctness hazard, not
 a safety one.
@@ -433,10 +433,32 @@ class ResourcePolicy:
         return candidate
 
 
-#: The package's fail-closed baseline, used whenever no policy has been resolved
-#: onto the request context (a plain ``strawberry.Schema``, a resolver invoked
-#: outside an operation, a frozen context that refused the stash).
+#: The package's fail-closed baseline, exported as an inspectable value template:
+#: a deployment reads it to learn which bound it gets by doing nothing, and copies
+#: it to build a policy of its own.
+#:
+#: It is a TEMPLATE and not the authority. It is exported, so consumer code holds
+#: it, and a frozen dataclass admits
+#: ``DEFAULT_RESOURCE_POLICY.__dict__["max_list_rows"] = 999`` - which, on an
+#: object every miss path read, would be one write after startup that widens the
+#: baseline for every schema in the process, including schemas built before it.
+#: Nothing in the package reads this name: what the miss paths read is
+#: :data:`_PACKAGE_RESOURCE_POLICY`, and what a schema stores is a fresh copy
+#: taken at resolution (``utils/policies.py::resolve_policy``).
 DEFAULT_RESOURCE_POLICY = ResourcePolicy()
+
+#: The package's own fail-closed budget, and the one every seam in the package
+#: falls back to: the miss path of :func:`policy_from_info`, the resource
+#: extension's unconfigured schema, and the record answered for a schema that
+#: settled none. Built once, at import, from the values the template was declared
+#: with, so it carries the package's bounds rather than whatever the exported
+#: object holds now; being reachable from no exported name is what makes
+#: enforcing a tampered default impossible rather than merely discouraged.
+_PACKAGE_RESOURCE_POLICY = canonical_policy(
+    DEFAULT_RESOURCE_POLICY,
+    policy_cls=ResourcePolicy,
+    display_name="resource policy",
+)
 
 
 def resolve_resource_policy(explicit: ResourcePolicy | Mapping[str, Any] | None) -> ResourcePolicy:
@@ -462,7 +484,7 @@ def resolve_resource_policy(explicit: ResourcePolicy | Mapping[str, Any] | None)
     return resolve_policy(
         explicit,
         policy_cls=ResourcePolicy,
-        default=DEFAULT_RESOURCE_POLICY,
+        default=_PACKAGE_RESOURCE_POLICY,
         read_setting=resource_policy_setting,
         display_name="resource policy",
         unit="bound",
@@ -861,8 +883,10 @@ def policy_from_info(info: Any) -> ResourcePolicy:
     :func:`_operation_policy` already, so this is the one path where a foreign
     object could still arrive.
 
-    Fail-closed by construction: the miss path returns
-    ``DEFAULT_RESOURCE_POLICY``, never ``None``. A field consulting the policy is
+    Fail-closed by construction: the miss path returns a copy of the package's
+    own baseline (``_PACKAGE_RESOURCE_POLICY``), never ``None`` and never the
+    exported ``DEFAULT_RESOURCE_POLICY`` a consumer holds. A field consulting the
+    policy is
     therefore always bounded, including under a plain ``strawberry.Schema`` that
     never installed the extension, and never needs a ``None`` branch of its own.
 
@@ -875,7 +899,7 @@ def policy_from_info(info: Any) -> ResourcePolicy:
     if budget is not None:
         return copy_policy(budget.policy)
     value = get_context_value(getattr(info, "context", None), DST_RESOURCE_POLICY)
-    return copy_policy(value if type(value) is ResourcePolicy else DEFAULT_RESOURCE_POLICY)
+    return copy_policy(value if type(value) is ResourcePolicy else _PACKAGE_RESOURCE_POLICY)
 
 
 def check_deadline(info: Any) -> None:

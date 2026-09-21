@@ -564,8 +564,9 @@ both subsystems: it handles the four context shapes (`None`, object, `dict`, fro
 the single place a new shape lands. *Why it is shared rather than copied is in the
 [rationale][rationale].*
 
-**The miss path is fail-closed.** `policy_from_info` returns `DEFAULT_RESOURCE_POLICY`, never
-`None`. A frozen context that refused the stash, a plain `strawberry.Schema` that never
+**The miss path is fail-closed.** `policy_from_info` returns a copy of the package's own
+baseline - the bounds `DEFAULT_RESOURCE_POLICY` declares, held in an object no export names -
+never `None`. A frozen context that refused the stash, a plain `strawberry.Schema` that never
 installed the extension, and a resolver invoked outside an operation all read back a
 *bounded* policy. Returning `None` would have forced every caller to write its own
 "no policy means no bound" branch, which is the fail-open shape spelled out in six places.
@@ -1228,8 +1229,8 @@ Both belong to the surface rather than to a slice; neither is a root package exp
 
 ## Edge cases and constraints
 
-- **A frozen or read-only context** cannot hold the stash; the request runs under
-  `DEFAULT_RESOURCE_POLICY` rather than unbounded.
+- **A frozen or read-only context** cannot hold the stash; the request runs under the
+  package baseline `DEFAULT_RESOURCE_POLICY` declares rather than unbounded.
 - **A consumer key collision** — some other value stashed under `dst_resource_policy` — is
   ignored while a budget is armed, and type-checked by `policy_from_info` on the fallback
   path where nothing is.

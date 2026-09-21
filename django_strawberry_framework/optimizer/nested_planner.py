@@ -1073,8 +1073,10 @@ def plan_connection_relation(
     each spec-033 Decision 6 refusal arm so the strictness contract still sees
     the per-parent access. Delegates child-queryset construction to the same
     helpers the list path uses (``_build_prefetch_child_queryset`` /
-    ``_build_child_queryset``); the only addition is the window applied after
-    ``child_plan.apply``.
+    ``_build_child_queryset``, reached here through
+    ``_build_connection_child_queryset`` so the child's visibility seal spends the
+    slice licence this path's own gate below answers for); the only addition is
+    the window applied after ``child_plan.apply``.
 
     Every decision about the relation TARGET spends one resolution.
     ``resolve_relation_target`` answers with the child definition beside its

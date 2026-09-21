@@ -2404,9 +2404,20 @@ def _sealed_prefetch_related_lookups(
     identity of both the inner queryset AND the ``Prefetch`` wrapper is dropped,
     so neither a hostile queryset override nor a hostile ``Prefetch`` method
     override can re-inject at fetch time. The child seal runs under
-    ``_PREFETCH_CHILD_POLICY``, whose ``reject_sliced=False`` admits the legal
-    sliced prefetch queryset (Django >= 4.2 top-N per parent) that nothing
-    refilters, while ``require_model_rows`` still holds. A child that cannot be sealed (a
+    ``_PREFETCH_CHILD_POLICY``, whose ``reject_sliced=False`` carries a sliced
+    prefetch queryset through unchanged, while ``require_model_rows`` still
+    holds. The licence covers exactly the ``Prefetch`` objects a CONSUMER built and
+    attached to a queryset this seal received: the slice is the consumer's own
+    ``Prefetch`` call, so Django's rules for it are the contract -- a sliced child
+    survives when the lookup carries ``to_attr`` or targets a to-one relation, and
+    raises Django's own ``TypeError`` when Django refilters it
+    (``prefetch_one_level`` -> ``RelatedManager._apply_rel_filters``). This seal
+    narrows neither, because rejecting the first shape would refuse a prefetch
+    Django supports and the second is already Django answering for the consumer's
+    own call. The package's OWN generated children are a different surface and do
+    not pass through here: the walker seals them against the relation shape it
+    plans (``_LIST_RELATION_CHILD_POLICY`` / ``_PREFETCH_CHILD_POLICY``). A child
+    that cannot be sealed (a
     non-queryset ``.queryset``, a malformed model, a foreign ``Query`` class, a
     foreign row iterable, malformed deferred-filter state) fails
     the OUTER seal closed with the ``untrusted`` defect -- carrying the inner
@@ -2525,12 +2536,14 @@ def _sealed_prefetch_related_lookups(
             # resolution never schedules the parent and its related rows across two
             # connections (spec-045 Decision 4). An unrouted child inherits the
             # outer alias.
-            # Prefetch children may legally be sliced (Django >= 4.2 top-N per
-            # parent, e.g. ``Prefetch("items", queryset=Item.objects.all()[:5])``):
-            # nothing refilters / reorders a prefetch child, so the ``sliced``
-            # rejection (which exists because outer read surfaces refilter) does
-            # not apply one edge down, while ``require_model_rows`` still holds
-            # (Django itself requires a ``ModelIterable`` for a prefetch queryset).
+            # A consumer's own ``Prefetch`` child may be sliced (Django >= 4.2
+            # top-N per parent, e.g.
+            # ``Prefetch("items", queryset=Item.objects.all()[:5], to_attr="top")``).
+            # The consumer wrote that slice into their own Django call, so Django
+            # answers for it; the ``sliced`` rejection exists because THIS package
+            # would recompose, and here it does not.  ``require_model_rows`` still
+            # holds (Django itself requires a ``ModelIterable`` for a prefetch
+            # queryset).
             # Both facts are the two fields ``_PREFETCH_CHILD_POLICY`` sets.
             sealed_inner, defect = _seal_or_defect(
                 inner,
@@ -2742,10 +2755,15 @@ class _SealPolicy:
       answer different questions (what the rows ARE, versus whether this surface
       will recompose onto them), and fusing them is what forced the cascade to
       re-implement the slice rejection at both of its own entry points. Off one
-      edge down, where nothing recomposes -- a ``Prefetch`` child (Django's legal
-      top-N-per-parent queryset) and the optimizer walker's nested-connection
-      child, whose own gate degrades a sliced child to the fully-unplanned
-      per-parent fallback instead of recomposing filters / ordering onto it.
+      edge down only where something downstream answers for the slice: the
+      optimizer walker's nested-connection child, whose own gate
+      (``optimizer/nested_fetch.py::unwindowable_child_queryset_reason``) degrades
+      a sliced child to the fully-unplanned per-parent fallback instead of
+      recomposing filters / ordering onto it, and a consumer's own ``Prefetch``
+      child, whose slice is the consumer's own Django call and answers to Django's
+      rules for it. It stays ON for the walker's plain-list-relation child
+      (``_LIST_RELATION_CHILD_POLICY``), which no gate classifies and which Django
+      refilters at fetch time.
     - ``reject_combined`` -- a ``union()`` / ``intersection()`` / ``difference()``
       query is a defect. On for the cascade, which narrows by ``.filter(...)``
       and re-projects to a single column, neither of which Django supports
@@ -2796,13 +2814,25 @@ _DEFAULT_SEAL_POLICY = _SealPolicy()
 # because the walk narrows by ``.filter(...)`` and re-projects to the edge's
 # target column, neither of which Django supports on those shapes.
 _CASCADE_SEAL_POLICY = _SealPolicy(require_model_rows=False, reject_combined=True)
-# The optimizer walker's ``Prefetch`` child. Its nested-connection gate
+# The optimizer walker's NESTED-CONNECTION ``Prefetch`` child, and every
+# consumer-supplied ``Prefetch`` child sealed by
+# ``_sealed_prefetch_related_lookups``. Its nested-connection gate
 # (``nested_fetch.py::unwindowable_child_queryset_reason``) classifies a sliced
 # child and degrades the nested connection to the fully-unplanned per-parent
-# fallback WITHOUT recomposing, so the slice rejection's premise does not hold;
-# the shared-alias requirement keeps one GraphQL resolution on one database
-# connection.
+# fallback WITHOUT recomposing, so the slice rejection's premise does not hold
+# there; the shared-alias requirement keeps one GraphQL resolution on one
+# database connection.
 _PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=True)
+# The optimizer walker's PLAIN-LIST-relation ``Prefetch`` child. It differs from
+# ``_PREFETCH_CHILD_POLICY`` on ``reject_sliced`` and on no other axis, because
+# exactly one thing differs: no gate downstream of this child classifies a slice.
+# The walker installs the value as ``Prefetch(<lookup>, queryset=...)`` with no
+# ``to_attr``, and Django then re-applies the relation's own filters to it
+# (``prefetch_one_level`` -> ``RelatedManager._apply_rel_filters``), which raises a
+# raw ``TypeError`` on a sliced query. A hook that returns a sliced queryset for
+# such a child therefore gets the seal's typed ``sliced`` defect here, the same
+# contract every other bad-hook shape answers to.
+_LIST_RELATION_CHILD_POLICY = _SealPolicy(require_shared_alias=True)
 # List-field visibility policy for active argument execution: the default read-surface
 # policy with ``reject_combined=True`` so combinators (union, intersect, difference) fail
 # closed before a window is taken. It differs from ``_DEFAULT_SEAL_POLICY`` on that one axis
@@ -3232,10 +3262,12 @@ def _seal_or_defect(
       was taken). Django forbids reordering or refiltering a sliced query, so
       the next framework transform (a Relay ``.filter(pk=...)``, a connection
       ordering, the cascade's ``.filter(...)`` narrowing) would raise a raw
-      ``TypeError`` outside the typed defect contract. Off one edge down, where
-      nothing recomposes: a ``Prefetch`` child (a legal sliced
-      top-N-per-parent queryset) and the optimizer walker's nested-connection
-      child, whose own gate degrades a sliced child instead of recomposing.
+      ``TypeError`` outside the typed defect contract. The same raw ``TypeError``
+      is what Django raises when it refilters a sliced ``Prefetch`` child at fetch
+      time, so it is on for the walker's plain-list-relation child too. It is off
+      one edge down only where something downstream answers for the slice: the
+      optimizer walker's nested-connection child, whose own gate degrades a sliced
+      child instead of recomposing, and a consumer's own ``Prefetch`` child.
     - ``combined`` -- when ``policy.reject_combined`` (the cascade and the two
       list-argument seals): the query carries a ``union()`` / ``intersection()``
       / ``difference()`` combinator. The cascade narrows by ``.filter(...)`` and
@@ -3994,9 +4026,11 @@ def apply_type_visibility_sync(
     source and the result so the two seals of one call cannot diverge. It
     defaults to ``_DEFAULT_SEAL_POLICY`` (model rows, no slice, no combinator
     licence); ``permissions.py`` passes ``_CASCADE_SEAL_POLICY`` and the
-    optimizer walker's prefetch-child plan path passes
-    ``_PREFETCH_CHILD_POLICY`` (``spec-045-visibility_boundary-0_0_14``
-    Decision 5 degrade-to-unplanned, plus the shared-alias requirement).
+    optimizer walker's prefetch-child plan path passes one of its two child
+    policies -- ``_PREFETCH_CHILD_POLICY`` for a nested-connection child
+    (``spec-045-visibility_boundary-0_0_14`` Decision 5 degrade-to-unplanned,
+    plus the shared-alias requirement) and ``_LIST_RELATION_CHILD_POLICY`` for a
+    plain list relation, which differs only in keeping the slice rejection.
     ``model`` is the captured-model seam (``_captured_model``): the field
     factories hand down the model off the ONE definition they read at
     construction, so neither seal of this call re-reads
@@ -4248,7 +4282,8 @@ async def apply_type_visibility_async(
     so the two colored paths cannot drift. ``render_error`` and ``policy`` are
     the sync runner's own seams, declared here for that reason: a surface whose
     seal differs from the default (the cascade's ``_CASCADE_SEAL_POLICY``, the
-    walker's ``_PREFETCH_CHILD_POLICY``) must be able to state the same
+    walker's ``_PREFETCH_CHILD_POLICY`` / ``_LIST_RELATION_CHILD_POLICY``) must be
+    able to state the same
     contract on either colored path, and an option only one twin can reach IS
     the drift the shared boundary exists to prevent. ``SyncMisuseError`` stays
     reserved for sync boundaries: every defect here is a plain

@@ -14,7 +14,9 @@ from strawberry.utils.str_converters import to_camel_case
 from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..utils.querysets import (
+    _LIST_RELATION_CHILD_POLICY,
     _PREFETCH_CHILD_POLICY,
+    _SealPolicy,
     apply_type_visibility_sync,
     base_queryset,
 )
@@ -415,8 +417,16 @@ def _build_child_queryset(
     has_custom_qs: bool,
     *,
     target_model: type[models.Model] | None = None,
+    policy: _SealPolicy = _LIST_RELATION_CHILD_POLICY,
 ) -> Any:
     """Build the queryset used inside a generated ``Prefetch`` object.
+
+    ``policy`` is the seal the child's ``get_queryset`` return is held to. It
+    defaults to ``_LIST_RELATION_CHILD_POLICY``, the plain-list-relation seal;
+    the nested-connection planner takes ``_PREFETCH_CHILD_POLICY`` through
+    ``_build_connection_child_queryset``. The two differ on ``reject_sliced``
+    and on nothing else, because one thing differs between the paths: only the
+    connection path has a gate that classifies a sliced child.
 
     ``has_custom_qs`` is the caller's verdict from the captured child
     definition (``_target_has_custom_get_queryset``), so the question is
@@ -446,10 +456,12 @@ def _build_child_queryset(
     """
     queryset = base_queryset(field.related_model)
     if has_custom_qs:
-        # ``_PREFETCH_CHILD_POLICY`` sets the two facts that hold one edge down.
+        # The slice axis is the one axis the two child policies differ on, and it
+        # differs because the paths do.
         #
-        # ``reject_sliced=False``: a nested-connection child may legitimately return a
-        # sliced queryset, and the plan's own gate
+        # ``_PREFETCH_CHILD_POLICY`` (``reject_sliced=False``, the nested-connection
+        # child): a nested-connection child may legitimately return a sliced
+        # queryset, and the plan's own gate
         # (``nested_fetch.py::unwindowable_child_queryset_reason``) detects that shape
         # and degrades to the fully-unplanned per-parent fallback WITHOUT recomposing
         # filters / ordering, so the seal's slice rejection (which exists because
@@ -457,7 +469,16 @@ def _build_child_queryset(
         # designed degradation (``spec-045-visibility_boundary-0_0_14`` Decision 5
         # degrade-to-unplanned).
         #
-        # ``require_shared_alias=True``: the value built here is installed as the
+        # ``_LIST_RELATION_CHILD_POLICY`` (``reject_sliced`` kept, the plain list
+        # relation): nothing downstream classifies this child. It is installed as
+        # ``Prefetch(<lookup>, queryset=...)`` with no ``to_attr``, and Django then
+        # re-applies the relation's own filters to it at fetch time
+        # (``prefetch_one_level`` -> ``RelatedManager._apply_rel_filters``), raising a
+        # raw ``TypeError`` on a sliced query. The hook therefore gets the seal's
+        # typed ``sliced`` defect instead, naming itself the way every other
+        # bad-hook shape is named here.
+        #
+        # ``require_shared_alias=True`` (both): the value built here is installed as the
         # ``Prefetch`` queryset of a parent this walk never holds, and the plan
         # carrying it is reused across requests, so the child must leave this call
         # UNROUTED. Its effective alias is the unpinned seed's ``None``, and a hook
@@ -473,9 +494,36 @@ def _build_child_queryset(
             queryset,
             info,
             model=target_model,
-            policy=_PREFETCH_CHILD_POLICY,
+            policy=policy,
         )
     return queryset
+
+
+def _build_connection_child_queryset(
+    field: Any,
+    target_type: type | None,
+    info: Any | None,
+    has_custom_qs: bool,
+    *,
+    target_model: type[models.Model] | None = None,
+) -> Any:
+    """Build a nested-connection child queryset under ``_PREFETCH_CHILD_POLICY``.
+
+    The nested-connection planner reaches the shared child builder through this
+    seam, so the slice licence is spent at the one call site whose premise holds:
+    the planner classifies the value it gets back with
+    ``nested_fetch.py::unwindowable_child_queryset_reason`` and degrades a sliced
+    child to the per-parent fallback. The plain list relation, which has no such
+    gate, takes the builder's default seal.
+    """
+    return _build_child_queryset(
+        field,
+        target_type,
+        info,
+        has_custom_qs,
+        target_model=target_model,
+        policy=_PREFETCH_CHILD_POLICY,
+    )
 
 
 def _resolver_identities_for(
@@ -1568,7 +1616,7 @@ def _plan_connection_relation(
         aliased_arguments_diverge=_aliased_arguments_diverge,
         target_has_custom_get_queryset=_target_has_custom_get_queryset,
         resolver_identities_for=_resolver_identities_for,
-        build_child_queryset=_build_child_queryset,
+        build_child_queryset=_build_connection_child_queryset,
         build_prefetch_child_queryset_from_base=_build_prefetch_child_queryset_from_base,
     )
     plan.merge_from(result.plan)

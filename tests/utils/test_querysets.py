@@ -42,6 +42,7 @@ from django_strawberry_framework.utils.querysets import (
     _DEFAULT_SEAL_POLICY,
     _INERT_VALUE_TYPES,
     _LIST_ARGUMENT_VISIBILITY_POLICY,
+    _LIST_RELATION_CHILD_POLICY,
     _PLAIN_CONTAINER_TYPES,
     _PREFETCH_CHILD_POLICY,
     _RETAINED_TYPES,
@@ -1732,11 +1733,12 @@ def test_prefetch_cross_alias_child_fails_closed():
 def test_sliced_prefetch_child_seals_successfully():
     """A legally sliced ``Prefetch`` child seals; the rebuilt child stays a plain, sliced qs.
 
-    Django >= 4.2 supports a sliced prefetch queryset (top-N per parent). Nothing
-    refilters a prefetch child, so the outer ``sliced`` rejection does not apply one
-    edge down; the child seals under ``_PREFETCH_CHILD_POLICY`` (``reject_sliced``
-    off) while still requiring model rows, and the rebuilt child is a fresh plain
-    ``QuerySet`` whose slice marks are preserved.
+    Django >= 4.2 supports a sliced prefetch queryset (top-N per parent). The slice
+    here is the CONSUMER's own ``Prefetch`` call, so Django's rules for it are the
+    contract and this seal narrows neither of its shapes; the child seals under
+    ``_PREFETCH_CHILD_POLICY`` (``reject_sliced`` off) while still requiring model
+    rows, and the rebuilt child is a fresh plain ``QuerySet`` whose slice marks are
+    preserved.
     """
     from django.db.models import Prefetch
 
@@ -5030,8 +5032,9 @@ def test_seal_policy_presets_answer_slice_and_combinator_independently():
     ``require_model_rows=False`` surface used to get the slice licence it never
     asked for. The four presets pin the four answers in one place - a read
     surface rejects a slice and admits a combinator (nothing in a read pipeline
-    re-projects one), the two one-edge-down children admit a slice because
-    nothing recomposes onto them, and the cascade rejects both because it
+    re-projects one), the one-edge-down child whose own gate classifies a slice
+    admits one, the plain-list-relation child does not (Django refilters it at
+    fetch time), and the cascade rejects both a slice and a combinator because it
     narrows by ``.filter(...)`` and re-projects to a single column.
     """
     base = Category.objects.all()
@@ -5043,6 +5046,10 @@ def test_seal_policy_presets_answer_slice_and_combinator_independently():
         "rows 0:5",
     )
     assert _seal_or_defect(sliced, Category, None, _PREFETCH_CHILD_POLICY)[1] is None
+    assert _seal_or_defect(sliced, Category, None, _LIST_RELATION_CHILD_POLICY)[1] == (
+        "sliced",
+        "rows 0:5",
+    )
     assert _seal_or_defect(sliced, Category, None, _CASCADE_SEAL_POLICY)[1] == (
         "sliced",
         "rows 0:5",

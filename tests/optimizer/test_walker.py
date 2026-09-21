@@ -19,10 +19,13 @@ from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.extension import mutation_payload_child_selections
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.nested_fetch import unwindowable_child_queryset_reason
 from django_strawberry_framework.optimizer.nested_planner import _connector_only_field
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.optimizer.walker import (
     _apply_hint,
+    _build_child_queryset,
+    _build_connection_child_queryset,
     _ensure_connector_only_fields,
     _field_by_graphql_name,
     _graphql_names_by_python_name,
@@ -1293,6 +1296,76 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
     assert prefetch.prefetch_to == "items"
     assert prefetch.queryset.model is Item
     assert calls["queryset"].model is Item
+
+
+def test_plan_refuses_sliced_hook_result_for_plain_list_relation():
+    """A sliced hook result on a plain list relation is the typed ``sliced`` defect.
+
+    The plain-list child is installed as ``Prefetch(<lookup>, queryset=...)`` with
+    no ``to_attr``, and Django re-applies the relation's own filters to it at fetch
+    time, which raises a raw ``TypeError``. Nothing between the walk and that fetch
+    classifies the slice, so the licence ``_PREFETCH_CHILD_POLICY`` spends on the
+    nested-connection child does not hold here: the seal refuses the shape while it
+    is still a configuration question, naming the hook.
+    """
+    registry.clear()
+
+    class SlicedItemType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.order_by("pk")[:1]
+
+    registry.register(Item, SlicedItemType)
+    try:
+        with pytest.raises(ConfigurationError) as excinfo:
+            plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+    finally:
+        registry.clear()
+
+    message = str(excinfo.value)
+    assert "SlicedItemType.get_queryset returned a sliced queryset (rows 0:1)" in message
+
+
+def test_connection_child_seam_still_admits_a_sliced_hook_result():
+    """The nested-connection seam keeps the slice licence its own gate answers for.
+
+    ``_build_connection_child_queryset`` is the only caller that spends
+    ``_PREFETCH_CHILD_POLICY``; the planner classifies what comes back with
+    ``nested_fetch.py::unwindowable_child_queryset_reason`` and degrades a sliced
+    child to the per-parent fallback. The default seam refuses the identical value,
+    which is the one axis the two policies differ on.
+    """
+
+    class SlicedItemType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.order_by("pk")[:1]
+
+    field = Category._meta.get_field("items")
+    admitted = _build_connection_child_queryset(
+        field,
+        SlicedItemType,
+        None,
+        True,
+        target_model=Item,
+    )
+    assert admitted.query.is_sliced
+    assert unwindowable_child_queryset_reason(admitted) is not None
+    with pytest.raises(ConfigurationError) as excinfo:
+        _build_child_queryset(field, SlicedItemType, None, True, target_model=Item)
+    assert "returned a sliced queryset (rows 0:1)" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

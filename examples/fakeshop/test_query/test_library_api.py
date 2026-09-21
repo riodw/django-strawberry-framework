@@ -822,6 +822,76 @@ query {
 """
 
 
+def _sliced_book_hook(cls, queryset, info):
+    """A ``BookType.get_queryset`` that returns a sliced top-N queryset."""
+    return queryset.order_by("pk")[:1]
+
+
+@pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
+def test_sliced_book_hook_on_plain_list_relation_is_refused_over_http(monkeypatch):
+    """A sliced hook result reached through a plain list relation fails closed, named.
+
+    ``shelves { books }`` is the list shape of ``ShelfType.Meta.relation_shapes``, so
+    the optimizer installs the hook's return as a ``Prefetch`` queryset with no
+    ``to_attr`` and Django refilters it at fetch time - a raw
+    ``TypeError: Cannot filter a query once a slice has been taken.`` on the wire.
+    Nothing on this path classifies the slice the way the nested-connection gate
+    does, so the child seal keeps its ``sliced`` rejection here and the schema
+    author gets the same typed ``ConfigurationError`` every other bad-hook shape
+    produces. The capture proves the refusal happens at plan time: no book query
+    ran at all.
+    """
+    from apps.library.schema import BookType
+
+    monkeypatch.setattr(BookType, "get_queryset", classmethod(_sliced_book_hook))
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql("{ allLibraryBranches { shelves { books { title } } } }")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert "BookType.get_queryset returned a sliced queryset (rows 0:1)" in message
+    assert _sql_from_table(captured, "library_book") == []
+
+
+@pytest.mark.django_db
+@override_settings(**_ERROR_POLICY_PASS_THROUGH)
+def test_sliced_book_hook_on_nested_connection_is_refused_at_resolve_time(monkeypatch):
+    """The same sliced hook on the CONNECTION shape is still admitted by the walker.
+
+    ``allLibraryGenres { booksConnection }`` is the connection half of
+    ``GenreType.Meta.relation_shapes``. Its planner classifies the sliced child with
+    ``optimizer/nested_fetch.py::unwindowable_child_queryset_reason`` and leaves the
+    selection unplanned - the slice licence
+    ``utils/querysets.py::_PREFETCH_CHILD_POLICY`` grants this path is what lets that
+    designed degradation happen at all, and narrowing the plain-list path left it
+    standing. The per-parent fallback then runs the connection's own read-surface
+    seal, which composes onto the hook result and so states the identical typed
+    defect. The distinguishing evidence is WHERE: the parent genre query has already
+    run, where the list-relation row refuses before any query at all.
+    """
+    from apps.library.schema import BookType
+
+    monkeypatch.setattr(BookType, "get_queryset", classmethod(_sliced_book_hook))
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            "{ allLibraryGenres { name booksConnection { edges { node { title } } } } }",
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert "BookType.get_queryset returned a sliced queryset (rows 0:1)" in message
+    assert _sql_from_table(captured, "library_genre") != []
+
+
 def _library_sql(captured: CaptureQueriesContext) -> list[str]:
     """Return only the library-table SQL of a capture, dropping session traffic."""
     return [entry["sql"] for entry in captured.captured_queries if "library_" in entry["sql"]]

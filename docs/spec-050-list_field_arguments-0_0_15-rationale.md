@@ -621,20 +621,30 @@ duplication is demonstrated; it is not mandated by line count.
 original was simpler partly because it missed failure modes the suite now pins.
 
 *Separated, not absorbed — the connection field's sidecar seam.*
-[`django_strawberry_framework/connection.py::_pipeline_sync`][connection] and
-[`_pipeline_async`][connection] apply `FilterSet.apply_*` / `OrderSet.apply_*` and carry the
-returned value straight to `_finalize_queryset`: no routing snapshot is taken before the call and
-the result is not re-sealed. [`django_strawberry_framework/list_field.py`][list-field] does both
-around the same public hooks - it freezes the routing intent, then validates the sealed output.
 The rule this decision's trust table states for application code is that the package validates
 mechanically what it can establish about a hook's RESULT, and a hook's result contract does not
 depend on which field called it; two fields invoking one public method and validating it
-differently is that rule broken. The row it breaks is [`spec-030`][spec-030] Decision 7's "later
-steps can only narrow" upper bound on the connection pipeline, which nothing currently proves for an
-override that widens, re-routes, or returns an evaluated queryset. It is not remediated here:
-the contract it breaks belongs to the connection field, and Decision 22 closes this card on the
-work the card named, so it opens a card owned by the connection field rather than reopening 050.
-Owner: `maintainer` until a card number exists.
+differently is that rule broken. The row at stake is [`spec-030`][spec-030] Decision 7's "later
+steps can only narrow" upper bound on the connection pipeline, which an override that widens,
+re-routes, pre-evaluates, slices or combines its return would otherwise defeat.
+
+The `OrderSet.apply_*` half of that seam is closed. The one post-`OrderSet` seal is
+[`django_strawberry_framework/utils/querysets.py::apply_orderset_sync`][utils-querysets] /
+[`::apply_orderset_async`][utils-querysets], called from both
+[`django_strawberry_framework/list_field.py`][list-field] and
+[`django_strawberry_framework/connection.py::_pipeline_sync`][connection] /
+[`::_pipeline_async`][connection]. Both fields therefore freeze the same routing intent before
+the consumer override receives the queryset and validate what it hands back on the same result
+axes - lazy, model rows of the captured model, unsliced, uncombined, same routing - before any
+later step, including the Relay window, sees it.
+
+The remaining deferral is the `FilterSet.apply_*` return, which neither field seals. It is not
+remediated here: Decision 22 closes this card on the work the card named, so it belongs to a
+card owned by the connection field rather than reopening 050. Owner: card
+`TODO-ALPHA-053-0.0.15`, which names the same symbols, the same frozen routing intent and the
+same `_ORDERSET_RESULT_POLICY` axes, plus the adjacent seal-policy asymmetry between
+the `_DEFAULT_SEAL_POLICY` the connection field seals under and the list field's
+`_LIST_ARGUMENT_VISIBILITY_POLICY`.
 
 ### Decision 21 — the extension contract is upstream's; per-operation isolation is the guarantee this package adds
 
@@ -736,6 +746,7 @@ criterion; this decision supplies the stop.
 <!-- django_strawberry_framework/ -->
 [connection]: ../django_strawberry_framework/connection.py
 [list-field]: ../django_strawberry_framework/list_field.py
+[utils-querysets]: ../django_strawberry_framework/utils/querysets.py
 
 <!-- tests/ -->
 

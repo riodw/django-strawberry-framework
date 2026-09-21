@@ -6,9 +6,16 @@ Target release: `0.0.15`
 Status: Candidate. This tree is the candidate implementation commit of spec Decision 22: the
 production and test changes, the shipped docs, the board's DONE transition, the spec status and
 every generated output are in it, and it is the tree every gate result and review conclusion
-must name. No gate, review or evidence-only follow-up has run against it yet, so no result
-recorded anywhere is evidence for it, and the card is not closed. What the gate covers, beyond
-the five slices:
+must name. The candidate is no longer a single commit: it is the commit carrying this
+reconciliation on top of three that landed after the first candidate tree was written - the one
+that moved the post-`OrderSet` seal into `utils/querysets.py` and routed the connection field's
+order arm through it, the one that refused a sliced child on a plain list relation with the
+typed defect under the walker's own child policy, and the one that added the `FilterSet` return
+seal to card `TODO-ALPHA-053-0.0.15`. They are named by content here because a tracked record
+cannot name the commit that contains it; the evidence-only follow-up writes the commit ids. No
+gate, review or evidence-only follow-up has run against that tree yet, so no result recorded
+anywhere is evidence for it, and the card is not closed. What the gate covers, beyond the five
+slices:
 
 - the policy-authority remediation - the object every bound is read from is no longer
   reachable from any consumer-visible name, a policy subclass is canonicalized at schema
@@ -161,16 +168,19 @@ of an approved function is for the SQL it substitutes ([`spec-050`][spec-050] De
 
 ## Final gate record
 
-No gate is recorded. The candidate tree now exists - this commit - and a tracked record cannot
-name the commit that contains the record itself, so the figures belong in the follow-up
-described below and nowhere else. The prior close evidence stays superseded because it did not
-identify the tree that the full suites and review actually covered.
+No gate is recorded. The candidate tree now exists - this commit, standing on the connection
+`OrderSet` seal, the plain-list-relation sliced-child refusal and the card-053 `FilterSet`
+seal row - and a tracked record cannot name the commit that contains the record itself, so the
+figures, and the commit ids of the three it stands on, belong in the follow-up described below
+and nowhere else. The prior close evidence stays superseded because it did not identify the
+tree that the full suites and review actually covered.
 
 The close uses two commits:
 
 1. The candidate implementation commit contains all production and test changes, shipped docs,
-   the final board/database transition, the spec status, and generated outputs. It atomically
-   carries the board's DONE state. Its commit id is the exact tree for every default, sharded,
+   the final board/database transition, the spec status, and generated outputs, and it carries
+   this record's reconciliation with the three commits above. It atomically carries the board's
+   DONE state. Its commit id is the exact tree for every default, sharded,
    supported-floor, structural, link, citation, tracked-path and adversarial-review result, none
    of which has been produced against it.
 2. After a green gate and a review that admits no finding under Decision 20, an evidence-only
@@ -231,12 +241,21 @@ execution-mode architecture added or rewrote - `tests/test_schema.py`,
 `examples/fakeshop/test_query/test_products_visibility_api.py`,
 `examples/fakeshop/test_query/test_keyset_api.py`,
 `examples/fakeshop/test_query/test_resource_policy_api.py`,
-`examples/fakeshop/test_query/test_error_policy_api.py`, plus the prefetch-seal fixture's two
+`examples/fakeshop/test_query/test_error_policy_api.py`,
+`examples/fakeshop/test_query/test_connection_pagination_api.py` and
+`examples/fakeshop/test_query/test_multi_db.py` - the last two because the post-`OrderSet`
+seal now runs at the connection field, so its live malformed-result matrix and its sharded
+routing rejection are this card's rows too - plus the prefetch-seal fixture's two
 modules `examples/fakeshop/apps/library/tests/test_models.py` and
-`examples/fakeshop/test_query/test_library_api.py`.
+`examples/fakeshop/test_query/test_library_api.py`, the second of which also carries the
+plain-list-relation sliced-child refusal.
 
-That is twenty-five paths: seventeen package modules or directories, the six live modules and the
-two fixture modules. A
+`tests/utils/test_querysets.py` and `tests/optimizer/` already stand in the package half of
+this set and are where the shared seal's own rows and the walker's child-policy rows live;
+`django_strawberry_framework/utils/querysets.py` is the module those rows cover.
+
+That is twenty-seven paths: seventeen package modules or directories, the eight live modules and
+the two fixture modules. A
 floor run that narrows this set is not this card's floor verification. The `Schema.stream` rows
 in the four architecture suites skip below strawberry-graphql 0.319.0 by their own gate, so a
 floor run reports them as skips, not as absent. The shared `.venv` is
@@ -402,11 +421,18 @@ they are not evidence for the candidate or its evidence-only follow-up.
 Every item below left the card under spec Decision 20 or Decision 22 with a named owner;
 none is a Definition-of-done row of this card.
 
-- **Connection-field sidecar results are not re-sealed** - `connection.py::_pipeline_sync` /
-  `_pipeline_async` apply `FilterSet.apply_*` and `OrderSet.apply_*` with no routing snapshot and
-  no post-apply seal, where `list_field.py` does both; a hook's result contract does not depend
-  on which field called it, and the row it breaks is spec-030 Decision 7's "later steps can only
-  narrow". Owner: `maintainer`, as a new card against that row (rationale, Decision 20 entry).
+- **Connection-field `FilterSet.apply_*` results are not re-sealed** - the `OrderSet.apply_*`
+  half of this seam is closed: the one post-`OrderSet` seal is
+  `django_strawberry_framework/utils/querysets.py::apply_orderset_sync` /
+  `::apply_orderset_async`, called from `list_field.py` and from
+  `connection.py::_pipeline_sync` / `::_pipeline_async`, so both fields freeze the same routing
+  intent before the override runs and validate the return on the same result axes - lazy, model
+  rows of the captured model, unsliced, uncombined, same alias. What remains is the
+  `FilterSet.apply_*` return, which neither field seals; a hook's result contract does not
+  depend on which field called it, and the row it answers is spec-030 Decision 7's "later steps
+  can only narrow". Owner: card `TODO-ALPHA-053-0.0.15` (rationale, Decision 20 entry), which
+  also carries the adjacent asymmetry between the `_DEFAULT_SEAL_POLICY` the connection field seals under and the
+  list field's `_LIST_ARGUMENT_VISIBILITY_POLICY`.
 - **An exact `QuerySet` carrying a foreign `_result_cache` escapes the raw-list ceiling** - only
   in-process application Python can write that slot, so the wire-input condition fails; a
   robustness row. Owner: `maintainer`, `BACKLOG.md` (`bld-050-close-row_carry.md`, final

@@ -23,12 +23,23 @@ the node type: ``allLibraryGenresConnection`` publishes ``filter:`` and
 The post-``OrderSet`` seal on the connection field is pinned here as well. The
 connection takes the Relay window on whatever ordering returned, so a consumer
 ``apply_sync`` override handing back an evaluated, materialized, projected,
-wrong-model, sliced, combined, awaitable or re-routed value would otherwise
-produce a silently wrong page or foreign rows. One row per defect class drives
+wrong-model, sliced, combined, awaitable, re-routed or unrebuildable-state
+value would otherwise
+produce a silently wrong page or foreign rows. One row per defect shape
+(``materialized-list`` and ``none`` share the ``type`` branch) drives
 ``GenreOrder.apply_sync`` on the shipped ``allLibraryGenresConnection`` and
 asserts both the exact rejection and that no ``library_genre`` read happened
 that the defect should have prevented; a ``super()`` pass-through override is
 the positive control that the seal accepts a healthy ``OrderSet``.
+
+Both pipelines run that seal, so the matrix is mirrored over the async one. The
+sync rows go through ``/graphql/``; a second set drives ``GenreOrder.apply_async``
+on the same shipped connection over a ``/graphql-async/`` mount this module owns
+(``graphql_client.py`` is sync-only, so those rows take the documented
+``AsyncTestClient`` + ``django_db(transaction=True)`` exemption), covering an
+evaluated, sliced, combined, wrong-model, re-routed and non-awaitable return plus
+the same pass-through control. Each async row asserts the typed rejection and
+that no raw exception text reaches the payload.
 """
 
 import pytest
@@ -36,10 +47,14 @@ from apps.library import models as library_models
 from apps.library.orders_genre import GenreOrder
 from apps.products.services import seed_data
 from django.conf import settings
-from django.db import connection
+from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from django.urls import path
 from graphql_client import assert_graphql_success, graphql_payload
+
+from django_strawberry_framework.testing import AsyncTestClient
+from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
@@ -342,6 +357,16 @@ _GENRE_CONNECTION_ORDER_QUERY = (
 )
 
 
+class _DeferredFilterQuerySet(models.QuerySet):
+    """A project queryset class, used here to carry a deferred filter Django never writes.
+
+    A PENDING predicate is ordinary: Django's related-manager machinery leaves
+    one on every relation queryset whatever class built it, and the seal bakes
+    it. What cannot be faithfully rebuilt is a deferred-filter STATE outside the
+    exact shape Django writes, which is what this class is planted with.
+    """
+
+
 async def _awaitable_queryset(queryset):
     return queryset
 
@@ -354,6 +379,19 @@ def _override_evaluated(
 ):
     list(queryset)
     return queryset
+
+
+def _override_untrusted(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    candidate = _DeferredFilterQuerySet(model=library_models.Genre)
+    # ``negate`` decides whether the predicate is inverted and is truth-tested to
+    # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
+    candidate._deferred_filter = (1, (), {"name": "A"})
+    return candidate
 
 
 def _override_in_place_routing(
@@ -375,10 +413,14 @@ def _override_passthrough(
     return super(GenreOrder, cls).apply_sync(order_input, queryset, info)
 
 
-#: One row per defect class the post-``OrderSet`` seal can name on the shipped
-#: connection: ``(id, override, expected message start, required substrings,
-#: resolver queries)``. The query count is the must-not half - a defect caught
-#: before the Relay window is taken must leave ``library_genre`` untouched.
+#: One row per defect shape the post-``OrderSet`` seal can name on the shipped
+#: connection; ``materialized-list`` and ``none`` share the ``type`` branch.
+#: ``(id, override, expected message start, required substrings, genre
+#: queries)``. The query count is the must-not half - a defect caught before the
+#: Relay window is taken must leave ``library_genre`` untouched, and the
+#: ``evaluated`` and ``materialized-list`` rows, which issue exactly one
+#: statement (the override's own evaluation), prove the count is measured rather
+#: than assumed.
 _CONNECTION_MALFORMED_APPLY_SYNC_ROWS = (
     (
         "evaluated",
@@ -445,6 +487,13 @@ _CONNECTION_MALFORMED_APPLY_SYNC_ROWS = (
         ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
         0,
     ),
+    (
+        "malformed-deferred-filter",
+        _override_untrusted,
+        _GENRE_ORDER_SHAPE_PREFIX + "untrusted defect",
+        ("deferred filter negate is a int",),
+        0,
+    ),
 )
 
 
@@ -454,7 +503,7 @@ _CONNECTION_MALFORMED_APPLY_SYNC_ROWS = (
         "override",
         "message_start",
         "substrings",
-        "resolver_queries",
+        "genre_queries",
     ),
     [row[1:] for row in _CONNECTION_MALFORMED_APPLY_SYNC_ROWS],
     ids=[row[0] for row in _CONNECTION_MALFORMED_APPLY_SYNC_ROWS],
@@ -464,7 +513,7 @@ def test_connection_branches_a_malformed_apply_sync_result_names_its_own_defect(
     override,
     message_start,
     substrings,
-    resolver_queries,
+    genre_queries,
 ):
     """Each malformed ``apply_sync`` result names its exact defect on the shipped connection.
 
@@ -489,7 +538,7 @@ def test_connection_branches_a_malformed_apply_sync_result_names_its_own_defect(
     for substring in substrings:
         assert substring in message, message
     genre_sql = [q["sql"] for q in ctx.captured_queries if "library_genre" in q["sql"].lower()]
-    assert len(genre_sql) == resolver_queries, genre_sql
+    assert len(genre_sql) == genre_queries, genre_sql
 
 
 @pytest.mark.django_db
@@ -506,4 +555,207 @@ def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(monk
     data = assert_graphql_success(_GENRE_CONNECTION_ORDER_QUERY)
 
     names = [edge["node"]["name"] for edge in data["allLibraryGenresConnection"]["edges"]]
+    assert names == ["A", "B", "C"]
+
+
+async def _async_shipped_graphql_view(request):
+    """The shipped schema on an async view, so the connection takes ``_pipeline_async``."""
+    from config.schema import schema
+
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+
+urlpatterns = [
+    path("graphql-async/", _async_shipped_graphql_view),
+]
+
+
+async def _post_async_shipped(query: str) -> dict:
+    """POST ``query`` against the shipped schema over ``/graphql-async/``.
+
+    ``graphql_client.py`` is sync-only, so the async rows take the documented
+    exemption and drive ``AsyncTestClient`` against a mount this module owns.
+    """
+    with override_settings(ROOT_URLCONF=__name__, **_ERROR_POLICY_PASS_THROUGH):
+        result = await AsyncTestClient().query(
+            query,
+            assert_no_errors=False,
+            url="/graphql-async/",
+        )
+    assert result.response.status_code == 200
+    return result.response.json()
+
+
+_GENRE_ORDER_ASYNC_SHAPE_PREFIX = (
+    "GenreOrder.apply_async must return an unevaluated, unsliced, uncombined "
+    "QuerySet of Genre rows; got "
+)
+
+
+async def _override_async_evaluated(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    [genre async for genre in queryset]
+    return queryset
+
+
+async def _override_async_sliced(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    return queryset.order_by("name")[:1]
+
+
+async def _override_async_combined(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    return queryset.filter(name="A").union(queryset.filter(name="B"))
+
+
+async def _override_async_wrong_model(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    return library_models.Book.objects.all()
+
+
+async def _override_async_in_place_routing(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    queryset._hints = {"tenant": 2}
+    return queryset
+
+
+def _override_async_non_awaitable(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    return queryset
+
+
+async def _override_async_passthrough(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    return await super(GenreOrder, cls).apply_async(order_input, queryset, info)
+
+
+#: One row per defect class the post-``OrderSet`` seal names on the ASYNC
+#: connection pipeline: ``(id, override, expected message start, required
+#: substrings)``. The sync matrix above drives ``apply_sync`` through
+#: ``connection.py::_pipeline_sync``; these drive ``apply_async`` through
+#: ``connection.py::_pipeline_async``, whose await of the shared seal is the
+#: half no live row reached before.
+_CONNECTION_MALFORMED_APPLY_ASYNC_ROWS = (
+    (
+        "evaluated",
+        _override_async_evaluated,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "evaluated defect",
+        (),
+    ),
+    (
+        "sliced",
+        _override_async_sliced,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "sliced defect",
+        (),
+    ),
+    (
+        "combined",
+        _override_async_combined,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "combined defect",
+        (),
+    ),
+    (
+        "wrong-model",
+        _override_async_wrong_model,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "table defect",
+        (),
+    ),
+    (
+        "routing-rewritten-in-place",
+        _override_async_in_place_routing,
+        "GenreOrder.apply_async changed database routing intent",
+        ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
+    ),
+    (
+        "non-awaitable",
+        _override_async_non_awaitable,
+        "GenreOrder.apply_async returned a non-awaitable value",
+        ("expected an awaitable coroutine or Future.",),
+    ),
+)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("override", "message_start", "substrings"),
+    [row[1:] for row in _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS],
+    ids=[row[0] for row in _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS],
+)
+async def test_connection_async_branches_a_malformed_apply_async_result_names_its_own_defect(
+    monkeypatch,
+    override,
+    message_start,
+    substrings,
+):
+    """Each malformed ``apply_async`` result names its exact defect over ``/graphql-async/``.
+
+    The async pipeline awaits the SAME post-``OrderSet`` seal the sync one
+    calls, so every defect class the sync matrix pins has to arrive here too;
+    unsealed, the Relay window would be taken on whatever the override handed
+    back. Each row asserts the typed rejection and that no raw exception text
+    reaches the payload.
+    """
+    await library_models.Genre.objects.acreate(name="A")
+    monkeypatch.setattr(GenreOrder, "apply_async", classmethod(override))
+
+    payload = await _post_async_shipped(_GENRE_CONNECTION_ORDER_QUERY)
+
+    assert payload["data"] is None, payload
+    message = payload["errors"][0]["message"]
+    assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
+    assert "Traceback" not in message, message
+    assert not any(
+        token in message for token in ("ValueError", "TypeError", "SynchronousOnlyOperation")
+    ), message
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_connection_async_healthy_apply_async_override_still_returns_ordered_edges(
+    monkeypatch,
+):
+    """A ``super()`` pass-through ``apply_async`` is ACCEPTED and the ordered page is served.
+
+    The async seal's positive control on the shipped connection: it rejects
+    malformed results without rejecting an ``OrderSet`` that simply delegates.
+    """
+    for name in ("C", "A", "B"):
+        await library_models.Genre.objects.acreate(name=name)
+    monkeypatch.setattr(GenreOrder, "apply_async", classmethod(_override_async_passthrough))
+
+    payload = await _post_async_shipped(_GENRE_CONNECTION_ORDER_QUERY)
+
+    assert "errors" not in payload, payload
+    names = [
+        edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
+    ]
     assert names == ["A", "B", "C"]

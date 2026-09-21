@@ -682,9 +682,10 @@ diff, so neither shape in `BUILD.md` `### Test staleness a focused run cannot se
   mechanically about their **results**", which is `GOAL.md`'s own hedge, and it does **not** say
   sidecar results are validated on every surface. That distinction is load-bearing right now:
   `django_strawberry_framework/connection.py::_pipeline_sync` #"qs = set_class.apply_sync(value, qs, info)"
-  applies `FilterSet` / `OrderSet` with no re-seal, while
-  `django_strawberry_framework/list_field.py::_apply_orderset_sync` #"return _validate_post_orderset_result"
-  does re-seal — a per-surface claim would have been false on the day it shipped.
+  applies `FilterSet` with no re-seal, while the post-`OrderSet` seal
+  `django_strawberry_framework/utils/querysets.py::apply_orderset_sync` #"return _validate_post_orderset_result"
+  does re-seal and is now called from both fields — a per-surface claim would have been false on
+  the day it shipped, and a per-sidecar one would still be.
 - **`### The trust boundary` is positioned to earn its "every row below reads against them".**
   Placing it before `### What the package already defaults to safe` makes that sentence point at a
   real table rather than at nothing.

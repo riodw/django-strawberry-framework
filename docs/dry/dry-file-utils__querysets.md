@@ -78,8 +78,10 @@ rule has a second flavor-local definition in `connection.py::_guard_source_not_p
 
 **2. Sync/async twins.** Four colored pairs touch this module: `apply_type_visibility_sync` /
 `_async`, `post_process_queryset_result_sync` / `_async`, `reject_awaitable_sync_source` /
-`reject_residual_async_source`, and the caller-side `_apply_orderset_sync` / `_async` in
-`list_field.py`. Compared by behavior, not shape, and by signature parity:
+`reject_residual_async_source`, and the post-`OrderSet` seal pair, which now lives in this
+module as `utils/querysets.py::apply_orderset_sync` / `::apply_orderset_async` and is called
+from both `list_field.py` and `connection.py`. Compared by behavior, not shape, and by
+signature parity:
 
 ```text
 apply_type_visibility_sync (type_cls, queryset, info, async_recourse='...', *, model=None, render_error=None, policy=_SealPolicy(...))
@@ -219,7 +221,7 @@ No production edit is owed by a file item; each finding names the family that wi
   coroutine only, wrapped in `contextlib.suppress(BaseException)`); `routers.py` #"application.close()"
   (279-285, coroutine only). *Consumers*: `reject_async_in_sync_context`, `_disposed_awaitable`,
   `apply_type_visibility_async`, `reject_awaitable_sync_source`, `reject_residual_async_source`,
-  `list_field.py::_apply_orderset_sync` / `_apply_orderset_async`, `utils/permissions.py`,
+  `utils/querysets.py::apply_orderset_sync` / `::apply_orderset_async`, `utils/permissions.py`,
   `mutations/permissions.py`, `relay.py` ×2. *Projection*: the `_disposed_awaitable` docstring,
   which already records "Four sites spelled this pair inline".
 - **Challenges.** C5 → 3 definitions. Second axis: "futures must be awaited-with-timeout rather
@@ -603,12 +605,16 @@ owning card.
 
 ### D3 — ambiguous: the connection field runs `OrderSet.apply_*` with no post-apply result seal
 
-`list_field.py::_apply_orderset_sync` / `_apply_orderset_async` freeze routing intent before the
-public override runs and re-seal its return through `_validate_post_orderset_result`
-(`_ORDERSET_RESULT_POLICY`: model rows, unevaluated, unsliced, uncombined, same route).
-`connection.py:1828` / `:1865` invoke the same public `OrderSet.apply_sync` / `apply_async` on a
-sealed queryset and pass the return straight to `_finalize_queryset` with neither the snapshot nor
-the re-seal.
+As raised, the list field froze routing intent before the public override ran and re-sealed its
+return through `_validate_post_orderset_result` (`_ORDERSET_RESULT_POLICY`: model rows,
+unevaluated, unsliced, uncombined, same route), while `connection.py:1828` / `:1865` invoked the
+same public `OrderSet.apply_sync` / `apply_async` on a sealed queryset and passed the return
+straight to `_finalize_queryset` with neither the snapshot nor the re-seal. That seal no longer
+belongs to the list field: it lives in this module as
+`utils/querysets.py::apply_orderset_sync` / `::apply_orderset_async` and is called from
+`list_field.py` and from `connection.py::_pipeline_sync` / `::_pipeline_async`, so both fields
+run one snapshot-plus-re-seal on the same result axes. The `FilterSet.apply_*` return is the
+half still unsealed at both.
 
 Per the axis-6 rule, sibling behaviour justifies the investigation but not the verdict. The two
 contract sources found both scope the rule to the list field:

@@ -7,12 +7,16 @@ Status: Candidate. This tree is the candidate implementation commit of spec Deci
 production and test changes, the shipped docs, the board's DONE transition, the spec status and
 every generated output are in it, and it is the tree every gate result and review conclusion
 must name. The candidate is no longer a single commit: it is the commit carrying this
-reconciliation on top of three that landed after the first candidate tree was written - the one
-that moved the post-`OrderSet` seal into `utils/querysets.py` and routed the connection field's
-order arm through it, the one that refused a sliced child on a plain list relation with the
-typed defect under the walker's own child policy, and the one that added the `FilterSet` return
-seal to card `TODO-ALPHA-053-0.0.15`. They are named by content here because a tracked record
-cannot name the commit that contains it; the evidence-only follow-up writes the commit ids. No
+reconciliation on top of five that landed after the first candidate tree was written - the one
+that canonicalized the default policy path, so a policy taken without a consumer override is
+the same object a declared one resolves to, and closed `ErrorPolicy` to exact-type strings; the
+one that moved the post-`OrderSet` seal into `utils/querysets.py` and routed the connection
+field's order arm through it; the one that refused a sliced child on a plain list relation with
+the typed defect under the walker's own child policy; the one that added the `FilterSet` return
+seal to card `TODO-ALPHA-053-0.0.15`; and the one that stopped the list-field async adapter
+test committing its seed rows. They are named by content here because a tracked record cannot
+name the commit that contains it; the evidence-only follow-up writes the commit ids, naming the
+complete parent chain from the first candidate tree to the gated commit. No
 gate, review or evidence-only follow-up has run against that tree yet, so no result recorded
 anywhere is evidence for it, and the card is not closed. What the gate covers, beyond the five
 slices:
@@ -168,18 +172,20 @@ of an approved function is for the SQL it substitutes ([`spec-050`][spec-050] De
 
 ## Final gate record
 
-No gate is recorded. The candidate tree now exists - this commit, standing on the connection
-`OrderSet` seal, the plain-list-relation sliced-child refusal and the card-053 `FilterSet`
-seal row - and a tracked record cannot name the commit that contains the record itself, so the
-figures, and the commit ids of the three it stands on, belong in the follow-up described below
-and nowhere else. The prior close evidence stays superseded because it did not identify the
+No gate is recorded. The candidate tree now exists - this commit, standing on the default-policy
+canonicalization with its exact-type `ErrorPolicy` strings, the connection `OrderSet` seal, the
+plain-list-relation sliced-child refusal, the card-053 `FilterSet` seal row and the list-field
+async adapter test that no longer commits its seed rows - and a tracked record cannot name the
+commit that contains the record itself, so the figures, and the commit ids of the five it stands
+on, belong in the follow-up described below and nowhere else; the follow-up names the complete
+parent chain from the first candidate tree to the gated commit. The prior close evidence stays superseded because it did not identify the
 tree that the full suites and review actually covered.
 
 The close uses two commits:
 
 1. The candidate implementation commit contains all production and test changes, shipped docs,
    the final board/database transition, the spec status, and generated outputs, and it carries
-   this record's reconciliation with the three commits above. It atomically carries the board's
+   this record's reconciliation with the five commits above. It atomically carries the board's
    DONE state. Its commit id is the exact tree for every default, sharded,
    supported-floor, structural, link, citation, tracked-path and adversarial-review result, none
    of which has been produced against it.
@@ -235,7 +241,7 @@ card actually moved - every Strawberry-internals and queryset-compilation bounda
 `tests/test_graphql_core_patches.py`, the four suites the enforcement, operation-state and
 execution-mode architecture added or rewrote - `tests/test_schema.py`,
 `tests/extensions/test_operation_state.py`, `tests/utils/test_execution_mode.py`,
-`tests/test_error_policy.py` - and the six live modules
+`tests/test_error_policy.py` - and the eight live modules
 `examples/fakeshop/test_query/test_list_field_api.py`,
 `examples/fakeshop/test_query/test_list_field_async_api.py`,
 `examples/fakeshop/test_query/test_products_visibility_api.py`,
@@ -403,7 +409,7 @@ on one identified tree, then one review of that tree under Decision 20, then the
 - [x] **Spec reconciliation and final verification (Worker 1)** - five homes agree; rationale
       change record; both cohort artifacts are superseded historical records.
 - [ ] **Gate on one candidate implementation commit** - this commit; default suite at
-      `fail_under = 100`, sharded suite, the twenty-five-path floor scope, hooks, citations,
+      `fail_under = 100`, sharded suite, the twenty-seven-path floor scope, hooks, citations,
       tracked-path constants, `manage.py check`, and `makemigrations --check --dry-run`.
 - [ ] **One review of that exact candidate tree under Decision 20** - record the review conclusion
       only after the candidate gate is complete; a finding meeting the three conditions re-loops.

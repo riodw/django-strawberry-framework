@@ -32,17 +32,25 @@ asserts both the exact rejection and that no ``library_genre`` read happened
 that the defect should have prevented; a ``super()`` pass-through override is
 the positive control that the seal accepts a healthy ``OrderSet``.
 
-Both pipelines run that seal, so the matrix is mirrored over the async one. The
-sync rows go through ``/graphql/``; a second set drives ``GenreOrder.apply_async``
-on the same shipped connection over a ``/graphql-async/`` mount this module owns
-(``graphql_client.py`` is sync-only, so those rows take the documented
-``AsyncTestClient`` + ``django_db(transaction=True)`` exemption), covering an
-evaluated, sliced, combined, wrong-model, re-routed and non-awaitable return plus
-the same pass-through control. Each async row asserts the typed rejection and
-that no raw exception text reaches the payload.
+Both pipelines run that seal, so the matrix is mirrored over the async one, on
+the field shape each pipeline belongs to. The sync matrix runs on the shipped
+``allLibraryGenresConnection`` through ``/graphql/``: that field declares no
+``resolver=``, so its public resolver is a sync one and the field runs
+``connection.py::_pipeline_sync``. The async matrix runs on a test-local
+connection field this module builds over the same shipped ``GenreType`` with an
+``async def`` consumer resolver, which is the only field shape that selects
+``connection.py::_pipeline_async``; it is served over a ``/graphql-async/``
+mount this module owns (``graphql_client.py`` is sync-only, so those rows take
+the documented ``AsyncTestClient`` + ``django_db(transaction=True)``
+exemption). The async rows cover an evaluated, sliced, combined, wrong-model,
+re-routed and non-awaitable return plus the same pass-through control; each
+asserts the typed rejection, that no raw exception text reaches the payload,
+and - through a sentinel the override records before it returns - that
+``apply_async`` was actually entered.
 """
 
 import pytest
+import strawberry
 from apps.library import models as library_models
 from apps.library.orders_genre import GenreOrder
 from apps.products.services import seed_data
@@ -50,9 +58,10 @@ from django.conf import settings
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from django.urls import path
+from django.urls import clear_url_caches, path
 from graphql_client import assert_graphql_success, graphql_payload
 
+from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
@@ -558,32 +567,77 @@ def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(monk
     assert names == ["A", "B", "C"]
 
 
-async def _async_shipped_graphql_view(request):
-    """The shipped schema on an async view, so the connection takes ``_pipeline_async``."""
-    from config.schema import schema
+_ASYNC_SCHEMA: dict = {"schema": None}
 
-    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+async def _async_genres_resolver(root, info):
+    """An ``async def`` consumer resolver - the shape that selects ``_pipeline_async``."""
+    return library_models.Genre.objects.all()
+
+
+def _async_genre_connection_schema():
+    """Build (once) a schema whose genre connection runs the ASYNC pipeline.
+
+    ``connection.py::_build_connection_resolver`` commits sync-vs-async dispatch
+    per construction: the async branch is selected only when the field is given
+    an ``is_async_callable`` ``resolver=``. The shipped
+    ``allLibraryGenresConnection`` declares none, so its wrapped resolver is the
+    sync one; this field supplies an ``async def`` resolver over the same
+    ``GenreType`` and therefore carries the async half of the seal.
+    """
+    if _ASYNC_SCHEMA["schema"] is None:
+        # The composed project schema is imported first so the sidecar input
+        # classes this field's synthesized signature forward-references have
+        # been materialized by ``finalize_django_types``.
+        import config.schema  # noqa: F401
+        from apps.library.schema import GenreType
+
+        @strawberry.type
+        class Query:
+            genres = DjangoConnectionField(GenreType, resolver=_async_genres_resolver)
+
+        _ASYNC_SCHEMA["schema"] = DjangoSchema(query=Query, config=strawberry_config())
+    return _ASYNC_SCHEMA["schema"]
+
+
+async def _async_genre_graphql_view(request):
+    """The test-local async-resolver schema on an async view."""
+    return await AsyncDjangoGraphQLView.as_view(schema=_async_genre_connection_schema())(request)
 
 
 urlpatterns = [
-    path("graphql-async/", _async_shipped_graphql_view),
+    path("graphql-async/", _async_genre_graphql_view),
 ]
 
 
-async def _post_async_shipped(query: str) -> dict:
-    """POST ``query`` against the shipped schema over ``/graphql-async/``.
+async def _post_async_genres(query: str) -> dict:
+    """POST ``query`` against the async-resolver genre connection over ``/graphql-async/``.
 
     ``graphql_client.py`` is sync-only, so the async rows take the documented
     exemption and drive ``AsyncTestClient`` against a mount this module owns.
     """
-    with override_settings(ROOT_URLCONF=__name__, **_ERROR_POLICY_PASS_THROUGH):
-        result = await AsyncTestClient().query(
-            query,
-            assert_no_errors=False,
-            url="/graphql-async/",
-        )
+    try:
+        with override_settings(ROOT_URLCONF=__name__, **_ERROR_POLICY_PASS_THROUGH):
+            clear_url_caches()
+            result = await AsyncTestClient().query(
+                query,
+                assert_no_errors=False,
+                url="/graphql-async/",
+            )
+    finally:
+        clear_url_caches()
     assert result.response.status_code == 200
     return result.response.json()
+
+
+_GENRE_ASYNC_CONNECTION_ORDER_QUERY = (
+    "{ genres(orderBy: [{ name: ASC }]) { edges { node { name } } } }"
+)
+
+#: Names of the overrides ``apply_async`` actually entered during one request.
+#: An override that is never called cannot append to it, so an empty list after
+#: a request means the field never took the async pipeline.
+_ASYNC_APPLY_CALLS: list = []
 
 
 _GENRE_ORDER_ASYNC_SHAPE_PREFIX = (
@@ -599,6 +653,7 @@ async def _override_async_evaluated(
     info,
 ):
     [genre async for genre in queryset]
+    _ASYNC_APPLY_CALLS.append("evaluated")
     return queryset
 
 
@@ -608,6 +663,7 @@ async def _override_async_sliced(
     queryset,
     info,
 ):
+    _ASYNC_APPLY_CALLS.append("sliced")
     return queryset.order_by("name")[:1]
 
 
@@ -617,6 +673,7 @@ async def _override_async_combined(
     queryset,
     info,
 ):
+    _ASYNC_APPLY_CALLS.append("combined")
     return queryset.filter(name="A").union(queryset.filter(name="B"))
 
 
@@ -626,6 +683,7 @@ async def _override_async_wrong_model(
     queryset,
     info,
 ):
+    _ASYNC_APPLY_CALLS.append("wrong-model")
     return library_models.Book.objects.all()
 
 
@@ -636,6 +694,7 @@ async def _override_async_in_place_routing(
     info,
 ):
     queryset._hints = {"tenant": 2}
+    _ASYNC_APPLY_CALLS.append("routing-rewritten-in-place")
     return queryset
 
 
@@ -645,6 +704,7 @@ def _override_async_non_awaitable(
     queryset,
     info,
 ):
+    _ASYNC_APPLY_CALLS.append("non-awaitable")
     return queryset
 
 
@@ -654,15 +714,19 @@ async def _override_async_passthrough(
     queryset,
     info,
 ):
+    _ASYNC_APPLY_CALLS.append("passthrough")
     return await super(GenreOrder, cls).apply_async(order_input, queryset, info)
 
 
-#: One row per defect class the post-``OrderSet`` seal names on the ASYNC
-#: connection pipeline: ``(id, override, expected message start, required
-#: substrings)``. The sync matrix above drives ``apply_sync`` through
-#: ``connection.py::_pipeline_sync``; these drive ``apply_async`` through
-#: ``connection.py::_pipeline_async``, whose await of the shared seal is the
-#: half no live row reached before.
+#: Defect rows the post-``OrderSet`` seal names on the ASYNC connection
+#: pipeline: ``(id, override, expected message start, required substrings)``.
+#: The sync matrix above drives ``apply_sync`` through
+#: ``connection.py::_pipeline_sync`` on the shipped connection, whose public
+#: resolver is sync; these drive ``apply_async`` through
+#: ``connection.py::_pipeline_async`` on the test-local connection field whose
+#: ``async def`` consumer resolver is what selects that branch. Every override
+#: records itself in ``_ASYNC_APPLY_CALLS`` so each row can prove the seal it
+#: names was entered rather than bypassed.
 _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS = (
     (
         "evaluated",
@@ -720,14 +784,19 @@ async def test_connection_async_branches_a_malformed_apply_async_result_names_it
     The async pipeline awaits the SAME post-``OrderSet`` seal the sync one
     calls, so every defect class the sync matrix pins has to arrive here too;
     unsealed, the Relay window would be taken on whatever the override handed
-    back. Each row asserts the typed rejection and that no raw exception text
-    reaches the payload.
+    back. The field carries an ``async def`` consumer resolver, which is what
+    puts the request on that pipeline. Each row asserts the typed rejection,
+    that the override was entered, and that no raw exception text reaches the
+    payload.
     """
     await library_models.Genre.objects.acreate(name="A")
     monkeypatch.setattr(GenreOrder, "apply_async", classmethod(override))
 
-    payload = await _post_async_shipped(_GENRE_CONNECTION_ORDER_QUERY)
+    _ASYNC_APPLY_CALLS.clear()
 
+    payload = await _post_async_genres(_GENRE_ASYNC_CONNECTION_ORDER_QUERY)
+
+    assert _ASYNC_APPLY_CALLS, payload
     assert payload["data"] is None, payload
     message = payload["errors"][0]["message"]
     assert message.startswith(message_start), message
@@ -745,17 +814,20 @@ async def test_connection_async_healthy_apply_async_override_still_returns_order
 ):
     """A ``super()`` pass-through ``apply_async`` is ACCEPTED and the ordered page is served.
 
-    The async seal's positive control on the shipped connection: it rejects
-    malformed results without rejecting an ``OrderSet`` that simply delegates.
+    The async seal's positive control on the async-resolver connection: it
+    rejects malformed results without rejecting an ``OrderSet`` that simply
+    delegates, and the sentinel shows the accepted result came through
+    ``apply_async``.
     """
     for name in ("C", "A", "B"):
         await library_models.Genre.objects.acreate(name=name)
     monkeypatch.setattr(GenreOrder, "apply_async", classmethod(_override_async_passthrough))
 
-    payload = await _post_async_shipped(_GENRE_CONNECTION_ORDER_QUERY)
+    _ASYNC_APPLY_CALLS.clear()
 
+    payload = await _post_async_genres(_GENRE_ASYNC_CONNECTION_ORDER_QUERY)
+
+    assert _ASYNC_APPLY_CALLS == ["passthrough"], payload
     assert "errors" not in payload, payload
-    names = [
-        edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
-    ]
+    names = [edge["node"]["name"] for edge in payload["data"]["genres"]["edges"]]
     assert names == ["A", "B", "C"]

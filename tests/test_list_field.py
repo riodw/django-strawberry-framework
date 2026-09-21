@@ -668,9 +668,15 @@ async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
         assert any("hostile aclose on tracker" in str(note) for note in notes)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_async_completion_adapter_semantics():
-    """_AsyncQuerySetRows wraps queryset in async context, exposes __aiter__, and rejects __iter__."""
+    """_AsyncQuerySetRows wraps queryset in async context, exposes __aiter__, and rejects __iter__.
+
+    ``transaction=True`` because the seed runs through ``sync_to_async`` on
+    asgiref's executor thread, whose connection sits outside the test-body
+    transaction pytest-django opens on the main thread: a plain ``django_db``
+    would commit the seeded rows and leave them for every later test.
+    """
     from django_strawberry_framework.utils.querysets import (
         _AsyncQuerySetRows,
         is_async_queryset_adapter,

@@ -12,7 +12,8 @@ staff branch that must NOT be scoped.
 Authority over WHICH ROWS is not authority over WHICH CONNECTION: the last two
 rows pin the planned child's hook to the connection the walker seeded it on, so a
 hook that pins an alias of its own fails the relation closed while a hook that only
-narrows still serves its scoped page.
+narrows still serves its scoped page. A list-returning root with the optimizer
+installed still pays ``1 + N`` for a nested connection.
 """
 
 import pytest
@@ -324,6 +325,266 @@ def test_nested_connection_costs_one_query_per_parent_without_the_optimizer(db):
 
     assert len(_nested_connection_item_queries(2)) == 2
     assert len(_nested_connection_item_queries(5)) == 5
+
+
+def _nested_connection_item_queries_with_optimizer_on_a_list(parent_count):
+    """Same document as ``_nested_connection_item_queries``, optimizer installed, list root.
+
+    A materialized list is not a ``QuerySet``, so the installed optimizer cannot
+    plan the nested window and each parent still pays its own child query.
+
+    Returns the child SQL and the root SQL, so a caller can pin both that the
+    per-parent cost is real and that the optimizer left the materialized root
+    alone instead of re-deriving a queryset from it and running it again.
+    """
+    parent_pks = list(
+        Category.objects.order_by("pk").values_list("pk", flat=True)[:parent_count],
+    )
+    assert len(parent_pks) == parent_count
+
+    from apps.products.schema import CategoryType
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return list(Category.objects.filter(pk__in=parent_pks).order_by("pk"))
+
+    optimizer = DjangoOptimizerExtension()
+    schema = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: optimizer],
+        config=strawberry_config(),
+    )
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_visibility_query(schema, _NESTED_CONNECTION_QUERY)
+    assert payload.get("errors") is None, payload
+    assert len(payload["data"]["categories"]) == parent_count
+    item_sql = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "products_item"' in entry["sql"]
+    ]
+    root_sql = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "products_category"' in entry["sql"]
+        and 'FROM "products_item"' not in entry["sql"]
+    ]
+    return item_sql, root_sql
+
+
+def test_nested_connection_still_costs_one_query_per_parent_when_the_optimizer_gets_a_list(
+    db,
+):
+    """An installed optimizer does not plan a list-returning root: cost still grows with N.
+
+    The root itself is read exactly once at both cardinalities: an optimizer that
+    re-ran the materialized list would show a second category statement.
+    """
+    services.seed_data(1)
+
+    item_sql_two, root_sql_two = _nested_connection_item_queries_with_optimizer_on_a_list(2)
+    assert len(root_sql_two) == 1, root_sql_two
+    assert len(item_sql_two) == 2
+
+    item_sql_five, root_sql_five = _nested_connection_item_queries_with_optimizer_on_a_list(5)
+    assert len(root_sql_five) == 1, root_sql_five
+    assert len(item_sql_five) == 5
+
+
+def _list_relation_item_queries(parent_count):
+    """Post a raw-list ``items`` selection at ``parent_count`` parents; return item SQL.
+
+    Holder installs no optimizer. The root returns a queryset so an installed
+    optimizer could plan the reverse FK; this helper omits the extension so
+    each parent lazy-loads.
+    """
+    parent_pks = list(
+        Category.objects.order_by("pk").values_list("pk", flat=True)[:parent_count],
+    )
+    assert len(parent_pks) == parent_count
+
+    from apps.products.schema import CategoryType
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return Category.objects.filter(pk__in=parent_pks).order_by("pk")
+
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_visibility_query(
+            strawberry.Schema(query=Query),
+            "{ categories { items { name } } }",
+        )
+    assert payload.get("errors") is None, payload
+    assert len(payload["data"]["categories"]) == parent_count
+    return [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "products_item"' in entry["sql"]
+    ]
+
+
+def test_unoptimized_list_relation_costs_one_query_per_parent(db):
+    """With no optimizer a many-side list selection costs one item query per parent.
+
+    Measured at two cardinalities so a fixed count cannot satisfy it.
+    """
+    services.seed_data(1)
+
+    assert len(_list_relation_item_queries(2)) == 2
+    assert len(_list_relation_item_queries(5)) == 5
+
+
+def _holder_patron_card_schema(*, optimizer):
+    """Throwaway reverse-O2O types: card hook hides ``HIDDEN*`` barcodes.
+
+    Shipped ``MembershipCardType`` has no ``get_queryset``; adding one there
+    would change every ``patron { card }`` traversal. Rung 3 holder.
+    """
+    from apps.library.models import MembershipCard, Patron
+
+    from django_strawberry_framework import DjangoType
+
+    registry.clear()
+
+    class HolderCardType(DjangoType):
+        class Meta:
+            model = MembershipCard
+            fields = ("id", "barcode")
+            name = "HolderCardType"
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(barcode__startswith="HIDDEN")
+
+    class HolderPatronType(DjangoType):
+        class Meta:
+            model = Patron
+            fields = ("id", "name", "card")
+            name = "HolderPatronType"
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def patrons(self) -> list[HolderPatronType]:
+            return list(Patron.objects.filter(name__endswith="Holder").order_by("name"))
+
+    extensions = []
+    if optimizer:
+        installed = DjangoOptimizerExtension()
+        extensions = [lambda: installed]
+    return strawberry.Schema(query=Query, extensions=extensions)
+
+
+def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer(db):
+    """Hidden reverse-O2O cards collapse to ``null`` whether or not the relation was planned.
+
+    The optimizer leg also pins its statement count. The root hands back a
+    materialized list, so nothing is planned and each patron pays exactly two
+    card statements: the descriptor load and the hook's re-check. Four in total
+    at two patrons - a third statement per patron fails this row.
+    """
+    from apps.library.models import MembershipCard, Patron
+
+    hidden = Patron.objects.create(name="Hidden Holder")
+    MembershipCard.objects.create(patron=hidden, barcode="HIDDEN-1")
+    visible = Patron.objects.create(name="Visible Holder")
+    MembershipCard.objects.create(patron=visible, barcode="OPEN-1")
+
+    query = "{ patrons { name card { barcode } } }"
+    expected = {
+        "patrons": [
+            {"name": "Hidden Holder", "card": None},
+            {"name": "Visible Holder", "card": {"barcode": "OPEN-1"}},
+        ],
+    }
+    unplanned = _post_visibility_query(_holder_patron_card_schema(optimizer=False), query)
+    planned_schema = _holder_patron_card_schema(optimizer=True)
+    with CaptureQueriesContext(connection) as captured:
+        planned = _post_visibility_query(planned_schema, query)
+    assert unplanned.get("errors") is None, unplanned
+    assert planned.get("errors") is None, planned
+    assert unplanned["data"] == expected
+    assert planned["data"] == expected
+    card_sql = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if 'FROM "library_membershipcard"' in entry["sql"]
+    ]
+    assert len(card_sql) == 4, card_sql
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_async_reverse_one_to_one_custom_visibility_over_http():
+    """Async reverse-O2O re-checks the card hook and nulls a hidden barcode."""
+    from apps.library.models import MembershipCard, Patron
+
+    await sync_to_async(Patron.objects.create)(name="Hidden Patron")
+    hidden = await sync_to_async(Patron.objects.get)(name="Hidden Patron")
+    await sync_to_async(MembershipCard.objects.create)(patron=hidden, barcode="HIDDEN-99")
+    await sync_to_async(Patron.objects.create)(name="Visible Patron")
+    visible = await sync_to_async(Patron.objects.get)(name="Visible Patron")
+    await sync_to_async(MembershipCard.objects.create)(patron=visible, barcode="OPEN-99")
+
+    from django_strawberry_framework import DjangoType
+
+    registry.clear()
+
+    class HolderCardType(DjangoType):
+        class Meta:
+            model = MembershipCard
+            fields = ("id", "barcode")
+            name = "AsyncHolderCardType"
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(barcode__startswith="HIDDEN")
+
+    class HolderPatronType(DjangoType):
+        class Meta:
+            model = Patron
+            fields = ("id", "name", "card")
+            name = "AsyncHolderPatronType"
+
+    await sync_to_async(finalize_django_types)()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        async def patrons(self) -> list[HolderPatronType]:
+            return await sync_to_async(list)(
+                Patron.objects.filter(pk__in=[hidden.pk, visible.pk]).order_by("pk"),
+            )
+
+    schema = strawberry.Schema(query=Query)
+    _CURRENT["schema"] = schema
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            res = await AsyncTestClient().query(
+                "{ patrons { name card { barcode } } }",
+                assert_no_errors=False,
+                url="/graphql-async/",
+            )
+            response = res.response
+    finally:
+        _CURRENT["schema"] = None
+        clear_url_caches()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == {
+        "patrons": [
+            {"name": "Hidden Patron", "card": None},
+            {"name": "Visible Patron", "card": {"barcode": "OPEN-99"}},
+        ],
+    }
 
 
 @pytest.mark.django_db

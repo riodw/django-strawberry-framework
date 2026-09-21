@@ -5,7 +5,9 @@ seven submodule names. Two things have to be pinned, because each fails silently
 the SET (a name added here is a public-surface widening, one removed strands
 every consumer using the short spelling) and the IDENTITY (a re-export that
 rebinds rather than forwards would let the package root and the owning submodule
-drift into two different objects under one name).
+drift into two different objects under one name). That identity is not a GraphQL
+field; helpers those names implement are live in
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 from django_strawberry_framework import utils

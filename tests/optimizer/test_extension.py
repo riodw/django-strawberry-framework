@@ -1,37 +1,13 @@
 """DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 
-Covers, by topic code:
+Plan-object, cache-key, and construction-time rows. SQL facts live in
+``examples/fakeshop/test_query/test_library_api.py``,
+``examples/fakeshop/test_query/test_optimizer_auto_api.py``, and
+``examples/fakeshop/test_query/test_products_visibility_api.py``.
 
-- **O3** - end-to-end relation traversal (forward FK ``select_related``,
-  reverse FK ``prefetch_related``, combined), root-field gate,
-  ``GraphQLNonNull`` / ``GraphQLList`` type tracing, passthrough cases,
-  ``on_execute`` ContextVar lifecycle, async resolver parity.
-- **O4** - nested prefetch chains and nested select-related chains.
-- **O5** - ``only()`` projection collection.
-- **O6** - ``plan_relation`` downgrade from ``select_related`` to
-  ``Prefetch`` for target types with custom ``get_queryset`` hooks.
-- **B1** - plan cache: hits, misses, eviction, named-fragment
-  differentiation, directive-variable cache splitting, runtime-path
-  inclusion. Reuse of one cached plan ACROSS requests belongs to the shared
-  extension instance the project schema mounts and is pinned live in
-  ``test_library_api.py::test_library_optimizer_plan_cache_is_reused_across_http_requests``.
-- **B2** - forward FK-id elision (and the guards that disable it).
-- **B3** - strictness API (``off`` / ``warn`` / ``raise``).
-- **B4** - ``Meta.optimizer_hints`` declaration-time rejection (unknown field
-  name, non-``OptimizerHint`` value). Skip SQL (non-sentinel ``skip=True``) and
-  ``select_related()`` downgrade past a hooked target are live in
-  ``test_library_api.py::test_library_optimizer_hints_are_observable_over_http``
-  and
-  ``test_library_api.py::test_library_force_select_book_hint_still_prefetches_when_book_is_hooked``.
-- **B5** - plan introspection via ``info.context`` and the read/write
-  symmetry of the ``_context`` helpers (dict, dict-subclass, non-dict
-  mapping, frozen mapping, immutable ``dict`` subclass, ``None``).
-- **B6** - schema-build-time optimization audit (``check_schema``,
-  ``_collect_schema_reachable_types`` including union-type descent).
-- **B8** - consumer-queryset-aware plan diffing.
-- Extension construction surface (unknown-kwarg rejection, Strawberry
-  ``execution_context`` keyword).
-- ``hint_is_skip`` dispatch shapes.
+A reverse FK with no ``related_name`` stays here: every fakeshop fixture sets
+one, so no live query can put the accessor-name lookup in front of
+``prefetch_related``.
 
 Every test uses the autouse ``_isolate_registry`` fixture so the
 global ``registry`` is cleared on entry and exit.
@@ -485,61 +461,6 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
 
 
 @pytest.mark.django_db
-def test_optimizer_skips_when_no_relations_selected(django_assert_num_queries):
-    """If the selection contains only scalars, only projection is applied."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-
-    # 1 query, no select_related / prefetch_related applied.
-    with django_assert_num_queries(1):
-        result = schema.execute_sync("{ allCategories { name } }")
-        assert result.errors is None
-
-
-@pytest.mark.django_db
-def test_optimizer_passes_through_non_queryset(django_assert_num_queries):
-    """A resolver returning a plain ``list`` (not a ``QuerySet``) skips the optimizer."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def categories_as_list(self) -> list[CategoryType]:
-            # Materializing the queryset turns it into a Python list, so the
-            # optimizer's ``isinstance(result, QuerySet)`` check returns False.
-            return list(Category.objects.all())
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-
-    # The materialization issues 1 query; nothing else fires because
-    # the optimizer hands the list straight back to Strawberry.
-    with django_assert_num_queries(1):
-        result = schema.execute_sync("{ categoriesAsList { name } }")
-        assert result.errors is None
-
-
-@pytest.mark.django_db
 def test_optimizer_passes_through_unregistered_return_type(caplog):
     """If the return type isn't in the registry, the queryset is unchanged."""
     services.seed_data(1)
@@ -571,30 +492,29 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
 
 
 # ---------------------------------------------------------------------------
-# G1 (spec-035): evaluated-queryset guard
+# G1 (spec-035): evaluated-queryset guard internals
 #
-# A consumer root resolver that already EVALUATED its queryset (``len(qs)``,
-# ``bool(qs)``, a slice) must pass through ``_optimize`` unchanged - the
-# optimizer's ``.only()`` / ``select_related`` clone would otherwise silently
-# re-execute the SQL (a doubled query) and discard the consumer's own prefetch
-# work. No fakeshop resolver evaluates its root queryset before returning it,
-# so G1 is not reachable from a live products query (Decision 8 unreachability
-# reason) and is earned here at the package level.
+# Wire SQL (one query, no re-execution) is
+# ``examples/fakeshop/test_query/test_library_api.py::test_library_evaluated_queryset_not_re_executed_over_http``.
+# Manager coercion SQL is
+# ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_coerces_manager_to_queryset_in_http_query``.
+# What remains here is cache-miss / instance-identity / async routing, none of
+# which a response can show.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
-def test_optimizer_passes_through_consumer_evaluated_queryset(django_assert_num_queries):
-    """An evaluated root queryset is returned unchanged - no re-executing clone.
+def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss():
+    """The G1 guard short-circuits before ``_get_or_build_plan``, so misses stay 0.
 
-    The resolver applies its OWN ``select_related`` and evaluates the queryset
-    (``len(qs)`` -> ``_result_cache`` populated), then returns it. With the G1
-    guard the optimizer leaves it alone: the whole operation issues exactly ONE
-    SQL query (the consumer's evaluation) and the ``category`` relation is
-    served from the consumer's join. Without the guard the optimizer would
-    clone the evaluated queryset with its own plan and re-execute - two queries
-    total, and the consumer's prefetch work thrown away.
+    Live HTTP one-query SQL is ``allLibraryBranchesEagerEval``. This row keeps
+    the cache-state half AND the consumer-``select_related`` relation that the
+    shipped eager-eval field cannot host: ``category { name }`` is served from
+    the JOIN the resolver already applied, in one query, with no plan miss.
     """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
     services.seed_data(2)
 
     class CategoryType(DjangoType):
@@ -614,77 +534,35 @@ def test_optimizer_passes_through_consumer_evaluated_queryset(django_assert_num_
         @strawberry.field
         def all_items(self) -> list[ItemType]:
             qs = Item.objects.select_related("category").all()
-            len(qs)  # consumer evaluates -> _result_cache populated
+            len(qs)
             return qs
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    with django_assert_num_queries(1):  # consumer's evaluation only; optimizer adds none
+    with CaptureQueriesContext(connection) as captured:
         result = schema.execute_sync("{ allItems { name category { name } } }")
     assert result.errors is None
-    # The guard short-circuited BEFORE _get_or_build_plan, so no plan was built.
     assert ext.cache_info().misses == 0
+    item_sql = [q["sql"] for q in captured.captured_queries if "products_item" in q["sql"]]
+    assert len(item_sql) == 1, captured.captured_queries
+    assert "JOIN" in item_sql[0].upper()
 
 
 @pytest.mark.django_db
 def test_optimize_returns_same_instance_for_evaluated_queryset():
     """``_optimize`` returns the SAME evaluated queryset object, never a clone.
 
-    Direct-call companion to the end-to-end test: it pins instance identity
-    (the contract the doubled-query count implies but cannot observe through
-    schema execution). ``_optimize`` never touches ``info`` for an evaluated
-    queryset - the guard returns before return-type resolution - so a bare
-    namespace suffices.
+    Instance identity has no wire shape. ``_optimize`` never touches ``info``
+    for an evaluated queryset, so a bare namespace suffices.
     """
     services.seed_data(1)
     ext = DjangoOptimizerExtension()
 
     qs = Category.objects.all()
-    len(qs)  # evaluate -> _result_cache is a (non-None) list
+    len(qs)
 
     assert ext._optimize(qs, SimpleNamespace()) is qs
     assert ext.cache_info().misses == 0
-
-
-@pytest.mark.django_db
-def test_optimizer_still_optimizes_manager_after_evaluated_queryset_guard(
-    django_assert_num_queries,
-):
-    """The guard sits AFTER the Manager coercion, so ``Model.objects`` still optimizes.
-
-    ``normalize_query_source`` coerces a returned ``Manager`` to a fresh
-    ``.all()`` whose ``_result_cache`` is ``None``; the guard must not pre-empt
-    that path. A ``Model.objects``-returning resolver therefore still builds and
-    applies a plan (cache miss recorded) and the ``category`` relation is joined
-    in a single query - the un-evaluated counterpart to the test above.
-    """
-    services.seed_data(2)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-
-    ext = DjangoOptimizerExtension()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects  # type: ignore[return-value]  # Manager, unevaluated post-coercion
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    with django_assert_num_queries(1):  # optimizer applied select_related -> single joined query
-        result = schema.execute_sync("{ allItems { name category { name } } }")
-    assert result.errors is None
-    # The plan WAS built (guard did not fire on the un-evaluated coerced queryset).
-    assert ext.cache_info().misses == 1
 
 
 @pytest.mark.django_db
@@ -1892,11 +1770,9 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
 def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
     """Hostile hashable custom scalars become opaque cache identities.
 
-    A custom scalar parser may return a hashable object whose equality method
-    raises. The first plan-key build can store such a value, but the second
-    request's dict/frozenset lookup compares the two values. The cache must
-    never execute that consumer-defined equality method: opaque identities
-    deliberately miss the cross-request cache instead.
+    Live HTTP: ``examples/fakeshop/test_query/test_optimizer_auto_api.py::test_repeated_live_query_survives_hashable_custom_scalar_equality``.
+    This row is the freezer unit: opaque identities compare unequal without
+    running consumer ``__eq__``.
     """
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
@@ -2095,123 +1971,6 @@ def test_build_cache_key_tolerates_unhashable_pagination_variable():
     assert DjangoOptimizerExtension._build_cache_key(info2, Category) == dict_key
 
 
-@pytest.mark.django_db
-def test_optimizer_survives_sibling_field_with_unhashable_custom_scalar():
-    """A custom scalar's unhashable runtime value cannot abort optimization.
-
-    ``objs`` is a Django-backed root field, so the optimizer plans it and builds
-    the plan-cache key from the whole operation. ``misc.logs(after: $x)`` is an
-    unrelated field whose custom scalar parser returns a set. The operation-wide
-    name-based walk over-collects ``$x``; before the root fix, the cache-key
-    frozenset raised ``TypeError`` and nullified the valid operation.
-    """
-    services.seed_data(2)
-
-    from typing import NewType
-
-    SetValue = NewType("SetValue", object)
-    set_scalar = strawberry.scalar(
-        name="SetValue",
-        serialize=lambda value: sorted(value),
-        parse_value=set,
-    )
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    @strawberry.type
-    class Misc:
-        @strawberry.field
-        def logs(self, after: SetValue) -> list[str]:
-            return sorted(after)
-
-    ext = DjangoOptimizerExtension()
-
-    @strawberry.type
-    class Query:
-        objs: list[CategoryType] = DjangoListField(CategoryType)
-
-        @strawberry.field
-        def misc(self) -> Misc:
-            return Misc()
-
-    finalize_django_types()
-    schema = strawberry.Schema(
-        query=Query,
-        config=strawberry_config(extra_scalar_map={SetValue: set_scalar}),
-        extensions=[lambda: ext],
-    )
-    result = schema.execute_sync(
-        "query Q($x: SetValue!) { objs { name } misc { logs(after: $x) } }",
-        variable_values={"x": ["b", "a"]},
-    )
-    assert result.errors is None, result.errors
-    assert result.data["misc"]["logs"] == ["a", "b"]
-    assert len(result.data["objs"]) >= 1
-
-
-@pytest.mark.django_db
-def test_optimizer_survives_sibling_field_with_hashable_equality_bomb_scalar():
-    """A public GraphQL operation never executes custom scalar equality in cache lookup."""
-    services.seed_data(1)
-
-    from typing import NewType
-
-    class EqualityBomb:
-        def __hash__(self):
-            return 1
-
-        def __eq__(self, _other):
-            raise RuntimeError("custom scalar equality must not run in cache lookup")
-
-    BombValue = NewType("BombValue", object)
-    bomb_scalar = strawberry.scalar(
-        name="BombValue",
-        serialize=lambda _value: "ok",
-        parse_value=lambda _value: EqualityBomb(),
-    )
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    @strawberry.type
-    class Misc:
-        @strawberry.field
-        def logs(self, after: BombValue) -> list[str]:
-            return ["ok"]
-
-    ext = DjangoOptimizerExtension()
-
-    @strawberry.type
-    class Query:
-        objs: list[CategoryType] = DjangoListField(CategoryType)
-
-        @strawberry.field
-        def misc(self) -> Misc:
-            return Misc()
-
-    finalize_django_types()
-    schema = strawberry.Schema(
-        query=Query,
-        config=strawberry_config(extra_scalar_map={BombValue: bomb_scalar}),
-        extensions=[lambda: ext],
-    )
-    query = "query Q($value: BombValue!) { objs { name } misc { logs(after: $value) } }"
-
-    first = schema.execute_sync(query, variable_values={"value": "marker"})
-    second = schema.execute_sync(query, variable_values={"value": "marker"})
-
-    assert first.errors is None, first.errors
-    assert second.errors is None, second.errors
-    assert first.data["misc"]["logs"] == ["ok"]
-    assert second.data["misc"]["logs"] == ["ok"]
-
-
 def _categories_list_schema(ext):
     """Build a ``DjangoListField(CategoryType)`` root over the reverse FK ``Category.items``.
 
@@ -2292,121 +2051,6 @@ def test_nested_pagination_variable_two_plans_two_windows():
     assert ext.cache_info().misses == 2
     assert ext.cache_info().hits == 0
     assert ext.cache_info().size == 2
-
-
-@pytest.mark.django_db
-def test_distinct_target_get_queryset_produces_no_window_prefetch():
-    """A target ``get_queryset`` returning ``.distinct()`` never windows.
-
-    ``.distinct()`` can never reach ``apply_window_pagination``: the
-    strategy-independent gate ``unwindowable_child_queryset_reason`` classifies
-    the base child queryset as ``"distinct"`` and the nested planner leaves the
-    connection FULLY unplanned (Decision 6), so the connection resolves through
-    the strictness-visible per-parent fallback - one child query per parent, no
-    single batched ``ROW_NUMBER() OVER`` window. Pins the verified
-    unreachability that killed the strawberry-django ``remove_window_pagination``
-    distinct-count fallback port (it would be dead code here).
-    """
-    from django.db import connection as db_connection
-    from django.test.utils import CaptureQueriesContext
-
-    services.seed_data(2)
-
-    class DistinctItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset.distinct()
-
-    class DistinctCategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-            interfaces = (relay.Node,)
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        objs: list[DistinctCategoryType] = DjangoListField(DistinctCategoryType)
-
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(
-        query=Query,
-        config=strawberry_config(),
-        extensions=[lambda: ext],
-    )
-    query = "{ objs { name itemsConnection(first: 2) { edges { node { name } } } } }"
-    with CaptureQueriesContext(db_connection) as ctx:
-        result = schema.execute_sync(query)
-
-    assert result.errors is None, result.errors
-    item_queries = [q["sql"] for q in ctx.captured_queries if "products_item" in q["sql"]]
-    # No batched window prefetch: the distinct child never gets a ``ROW_NUMBER()
-    # OVER`` window annotation.
-    assert not any("OVER (" in sql for sql in item_queries), item_queries
-    # Per-parent fallback instead: one child query per seeded category (> 1),
-    # never a single collapsed window query.
-    assert len(item_queries) > 1, item_queries
-
-
-@pytest.mark.django_db
-def test_per_field_nested_strategy_hint_selects_windowed(django_assert_num_queries):
-    """A ``nested_strategy`` hint drives the per-field strategy selection.
-
-    ``OptimizerHint.strategy("windowed")`` on a connection field routes
-    ``nested_planner.py::_select_nested_strategy`` through
-    ``resolve_strategy(name)`` (the per-field override) rather than the
-    extension-wide ``active_strategy()`` default, so the connection plans as a
-    single batched ``ROW_NUMBER() OVER`` window and returns the correct page.
-    """
-    from django.db import connection as db_connection
-    from django.test.utils import CaptureQueriesContext
-
-    from django_strawberry_framework import OptimizerHint
-
-    services.seed_data(2)
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    class WindowedCategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-            interfaces = (relay.Node,)
-            optimizer_hints = {"items": OptimizerHint.strategy("windowed")}
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        objs: list[WindowedCategoryType] = DjangoListField(WindowedCategoryType)
-
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(
-        query=Query,
-        config=strawberry_config(),
-        extensions=[lambda: ext],
-    )
-    query = "{ objs { name itemsConnection(first: 2) { edges { node { name } } } } }"
-    with CaptureQueriesContext(db_connection) as ctx:
-        result = schema.execute_sync(query)
-
-    assert result.errors is None, result.errors
-    item_queries = [q["sql"] for q in ctx.captured_queries if "products_item" in q["sql"]]
-    # The per-field windowed hint plans one batched ROW_NUMBER() OVER window.
-    assert any("OVER (" in sql for sql in item_queries), item_queries
-    # Every category resolves from that single window, not a per-parent fallback.
-    windowed = [sql for sql in item_queries if "OVER (" in sql]
-    assert len(windowed) == 1, item_queries
 
 
 @pytest.mark.django_db
@@ -4459,8 +4103,13 @@ def test_empty_plan_still_stashed():
 
 
 @pytest.mark.django_db
-def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
-    """O5: selected scalar fields are collected into the stashed plan."""
+def test_optimizer_applies_only_for_selected_scalars():
+    """O5: selected scalar fields are collected into the stashed plan.
+
+    Query count, JOIN-absence, and unused-column omission are live on
+    ``test_library_api.py::test_scalar_only_branch_list_projects_name_without_a_join_or_unused_column``.
+    This row keeps the plan-slot tuple a response cannot name.
+    """
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -4478,11 +4127,10 @@ def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
     ext = DjangoOptimizerExtension()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
     ctx = SimpleNamespace()
-    with django_assert_num_queries(1):
-        result = schema.execute_sync(
-            "{ allCategories { name } }",
-            context_value=ctx,
-        )
+    result = schema.execute_sync(
+        "{ allCategories { name } }",
+        context_value=ctx,
+    )
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
     assert plan.only_fields == ("name",)
@@ -4496,8 +4144,14 @@ def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
 
 
 @pytest.mark.django_db
-def test_optimizer_downgrades_select_related_for_custom_get_queryset(django_assert_num_queries):
-    """O6: custom target ``get_queryset`` downgrades forward FK traversal to ``Prefetch``."""
+def test_optimizer_downgrades_select_related_for_custom_get_queryset():
+    """O6: custom target ``get_queryset`` downgrades forward FK traversal to ``Prefetch``.
+
+    Two-query SQL is live in
+    ``examples/fakeshop/test_query/test_library_api.py::test_library_optimizer_selects_book_shelf_in_http_query``.
+    This row keeps the plan slots (empty ``select_related``, one ``Prefetch``,
+    uncacheable).
+    """
     from django.db.models import Prefetch
 
     services.seed_data(1)
@@ -4530,11 +4184,10 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset(django_asse
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
     ctx = SimpleNamespace()
 
-    with django_assert_num_queries(2):
-        result = schema.execute_sync(
-            "{ allItems { name category { name } } }",
-            context_value=ctx,
-        )
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
     assert result.errors is None
     assert calls
     plan = ctx.dst_optimizer_plan
@@ -5865,7 +5518,11 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
 
 
 def test_optimizer_unadapted_non_queryset_passthrough():
-    """Non-queryset results pass through _optimize unadapted."""
+    """Non-queryset results pass through ``_optimize`` unadapted.
+
+    Wire cost of a list-returning root with the optimizer installed is
+    ``examples/fakeshop/test_query/test_products_visibility_api.py::test_nested_connection_still_costs_one_query_per_parent_when_the_optimizer_gets_a_list``.
+    """
     from django_strawberry_framework.utils.querysets import is_async_queryset_adapter
 
     ext = DjangoOptimizerExtension()

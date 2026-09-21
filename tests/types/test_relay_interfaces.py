@@ -1,9 +1,11 @@
 """DjangoType Relay interface tests for Node wiring and resolver contracts.
 
-Covers ``Meta.interfaces`` validation, ``is_type_of`` injection, id
-suppression, interface base-class injection, and the four Relay node
-resolver defaults (``resolve_id_attr``, ``resolve_id``, ``resolve_node``,
-``resolve_nodes``).
+``nodes(ids:)`` order, holes, and hidden rows live in
+``examples/fakeshop/test_query/test_library_api.py``
+(``test_nodes_batch_mixed_types_order_and_null``). This module keeps
+``Meta.interfaces`` validation, ``is_type_of``, GlobalID encode/decode strategy,
+``resolve_nodes`` generator/required/async-hook contracts, and ``SyncMisuseError``;
+none of those are a JSON selection.
 """
 
 import functools
@@ -631,28 +633,6 @@ def test_resolve_node_required_raises_for_missing():
     finalize_django_types()
     with pytest.raises(Category.DoesNotExist):
         CategoryNode.resolve_node(info=None, node_id=99999, required=True)
-
-
-@pytest.mark.django_db
-def test_resolve_nodes_preserves_order_and_missing():
-    """``resolve_nodes(node_ids=[a, missing, b])`` returns ``[a, None, b]``."""
-    services.seed_data(1)
-
-    class CategoryNode(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    finalize_django_types()
-    rows = list(Category.objects.order_by("id")[:2])
-    a, b = rows[0], rows[1]
-    results = CategoryNode.resolve_nodes(
-        info=None,
-        node_ids=[a.id, 999999, b.id],
-        required=False,
-    )
-    assert results == [a, None, b]
 
 
 @pytest.mark.django_db

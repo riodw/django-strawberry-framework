@@ -85,7 +85,7 @@ from django.middleware.csrf import CsrfViewMiddleware, get_token
 from django.test import AsyncClient, Client, RequestFactory, override_settings
 from django.urls import include, path, resolve
 from graphql import NoSchemaIntrospectionCustomRule
-from graphql_client import assert_graphql_data, post_graphql
+from graphql_client import assert_graphql_data, post_graphql, post_graphql_raw
 from strawberry.django.views import GraphQLView as UpstreamGraphQLView
 from strawberry.extensions import AddValidationRules
 from strawberry.http.base import BaseView
@@ -1417,6 +1417,21 @@ def test_malformed_json_over_the_cap_gets_413_and_under_it_still_gets_400():
     assert under.content == b"Unable to parse request body as JSON"
 
     _assert_body_limit_response(over)
+
+
+@pytest.mark.django_db
+def test_post_not_json_body_is_upstreams_malformed_json_400():
+    """POST `{not json` to `/graphql/` is upstream's parse 400, byte for byte.
+
+    The GET `?variables={not json` twin lives in ``test_products_api.py``; this
+    is the request-body spelling the raw-envelope helper exists for. A wrapper
+    that swallowed or reworded the parse failure would change that one wire
+    meaning.
+    """
+    response = post_graphql_raw("{not json")
+
+    assert response.status_code == 400
+    assert response.content == b"Unable to parse request body as JSON"
 
 
 # ---------------------------------------------------------------------------

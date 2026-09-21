@@ -3,6 +3,11 @@
 Postgres-marked rows pin per-field ``OptimizerHint.strategy`` overrides over
 HTTP: a windowed hint under a lateral extension default emits no
 ``CROSS JOIN LATERAL``, and a lateral hint under a windowed default emits one.
+SQLite rows pin the auto fallback's window SQL, a per-field windowed hint
+that wins over a refusing extension default (OVER cannot come from the
+default), a ``.distinct()`` child that refuses the window, and an unhashable
+custom-scalar variable that still shares one plan-cache identity across
+requests.
 """
 
 import pytest
@@ -79,8 +84,7 @@ def test_auto_strategy_non_postgres_fallback_is_bounded_over_http(
     for title in ("a", "b", "c"):
         Book.objects.create(title=title, shelf=shelf)
 
-    response = TestClient().query(
-        """
+    document = """
         query {
           shelves {
             code
@@ -91,8 +95,9 @@ def test_auto_strategy_non_postgres_fallback_is_bounded_over_http(
             }
           }
         }
-        """,
-    )
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = TestClient().query(document)
 
     assert response.data == {
         "shelves": [
@@ -106,6 +111,12 @@ def test_auto_strategy_non_postgres_fallback_is_bounded_over_http(
             },
         ],
     }
+    book_sql = [
+        entry["sql"] for entry in captured.captured_queries if "library_book" in entry["sql"]
+    ]
+    assert any("OVER (" in sql and "PARTITION BY" in sql for sql in book_sql), book_sql
+    windowed = [sql for sql in book_sql if "OVER (" in sql]
+    assert len(windowed) == 1, book_sql
 
 
 @pytest.fixture
@@ -180,6 +191,80 @@ def test_repeated_live_query_survives_hashable_custom_scalar_equality(
     assert second.data["misc"]["logs"] == ["ok"]
     assert install_hashable_scalar_cache_schema.cache_info().misses == 2
     assert install_hashable_scalar_cache_schema.cache_info().hits == 0
+
+
+@pytest.fixture
+def install_unhashable_set_scalar_cache_schema(_reload_project_schema_for_acceptance_tests):
+    """Install a live schema whose custom scalar parser returns a ``set``."""
+    from typing import NewType
+
+    registry.clear()
+    category_type = make_django_type(
+        "SetCacheCategoryType",
+        Category,
+        ("id", "name"),
+        node=False,
+    )
+
+    SetValue = NewType("SetValue", object)
+    set_scalar = strawberry.scalar(
+        name="SetValue",
+        serialize=lambda value: sorted(value),
+        parse_value=set,
+    )
+
+    @strawberry.type
+    class Misc:
+        @strawberry.field
+        def logs(self, after: SetValue) -> list[str]:
+            return sorted(after)
+
+    @strawberry.type
+    class Query:
+        objs: list[category_type] = DjangoListField(category_type)
+
+        @strawberry.field
+        def misc(self) -> Misc:
+            return Misc()
+
+    finalize_django_types()
+    optimizer = DjangoOptimizerExtension()
+    _current["schema"] = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(extra_scalar_map={SetValue: set_scalar}),
+        extensions=[lambda: optimizer],
+    )
+    yield optimizer
+    _current["schema"] = None
+
+
+@pytest.mark.django_db
+def test_repeated_live_query_shares_plan_cache_for_unhashable_set_scalar(
+    install_unhashable_set_scalar_cache_schema,
+):
+    """A ``set``-valued custom scalar is frozen structurally, so two requests share one plan.
+
+    The sibling ``EqualityBomb`` row is the opaque-identity miss; this is the
+    must-not: a library-owned container freeze still hits the cache. Returning
+    the raw set from the freezer would ``TypeError`` inside the plan-key
+    ``frozenset``.
+    """
+    services.seed_data(1)
+    query = """
+        query Q($x: SetValue!) {
+          objs { name }
+          misc { logs(after: $x) }
+        }
+    """
+
+    first = TestClient().query(query, variables={"x": ["b", "a"]})
+    second = TestClient().query(query, variables={"x": ["a", "b"]})
+
+    assert first.data["misc"]["logs"] == ["a", "b"]
+    assert second.data["misc"]["logs"] == ["a", "b"]
+    assert install_unhashable_set_scalar_cache_schema.cache_info().misses == 1
+    assert install_unhashable_set_scalar_cache_schema.cache_info().hits == 1
+    assert install_unhashable_set_scalar_cache_schema.cache_info().size == 1
 
 
 _HINT_PAGE_DOCUMENT = """
@@ -274,6 +359,42 @@ def install_hinted_strategy_schema(_reload_project_schema_for_acceptance_tests):
     _current["schema"] = None
 
 
+class _RefusingNestedStrategy:
+    """Extension default that never accepts a nested connection plan.
+
+    A windowed per-field hint must still emit ``OVER (``; if the hint is
+    ignored, the refusing default leaves per-parent fallback SQL with no window.
+    """
+
+    name = "refusing"
+
+    def plan(self, _request, _plan):
+        return False
+
+
+@pytest.mark.django_db
+def test_per_field_strategy_hint_windowed_emits_over_when_the_default_refuses(
+    install_hinted_strategy_schema,
+):
+    """``OptimizerHint.strategy("windowed")`` plans ``ROW_NUMBER() OVER`` on SQLite.
+
+    Postgres HTTP rows pin the same branch against LATERAL; this row is the
+    SQLite pin and the must-not (a refusing extension default cannot be the
+    source of the window).
+    """
+    _seed_hint_shelf()
+    install_hinted_strategy_schema(_RefusingNestedStrategy(), OptimizerHint.strategy("windowed"))
+
+    with CaptureQueriesContext(connection) as captured:
+        response = TestClient().query(_HINT_PAGE_DOCUMENT)
+
+    assert response.data == _HINT_PAGE_DATA
+    book_sql = _book_sql(captured)
+    assert any("OVER (" in sql and "PARTITION BY" in sql for sql in book_sql), book_sql
+    windowed = [sql for sql in book_sql if "OVER (" in sql]
+    assert len(windowed) == 1, book_sql
+
+
 @pytest.mark.django_db
 @pytest.mark.pg
 def test_per_field_strategy_hint_windowed_under_lateral_default_skips_lateral_over_http(
@@ -310,3 +431,54 @@ def test_per_field_strategy_hint_lateral_under_windowed_default_emits_lateral_ov
     assert book_sql, captured.captured_queries
     assert any("CROSS JOIN LATERAL" in sql for sql in book_sql), book_sql
     assert any("LATERAL" in sql for sql in book_sql), book_sql
+
+
+@pytest.fixture
+def install_distinct_child_schema(_reload_project_schema_for_acceptance_tests):
+    """Install a library graph whose nested book queryset is ``.distinct()``."""
+
+    def _distinct(cls, queryset, info, **kwargs):
+        return queryset.distinct()
+
+    registry.clear()
+    make_django_type(
+        "DistinctBookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}},
+        namespace_extra={"get_queryset": classmethod(_distinct)},
+    )
+    shelf_type = make_django_type("DistinctShelfType", Shelf, ("id", "code", "books"))
+    finalize_django_types()
+    query_type = strawberry.type(
+        type(
+            "DistinctChildQuery",
+            (),
+            {
+                "__annotations__": {"shelves": list[shelf_type]},
+                "shelves": DjangoListField(shelf_type),
+            },
+        ),
+    )
+    _current["schema"] = build_strategy_schema(query_type, "windowed")
+    yield
+    _current["schema"] = None
+
+
+@pytest.mark.django_db
+def test_distinct_child_queryset_never_windows_over_http(install_distinct_child_schema):
+    """A target ``get_queryset`` returning ``.distinct()`` leaves the nested page unplanned.
+
+    The nested planner refuses the whole relation (Decision 6), so each parent
+    pays its own child query and no ``ROW_NUMBER() OVER`` window is emitted.
+    """
+    _seed_hint_shelf()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = TestClient().query(_HINT_PAGE_DOCUMENT)
+
+    assert response.data == _HINT_PAGE_DATA
+    book_sql = _book_sql(captured)
+    assert book_sql, captured.captured_queries
+    assert not any("OVER (" in sql for sql in book_sql), book_sql
+    assert len(book_sql) > 1, book_sql

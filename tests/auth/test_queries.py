@@ -8,7 +8,8 @@ gated-anonymous ``GraphQLError`` and its exact denial string, hostile
 ``is_authenticated`` containment, and the async lazy-user forcing inside the
 one ``sync_to_async`` boundary. The live ``me`` behavior (authenticated /
 anonymous / no-``AuthenticationMiddleware`` / hide-everyone ``get_queryset``
-skip / ``me: UserType`` SDL) is earned in
+skip / ``me: UserType`` SDL / unplanned relation under ``strictness="raise"``)
+is earned in
 ``examples/fakeshop/test_query/test_auth_api.py``.
 """
 
@@ -19,7 +20,6 @@ from unittest import mock
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory
 from django.utils.functional import SimpleLazyObject
@@ -35,7 +35,6 @@ from django_strawberry_framework.auth.queries import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import _materialized_names
-from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.registry import iter_subsystem_clears, registry
 from tests.auth._helpers import _session_request
 
@@ -64,12 +63,8 @@ class _IsAuthenticated:
         return instance is not None
 
 
-def _declare_user_type(fields=("id", "username", "email")):
-    """Register a fresh Relay-backed primary ``DjangoType`` over the user model.
-
-    ``fields`` seams the exposed column set: the default identity trio, or a
-    ``groups``-exposing variant for the deep-selection test.
-    """
+def _declare_user_type():
+    """Register a fresh Relay-backed primary ``DjangoType`` over the user model."""
     return type(
         "UserT",
         (DjangoType, relay.Node),
@@ -77,53 +72,17 @@ def _declare_user_type(fields=("id", "username", "email")):
             "Meta": type(
                 "Meta",
                 (),
-                {"model": User, "fields": fields, "primary": True},
+                {"model": User, "fields": ("id", "username", "email"), "primary": True},
             ),
         },
     )
 
 
-def _declare_group_type():
-    """Register a Relay-backed ``DjangoType`` over ``Group``, the user's M2M target.
-
-    Declared beside ``_declare_user_type`` rather than shared with
-    ``tests/auth/test_mutations.py``: the two modules already carry their own
-    ``_declare_user_type`` copies so each file's registrations stay readable
-    inside the per-test cleared registry.
-    """
-    return type(
-        "GroupT",
-        (DjangoType, relay.Node),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {"model": Group, "fields": ("id", "name")},
-            ),
-        },
-    )
-
-
-def _me_schema(
-    *,
-    declare=_declare_user_type,
-    optimizer=None,
-    **current_user_kwargs,
-) -> strawberry.Schema:
+def _me_schema(*, declare=_declare_user_type, **current_user_kwargs) -> strawberry.Schema:
     """Declare UserT + a me-only Query; return the finalized schema.
 
-    ``declare`` is the per-call user-type declaration callable and ``optimizer``
-    installs a caller-constructed ``DjangoOptimizerExtension`` (strictness is a
-    CONSTRUCTION argument, so only a locally built schema can arm it). Both are
-    keyword-only and consumed here; everything else in ``current_user_kwargs``
-    flows to ``current_user``.
-
-    An installed optimizer also opts out of the response boundary's masking
-    (``error_policy={"enabled": False}``), the same opt-out
-    ``tests/auth/test_mutations.py::_finalize_schema`` applies: the optimizer's
-    diagnostic is a plain Python exception, so the spec-048 policy would replace
-    exactly the message under test with its stable production one. The default
-    (no optimizer) schema keeps masking on, so every other row here is unchanged.
+    ``declare`` is the per-call user-type declaration callable; everything else
+    in ``current_user_kwargs`` flows to ``current_user``.
     """
     declare()
 
@@ -132,13 +91,7 @@ def _me_schema(
         me = current_user(**current_user_kwargs)
 
     finalize_django_types()
-    if optimizer is None:
-        return DjangoSchema(query=Query)
-    return DjangoSchema(
-        query=Query,
-        extensions=[lambda: optimizer],
-        error_policy={"enabled": False},
-    )
+    return DjangoSchema(query=Query)
 
 
 class _FakeConsumer:
@@ -590,30 +543,3 @@ async def test_async_gated_me_forces_the_lazy_user_inside_the_one_sync_boundary(
     assert seen["operation"] == "current_user"
     assert seen["data"] is None
     assert seen["instance"] == user
-
-
-@pytest.mark.django_db
-def test_an_unplanned_relation_under_me_is_strictness_visible():
-    """``me`` returns the session actor raw, so a relation under it is unplanned.
-
-    ``::_current_user_resolve_body`` hands back the request's own actor - no
-    optimizer plan rides it - so selecting a relation under ``me`` resolves
-    per-parent. Under a strictness-armed optimizer that is the ``OptimizerError``,
-    which is what makes the deep selection VISIBLE rather than silently N+1.
-    Strictness is a construction argument, so only a locally built schema can arm
-    it.
-    """
-    _declare_group_type()
-    schema = _me_schema(
-        declare=lambda: _declare_user_type(fields=("id", "username", "groups")),
-        optimizer=DjangoOptimizerExtension(strictness="raise"),
-    )
-    user = User.objects.create_user(username="probe_u", password="pw-9x-strong")
-    user.groups.add(Group.objects.create(name="g1"))
-    res = schema.execute_sync(
-        "{ me { groupsConnection { edges { node { name } } } } }",
-        context_value=_session_request(user=user),
-    )
-    assert res.errors is not None
-    assert "Unplanned N+1: groups" in res.errors[0].message
-    assert res.errors[0].path == ["me", "groupsConnection"]

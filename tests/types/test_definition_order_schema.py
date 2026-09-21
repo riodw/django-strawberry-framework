@@ -1,4 +1,9 @@
-"""Schema-build tests for definition-order-independent DjangoType finalization."""
+"""Schema-build tests for definition-order-independent DjangoType finalization.
+
+The ``Unexpected type`` / ``finalize_django_types()`` sentinel is raised while
+building a throwaway ``strawberry.Schema``, before any HTTP view. Live
+finalized types live in ``examples/fakeshop/test_query/test_schema_composition_api.py``.
+"""
 
 import pytest
 import strawberry

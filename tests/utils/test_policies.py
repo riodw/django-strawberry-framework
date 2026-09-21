@@ -5,7 +5,9 @@ The generic contract that ``resource_policy.py::resolve_resource_policy`` and
 with probe policies so the precedence ladder, the mapping-type gate, the
 unknown-key vocabulary message, and the derived article are pinned once here.
 Each flavor's own tier (``tests/test_resource_policy.py``,
-``tests/test_error_policy.py``, plus the live ``/graphql/`` rows) pins its
+``tests/test_error_policy.py``) plus
+``examples/fakeshop/test_query/test_error_policy_api.py`` and
+``examples/fakeshop/test_query/test_resource_policy_api.py`` pins
 wire-visible wording end to end.
 """
 

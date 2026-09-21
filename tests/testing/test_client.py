@@ -21,6 +21,10 @@ what a live request cannot (or need not) pin:
   stand-in;
 - the ``__test__ = False`` collection guard and the export surface.
 
+``login()`` logout-on-exception is live in
+``examples/fakeshop/test_query/test_client_api.py`` (sync and async); the
+clean-exit sync bracket stays in ``test_products_api.py``.
+
 Every test here is DB-free: no schema reload, no ``seed_data``, no real request.
 """
 
@@ -773,53 +777,3 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
         with self.assertRaises(AssertionError) as ctx:
             self.assertResponseHasErrors(res, msg="custom has-errors failure")
         self.assertIn("custom has-errors failure", str(ctx.exception))
-
-
-# ---------------------------------------------------------------------------
-# Login bracket lifecycle and exception cleanup (DB-free mechanics).
-# ---------------------------------------------------------------------------
-
-
-class _RecordingAuthClient:
-    """A minimal client recording force_login and logout calls."""
-
-    def __init__(self):
-        self.logins = []
-        self.logouts = 0
-
-    def force_login(self, user):
-        self.logins.append(user)
-
-    def logout(self):
-        self.logouts += 1
-
-
-def test_sync_login_bracket_guarantees_logout_on_exception():
-    """Sync ``login()`` calls ``force_login`` and runs ``logout`` on exit even on exception."""
-    recording = _RecordingAuthClient()
-    client = TestClient(client=recording)
-    user = object()
-
-    with pytest.raises(RuntimeError):
-        with client.login(user):
-            assert recording.logins == [user]
-            assert recording.logouts == 0
-            raise RuntimeError("sync login error")
-
-    assert recording.logouts == 1
-
-
-@pytest.mark.asyncio
-async def test_async_login_bracket_guarantees_logout_on_exception():
-    """Async ``login()`` calls ``force_login`` and runs ``logout`` on exit even on exception."""
-    recording = _RecordingAuthClient()
-    client = AsyncTestClient(client=recording)
-    user = object()
-
-    with pytest.raises(RuntimeError):
-        async with client.login(user):
-            assert recording.logins == [user]
-            assert recording.logouts == 0
-            raise RuntimeError("async login error")
-
-    assert recording.logouts == 1

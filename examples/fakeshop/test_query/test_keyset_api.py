@@ -54,7 +54,6 @@ from graphql_client import post_graphql as _post_graphql
 from strawberry.relay.utils import from_base64, to_base64
 
 from django_strawberry_framework import DjangoConnectionField, strawberry_config
-from django_strawberry_framework.keyset import KEYSET_CURSOR_PREFIX
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
@@ -174,6 +173,8 @@ def test_root_keyset_first_page_orders_by_cursor_field():
     assert page["pageInfo"]["hasPreviousPage"] is False
     assert page["pageInfo"]["startCursor"] == page["edges"][0]["cursor"]
     assert page["pageInfo"]["endCursor"] == page["edges"][-1]["cursor"]
+    prefix, _payload = from_base64(page["edges"][0]["cursor"])
+    assert prefix == "dstcursor"
 
 
 @pytest.mark.django_db
@@ -532,7 +533,7 @@ def test_root_keyset_cursors_do_not_disclose_ordering_values():
         e for e in data["allLibraryIssuesConnection"]["edges"] if e["node"]["title"] == sentinel
     )
     prefix, encrypted = from_base64(edge["cursor"])
-    assert prefix == KEYSET_CURSOR_PREFIX
+    assert prefix == "dstcursor"
     assert sentinel not in encrypted
     assert sentinel.encode() not in base64.urlsafe_b64decode(encrypted)
 

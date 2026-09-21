@@ -428,8 +428,52 @@ def test_library_evaluated_queryset_not_re_executed_over_http():
     }
     # G1: exactly one query - the consumer's own ``bool(queryset)`` evaluation.
     # Without the evaluated-queryset guard, the optimizer's ``.only()`` clone
-    # would re-execute and this would be two.
-    assert len(captured) == 1
+    # would re-execute and this would be two. Filter to the branch table so
+    # session reads cannot satisfy the count.
+    branch_sql = [
+        entry["sql"] for entry in captured.captured_queries if "library_branch" in entry["sql"]
+    ]
+    assert len(branch_sql) == 1, captured.captured_queries
+    assert 'FROM "library_branch"' in branch_sql[0]
+    assert "JOIN" not in branch_sql[0].upper()
+
+
+@pytest.mark.django_db
+def test_scalar_only_branch_list_projects_name_without_a_join_or_unused_column():
+    """A scalar-only list applies ``only()``: one branch query, no JOIN, unused ``city`` omitted.
+
+    Replacement for the package ``skips_when_no_relations`` / O5 query-count
+    halves: live SQL, not a plan-slot tuple, pins that selecting ``name`` does
+    not join ``library_shelf`` and does not project ``city``.
+    """
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryBranches { name }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {"allLibraryBranches": [{"name": "Central"}]},
+    }
+    branch_sql = [
+        entry["sql"] for entry in captured.captured_queries if "library_branch" in entry["sql"]
+    ]
+    assert len(branch_sql) == 1, captured.captured_queries
+    sql = branch_sql[0]
+    assert 'FROM "library_branch"' in sql
+    assert "JOIN" not in sql.upper()
+    assert "library_shelf" not in sql
+    select_list = sql.split(" FROM ", 1)[0]
+    assert '"name"' in select_list
+    # Visibility ``exclude(city="restricted")`` may mention city in WHERE;
+    # ``only()`` must still omit it from the projection.
+    assert '"city"' not in select_list
 
 
 @pytest.mark.django_db
@@ -1331,6 +1375,123 @@ def test_library_books_filter_by_relay_m2m_global_id():
         """,
         {"allLibraryBooks": [{"title": "Hyperion"}]},
     )
+
+
+@pytest.mark.django_db
+def test_relay_relation_isnull_absent_from_shipped_book_filter():
+    """Shipped ``BookFilter`` does not publish a Relay-relation ``isnull`` bag.
+
+    ``genres`` is a RelatedFilter (nested ``GenreFilter``), not Meta.fields
+    ``isnull`` / ``exact``. The grouped bag type is therefore unpublished.
+    """
+    response = _post_graphql(
+        '{ __type(name: "BookFilterGenresFilterInputType") { name } }',
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["__type"] is None
+
+
+@pytest.mark.django_db
+def test_relay_relation_isnull_is_boolean_not_globalid_list_over_http():
+    """A framework-owned Relay-relation ``isnull`` is Boolean; ``exact`` stays a GlobalID list.
+
+    ``GenreType`` is a Relay node, so Meta.fields ``genres.exact`` is a list of
+    GlobalIDs. The same relation's ``isNull`` must stay a Boolean (a null test
+    is never a GlobalID). ``true`` matches books with no genres; ``false``
+    matches books with at least one; a string literal is rejected.
+    """
+    from django_strawberry_framework.registry import registry
+
+    branch = models.Branch.objects.create(name="IsNull Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    genre = models.Genre.objects.create(name="Speculative")
+    with_genre = models.Book.objects.create(title="Kindred", shelf=shelf)
+    with_genre.genres.add(genre)
+    models.Book.objects.create(title="UnshelvedNotes", shelf=shelf)
+    gid = str(
+        relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=str(genre.pk)),
+    )
+    bag = "HolderBookIsnullFilterGenresFilterInputType"
+
+    registry.clear()
+    try:
+        schema = _relay_relation_isnull_holder_schema()
+        isnull_response = _post_holder(
+            schema,
+            f"""
+            {{
+              __type(name: "{bag}") {{
+                inputFields {{ name type {{ kind name }} }}
+              }}
+            }}
+            """,
+        )
+        assert isnull_response.status_code == 200
+        introspected = isnull_response.json()
+        assert "errors" not in introspected, introspected
+        input_fields = {
+            field["name"]: field["type"] for field in introspected["data"]["__type"]["inputFields"]
+        }
+        assert input_fields["isNull"] == {"kind": "SCALAR", "name": "Boolean"}, input_fields
+        assert input_fields["exact"]["kind"] == "LIST", input_fields
+
+        true_response = _post_holder(
+            schema,
+            """
+            query {
+              books(filter: { genres: { isNull: true } }) { title }
+            }
+            """,
+        )
+        assert true_response.status_code == 200
+        true_payload = true_response.json()
+        assert "errors" not in true_payload, true_payload
+        assert true_payload["data"] == {"books": [{"title": "UnshelvedNotes"}]}
+
+        false_response = _post_holder(
+            schema,
+            """
+            query {
+              books(filter: { genres: { isNull: false } }) { title }
+            }
+            """,
+        )
+        assert false_response.status_code == 200
+        false_payload = false_response.json()
+        assert "errors" not in false_payload, false_payload
+        assert false_payload["data"] == {"books": [{"title": "Kindred"}]}
+
+        exact_response = _post_holder(
+            schema,
+            f"""
+            query {{
+              books(filter: {{ genres: {{ exact: ["{gid}"] }} }}) {{ title }}
+            }}
+            """,
+        )
+        assert exact_response.status_code == 200
+        exact_payload = exact_response.json()
+        assert "errors" not in exact_payload, exact_payload
+        assert exact_payload["data"] == {"books": [{"title": "Kindred"}]}
+
+        rejected = _post_holder(
+            schema,
+            """
+            query {
+              books(filter: { genres: { isNull: "not-a-bool" } }) { title }
+            }
+            """,
+        )
+    finally:
+        registry.clear()
+
+    assert rejected.status_code == 200
+    payload = rejected.json()
+    assert payload.get("data") is None, payload
+    assert "errors" in payload, payload
+    assert "Boolean cannot represent" in payload["errors"][0]["message"], payload
 
 
 @pytest.mark.django_db
@@ -4557,6 +4718,119 @@ def _post_holder(schema, query, *, variables=None):
         _CURRENT["schema"] = None
 
 
+def _relay_relation_isnull_holder_schema():
+    """Holder schema whose ``genres`` lookups are framework-owned Meta.fields.
+
+    Shipped ``BookFilter.genres`` is a RelatedFilter, so a Meta.fields
+    ``isnull`` / ``exact`` bag would collide. This holder is the consumer
+    surface that declares the relation lookups without a RelatedFilter.
+    """
+    from strawberry.types import Info
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+    from django_strawberry_framework.filters import FilterSet, filter_input_type
+
+    class HolderRelayIsnullGenreType(DjangoType):
+        class Meta:
+            model = models.Genre
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "HolderRelayIsnullGenreType"
+
+    class HolderBookIsnullFilter(FilterSet):
+        class Meta:
+            model = models.Book
+            fields = {"title": ["exact"], "genres": ["isnull", "exact"]}
+
+    class HolderRelayIsnullBookType(DjangoType):
+        class Meta:
+            model = models.Book
+            fields = ("id", "title")
+            filterset_class = HolderBookIsnullFilter
+            name = "HolderRelayIsnullBookType"
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def books(
+            self,
+            info: Info,
+            filter: filter_input_type(HolderBookIsnullFilter) | None = None,  # noqa: A002
+        ) -> list[HolderRelayIsnullBookType]:
+            queryset = models.Book.objects.order_by("title")
+            if filter is not None:
+                queryset = HolderBookIsnullFilter.apply_sync(filter, queryset, info)
+            return queryset
+
+    finalize_django_types()
+    return strawberry.Schema(query=Query, config=strawberry_config())
+
+
+@pytest.mark.django_db
+def test_generic_relation_tags_resolve_over_http_with_optimizer():
+    """Holder GenericRelation ``tags`` resolves under the optimizer (rung 3).
+
+    Shipped ``BranchType`` does not select ``tags``; a consumer would not ship
+    ``TaggedItem`` on the composed schema. The captured SQL is part of the
+    claim: the generic relation is prefetched, so the two branches read the tag
+    table once between them rather than once each.
+    """
+    from django_strawberry_framework import (
+        DjangoOptimizerExtension,
+        DjangoType,
+        finalize_django_types,
+    )
+    from django_strawberry_framework.registry import registry
+
+    branch = models.Branch.objects.create(name="GfkHolder", city="Boston")
+    tag_row = models.TaggedItem.objects.create(content_object=branch, tag="public")
+    other_branch = models.Branch.objects.create(name="GfkHolderTwo", city="Salem")
+    other_tag_row = models.TaggedItem.objects.create(content_object=other_branch, tag="listed")
+
+    registry.clear()
+    try:
+
+        class HolderTaggedBranchType(DjangoType):
+            class Meta:
+                model = models.Branch
+                fields = ("id", "name", "tags")
+                name = "HolderTaggedBranchType"
+
+        class HolderTaggedItemType(DjangoType):
+            class Meta:
+                model = models.TaggedItem
+                fields = ("id", "tag")
+                name = "HolderTaggedItemType"
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            def branches(self) -> list[HolderTaggedBranchType]:
+                return models.Branch.objects.filter(
+                    pk__in=[branch.pk, other_branch.pk],
+                ).order_by("pk")
+
+        finalize_django_types()
+        ext = DjangoOptimizerExtension()
+        schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_holder(schema, "{ branches { name tags { tag } } }")
+    finally:
+        registry.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors") is None, payload
+    assert payload["data"]["branches"] == [
+        {"name": branch.name, "tags": [{"tag": tag_row.tag}]},
+        {"name": other_branch.name, "tags": [{"tag": other_tag_row.tag}]},
+    ]
+    tag_sql = [
+        entry["sql"] for entry in captured.captured_queries if "library_taggeditem" in entry["sql"]
+    ]
+    assert len(tag_sql) == 1, tag_sql
+
+
 async def _post_async_shipped(query: str, *, variables=None) -> dict:
     """POST ``query`` against the shipped schema over ``/graphql-async/``."""
     with override_settings(ROOT_URLCONF=__name__):
@@ -7394,6 +7668,25 @@ def test_book_genres_m2m_renders_as_list_shape_live():
 
 
 @pytest.mark.django_db
+def test_shelf_books_relation_resolves_to_primary_book_type_over_http():
+    """``ShelfType.books`` targets primary ``BookType``, not the secondary override type.
+
+    ``BookType`` declares ``Meta.primary = True`` so a reverse FK to ``library.Book``
+    binds there even though ``NullabilityOverrideBookType`` is also registered on
+    the same model. The must-not is the secondary's GraphQL name: it is published
+    (introspection finds it) and still is not the ``books`` element type.
+    """
+    books_type = _field_type(_introspect_type("ShelfType"), "books")
+    assert books_type["kind"] == "NON_NULL"
+    assert books_type["ofType"]["kind"] == "LIST"
+    assert books_type["ofType"]["ofType"]["kind"] == "NON_NULL"
+    assert books_type["ofType"]["ofType"]["ofType"]["kind"] == "OBJECT"
+    assert books_type["ofType"]["ofType"]["ofType"]["name"] == "BookType"
+    _introspect_type("NullabilityOverrideBookType")
+    assert books_type["ofType"]["ofType"]["ofType"]["name"] != "NullabilityOverrideBookType"
+
+
+@pytest.mark.django_db
 def test_relay_genre_type_emits_node_interface_and_global_id_live():
     """A Relay-declared ``GenreType`` exposes the ``Node`` interface and ``id: ID!``.
 
@@ -7868,14 +8161,21 @@ def test_create_shelf_model_mutation_hidden_alt_branch_m2m_is_field_error():
 
 @pytest.mark.django_db
 def test_create_shelf_model_mutation_nonexistent_alt_branch_is_field_error():
-    """A raw-pk M2M id that names no Branch is a field-keyed error; no dangling row."""
+    """A raw-pk M2M id that names no Branch is a field-keyed error; no dangling row.
+
+    Hidden and missing members share the envelope (field + messages) so a writer
+    cannot probe existence through ``altBranches``. A visible member beside a
+    missing one is all-or-nothing: no row.
+    """
     visible = models.Branch.objects.create(name="ModelVisibleMissingM2M", city="open")
+    hidden = models.Branch.objects.create(name="ModelHiddenMissingM2M", city="restricted")
     before = models.Shelf.objects.count()
+    missing_pk = 99999
 
     response = _post_graphql(
         _CREATE_SHELF_MODEL,
         variables={
-            "d": {"code": "MM-3", "branchId": visible.pk, "altBranches": [99999]},
+            "d": {"code": "MM-3", "branchId": visible.pk, "altBranches": [missing_pk]},
         },
     )
     assert response.status_code == 200
@@ -7883,9 +8183,36 @@ def test_create_shelf_model_mutation_nonexistent_alt_branch_is_field_error():
     assert "errors" not in payload, payload
     result = payload["data"]["createShelf"]
     assert result["result"] is None
-    assert [e["field"] for e in result["errors"]] == ["altBranches"]
+    missing_errors = result["errors"]
+    assert [e["field"] for e in missing_errors] == ["altBranches"]
     assert models.Shelf.objects.count() == before
     assert not models.Shelf.objects.filter(code="MM-3").exists()
+
+    hidden_response = _post_graphql(
+        _CREATE_SHELF_MODEL,
+        variables={
+            "d": {"code": "MM-3H", "branchId": visible.pk, "altBranches": [hidden.pk]},
+        },
+    )
+    hidden_result = hidden_response.json()["data"]["createShelf"]
+    assert hidden_result["result"] is None
+    assert hidden_result["errors"] == missing_errors
+    assert not models.Shelf.objects.filter(code="MM-3H").exists()
+
+    mixed = _post_graphql(
+        _CREATE_SHELF_MODEL,
+        variables={
+            "d": {
+                "code": "MM-3X",
+                "branchId": visible.pk,
+                "altBranches": [visible.pk, missing_pk],
+            },
+        },
+    )
+    mixed_result = mixed.json()["data"]["createShelf"]
+    assert mixed_result["result"] is None
+    assert [e["field"] for e in mixed_result["errors"]] == ["altBranches"]
+    assert not models.Shelf.objects.filter(code="MM-3X").exists()
 
 
 @pytest.mark.django_db
@@ -9349,6 +9676,56 @@ def test_serializer_m2m_alt_branches_visibility_is_one_batched_query_over_http()
     two = _create("BatchShelf2", alts[:2])
     five = _create("BatchShelf5", alts)
     assert len(two) == len(five) == 1, (two, five)
+
+
+@pytest.mark.django_db
+def test_serializer_m2m_duplicate_alt_branch_pks_still_one_visibility_query():
+    """Repeated pks are a subset check, not a count match: one ``pk__in`` and the unique members attach."""
+    home = models.Branch.objects.create(name="DupeHome", city="Boston")
+    alt1 = models.Branch.objects.create(name="DupeAlt1", city="Boston")
+    alt2 = models.Branch.objects.create(name="DupeAlt2", city="Boston")
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            "mutation($d: AltBranchesShelfSerializerInput!) { "
+            "createShelfViaAltBranchesSerializer(data: $d) { "
+            "result { code } errors { field messages } } }",
+            variables={
+                "d": {
+                    "code": "BatchShelfDupes",
+                    "branchId": home.pk,
+                    "altBranches": [alt1.pk, alt2.pk, alt1.pk],
+                },
+            },
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["createShelfViaAltBranchesSerializer"]["errors"] == []
+    assert len(_branch_batched_visibility_queries(captured)) == 1
+    shelf = models.Shelf.objects.get(code="BatchShelfDupes")
+    assert set(shelf.alt_branches.values_list("pk", flat=True)) == {alt1.pk, alt2.pk}
+
+
+@pytest.mark.django_db
+def test_serializer_m2m_empty_alt_branches_issues_no_visibility_in_query():
+    """An empty M2M list is a clear: it writes the shelf and issues no ``pk__in`` check."""
+    home = models.Branch.objects.create(name="EmptyHome", city="Boston")
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            "mutation($d: AltBranchesShelfSerializerInput!) { "
+            "createShelfViaAltBranchesSerializer(data: $d) { "
+            "result { code } errors { field messages } } }",
+            variables={"d": {"code": "EmptyAlts", "branchId": home.pk, "altBranches": []}},
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["createShelfViaAltBranchesSerializer"]["errors"] == []
+    assert _branch_batched_visibility_queries(captured) == []
+    shelf = models.Shelf.objects.get(code="EmptyAlts")
+    assert list(shelf.alt_branches.all()) == []
 
 
 @pytest.mark.django_db

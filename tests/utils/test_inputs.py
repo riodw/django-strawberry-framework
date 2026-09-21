@@ -1,10 +1,9 @@
 """Tests for the shared generated-input substrate (``utils/inputs.py``).
 
-This module single-sites the neutral generated-input mechanics that the filter
-and order families had grown as parallel copies. These tests pin the substrate
-directly and assert that BOTH families route through the one builder /
-field-spec / camel-name path / Layer-6 Meta-cache skeleton, so a future
-re-divergence is caught here rather than via a silently drifted second copy.
+Name collision, Meta cache keys, and hashable-meta depth are construction-time.
+Shipped filter/order input names live in
+``examples/fakeshop/test_query/test_library_api.py`` and
+``examples/fakeshop/test_query/test_connection_pagination_api.py``.
 """
 
 import sys

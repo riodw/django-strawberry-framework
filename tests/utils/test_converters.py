@@ -1,21 +1,8 @@
 """Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
 
-``convert_with_mro`` single-sites the ordered-precheck -> MRO-walk ->
-raising-fallthrough control flow both ``forms/converter.py`` and
-``rest_framework/serializer_converter.py`` ride. These tests pin the skeleton in
-isolation (flavor-free) so the no-silent-catch-all contract is verified once at
-its owner:
-
-- a precheck match wins (and runs in order; a precheck for a parent class
-  precedes the scalar walk over a child);
-- ``MRO_CONTINUE`` from a precheck keeps walking; ``None`` is a real result;
-- the MRO registry resolves the MOST-specific class regardless of insertion
-  order;
-- an unhandled field calls the ``fallthrough_error_factory`` and raises.
-
-A second section pins the scalar-table VALUE-shape factory
-(``make_scalar_converter`` / ``make_kind_converter`` / ``finish_field_conversion``)
-both write converters ride without merging their field-class key spaces.
+``convert_with_mro`` is class-creation dispatch, not a request. Form and serializer
+field maps on the wire live in ``examples/fakeshop/test_query/test_products_api.py``
+and ``examples/fakeshop/test_query/test_uploads_api.py``.
 """
 
 from __future__ import annotations

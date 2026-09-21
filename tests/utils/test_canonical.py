@@ -8,6 +8,8 @@ DIRECTLY, because the properties that matter (a subclass's overridden iteration
 never runs; a lying or raising ``__repr__`` never collapses or breaks an order)
 are properties of the primitive, not of either walk that consumes it. A test that
 could only reach them through a consumer would be testing the consumer's gate.
+No GraphQL document can observe those dunders; input SDL lives in
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 import pytest

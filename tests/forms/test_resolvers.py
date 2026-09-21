@@ -16,9 +16,13 @@ write-time IntegrityError / ``submitContact`` / ``submitPing`` /
 Kept here because no shipped mutation carries them: Relay-GlobalID M2M
 visibility (``GenreType`` has no hide hook), ``Meta.fields``-narrowed update,
 ``get_form``-only construction, request-scoped ``ModelChoiceField`` queryset vs
-generated-input identity, NullBoolean UNSET omit, required extra field on a
-partial input, ``to_field_name`` reconstruction, ImageField reconstruction
-key absence, decode-helper envelopes, optimizer ``dst_optimizer_plan`` G2.
+generated-input identity, NullBoolean UNSET omit (shipped
+``setCardItemComplete.complete`` is ``required=False``, a weaker claim; the
+Django-default-required omit needs a throwaway form, and a live holder cannot
+declare ``DjangoFormMutation`` after the acceptance finalize), required extra
+field on a partial input, ``to_field_name`` reconstruction, ImageField
+reconstruction key absence, decode-helper envelopes, optimizer
+``dst_optimizer_plan`` G2.
 """
 
 from __future__ import annotations
@@ -433,6 +437,8 @@ def test_null_boolean_field_omitted_in_mutation_uses_unset_default():
     widened to ``| None`` + ``UNSET`` the omit reaches the bound form as an
     absent value, and ``NullBooleanField`` resolves it to ``None``. A pure-SDL
     test cannot catch this - only executing the mutation with the field omitted.
+    Shipped ``setCardItemComplete.complete`` is ``required=False`` (weaker);
+    a live holder cannot declare ``DjangoFormMutation`` after finalize.
     """
     captured = {}
 

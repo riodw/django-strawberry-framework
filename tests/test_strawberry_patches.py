@@ -43,6 +43,8 @@ both gap 2's envelope guard and the shield - rejected scalar and
 non-object-batch bodies, object / null / malformed / scalar GET params,
 and the RecursionError 400 on a nested body or GET param - is earned
 over real HTTP in ``examples/fakeshop/test_query/test_products_api.py``.
+The POST body ``{not json`` is
+``examples/fakeshop/test_query/test_transport_api.py``.
 The rows here pin the parse semantics that have no wire shape of their
 own (the falsy skip, the well-typed batch handed on to upstream's own
 validator), the UnicodeDecodeError ``__cause__`` a live JSON 400 cannot
@@ -238,18 +240,6 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
         patches._patched_parse_json(BaseView(), body)
 
     assert seen[0] is body
-
-
-def test_patched_parse_json_passes_through_malformed_json_as_400():
-    """Malformed (but UTF-8) JSON still becomes upstream's ``HTTPException(400)``.
-
-    Pins that the wrapper does not regress Strawberry's existing
-    ``json.JSONDecodeError -> 400`` handling - that error is raised by
-    the delegated original and passes through the wrapper untouched.
-    """
-    with pytest.raises(HTTPException) as excinfo:
-        patches._patched_parse_json(BaseView(), "{not valid json")
-    assert excinfo.value.status_code == 400
 
 
 def test_patched_parse_json_passes_through_list_for_batch_handling():

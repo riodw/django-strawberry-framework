@@ -576,14 +576,14 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
 │   ├── test_converters.py        # Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
-│   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
+│   ├── test_definition_order.py  # Declaration-order traps and Relay id-annotation rules no GraphQL request observes.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup, GraphQL naming, and Relay ID detection.
 │   ├── test_finalizer.py         # Finalizer malformed-state and hostile-metadata boundaries.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
 │   ├── test_relations.py         # PendingRelation tests for hash consistency and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
-│   ├── test_resolvers.py         # Relation resolver tests for cardinality, FK-ID elision, N+1 strictness, and multi-database routing.
+│   ├── test_resolvers.py         # Relation resolver tests for FK-id elision, N+1 strictness, and multi-database routing.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       ├── lazy_relation_target_module.py  # Cross-module fixture holding the target of a ``strawberry.lazy`` relation override.
@@ -607,7 +607,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.
     ├── test_strings.py           # String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening.
     ├── test_typing.py            # Typing utility tests for async-callable detection and Strawberry, Python, and GraphQL unwrapping.
-    └── test_write_values.py      # Tests for the shared write-value decoding substrate.
+    └── test_write_values.py      # Direct pins of write-value decode internals a GraphQL request cannot name.
 ```
 
 
@@ -820,14 +820,14 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
 │   ├── test_converters.py        # Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
-│   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
+│   ├── test_definition_order.py  # Declaration-order traps and Relay id-annotation rules no GraphQL request observes.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup, GraphQL naming, and Relay ID detection.
 │   ├── test_finalizer.py         # Finalizer malformed-state and hostile-metadata boundaries.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
 │   ├── test_relations.py         # PendingRelation tests for hash consistency and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
-│   ├── test_resolvers.py         # Relation resolver tests for cardinality, FK-ID elision, N+1 strictness, and multi-database routing.
+│   ├── test_resolvers.py         # Relation resolver tests for FK-id elision, N+1 strictness, and multi-database routing.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       ├── lazy_relation_target_module.py  # Cross-module fixture holding the target of a ``strawberry.lazy`` relation override.
@@ -851,7 +851,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.
     ├── test_strings.py           # String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening.
     ├── test_typing.py            # Typing utility tests for async-callable detection and Strawberry, Python, and GraphQL unwrapping.
-    └── test_write_values.py      # Tests for the shared write-value decoding substrate.
+    └── test_write_values.py      # Direct pins of write-value decode internals a GraphQL request cannot name.
 ```
 
 

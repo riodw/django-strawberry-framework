@@ -13,14 +13,15 @@ guards - stay in the package tier at ``tests/testing/test_client.py``.
 Covered live here: the ``assert_no_errors=True`` raising direction on a real
 invalid selection; the source-level non-JSON ``ValueError`` from a real 404 on
 both transport colors; the ``AsyncTestClient`` happy path (awaited transport,
-async decode), its ``login()`` bracket, and its nested two-file multipart
-upload (the async color of ``test_uploads_api.py``'s sync upload, so the DoD's
-"multipart ... on both clients" is earned live on both); and the unittest
-family end to end (``self.query(...)``, both assertion helpers' PASSING
-directions, the per-call and ``GRAPHQL_URL`` endpoint rungs against a real
-view, and the ``TransactionTestCase`` combination). The sync ``login()``
-bracket and ``operation_name`` dispatch are earned live in
-``test_products_api.py``.
+async decode), its ``login()`` bracket including logout when the block raises,
+and its nested two-file multipart upload (the async color of
+``test_uploads_api.py``'s sync upload, so the DoD's "multipart ... on both
+clients" is earned live on both); the sync ``login()`` exception-logout twin
+(the clean-exit sync bracket and ``operation_name`` dispatch stay in
+``test_products_api.py``); and the unittest family end to end
+(``self.query(...)``, both assertion helpers' PASSING directions, the per-call
+and ``GRAPHQL_URL`` endpoint rungs against a real view, and the
+``TransactionTestCase`` combination).
 
 The async tests that reach the GraphQL view depend on ``transactional_db``:
 ``django.test.AsyncClient`` runs the sync view on asgiref's executor thread,
@@ -247,6 +248,68 @@ async def test_async_login_brackets_the_write_authorized_mutation(permitted_writ
     denied_again = await client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
     assert denied_again.data is None
     assert "Not authorized" in denied_again.errors[0]["message"]
+
+
+@pytest.mark.django_db
+def test_sync_login_bracket_logs_out_when_the_block_raises():
+    """A raise inside ``with client.login(user)`` still clears the session on the wire.
+
+    The clean-exit sync bracket lives in ``test_products_api.py``. This row is
+    the exception arm: a permitted ``createItem`` succeeds inside the block, the
+    block then raises, and the same client is unauthorized afterwards - logout
+    ran in ``finally``, not only on the happy path.
+    """
+    create_users(1)
+    seed_data(1)
+    from django.contrib.auth.models import Permission
+
+    user_model = get_user_model()
+    user = user_model.objects.get(username="view_item_1")
+    user.user_permissions.add(
+        Permission.objects.get(codename="add_item", content_type__app_label="products"),
+    )
+    user = user_model.objects.get(pk=user.pk)
+    category = Category.objects.order_by("pk").first()
+    category_gid = str(relay.GlobalID(type_name="products.category", node_id=str(category.pk)))
+    variables = {"d": {"name": "SyncRaiseLogoutWidget", "categoryId": category_gid}}
+    client = TestClient()
+
+    with pytest.raises(RuntimeError, match="sync login error"):
+        with client.login(user):
+            granted = client.query(_CREATE_ITEM, variables=variables)
+            assert granted.data["createItem"]["errors"] == []
+            assert granted.data["createItem"]["node"]["name"] == "SyncRaiseLogoutWidget"
+            raise RuntimeError("sync login error")
+
+    denied = client.query(
+        _CREATE_ITEM,
+        variables={"d": {"name": "AfterSyncRaiseWidget", "categoryId": category_gid}},
+        assert_no_errors=False,
+    )
+    assert denied.data is None
+    assert "Not authorized" in denied.errors[0]["message"]
+
+
+async def test_async_login_bracket_logs_out_when_the_block_raises(permitted_writer):
+    """A raise inside ``async with client.login(user)`` still clears the session on the wire."""
+    user, category_gid = permitted_writer
+    variables = {"d": {"name": "AsyncRaiseLogoutWidget", "categoryId": category_gid}}
+    client = AsyncTestClient()
+
+    with pytest.raises(RuntimeError, match="async login error"):
+        async with client.login(user):
+            granted = await client.query(_CREATE_ITEM, variables=variables)
+            assert granted.data["createItem"]["errors"] == []
+            assert granted.data["createItem"]["node"]["name"] == "AsyncRaiseLogoutWidget"
+            raise RuntimeError("async login error")
+
+    denied = await client.query(
+        _CREATE_ITEM,
+        variables={"d": {"name": "AfterAsyncRaiseWidget", "categoryId": category_gid}},
+        assert_no_errors=False,
+    )
+    assert denied.data is None
+    assert "Not authorized" in denied.errors[0]["message"]
 
 
 @pytest.fixture

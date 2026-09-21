@@ -651,6 +651,18 @@ def test_scalar_specimen_introspects_json_scalar_in_both_shapes():
 
 
 @pytest.mark.django_db
+def test_scalar_specimen_id_maps_big_auto_pk_to_int():
+    """``DEFAULT_AUTO_FIELD = BigAutoField`` still publishes ``id`` as GraphQL ``Int``.
+
+    Fakeshop's settings pin ``django.db.models.BigAutoField``, so ``ScalarSpecimenType.id``
+    is the live ``BigAutoField -> int`` converter row: a ``NON_NULL`` ``Int``, not ``BigInt``.
+    """
+    id_type = _introspect_field_types("ScalarSpecimenType")["id"]
+    assert id_type["kind"] == "NON_NULL"
+    assert id_type["ofType"] == {"name": "Int", "kind": "SCALAR"}
+
+
+@pytest.mark.django_db
 def test_nullable_scalar_specimen_all_null_wire_format_over_http():
     """Every nullable scalar serializes as JSON ``null`` when the column is NULL.
 
@@ -847,6 +859,44 @@ def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
     nullable.refresh_from_db()
     assert nullable.pk is not None
     assert nullable.partner_id is None
+
+
+@pytest.mark.django_db
+def test_nullable_self_fk_dangling_parent_resolves_to_null_over_http():
+    """A nullable self-FK whose target was deleted under disabled constraints is ``null``.
+
+    ``ScalarSpecimen.parent`` stays populated against a missing row. The wire is
+    ``parent: null`` with no completion error, and the column is still the deleted
+    pk. Distinct from ``test_scalars_set_null_ondelete_detaches_partner_in_http_query``,
+    which clears the column via ``SET_NULL`` before the query.
+    """
+    parent = _seed_specimen(label="dangling-fk-parent")
+    child = _seed_specimen(label="dangling-fk-child", parent=parent)
+
+    with connection.constraint_checks_disabled():
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM scalars_scalarspecimen WHERE id = %s", [parent.pk])
+        try:
+            response = _post_graphql(
+                """
+                query {
+                  allScalarSpecimens {
+                    label
+                    parent { label }
+                  }
+                }
+                """,
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert "errors" not in body, body
+            rows = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
+            assert "dangling-fk-parent" not in rows
+            assert rows["dangling-fk-child"]["parent"] is None
+            dangling = models.ScalarSpecimen.objects.get(pk=child.pk)
+            assert dangling.parent_id == parent.pk
+        finally:
+            models.ScalarSpecimen.objects.filter(pk=child.pk).update(parent=None)
 
 
 @pytest.mark.django_db
@@ -1450,8 +1500,8 @@ def test_override_specimen_consumer_field_overrides_resolve_over_http():
     ``annotation + strawberry.field`` overlap (``score``), and an annotation escape
     hatch over the unsupported ``Base36Field`` column (``token``). ``note`` adds the
     declare-but-infer corner: declared ``note: auto`` so its ``String!`` type is
-    synthesized from the model, not overridden. This pins that every corner not only
-    inspects correctly but actually resolves end to end.
+    synthesized from the model, not overridden. Introspection pins those SDL
+    shapes (``quantity: Float``, ``note: String!``) next to the resolved values.
     """
     models.OverrideSpecimen.objects.create(
         label="alpha",
@@ -1492,3 +1542,10 @@ def test_override_specimen_consumer_field_overrides_resolve_over_http():
     assert row["token"] == "zz9"
     # ``note: auto`` - inferred ``String!`` resolved straight from the column.
     assert row["note"] == "inferred"
+
+    sdl = _introspect_field_types("OverriddenScalarSpecimenType")
+    quantity_type = sdl["quantity"]
+    assert quantity_type == {"name": "Float", "kind": "SCALAR", "ofType": None}
+    note_type = sdl["note"]
+    assert note_type["kind"] == "NON_NULL"
+    assert note_type["ofType"] == {"name": "String", "kind": "SCALAR"}

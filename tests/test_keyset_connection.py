@@ -10,7 +10,10 @@ This module keeps claims no GraphQL request can express:
 
 - The generated connection class's ``_dst_keyset_state`` slot (identity cache
   and the offset-type ``None`` sentinel). The live sibling is
-  ``test_root_keyset_first_page_orders_by_cursor_field``.
+  ``test_root_keyset_first_page_orders_by_cursor_field``. A ``cursor_field``
+  type with no ``Meta.connection`` still resolves as keyset-mode here:
+  live ``IssueType`` always declares ``connection``, and a live module cannot
+  register a second ``DjangoType`` after finalize.
 - ``declared_cursor_state_for_definition`` lookup, including a ``None``
   definition.
 - Defensive ``_WindowedConnectionRows`` arms the walker never plans: ``last``
@@ -40,7 +43,6 @@ This module keeps claims no GraphQL request can express:
 from types import SimpleNamespace
 
 import pytest
-import strawberry
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
 from django.db import models
@@ -48,7 +50,7 @@ from django.db.models import Count, F
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
 
-from django_strawberry_framework import DjangoConnectionField, finalize_django_types
+from django_strawberry_framework import finalize_django_types
 from django_strawberry_framework.connection import (
     _connection_type_for,
     _keyset_connection_context,
@@ -59,10 +61,8 @@ from django_strawberry_framework.connection import (
     _WindowedConnectionRows,
 )
 from django_strawberry_framework.keyset import (
-    KEYSET_CURSOR_PREFIX,
     cursor_columns_for,
     declared_cursor_state_for_definition,
-    from_base64,
     order_fingerprint,
 )
 from django_strawberry_framework.optimizer.nested_planner import (
@@ -129,6 +129,23 @@ def test_keyset_connection_context_is_none_for_offset_types():
     assert _keyset_connection_context(connection_type) is None
     # The negative result is cached too (the ``False`` sentinel round-trip).
     assert _keyset_connection_context(connection_type) is None
+
+
+def test_keyset_connection_context_resolves_without_connection_opt_in():
+    """A ``cursor_field`` type with no ``Meta.connection`` is still keyset-mode.
+
+    ``Meta.connection`` only opts into ``totalCount``. Keyset vocabulary is
+    ``cursor_field``. The minted prefix on default-order shipped ``IssueType``
+    is ``test_root_keyset_first_page_orders_by_cursor_field``. A live module
+    cannot register a second ``DjangoType`` after finalize, so the
+    ``connection=None`` generation path stays here.
+    """
+    issue_type = _make_issue_type("BareKeysetNode", connection=None)
+    finalize_django_types()
+    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
+    state = _keyset_connection_context(connection_type)
+    assert state is not None
+    assert state.cursor_field == ISSUE_ORDER
 
 
 def test_declared_cursor_state_for_definition_resolves_the_declared_vocabulary():
@@ -497,30 +514,3 @@ def test_extend_only_projection_passthrough_arms():
     names, defer_flag = deferred_loading_of(extended_only)
     assert defer_flag is False
     assert names == frozenset({"number", "title"})
-
-
-@pytest.mark.django_db
-def test_bare_keyset_connection_routes_through_keyset_slicer():
-    """A ``cursor_field`` type with NO ``Meta.connection`` still slices by keyset.
-
-    Package-only: every shipped keyset type declares ``Meta.connection``
-    (``examples/fakeshop/apps/library/schema.py::IssueType``), so the bare
-    shape has no live fixture. The minted cursor's prefix is what separates
-    the keyset slicer from the offset one.
-    """
-    issue_type = _make_issue_type("BareKeysetNode", connection=None)
-
-    @strawberry.type
-    class Query:
-        issues = DjangoConnectionField(issue_type)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    periodical = Periodical.objects.create(name="P")
-    Issue.objects.create(periodical=periodical, number=1, title="one")
-    result = schema.execute_sync("{ issues(first: 1) { edges { cursor } } }")
-    assert not result.errors, result.errors
-    assert len(result.data["issues"]["edges"]) == 1
-    cursor = result.data["issues"]["edges"][0]["cursor"]
-    prefix, _ = from_base64(cursor)
-    assert prefix == KEYSET_CURSOR_PREFIX

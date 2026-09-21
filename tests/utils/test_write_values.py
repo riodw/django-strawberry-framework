@@ -1,4 +1,12 @@
-"""Tests for the shared write-value decoding substrate."""
+"""Direct pins of write-value decode internals a GraphQL request cannot name.
+
+Omitted-vs-null-vs-provided identity, hostile containers, generator materialization,
+and GraphQL-unrepresentable member shapes (string-in-a-list, mixed GlobalID+pk) stay
+here because the wire never delivers them. Consumer envelopes for hidden vs missing
+relation ids, batched ``pk__in`` cost, duplicate members, and empty M2M clears live in
+``examples/fakeshop/test_query/test_products_api.py`` and
+``examples/fakeshop/test_query/test_library_api.py``.
+"""
 
 from enum import Enum
 
@@ -29,7 +37,6 @@ from django_strawberry_framework.utils.write_values import (
     relation_into,
     scalar_into,
     store_decoded,
-    type_check_relation_id,
     unencodable_text_error,
 )
 
@@ -119,47 +126,26 @@ def test_decode_layers_preserve_omitted_null_and_provided_values():
 
 
 @pytest.mark.django_db
-def test_decode_visible_relation_ids_batches_visibility_and_short_circuits():
-    """The batched compose type-checks first, queries once, and maps misses to one error."""
+def test_decode_visible_relation_ids_rejects_uncoercible_member_without_a_visibility_query():
+    """A string member fails the type check before any ``pk__in``; GraphQL ``[Int!]`` never delivers it."""
     from django.db import connection
     from django.test.utils import CaptureQueriesContext
 
     first = Category.objects.create(name="BatchA")
-    second = Category.objects.create(name="BatchB")
     recourse = "Use a synchronous visibility hook."
-
-    pks, error = decode_visible_relation_ids(
-        [],
-        graphql_name="categoryIds",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-    )
-    assert error is None
-    assert pks == []
 
     with CaptureQueriesContext(connection) as ctx:
         pks, error = decode_visible_relation_ids(
-            [first.pk, second.pk],
+            [first.pk, "bad"],
             graphql_name="categoryIds",
             related_model=Category,
             info=None,
             async_recourse=recourse,
         )
-    assert error is None
-    assert pks == [first.pk, second.pk]
-    assert len(ctx.captured_queries) == 1
-
-    pks, error = decode_visible_relation_ids(
-        [first.pk, "bad"],
-        graphql_name="categoryIds",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-    )
     assert pks is None
     assert error is not None
     assert error.field == "categoryIds"
+    assert ctx.captured_queries == []
 
 
 def test_decode_visible_relation_ids_maps_malformed_containers_to_relation_error():
@@ -599,42 +585,6 @@ def test_unencodable_text_error_handles_non_strings_and_valid_strings():
 
 
 @pytest.mark.django_db
-def test_type_check_relation_id_with_global_id():
-    """GlobalID values are decoded against the target model; non-OK results return relation_field_error."""
-    from django_strawberry_framework.types.base import DjangoType
-    from django_strawberry_framework.types.finalizer import finalize_django_types
-
-    class GidCatType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    finalize_django_types()
-
-    category = Category.objects.create(name="RelayCatTest")
-    valid_gid = relay.GlobalID("products.category", str(category.pk))
-    pk, error = type_check_relation_id(
-        valid_gid,
-        graphql_name="categoryId",
-        related_model=Category,
-    )
-    assert error is None
-    assert pk == category.pk
-
-    # Wrong model GlobalID
-    wrong_gid = relay.GlobalID("unknown.model", str(category.pk))
-    pk, error = type_check_relation_id(
-        wrong_gid,
-        graphql_name="categoryId",
-        related_model=Category,
-    )
-    assert pk is None
-    assert error is not None
-    assert error.field == "categoryId"
-
-
-@pytest.mark.django_db
 def test_decode_visible_relation_handles_invalid_id_and_missing_object():
     """decode_visible_relation returns field errors for type-check failure or missing/hidden object."""
     recourse = "Use a synchronous visibility hook."
@@ -666,24 +616,6 @@ def test_decode_visible_relation_handles_invalid_id_and_missing_object():
     assert val is None
     assert error is not None
     assert error.field == "categoryId"
-
-
-@pytest.mark.django_db
-def test_decode_visible_relation_ids_rejects_missing_pks():
-    """decode_visible_relation_ids returns relation_field_error when any requested pk is not found."""
-    existing = Category.objects.create(name="BatchExisting")
-    recourse = "Use a synchronous visibility hook."
-
-    pks, error = decode_visible_relation_ids(
-        [existing.pk, 999999],
-        graphql_name="categoryIds",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-    )
-    assert pks is None
-    assert error is not None
-    assert error.field == "categoryIds"
 
 
 def test_decode_provided_fields_short_circuits_on_handler_error():
@@ -720,89 +652,6 @@ def test_decode_provided_fields_short_circuits_on_handler_error():
     assert error.codes == ["custom_error"]
     assert len(failing_handler_called) == 1
     assert len(scalar_handler_called) == 0
-
-
-@pytest.mark.django_db
-def test_decode_visible_relation_ids_hidden_and_missing_are_indistinguishable():
-    """A visibility-hook-hidden row gets the SAME envelope as a missing one, at both seams.
-
-    The cross-flavor security invariant on the batch path: the one ``pk__in``
-    visibility query runs through the related primary's ``get_queryset``, so a
-    row the writer cannot see is absent from the present-set and the subset
-    check maps it to the same ``relation_field_error`` a missing pk yields -
-    no existence leak (identical field, messages, and codes), and a mixed
-    visible+hidden batch fails all-or-nothing. The single-relation decoder
-    (``decode_visible_relation`` via ``visible_related_object``) is pinned to
-    the same indistinguishability.
-    """
-    from django_strawberry_framework.types.base import DjangoType
-    from django_strawberry_framework.types.finalizer import finalize_django_types
-
-    class HiddenPinType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-        @classmethod
-        def get_queryset(cls, queryset, info):
-            return queryset.exclude(name="HiddenCat")
-
-    finalize_django_types()
-    recourse = "Use a synchronous visibility hook."
-    visible = Category.objects.create(name="VisibleCat")
-    hidden = Category.objects.create(name="HiddenCat")
-
-    def shape(error):
-        return (error.field, tuple(error.messages or []), tuple(error.codes or []))
-
-    _, error_hidden = decode_visible_relation_ids(
-        [hidden.pk],
-        graphql_name="categoryIds",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-    )
-    _, error_missing = decode_visible_relation_ids(
-        [999999],
-        graphql_name="categoryIds",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-    )
-    assert error_hidden is not None, "hidden row was attached - visibility bypass"
-    assert shape(error_hidden) == shape(error_missing), "existence leak on the batch seam"
-
-    pks, error = decode_visible_relation_ids(
-        [visible.pk, hidden.pk],
-        graphql_name="categoryIds",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-    )
-    assert pks is None
-    assert error is not None
-
-    _, single_hidden = decode_visible_relation(
-        hidden.pk,
-        graphql_name="categoryId",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-        skip=lambda value: value is None,
-        project=lambda obj: obj.pk,
-    )
-    _, single_missing = decode_visible_relation(
-        999999,
-        graphql_name="categoryId",
-        related_model=Category,
-        info=None,
-        async_recourse=recourse,
-        skip=lambda value: value is None,
-        project=lambda obj: obj.pk,
-    )
-    assert single_hidden is not None, "hidden row attached at the single seam"
-    assert shape(single_hidden) == shape(single_missing), "existence leak on the single seam"
 
 
 @pytest.mark.django_db
@@ -856,6 +705,33 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
         assert pks is None
         assert error is not None
         assert error.field == "categoryIds"
+
+
+@pytest.mark.django_db
+def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query():
+    """Duplicate pks are a subset check, not a count match: the decode keeps the duplicates.
+
+    Live ``test_serializer_m2m_duplicate_alt_branch_pks_still_one_visibility_query``
+    unique-attaches on the wire. GraphQL cannot observe that the decoder returns
+    ``[a, b, a]`` rather than a set; a len-compare in ``pks_all_present`` would
+    still unique-attach.
+    """
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    first = Category.objects.create(name="DupA")
+    second = Category.objects.create(name="DupB")
+    with CaptureQueriesContext(connection) as ctx:
+        pks, error = decode_visible_relation_ids(
+            [first.pk, second.pk, first.pk],
+            graphql_name="categoryIds",
+            related_model=Category,
+            info=None,
+            async_recourse="Use a synchronous visibility hook.",
+        )
+    assert error is None
+    assert pks == [first.pk, second.pk, first.pk]
+    assert len(ctx.captured_queries) == 1
 
 
 @pytest.mark.django_db
@@ -961,31 +837,6 @@ def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained
     )
     assert error is None
     assert pks == [category.pk]
-
-
-@pytest.mark.django_db
-def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query():
-    """Duplicate pks are a stringified SUBSET test, not a count match - accepted, one query.
-
-    ``pks_all_present`` collapses duplicates, so a repeated pk neither fails
-    the membership check (a len-compare would) nor adds a second query.
-    """
-    from django.db import connection
-    from django.test.utils import CaptureQueriesContext
-
-    first = Category.objects.create(name="DupA")
-    second = Category.objects.create(name="DupB")
-    with CaptureQueriesContext(connection) as ctx:
-        pks, error = decode_visible_relation_ids(
-            [first.pk, second.pk, first.pk],
-            graphql_name="categoryIds",
-            related_model=Category,
-            info=None,
-            async_recourse="Use a synchronous visibility hook.",
-        )
-    assert error is None
-    assert pks == [first.pk, second.pk, first.pk]
-    assert len(ctx.captured_queries) == 1
 
 
 def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():

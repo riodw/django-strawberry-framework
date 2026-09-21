@@ -10,6 +10,10 @@ field unreachable in the single aggregated ``config.schema``, so ALL
 permission-gate coverage lives in ``tests/auth/`` on isolated throwaway schemas
 (the documented placement exception for genuinely-unreachable-live behavior).
 Async colour of login/register uses a ``/graphql-async/`` mount in this module.
+A test-local ``/graphql-test/`` holder arms optimizer ``strictness="raise"``
+around a groups-exposing user type so an unplanned relation under ``me`` /
+``login { node }`` is the ``OptimizerError`` on the wire; shipped ``UserType``
+has no relation field.
 
 Per AGENTS.md, every test's first line seeds via ``create_users(N)`` - including
 the register / anonymous-``me`` cases, which still seed first and then exercise
@@ -20,21 +24,28 @@ import json
 import logging
 
 import pytest
+import strawberry
 from apps.products.services import TEST_USER_PASSWORD, create_users
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
 from django.contrib.auth import signals as auth_signals
+from django.contrib.auth.models import Group
 from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
 from django.test import AsyncClient, Client, override_settings
-from django.urls import path
+from django.urls import clear_url_caches, path
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import graphql_payload
 from graphql_client import post_graphql as _post_graphql
+from strawberry import relay
 
+from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
+from django_strawberry_framework.auth import current_user, login_mutation
+from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient
-from django_strawberry_framework.views import AsyncDjangoGraphQLView
+from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 # A password that passes all four fakeshop ``AUTH_PASSWORD_VALIDATORS`` and is
 # unrelated to any seeded username (the similarity validator must not bite).
@@ -900,13 +911,25 @@ def test_login_and_logout_face_djangos_real_csrf_check():
     assert accepted_logout.json()["data"]["logout"]["ok"] is True
 
 
+_CURRENT: dict[str, object | None] = {"schema": None}
+
+
 async def _async_shipped_graphql_view(request):
     from config.schema import schema
 
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
 
 
-urlpatterns = [path("graphql-async/", _async_shipped_graphql_view)]
+def _holder_graphql_view(request):
+    schema = _CURRENT["schema"]
+    assert schema is not None
+    return DjangoGraphQLView.as_view(schema=schema)(request)
+
+
+urlpatterns = [
+    path("graphql-async/", _async_shipped_graphql_view),
+    path("graphql-test/", _holder_graphql_view),
+]
 
 
 async def _post_async_shipped(query, *, variables=None, client=None):
@@ -1117,3 +1140,128 @@ async def test_async_login_payload_exposes_the_post_login_last_login(project_sch
     node = payload["data"]["login"]["node"]
     assert node["username"] == "staff_1"
     assert node["lastLogin"] is not None
+
+
+def _unplanned_auth_holder_schema():
+    """Throwaway login/me schema whose user type exposes ``groups``, optimizer raise.
+
+    Shipped ``UserType`` has no relation field, and strictness is a schema
+    construction argument, so this holder is the HTTP surface (rung 3).
+    ``registry.clear()`` drains the one-declaration ledger so a second
+    ``login_mutation`` / ``current_user`` can exist beside fakeshop's AllowAny
+    pair; the acceptance autouse fixture rebuilds the project schema on exit.
+    """
+    registry.clear()
+    user_model = get_user_model()
+    type(
+        "AuthProbeUser",
+        (DjangoType, relay.Node),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": user_model, "fields": ("id", "username", "groups"), "primary": True},
+            ),
+        },
+    )
+    type(
+        "AuthProbeGroup",
+        (DjangoType, relay.Node),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": Group, "fields": ("id", "name")},
+            ),
+        },
+    )
+
+    @strawberry.type
+    class Query:
+        me = current_user()
+
+    @strawberry.type
+    class Mutation:
+        login = login_mutation()
+
+    finalize_django_types()
+    optimizer = DjangoOptimizerExtension(strictness="raise")
+    return DjangoSchema(
+        query=Query,
+        mutation=Mutation,
+        extensions=[lambda: optimizer],
+        error_policy={"enabled": False},
+    )
+
+
+def _post_auth_holder(
+    schema,
+    query,
+    *,
+    client=None,
+    variables=None,
+):
+    """POST ``query`` against the holder schema over ``/graphql-test/``."""
+    _CURRENT["schema"] = schema
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            return graphql_payload(
+                query,
+                client=client,
+                variables=variables,
+                url="/graphql-test/",
+            )
+    finally:
+        _CURRENT["schema"] = None
+        clear_url_caches()
+
+
+def _seed_staff_in_group():
+    """Seed users, put ``staff_1`` in one named group, and return that user."""
+    create_users(1)
+    user = get_user_model().objects.get(username="staff_1")
+    user.groups.add(Group.objects.create(name="g1"))
+    return user
+
+
+@pytest.mark.django_db
+def test_an_unplanned_relation_under_me_is_strictness_visible_over_http():
+    """``me`` returns the session actor raw, so a relation under it is unplanned.
+
+    Selecting ``groupsConnection`` under ``me`` on a holder whose optimizer is
+    armed with ``strictness="raise"`` is the ``OptimizerError`` rather than a
+    silent N+1. Shipped ``UserType`` has no relation field, so this is a
+    test-local holder (rung 3), not a shipped-schema document.
+    """
+    user = _seed_staff_in_group()
+    schema = _unplanned_auth_holder_schema()
+    client = Client()
+    client.force_login(user)
+    payload = _post_auth_holder(
+        schema,
+        "{ me { groupsConnection { edges { node { name } } } } }",
+        client=client,
+    )
+    assert payload.get("errors"), payload
+    assert "Unplanned N+1: groups" in payload["errors"][0]["message"], payload
+    assert payload["errors"][0].get("path") == ["me", "groupsConnection"], payload
+
+
+@pytest.mark.django_db
+def test_an_unplanned_relation_under_login_node_is_strictness_visible_over_http():
+    """``login``'s payload object is a raw instance, so a relation under it is unplanned."""
+    _seed_staff_in_group()
+    schema = _unplanned_auth_holder_schema()
+    payload = _post_auth_holder(
+        schema,
+        (
+            "mutation($u: String!, $p: String!){ login(username: $u, password: $p){ "
+            "node { groupsConnection { edges { node { name } } } } errors { field } } }"
+        ),
+        client=Client(),
+        variables={"u": "staff_1", "p": TEST_USER_PASSWORD},
+    )
+    assert payload.get("errors"), payload
+    assert "Unplanned N+1: groups" in payload["errors"][0]["message"], payload
+    assert payload["errors"][0].get("path") == ["login", "node", "groupsConnection"], payload

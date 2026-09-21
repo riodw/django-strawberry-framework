@@ -1,18 +1,14 @@
-"""Relation resolver tests for cardinality, FK-ID elision, N+1 strictness, and multi-database routing.
+"""Relation resolver tests for FK-id elision, N+1 strictness, and multi-database routing.
 
-Covers the cardinality-aware relation resolvers attached by
-``DjangoType.__init_subclass__`` via ``_attach_relation_resolvers``:
-
-- Forward FK / OneToOne - ``getattr(root, name)`` returns the related instance.
-- Reverse FK / M2M (many-side) - ``list(getattr(root, name).all())`` so
-  Strawberry sees an iterable instead of a Django ``RelatedManager``.
-- Reverse OneToOne (``one_to_one`` and ``auto_created``) - try/except
-  ``DoesNotExist`` so a missing reverse row collapses to ``None``.
-
-Mix of integration tests (real Strawberry schema execution against
-fakeshop seed data) and direct unit tests of ``_make_relation_resolver``
-against synthetic ``SimpleNamespace`` fields, so the OneToOne branch can
-be exercised without a real Django OneToOne in the example schema.
+Generated relation payloads, reverse-O2O custom visibility, and unoptimized
+many-side query cost live in ``examples/fakeshop/test_query/test_products_visibility_api.py``
+and ``examples/fakeshop/test_query/test_relations_async_api.py``. A nullable dangling
+self-FK over HTTP lives in
+``examples/fakeshop/test_query/test_scalars_api.py``
+(``test_nullable_self_fk_dangling_parent_resolves_to_null_over_http``). This module
+keeps direct ``_make_relation_resolver`` / ``_check_n1`` calls, hostile metadata,
+router mocks, ``resolver.__name__``, and the nullable ``DoesNotExist`` swallow a
+planned JOIN never takes.
 """
 
 import datetime
@@ -20,14 +16,12 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-import strawberry
 from apps.products import services
 from apps.products.models import Category, Item
 from django.db import connection as db_connection
 from django.utils import timezone
 
 from django_strawberry_framework import DjangoType, finalize_django_types
-from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.optimizer._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
 )
@@ -66,85 +60,28 @@ def _isolate_registry():
 # ---------------------------------------------------------------------------
 
 
-def test_o1_make_relation_resolver_many_side():
-    """Direct unit: many-side resolver returns ``list(manager.all())``."""
-    from types import SimpleNamespace
+def test_make_relation_resolver_many_side_is_named_resolve_field():
+    """Generated many-side resolver is named ``resolve_<field>``.
 
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
+    Payload and SQL live in ``examples/fakeshop/test_query/test_products_visibility_api.py``.
+    """
     fake_field = SimpleNamespace(name="items", many_to_many=False, one_to_many=True)
     resolver = _make_relation_resolver(fake_field)
+    assert resolver.__name__ == "resolve_items"
 
     class FakeManager:
         def all(self):
             return [1, 2, 3]
 
-    fake_root = SimpleNamespace(items=FakeManager())
     fake_info = SimpleNamespace(context=None, path=None)
-    assert resolver(fake_root, fake_info) == [1, 2, 3]
-    assert resolver.__name__ == "resolve_items"
+    assert resolver(SimpleNamespace(items=FakeManager()), fake_info) == [1, 2, 3]
 
 
-@pytest.mark.django_db
-def test_reverse_one_to_one_scopes_custom_target_by_planned_relation():
-    """Reverse-OneToOne visibility follows the PER-RELATION optimizer attribution.
+def test_make_relation_resolver_forward_is_named_resolve_field():
+    """Generated forward-FK resolver is named ``resolve_<field>``.
 
-    No fakeshop reverse-OneToOne target declares ``get_queryset``, so this shape
-    is unreachable from the shipped schema and lives here rather than in the live
-    tier. Both sides of the attribution are asserted: a relation no optimizer
-    planned is re-read through the target hook (a hidden card collapses to
-    ``None``), and a relation the optimizer planned - whose ``Prefetch`` the
-    walker already scoped - is returned as loaded without a second query.
+    Payload and SQL live in ``examples/fakeshop/test_query/test_products_visibility_api.py``.
     """
-    from apps.library.models import MembershipCard, Patron
-
-    hidden_patron = Patron.objects.create(name="Hidden Holder")
-    MembershipCard.objects.create(patron=hidden_patron, barcode="HIDDEN-1")
-    visible_patron = Patron.objects.create(name="Visible Holder")
-    MembershipCard.objects.create(patron=visible_patron, barcode="OPEN-1")
-
-    class MembershipCardType(DjangoType):
-        class Meta:
-            model = MembershipCard
-            fields = ("id", "barcode")
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset.exclude(barcode__startswith="HIDDEN")
-
-    class PatronType(DjangoType):
-        class Meta:
-            model = Patron
-            fields = ("id", "card")
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def patrons(self) -> list[PatronType]:
-            return Patron.objects.filter(name__endswith="Holder").order_by("name")
-
-    query = "{ patrons { card { barcode } } }"
-    unplanned = strawberry.Schema(query=Query).execute_sync(query)
-    assert unplanned.errors is None, unplanned.errors
-    assert unplanned.data == {"patrons": [{"card": None}, {"card": {"barcode": "OPEN-1"}}]}
-
-    optimizer = DjangoOptimizerExtension()
-    planned = strawberry.Schema(
-        query=Query,
-        extensions=[lambda: optimizer],
-    ).execute_sync(query, context_value=SimpleNamespace())
-    assert planned.errors is None, planned.errors
-    assert planned.data == unplanned.data
-
-
-def test_o1_make_relation_resolver_forward_returns_attribute():
-    """Direct unit: forward-FK / OneToOne resolver returns the related instance."""
-    from types import SimpleNamespace
-
-    from django_strawberry_framework.types.resolvers import _make_relation_resolver
-
     fake_field = SimpleNamespace(
         name="category",
         attname="category_id",
@@ -153,12 +90,11 @@ def test_o1_make_relation_resolver_forward_returns_attribute():
         one_to_one=False,
     )
     resolver = _make_relation_resolver(fake_field)
+    assert resolver.__name__ == "resolve_category"
 
     sentinel = object()
-    fake_root = SimpleNamespace(category=sentinel)
     fake_info = SimpleNamespace(context=None, path=None)
-    assert resolver(fake_root, fake_info) is sentinel
-    assert resolver.__name__ == "resolve_category"
+    assert resolver(SimpleNamespace(category=sentinel), fake_info) is sentinel
 
 
 def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
@@ -266,45 +202,6 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
         _end_execution_frame(frame)
     assert isinstance(scoped, Category)
     assert scoped.pk == category.pk
-
-
-@pytest.mark.django_db
-def test_forward_relation_is_scoped_when_strictness_leaves_it_unplanned():
-    """The forward tail re-reads a custom-visibility target the plan never claimed.
-
-    Reached when planning metadata EXISTS for the request (strictness publishes
-    ``DST_OPTIMIZER_PLANNED``) but this relation is not among the planned keys, so
-    the ``getattr`` below is an unscoped lazy load.
-    """
-    services.seed_data(1)
-    item = Item.objects.select_related("category").first()
-    assert item is not None
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset.none()
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-
-    finalize_django_types()
-
-    field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=ItemType)
-    fake_info = SimpleNamespace(
-        context=SimpleNamespace(dst_optimizer_planned=frozenset()),
-        field_name="category",
-        path=_path("allItems", 0, "category"),
-    )
-
-    assert resolver(item, fake_info) is None
 
 
 def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
@@ -658,7 +555,12 @@ def test_check_n1_probes_prefetch_cache_under_accessor_name():
 
 
 def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
-    """O4: runtime response paths preserve aliases and omit list indexes."""
+    """Runtime response paths preserve aliases and omit list indexes.
+
+    ``runtime_path_from_info`` is an optimizer-plan helper with no GraphQL
+    selection of its own; the live sibling for planned vs unplanned relations is
+    ``examples/fakeshop/test_query/test_products_visibility_api.py``.
+    """
     from types import SimpleNamespace
 
     from django_strawberry_framework.optimizer.plans import runtime_path_from_info
@@ -670,9 +572,11 @@ def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
 def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexist():
     """Direct unit: reverse OneToOne resolver swallows DoesNotExist into None.
 
-    Fakeshop has no OneToOne fields, so this exercises the branch via a
-    SimpleNamespace and a fabricated ``DoesNotExist``. The behaviour is
-    part of the relation cardinality contract.
+    Direct ``_make_relation_resolver`` call with a fabricated ``DoesNotExist``.
+    Live reverse-O2O payloads live in
+    ``examples/fakeshop/test_query/test_products_visibility_api.py``; this row
+    keeps the swallow-to-None branch a request cannot name without a missing
+    reverse accessor.
     """
     from types import SimpleNamespace
 
@@ -848,19 +752,15 @@ async def test_reverse_one_to_one_async_contains_missing_row():
 
 @pytest.mark.django_db
 def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
-    """Nullable forward FK pointing at a DELETED row resolves to ``None``.
+    """Direct resolver: a nullable dangling FK swallows the target's ``DoesNotExist``.
 
-    The non-nullable dangling case raises ``RelatedObjectDoesNotExist`` (which
-    subclasses ``AttributeError``); the nullable one does NOT - Django's
-    descriptor lets the target's plain ``Model.DoesNotExist`` out of
-    ``get_object()``, and that class is not an ``AttributeError`` at all. Both
-    are the same data-integrity anomaly (a restore, a partial import, manual
-    SQL) and both must collapse to ``None``, so the nullable spelling is
-    pinned explicitly rather than assumed to ride on the other one's catch.
-
-    ``ScalarSpecimen.parent`` is the example project's only nullable forward
-    FK; the target row is removed with constraint checking off so the column
-    survives the delete instead of cascading.
+    The non-nullable dangling case raises ``RelatedObjectDoesNotExist`` (an
+    ``AttributeError`` subclass); the nullable one lets the target's plain
+    ``Model.DoesNotExist`` out of ``get_object()``. A planned JOIN on the
+    shipped schema never takes this arm. Wire ``parent: null`` with the column
+    still set lives in
+    ``examples/fakeshop/test_query/test_scalars_api.py``
+    (``test_nullable_self_fk_dangling_parent_resolves_to_null_over_http``).
     """
     from apps.scalars.models import ScalarSpecimen
 
@@ -922,47 +822,6 @@ def test_forward_resolver_propagates_consumer_attribute_error():
     fake_info = SimpleNamespace(context=None, path=None)
     with pytest.raises(AttributeError, match="consumer descriptor bug"):
         resolver(HostileItem(), fake_info)
-
-
-@pytest.mark.django_db
-def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries):
-    """A schema with no optimizer extension answers a many-side selection in 1 + N queries.
-
-    The generated many-side resolver is correct on its own - one category query
-    plus one item query per category - and buying that correctness back down to
-    a fixed query count is the optimizer's job, not the resolver's. The
-    optimized count on the shipped schema is pinned live in
-    ``examples/fakeshop/test_query/test_optimizer_auto_api.py``; this row is the
-    unoptimized reference it is measured against, so a silent change here would
-    make that comparison meaningless.
-    """
-    from apps.products import services
-
-    services.seed_data(1)
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return list(Category.objects.all())
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-
-    # 1 query for categories + N (=25) queries for each category's items.
-    with django_assert_num_queries(26):
-        result = schema.execute_sync("{ allCategories { name items { name } } }")
-        assert result.errors is None
 
 
 # ---------------------------------------------------------------------------
@@ -1402,69 +1261,6 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog):
     assert isinstance(result, Category)
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_async_relations_with_custom_visibility():
-    """Relations re-check custom visibility hooks asynchronously.
-
-    Stays in the package tier for the same structural reason the sync sibling
-    ``test_reverse_one_to_one_scopes_custom_target_by_planned_relation`` gives:
-    no fakeshop reverse-OneToOne target declares ``get_queryset``, so the
-    reverse-o2o-plus-custom-visibility shape cannot be assembled from the
-    shipped schema. ``MembershipCard.patron`` is the only library OneToOne and
-    ``MembershipCardType`` has no visibility hook; kanban's OneToOnes have none
-    either. Reaching this live would mean adding ``get_queryset`` to fakeshop's
-    shipped ``MembershipCardType``, which changes what every existing
-    ``patron { card { ... } }`` traversal returns -- a behavior change to the
-    example schema, not an additive one.
-
-    Its three no-visibility siblings DID move: they are now
-    ``examples/fakeshop/test_query/test_relations_async_api.py``.
-    """
-    from apps.library.models import MembershipCard, Patron
-    from asgiref.sync import sync_to_async
-
-    p1 = await sync_to_async(Patron.objects.create)(name="Hidden Patron")
-    await sync_to_async(MembershipCard.objects.create)(patron=p1, barcode="HIDDEN-99")
-    p2 = await sync_to_async(Patron.objects.create)(name="Visible Patron")
-    await sync_to_async(MembershipCard.objects.create)(patron=p2, barcode="OPEN-99")
-
-    class MembershipCardType(DjangoType):
-        class Meta:
-            model = MembershipCard
-            fields = ("id", "barcode")
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset.exclude(barcode__startswith="HIDDEN")
-
-    class PatronType(DjangoType):
-        class Meta:
-            model = Patron
-            fields = ("id", "name", "card")
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        async def patrons(self) -> list[PatronType]:
-            patrons = []
-            async for p in Patron.objects.filter(pk__in=[p1.pk, p2.pk]).order_by("pk"):
-                patrons.append(p)
-            return patrons
-
-    schema = strawberry.Schema(query=Query)
-    result = await schema.execute("{ patrons { name card { barcode } } }")
-    assert result.errors is None
-    assert result.data == {
-        "patrons": [
-            {"name": "Hidden Patron", "card": None},
-            {"name": "Visible Patron", "card": {"barcode": "OPEN-99"}},
-        ],
-    }
-
-
 def test_fk_attname_is_deferred_and_stub_exceptions():
     from django_strawberry_framework.optimizer.field_meta import FieldMeta
     from django_strawberry_framework.types.resolvers import (
@@ -1645,18 +1441,16 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         finally:
             end_execution_frame(strict_frame)
 
-        # Fallback when _visible_related_object returns non-awaitable (lines 510, 548, 601)
+        # Fallback when _visible_related_object returns a non-awaitable object.
         orig_vis = resolvers_mod._visible_related_object
         try:
             resolvers_mod._visible_related_object = lambda rel, vt, inf: rel
 
-            # Reverse one-to-one non-awaitable fallback (line 510)
             res_rev_sync = rev_resolver(FakeRevRoot(), unscoped_info)
             if inspect.isawaitable(res_rev_sync):
                 res_rev_sync = await res_rev_sync
             assert res_rev_sync.pk == cat.pk
 
-            # Forward non-awaitable fallback without strictness (line 548)
             res_fwd_sync = fwd_resolver(
                 Item(name="Test Item 5", category_id=cat.pk),
                 fwd_unscoped_info,
@@ -1665,7 +1459,6 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
                 res_fwd_sync = await res_fwd_sync
             assert res_fwd_sync.pk == cat.pk
 
-            # Forward non-awaitable fallback with strictness (line 601)
             strict_frame = begin_execution_frame({}, nested=False, strictness="warn")
             try:
                 res_strict_sync = fwd_resolver(
@@ -1676,7 +1469,6 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
                     res_strict_sync = await res_strict_sync
                 assert res_strict_sync.pk == cat.pk
 
-                # Null related in strict async forward resolver (line 602)
                 class FakeItemNull:
                     _state = SimpleNamespace(fields_cache={})
                     category = None
@@ -1756,19 +1548,16 @@ def test_sync_forward_and_many_resolver_visibility(db):
         fwd_field = Item._meta.get_field("category")
         fwd_resolver = _make_relation_resolver(fwd_field, parent_type=Item)
 
-        # Scoped (line 556)
         fwd_key = resolver_key(Item, "category", ("item", "category"))
         publish_scoped_relations({fwd_key})
         fwd_scoped_info = SimpleNamespace(path=_path("item", "category"), context={})
         res_scoped = fwd_resolver(item, fwd_scoped_info)
         assert res_scoped.pk == cat.pk
 
-        # Unscoped (line 557)
         fwd_unscoped_info = SimpleNamespace(path=_path("other", "category"), context={})
         res_unscoped = fwd_resolver(item, fwd_unscoped_info)
         assert res_unscoped.pk == cat.pk
 
-        # Many resolver sync unscoped with cache (line 462)
         many_field = Category._meta.get_field("items")
         many_resolver = _make_relation_resolver(many_field, parent_type=Category)
         cat_with_cache = SimpleNamespace(
@@ -1779,12 +1568,43 @@ def test_sync_forward_and_many_resolver_visibility(db):
         res_many_unscoped = many_resolver(cat_with_cache, many_unscoped_info)
         assert len(res_many_unscoped) == 1
 
-        # Many resolver sync scoped with cache (line 467-469)
         many_key = resolver_key(Category, "items", ("category", "items"))
         publish_scoped_relations({many_key})
         many_scoped_info = SimpleNamespace(path=_path("category", "items"), context={})
         res_many_scoped = many_resolver(cat_with_cache, many_scoped_info)
         assert len(list(res_many_scoped)) == 1
+
+        # ``strictness="warn"`` takes the non-cheap resolver arm; scoped True
+        # returns the loaded related object without a visibility re-query.
+        warn_frame = begin_execution_frame({}, nested=False, strictness="warn")
+        try:
+
+            class FakeRevRel:
+                name = "profile"
+                is_relation = True
+                one_to_one = True
+                auto_created = True
+                related_model = Category
+
+                def get_accessor_name(self):
+                    return "profile"
+
+            rev_resolver = _make_relation_resolver(FakeRevRel(), parent_type=Item)
+            rev_key = resolver_key(Item, "profile", ("item", "profile"))
+            publish_scoped_relations({rev_key, fwd_key})
+
+            class FakeRevRoot:
+                _state = SimpleNamespace(fields_cache={})
+
+                @property
+                def profile(self):
+                    return cat
+
+            rev_info = SimpleNamespace(path=_path("item", "profile"), context={})
+            assert rev_resolver(FakeRevRoot(), rev_info) == cat
+            assert fwd_resolver(item, fwd_scoped_info).pk == cat.pk
+        finally:
+            end_execution_frame(warn_frame)
     finally:
         end_execution_frame(frame)
         registry._finalized = False

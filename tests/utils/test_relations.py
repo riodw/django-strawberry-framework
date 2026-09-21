@@ -1,4 +1,8 @@
-"""Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports."""
+"""Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports.
+
+``classify_path`` / ``validate_lookup_expr`` are construction-time taxonomy.
+Traversal on the wire is ``examples/fakeshop/test_query/test_library_api.py``.
+"""
 
 from types import SimpleNamespace
 

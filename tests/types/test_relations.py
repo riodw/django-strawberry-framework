@@ -6,6 +6,9 @@ The ``@dataclass(frozen=True)`` decorator synthesizes value-based equality.
 components that keep equal records equal in sets without requiring the
 descriptor itself to be hashable. ``TypeRegistry.discard_pending`` still
 matches records by identity, independently of equality or hashing.
+
+No GraphQL request observes hash equality of pending records. Live relation
+fields live in ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 from dataclasses import FrozenInstanceError

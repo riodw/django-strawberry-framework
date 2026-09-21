@@ -1,9 +1,10 @@
 """Unit tests for the shared connection planner/resolver contracts.
 
-Covers ``django_strawberry_framework/utils/connections.py`` -- the cycle-safe
-home for the slice-window derivation and the sidecar-kwarg family that the
-optimizer walker (plan time) and the Relay resolver (resolve time) must spell
-identically.
+SliceMetadata reverse-window limits, Unset sidecars, and fetch-mode triples are
+planner identity, not a unique HTTP payload. Page windows, ``totalCount`` gating,
+and ``first``/``last`` refusals live in
+``examples/fakeshop/test_query/test_connection_pagination_api.py`` and
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 from types import SimpleNamespace

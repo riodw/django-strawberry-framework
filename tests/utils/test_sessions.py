@@ -1,4 +1,10 @@
-"""Behavioral tests for the session-engine resolver and connection actor lease."""
+"""Behavioral tests for the session-engine resolver and connection actor lease.
+
+``session_store_class`` hostile ``SESSION_ENGINE`` shapes and the WebSocket actor
+lease have no GraphQL document: login/logout sessions live in
+``examples/fakeshop/test_query/test_auth_api.py``; actor serialization stays here
+until fakeshop mounts ASGI.
+"""
 
 from __future__ import annotations
 

@@ -271,6 +271,98 @@ def test_update_item_non_colliding_partial_update():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_update_item_omitting_attachment_leaves_stored_file_unchanged(tmp_path):
+    """A description-only ``updateItem`` leaves the stored ``attachment`` byte-identical.
+
+    Model-flavor counterpart of the form omit row: ``UNSET`` is stripped before
+    the ``setattr`` loop, so an omitted file field never reaches a re-assignment.
+    """
+    create_users(1)
+    seed_data(1)
+    item = models.Item.objects.order_by("pk").first()
+    assert item is not None
+    client = _login_with_perm("staff_1", "change_item")
+
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        item.attachment.save(
+            "keepme.txt",
+            SimpleUploadedFile(
+                "keepme.txt",
+                b"bytes that must survive",
+                content_type="text/plain",
+            ),
+            save=True,
+        )
+        stored_name = item.attachment.name
+
+        data = _graphql_data(
+            _UPDATE_ITEM,
+            client=client,
+            variables={
+                "id": _global_id("products.item", item.pk),
+                "d": {"description": "kept-file-update"},
+            },
+        )
+        result = data["updateItem"]
+        assert result["errors"] == []
+        item.refresh_from_db()
+        assert item.description == "kept-file-update"
+        assert item.attachment.name == stored_name
+        with item.attachment.open("rb") as handle:
+            assert handle.read() == b"bytes that must survive"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_with_new_upload_replaces_attachment(tmp_path):
+    """A multipart ``updateItem`` providing ``attachment`` replaces the stored file through ``setattr``.
+
+    The generic update loop carries the upload; there is no file-specific write branch.
+    """
+    create_users(1)
+    seed_data(1)
+    item = models.Item.objects.order_by("pk").first()
+    assert item is not None
+    from django.contrib.auth.models import Permission
+
+    user = get_user_model().objects.get(username="staff_1")
+    user.user_permissions.add(
+        Permission.objects.get(codename="change_item", content_type__app_label="products"),
+    )
+    user = get_user_model().objects.get(pk=user.pk)
+
+    mutation = (
+        "mutation($id: ID!, $d: ItemPartialInput!) { updateItem(id: $id, data: $d) { "
+        "node { name } errors { field messages } } }"
+    )
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        item.attachment.save(
+            "orig.txt",
+            SimpleUploadedFile("orig.txt", b"original", content_type="text/plain"),
+            save=True,
+        )
+        client = TestClient()
+        with client.login(user):
+            res = client.query(
+                mutation,
+                variables={"id": _global_id("products.item", item.pk), "d": {"attachment": None}},
+                files={
+                    "d.attachment": SimpleUploadedFile(
+                        "replacement.txt",
+                        b"replaced bytes",
+                        content_type="text/plain",
+                    ),
+                },
+            )
+        assert res.response.status_code == 200
+        payload = res.data["updateItem"]
+        assert payload["errors"] == []
+        item.refresh_from_db()
+        assert item.attachment.name.endswith("replacement.txt")
+        with item.attachment.open("rb") as handle:
+            assert handle.read() == b"replaced bytes"
+
+
+@pytest.mark.django_db(transaction=True)
 def test_delete_item_happy_path():
     """``deleteItem`` returns the pre-deletion snapshot (id + relation) and removes the row.
 
@@ -1060,9 +1152,10 @@ def test_create_item_relation_id_for_hidden_category_is_field_error():
     categories from non-staff), so `createItem(categoryId=<private cat gid>)` is a
     `FieldError` on `categoryId` - the relation id is resolved through the target's
     visibility `get_queryset`, never silently attached via the later `full_clean`
-    FK check (which uses Django's default manager). The SAME create succeeds against
-    the visible public category, isolating the visibility miss from the write perm
-    (which is held throughout).
+    FK check (which uses Django's default manager). A well-formed GlobalID whose
+    pk names no row is the same envelope (field + messages): existence must not
+    leak. The SAME create succeeds against the visible public category, isolating
+    the visibility miss from the write perm (which is held throughout).
     """
     create_users(1)
     chain = seed_cascade_split()
@@ -1085,9 +1178,28 @@ def test_create_item_relation_id_for_hidden_category_is_field_error():
     assert "errors" not in payload, payload
     result = payload["data"]["createItem"]
     assert result["node"] is None
-    assert [e["field"] for e in result["errors"]] == ["categoryId"]
+    hidden_errors = result["errors"]
+    assert [e["field"] for e in hidden_errors] == ["categoryId"]
     assert models.Item.objects.count() == before
     assert not models.Item.objects.filter(name="AttachHidden").exists()
+
+    missing_pk = (models.Category.objects.order_by("-pk").first().pk) + 10_000
+    missing = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": "AttachMissing",
+                "categoryId": _global_id("products.category", missing_pk),
+            },
+        },
+    )
+    missing_payload = missing.json()
+    assert "errors" not in missing_payload, missing_payload
+    missing_result = missing_payload["data"]["createItem"]
+    assert missing_result["node"] is None
+    assert missing_result["errors"] == hidden_errors
+    assert not models.Item.objects.filter(name="AttachMissing").exists()
 
     # Visible public category: the same caller's same create succeeds.
     response = _post_graphql(

@@ -2,7 +2,8 @@
 
 Construction, hostile extension matching, mutation-lock identity, rollback
 windows, and the enforcement-seal / WeakKeyDictionary / GC rows a request
-cannot express. Consumer-visible policy enforcement and masking live in
+cannot express. ``Schema.stream`` stays here: fakeshop has no ASGI/WS mount.
+Consumer-visible policy enforcement and masking live in
 ``examples/fakeshop/test_query/test_resource_policy_api.py`` and
 ``examples/fakeshop/test_query/test_error_policy_api.py``.
 """

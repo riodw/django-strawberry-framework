@@ -22,9 +22,9 @@ capture cannot uniquely show; thread / task ``ContextVar`` isolation; the
 async ``aapply`` off-loop contract; identity-hook default-manager
 composition (every products type declares a custom ``get_queryset``);
 mixed-actor cascade-then-gate composition (anonymous-narrowed queryset +
-staff ``apply_sync``) that one HTTP request cannot split; and
-``strictness="raise"`` silence on a throwaway schema (fakeshop arms
-``strictness="off"``).
+staff ``apply_sync``) that one HTTP request cannot split.
+``strictness="raise"`` cascade silence is live
+(``test_list_field_api.py::test_cascaded_item_list_stays_silent_under_strictness_raise``).
 
 Fixture mechanics
 =================
@@ -50,7 +50,6 @@ import os
 from types import SimpleNamespace
 
 import pytest
-import strawberry
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -62,7 +61,6 @@ from graphql import GraphQLError
 from strategy_schemas import make_django_type
 
 from django_strawberry_framework import (
-    DjangoOptimizerExtension,
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -2283,60 +2281,6 @@ async def test_aapply_gather_restores_task_contexts():
     assert "IN (SELECT" in str(first.query)
     assert "IN (SELECT" in str(second.query)
     assert _cascade_state.get() is None
-
-
-# =============================================================================
-# N+1 audit (permissions-owned pins; optimizer-plan pins live in
-# tests/optimizer/test_extension.py). Per spec-034 Decision 7. HTTP
-# zero-round-trip + Prefetch count is
-# ``test_products_api.py::test_cascade_query_count_fixed``.
-# =============================================================================
-
-
-@pytest.mark.django_db
-def test_strictness_raise_silent_across_cascaded_shape():
-    """The cascade composes SQL (never lazy-loads), so strictness ``"raise"`` stays silent.
-
-    A cascaded 2-deep ``Entry -> Item -> Category`` traversal under
-    ``DjangoOptimizerExtension(strictness="raise")`` plans fully (each cascading
-    target downgrades to a ``Prefetch`` baked with the request ``info``) and never
-    lazy-loads, so the N+1 sentinel never trips: ``result.errors is None``.
-    Fakeshop's composed schema arms the optimizer at default ``strictness="off"``,
-    so no shipped request can trip this sentinel; the planned Prefetch HTTP twin
-    is ``test_cascade_query_count_fixed``. The query is kept minimal so it can
-    only take the planned downgraded-Prefetch path it claims to test.
-    """
-
-    def _exclude_private(cls, qs, info):
-        return apply_cascade_permissions(cls, qs.filter(is_private=False), info)
-
-    _make_type("SrCategoryType", Category, get_queryset=_exclude_private, fields=("id", "name"))
-    _make_type(
-        "SrItemType",
-        Item,
-        get_queryset=_exclude_private,
-        fields=("id", "name", "category"),
-    )
-    item_type = registry.get(Item)
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[item_type]:  # type: ignore[valid-type]
-            return Item.objects.all()
-
-    finalize_django_types()
-
-    services.seed_public_category_with_item()
-
-    ext = DjangoOptimizerExtension(strictness="raise")
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    # A ``"raise"`` trip would surface a GraphQL error; the cascaded shape stays silent.
-    result = schema.execute_sync(
-        "{ allItems { name category { name } } }",
-        context_value=SimpleNamespace(user=None),
-    )
-    assert result.errors is None
 
 
 # =============================================================================

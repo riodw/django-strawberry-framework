@@ -1,11 +1,8 @@
 """Tests for the shared field-directives containment (``utils/directives.py``).
 
-Every field factory in the package routes its consumer-supplied ``directives=``
-through ``validated_field_directives`` before handing it to
-``strawberry.field()``. The rows here pin the containment itself; the per-factory
-tests (``tests/test_list_field.py``, ``tests/mutations/test_fields.py``,
-``tests/test_relay_node_field.py``, ``tests/auth/``) pin that each factory
-actually calls it and interpolates its own label.
+``validated_field_directives`` raises at field construction. Per-factory call
+sites stay in ``tests/test_list_field.py`` / ``tests/mutations/test_fields.py``;
+consumer fields over HTTP live in ``examples/fakeshop/test_query/test_list_field_api.py``.
 """
 
 import pytest

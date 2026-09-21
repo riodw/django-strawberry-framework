@@ -2,7 +2,9 @@
 
 This is the SYNC counterpart of ``test_list_field_async_api.py``. It covers the sync
 acceptance surface over live HTTP (``/graphql/`` for shipped schema fields and
-``/graphql-test/`` for test-local holder schemas).
+``/graphql-test/`` for test-local holder schemas). A holder list of shipped
+``ItemType`` under ``strictness="raise"`` pins that the cascade plans ``category``
+instead of lazy-loading it.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from apps.library import models as library_models
 from apps.library import schema as library_schema
 from apps.library.orders import BranchOrder
 from apps.products import schema as products_schema
+from apps.products.services import seed_data
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connection, models
@@ -3705,3 +3708,49 @@ def test_holder_manager_that_drifts_alias_is_rejected():
     )
     assert payload["data"] is None
     assert "preserve the manager's explicit routing" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_cascaded_item_list_stays_silent_under_strictness_raise():
+    """Shipped ``ItemType`` cascade under ``strictness="raise"`` plans ``category``.
+
+    Fakeshop's composed schema arms the optimizer at default ``strictness="off"``.
+    This holder keeps the same cascading types and a queryset-backed list field.
+    The captured statement count is the claim: the cascade plans the FK into the
+    root fetch, so each of the two tables is read exactly once no matter how many
+    rows come back. Strictness alone cannot carry it: a planned FK never
+    reaches the refusal, because of the short-circuit in
+    ``django_strawberry_framework/types/resolvers.py::_check_n1``.
+    """
+    seed_data(1)
+
+    @strawberry.type
+    class Query:
+        all_items: list[products_schema.ItemType] = DjangoListField(products_schema.ItemType)
+
+    optimizer = DjangoOptimizerExtension(strictness="raise")
+    schema = DjangoSchema(
+        query=Query,
+        extensions=[lambda: optimizer],
+        config=strawberry_config(),
+    )
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_sync(schema, "{ allItems { name category { name } } }")
+    assert payload.get("errors") is None, payload
+    rows = payload["data"]["allItems"]
+    assert rows
+    assert all(row["category"]["name"] for row in rows)
+    # The item read carries a ``products_category`` visibility subquery, so the
+    # category prefetch is told apart by the table it selects from, not by mention.
+    item_sql = [
+        e["sql"]
+        for e in captured.captured_queries
+        if e["sql"].startswith('SELECT "products_item"')
+    ]
+    category_sql = [
+        e["sql"]
+        for e in captured.captured_queries
+        if e["sql"].startswith('SELECT "products_category"')
+    ]
+    assert len(item_sql) == 1, captured.captured_queries
+    assert len(category_sql) == 1, captured.captured_queries

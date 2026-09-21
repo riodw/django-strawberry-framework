@@ -1,12 +1,9 @@
 """Tests for input permissions, relation-path gates, and Django/Channels request decoding.
 
-This module single-sites the active-input permission traversal that the filter
-and order families had grown as parallel copies; on an authorization surface a
-divergence between two copies is a real bug class. These tests pin the shared
-mechanics directly and the
-configuration points (the family label, the ``unset_sentinel``) that keep the
-two families distinct; the deep behavioral coverage (dedup, double-dispatch,
-logic recursion, list aggregation) lives in the family ``test_sets`` suites.
+Channels scope adapters and hostile ``info.context`` reads have no HTTP mount
+(fakeshop has no ASGI/WS). Filter/order permission dispatch on the wire lives in
+``examples/fakeshop/test_query/test_products_api.py`` and
+``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 from collections.abc import Mapping

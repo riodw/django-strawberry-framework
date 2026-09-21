@@ -1,4 +1,9 @@
-"""Typing utility tests for async-callable detection and Strawberry, Python, and GraphQL unwrapping."""
+"""Typing utility tests for async-callable detection and Strawberry, Python, and GraphQL unwrapping.
+
+Wrapper peeling and cyclic-of_type refusal have no selection-set spelling.
+Async field colour on the wire lives in
+``examples/fakeshop/test_query/test_list_field_async_api.py``.
+"""
 
 import functools
 import typing

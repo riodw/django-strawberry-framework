@@ -1,4 +1,10 @@
-"""Shared mutation-error constructors remain total over hostile metadata."""
+"""Shared mutation-error constructors remain total over hostile metadata.
+
+Hostile string subclasses, midway iterators, and lazy translation proxies never
+arrive on the wire; the constructors must still return a FieldError. Consumer
+envelopes (constraint ``codes``, ``__all__`` sentinel, relation ``not_found``)
+live in ``examples/fakeshop/test_query/test_products_api.py``.
+"""
 
 import ast
 from pathlib import Path

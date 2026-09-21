@@ -1,4 +1,9 @@
-"""String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening."""
+"""String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening.
+
+Case conversion is a pure function; GraphQL names it produces are asserted live
+via introspection in ``examples/fakeshop/test_query/test_schema_composition_api.py``
+and filter lookup camelCase in ``examples/fakeshop/test_query/test_library_api.py``.
+"""
 
 import pytest
 

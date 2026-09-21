@@ -1,4 +1,11 @@
-"""Acceptance tests for definition-order-independent DjangoType relation finalization."""
+"""Declaration-order traps and Relay id-annotation rules no GraphQL request observes.
+
+SDL of annotation-only scalar overrides and ``field: auto`` lives in
+``examples/fakeshop/test_query/test_scalars_api.py``
+(``test_override_specimen_consumer_field_overrides_resolve_over_http``). This
+module keeps declaration-order traps, collision guards, Relay id-annotation
+rules, and ``_build_annotations`` internals that no request observes.
+"""
 
 import importlib
 import sys
@@ -793,34 +800,6 @@ def test_annotation_only_scalar_override_does_not_emit_synthesized_annotation():
     assert "description" not in synthesized
 
 
-def test_annotation_only_scalar_override_survives_strawberry_finalization():
-    """End-to-end: the consumer annotation surfaces in the GraphQL schema as ``Int!``."""
-
-    class CategoryType(DjangoType):
-        description: int
-
-        class Meta:
-            model = Category
-            fields = ("id", "name", "description")
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def category(self) -> CategoryType:
-            return Category(id=1, name="x", description=42)
-
-    schema = strawberry.Schema(query=Query)
-    query = '{ __type(name: "CategoryType") { fields { name type { kind name ofType { kind name } } } } }'
-    result = schema.execute_sync(query)
-    assert result.errors is None, result.errors
-    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
-    description_type = fields["description"]
-    assert description_type["kind"] == "NON_NULL"
-    assert description_type["ofType"]["name"] == "Int"
-
-
 # ---------------------------------------------------------------------------
 # ``field: auto`` - declare-but-infer (the fifth corner of the override surface).
 # ---------------------------------------------------------------------------
@@ -878,34 +857,6 @@ def test_auto_annotation_emits_synthesized_annotation():
         interfaces=definition.interfaces,
     )
     assert synthesized["name"] is str
-
-
-def test_auto_annotation_survives_strawberry_finalization():
-    """End-to-end: ``name: auto`` surfaces in the schema as the inferred ``String!``."""
-
-    class CategoryType(DjangoType):
-        name: auto
-
-        class Meta:
-            model = Category
-            fields = ("id", "name", "description")
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def category(self) -> CategoryType:
-            return Category(id=1, name="x", description="y")
-
-    schema = strawberry.Schema(query=Query)
-    query = '{ __type(name: "CategoryType") { fields { name type { kind name ofType { kind name } } } } }'
-    result = schema.execute_sync(query)
-    assert result.errors is None, result.errors
-    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
-    name_type = fields["name"]
-    assert name_type["kind"] == "NON_NULL"
-    assert name_type["ofType"]["name"] == "String"
 
 
 def test_auto_annotation_on_relation_field_synthesizes_relation():

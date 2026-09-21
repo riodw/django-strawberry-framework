@@ -1,4 +1,10 @@
-"""Tests for the shared request-context read / write / delete dispatch."""
+"""Tests for the shared request-context read / write / delete dispatch.
+
+Stash/clear on slotted objects, frozen mappings, and hostile descriptors are
+not a response field. Optimizer and resource-policy stashes on the live request
+are in ``examples/fakeshop/test_query/test_library_api.py`` and
+``examples/fakeshop/test_query/test_resource_policy_api.py``.
+"""
 
 from types import MappingProxyType, SimpleNamespace
 

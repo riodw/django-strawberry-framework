@@ -1,25 +1,16 @@
 """Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
 
-This module single-sites the query-source contract the list field, connection
-field, optimizer middleware, Relay node defaults, and filter
-related-visibility derive had each spelled separately:
-``Manager`` -> ``QuerySet`` coercion, the is-queryset decision, and the sync /
-async ``DjangoType.get_queryset`` visibility routing. ``get_queryset`` is the
-visibility hook, so a divergence between those copies is a data-leak bug class;
-these tests pin the neutral mechanics directly. The deep behavioral coverage
-(through-schema list / connection / node / filter visibility) lives in the
-surface suites (``tests/test_list_field.py``, ``tests/test_connection.py``,
-``tests/test_relay_node_field.py``, ``tests/filters/test_sets.py``).
+Seal, Manager coercion, and hostile QuerySet internals have no wire shape: a
+request sees the filtered rows, not the sealed class identity. Consumer
+visibility and list/connection cost live in
+``examples/fakeshop/test_query/test_products_visibility_api.py``,
+``examples/fakeshop/test_query/test_library_api.py``, and
+``examples/fakeshop/test_query/test_list_field_api.py``. ``coerce_field_value_or_none``
+out-of-range ``__in`` drop is live in
+``examples/fakeshop/test_query/test_scalars_filter_api.py``.
 
 Visibility-boundary decision references below resolve to
 ``docs/SPECS/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions"``.
-
-``coerce_field_value_or_none`` is the sibling "raw
-literal -> Django field value, or nothing" primitive shared by the Relay id
-decode, the raw relation-pk decode, and the ``__in`` filter member decode; its
-own through-schema coverage lives in the same surface suites plus
-``examples/fakeshop/test_query/test_scalars_filter_api.py`` (the out-of-range
-``__in`` member drop).
 """
 
 import asyncio
@@ -32,11 +23,14 @@ from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item, Property
-from django.db import models, router
+from apps.products.services import seed_data
+from django.apps.registry import Apps
+from django.db import connection, models, router
 from django.db.models import FilteredRelation, Prefetch, Q
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce, Trunc
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -4688,12 +4682,16 @@ def test_prefetch_child_over_target_subclass_seals():
     assert defect is None, defect
 
 
+_proxy_target_apps = Apps([])
+
+
 class _ProxyTargetCategory(Category):
     """Proxy of ``Category``, used as a relation TARGET (it reads Category's table)."""
 
     class Meta:
         proxy = True
         app_label = "products"
+        apps = _proxy_target_apps
 
 
 class _ProxyTargetHolder(models.Model):
@@ -4716,6 +4714,38 @@ class _ProxyTargetHolder(models.Model):
     class Meta:
         app_label = "products"
         managed = False
+        apps = _proxy_target_apps
+
+
+def test_proxy_target_fixtures_leave_category_relations_unchanged():
+    from django.apps import apps
+
+    assert _ProxyTargetHolder not in apps.get_models()
+    assert _ProxyTargetCategory not in apps.get_models()
+    assert all(
+        field.related_model is not _ProxyTargetHolder
+        for field in Category._meta.get_fields(include_hidden=True)
+    )
+    assert not hasattr(Category, "proxy_target_holders")
+    assert _ProxyTargetHolder._meta.get_field("cat").related_model is _ProxyTargetCategory
+    assert _ProxyTargetCategory._meta.concrete_model is Category
+
+
+@pytest.mark.django_db
+def test_proxy_target_fixtures_allow_category_deletion():
+    seed_data(1)
+    category = Category.objects.first()
+    assert category is not None
+    pk = category.pk
+    with CaptureQueriesContext(connection) as captured:
+        category.delete()
+    assert not Category.objects.filter(pk=pk).exists()
+    assert not any(
+        field.related_model is _ProxyTargetHolder
+        for field in Category._meta.get_fields(include_hidden=True)
+    )
+    holder_table = _ProxyTargetHolder._meta.db_table
+    assert not any(holder_table in query["sql"] for query in captured.captured_queries)
 
 
 def test_prefetch_child_over_unrelated_table_still_fails_for_proxy_target():

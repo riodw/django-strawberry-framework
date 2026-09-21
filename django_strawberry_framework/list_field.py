@@ -74,7 +74,6 @@ from .exceptions import (
     DjangoStrawberryFrameworkError,
     _safe_arg_repr,
     _safe_class_name,
-    _safe_type_name,
     describe_value,
 )
 from .registry import registry
@@ -93,10 +92,8 @@ from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
     _LIST_ARGUMENT_VISIBILITY_POLICY,
-    SyncMisuseError,
-    _dispose_sync_awaitable,
-    _snapshot_routing_intent,
-    _validate_post_orderset_result,
+    apply_orderset_async,
+    apply_orderset_sync,
     apply_type_visibility_async,
     apply_type_visibility_sync,
     base_queryset,
@@ -462,7 +459,9 @@ def _normalize_list_arguments(
         within the effective ceiling), order_by structure and semantics are delegated to
         the target DjangoType's OrderSet (or to Strawberry's schema-level input validation
         when executed over GraphQL). Direct callers supplying non-null order_by to a target
-        without an OrderSet are caught by _require_orderset_class at pipeline execution time.
+        without an OrderSet are caught by
+        ``django_strawberry_framework/utils/querysets.py::require_orderset_class``
+        at pipeline execution time.
     """
     offset_supplied = offset is not None and offset is not strawberry.UNSET
     limit_supplied = limit is not None and limit is not strawberry.UNSET
@@ -1339,84 +1338,6 @@ async def _handle_non_queryset_rejections_async(
         raise err
 
 
-def _require_orderset_class(target_type: type, orderset_class: type | None) -> type:
-    """Return the field's captured ``OrderSet``, or reject an ordering call without one.
-
-    Reachable only through a direct call that supplies ``order_by`` to a field
-    whose target declares no ``Meta.orderset_class``; over the wire the argument
-    is simply not published.
-    """
-    if orderset_class is None:
-        raise ConfigurationError(
-            f"DjangoListField target {_safe_class_name(target_type)} has no orderset_class configured.",
-        )
-    return orderset_class
-
-
-def _apply_orderset_sync(
-    target_type: type,
-    orderset_class: type | None,
-    queryset: models.QuerySet,
-    order_by: Any,
-    info: Info,
-    *,
-    model: type[models.Model],
-) -> models.QuerySet:
-    orderset_class = _require_orderset_class(target_type, orderset_class)
-    method_name = f"{orderset_class.__name__}.apply_sync"
-    # Frozen BEFORE the override receives the queryset: it can mutate the
-    # object it was handed, so a post-call read is not a baseline.
-    expected_routing = _snapshot_routing_intent(queryset, method_name)
-    candidate = orderset_class.apply_sync(order_by, queryset, info)
-    if inspect.isawaitable(candidate):
-        _dispose_sync_awaitable(candidate)
-        raise SyncMisuseError(
-            f"{method_name} returned an awaitable in a sync resolver context. "
-            f"Make apply_sync synchronous or execute the query asynchronously.",
-        )
-    return _validate_post_orderset_result(
-        target_type,
-        expected_routing,
-        candidate,
-        method_name,
-        model=model,
-    )
-
-
-async def _apply_orderset_async(
-    target_type: type,
-    orderset_class: type | None,
-    queryset: models.QuerySet,
-    order_by: Any,
-    info: Info,
-    *,
-    model: type[models.Model],
-) -> models.QuerySet:
-    orderset_class = _require_orderset_class(target_type, orderset_class)
-    method_name = f"{orderset_class.__name__}.apply_async"
-    expected_routing = _snapshot_routing_intent(queryset, method_name)
-    candidate_awaitable = orderset_class.apply_async(order_by, queryset, info)
-    if not inspect.isawaitable(candidate_awaitable):
-        raise ConfigurationError(
-            f"{method_name} returned a non-awaitable value "
-            f"({_safe_type_name(candidate_awaitable)}); expected an awaitable coroutine or Future.",
-        )
-    candidate = await candidate_awaitable
-    if inspect.isawaitable(candidate):
-        _dispose_sync_awaitable(candidate)
-        raise ConfigurationError(
-            f"{method_name} returned a residual awaitable value "
-            f"({_safe_type_name(candidate)}); expected a QuerySet.",
-        )
-    return _validate_post_orderset_result(
-        target_type,
-        expected_routing,
-        candidate,
-        method_name,
-        model=model,
-    )
-
-
 def _check_nonzero_offset_guard(
     queryset: models.QuerySet,
     args_record: _ListArguments,
@@ -1481,8 +1402,9 @@ def _order_normalization_scope(
     ``orderset_class`` is the field's captured sidecar, so the no-``OrderSet``
     condition is decidable here rather than asserted: over the wire that target
     publishes no ``orderBy`` at all, and the direct call that supplies one
-    reaches ``_require_orderset_class``'s rejection without having opened a
-    scope first.
+    reaches the rejection in
+    ``django_strawberry_framework/utils/querysets.py::require_orderset_class``
+    without having opened a scope first.
     """
     if (
         args_record.order_by_supplied
@@ -1527,7 +1449,7 @@ def _execute_queryset_pipeline_sync(
     # handoff can happen.
     with _order_normalization_scope(args_record, orderset_class):
         if args_record.order_by_supplied:
-            post_order_qs = _apply_orderset_sync(
+            post_order_qs = apply_orderset_sync(
                 target_type,
                 orderset_class,
                 post_vis_qs,
@@ -1580,7 +1502,7 @@ async def _execute_queryset_pipeline_async(
     # handoff can happen.
     with _order_normalization_scope(args_record, orderset_class):
         if args_record.order_by_supplied:
-            post_order_qs = await _apply_orderset_async(
+            post_order_qs = await apply_orderset_async(
                 target_type,
                 orderset_class,
                 post_vis_qs,

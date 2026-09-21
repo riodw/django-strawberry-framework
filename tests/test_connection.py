@@ -1755,6 +1755,211 @@ async def test_connection_async_pipeline_applies_filter_and_order():
     assert result.data["items"]["edges"] == []
 
 
+# --- Post-OrderSet seal on the connection field -------------------------------
+
+_CATEGORY_ORDER_SHAPE_PREFIX = (
+    "_CategoryOrder.apply_sync must return an unevaluated, unsliced, uncombined "
+    "QuerySet of Category rows; got "
+)
+
+
+async def _awaitable_queryset(queryset):
+    return queryset
+
+
+def _order_override_evaluated(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    list(queryset)
+    return queryset
+
+
+def _order_override_in_place_routing(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    queryset._hints = {"tenant": 2}
+    return Category.objects.using("default")
+
+
+def _order_override_passthrough(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    return super(_CategoryOrder, cls).apply_sync(order_input, queryset, info)
+
+
+#: One row per defect class the post-``OrderSet`` seal names at the CONNECTION
+#: field: ``(id, override, expected message start)``. The connection takes the
+#: Relay window on whatever ordering returned, so an unsealed result is a wrong
+#: page or a foreign row rather than a loud error - each row proves the seal
+#: rejects instead.
+_CONNECTION_MALFORMED_ORDER_ROWS = (
+    ("evaluated", _order_override_evaluated, _CATEGORY_ORDER_SHAPE_PREFIX + "evaluated defect"),
+    (
+        "materialized-list",
+        lambda cls, order_input, queryset, info: list(queryset),
+        _CATEGORY_ORDER_SHAPE_PREFIX + "type defect",
+    ),
+    (
+        "none",
+        lambda cls, order_input, queryset, info: None,
+        _CATEGORY_ORDER_SHAPE_PREFIX + "type defect",
+    ),
+    (
+        "projection",
+        lambda cls, order_input, queryset, info: queryset.values("name"),
+        _CATEGORY_ORDER_SHAPE_PREFIX + "projection defect",
+    ),
+    (
+        "wrong-model",
+        lambda cls, order_input, queryset, info: Item.objects.all(),
+        _CATEGORY_ORDER_SHAPE_PREFIX + "table defect",
+    ),
+    (
+        "sliced",
+        lambda cls, order_input, queryset, info: queryset.order_by("name")[:1],
+        _CATEGORY_ORDER_SHAPE_PREFIX + "sliced defect",
+    ),
+    (
+        "combined",
+        lambda cls, order_input, queryset, info: queryset.filter(name="a").union(
+            queryset.filter(name="b"),
+        ),
+        _CATEGORY_ORDER_SHAPE_PREFIX + "combined defect",
+    ),
+    (
+        "awaitable-in-sync",
+        lambda cls, order_input, queryset, info: _awaitable_queryset(queryset),
+        "_CategoryOrder.apply_sync returned an awaitable in a sync resolver context.",
+    ),
+    (
+        "routing-rewritten-in-place",
+        _order_override_in_place_routing,
+        "_CategoryOrder.apply_sync changed database routing intent",
+    ),
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("override", "message_start"),
+    [row[1:] for row in _CONNECTION_MALFORMED_ORDER_ROWS],
+    ids=[row[0] for row in _CONNECTION_MALFORMED_ORDER_ROWS],
+)
+def test_connection_seals_a_malformed_apply_sync_result(monkeypatch, override, message_start):
+    """Each malformed ``apply_sync`` result is rejected by name at the connection field.
+
+    The connection runs the SAME post-``OrderSet`` seal the list field runs, so
+    every defect class the seal can name has to arrive here too; without it the
+    Relay window is taken on whatever came back.
+    """
+    services.seed_data(2)
+    monkeypatch.setattr(_CategoryOrder, "apply_sync", classmethod(override))
+
+    schema = _field_schema(_make_sidecar_node_type("SealedOrderNode"))
+    result = schema.execute_sync(
+        "{ items(orderBy: [{name: ASC}]) { edges { node { name } } } }",
+        context_value=HttpRequest(),
+    )
+
+    assert result.errors is not None
+    assert result.data is None
+    message = str(result.errors[0].message)
+    assert message.startswith(message_start), message
+
+
+@pytest.mark.django_db
+def test_connection_healthy_apply_sync_override_still_orders(monkeypatch):
+    """A ``super()`` pass-through override is ACCEPTED and yields the ordered page.
+
+    The seal's positive control: it rejects malformed results without rejecting
+    a consumer ``OrderSet`` that simply delegates.
+    """
+    services.seed_data(3)
+    monkeypatch.setattr(_CategoryOrder, "apply_sync", classmethod(_order_override_passthrough))
+
+    schema = _field_schema(_make_sidecar_node_type("HealthyOrderNode"))
+    result = schema.execute_sync(
+        "{ items(orderBy: [{name: ASC}]) { edges { node { name } } } }",
+        context_value=HttpRequest(),
+    )
+
+    assert result.errors is None, result.errors
+    names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
+    assert names == sorted(names)
+    assert len(names) == Category.objects.count()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_connection_async_seal_rejects_a_non_awaitable_apply_async(monkeypatch):
+    """``apply_async`` returning a plain value is rejected on the connection's async path."""
+    monkeypatch.setattr(
+        _CategoryOrder,
+        "apply_async",
+        classmethod(lambda cls, order_input, queryset, info: queryset),
+    )
+
+    async def resolver(root, info):
+        return Category.objects.all()
+
+    schema = _field_schema(_make_sidecar_node_type("AsyncSealNonAwaitableNode"), resolver=resolver)
+    request = HttpRequest()
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    result = asyncio.run(
+        schema.execute(
+            "{ items(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+            context_value=SimpleNamespace(request=request),
+        ),
+    )
+
+    assert result.errors is not None
+    assert str(result.errors[0].message).startswith(
+        "_CategoryOrder.apply_async returned a non-awaitable value",
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_connection_async_seal_rejects_a_sliced_apply_async_result(monkeypatch):
+    """A sliced ``apply_async`` result is rejected with the shared shape wording."""
+
+    async def _sliced(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        return queryset.order_by("name")[:1]
+
+    monkeypatch.setattr(_CategoryOrder, "apply_async", classmethod(_sliced))
+
+    async def resolver(root, info):
+        return Category.objects.all()
+
+    schema = _field_schema(_make_sidecar_node_type("AsyncSealSlicedNode"), resolver=resolver)
+    request = HttpRequest()
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    result = asyncio.run(
+        schema.execute(
+            "{ items(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+            context_value=SimpleNamespace(request=request),
+        ),
+    )
+
+    assert result.errors is not None
+    assert str(result.errors[0].message).startswith(
+        "_CategoryOrder.apply_async must return an unevaluated, unsliced, uncombined "
+        "QuerySet of Category rows; got sliced defect",
+    )
+
+
 def test_clear_connection_type_cache_empties_the_cache():
     """``clear_connection_type_cache`` drops the generated-connection-class cache."""
     node_type = _make_node_type("P3bDirectNode", total_count=True)

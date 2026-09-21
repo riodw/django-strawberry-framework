@@ -3041,6 +3041,102 @@ def _validate_post_orderset_result(
     return sealed
 
 
+def require_orderset_class(target_type: type, orderset_class: type | None) -> type:
+    """Return the field's captured ``OrderSet``, or reject an ordering call without one.
+
+    Reachable only through a direct call that supplies ``order_by`` to a field
+    whose target declares no ``Meta.orderset_class``; over the wire the argument
+    is simply not published.
+    """
+    if orderset_class is None:
+        raise ConfigurationError(
+            f"Field target {_safe_class_name(target_type)} has no orderset_class configured.",
+        )
+    return orderset_class
+
+
+def apply_orderset_sync(
+    target_type: type,
+    orderset_class: type | None,
+    queryset: models.QuerySet,
+    order_by: Any,
+    info: Any,
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    """Call ``OrderSet.apply_sync`` and re-seal what it returned.
+
+    The ONE post-OrderSet seal both the list field and the Relay connection
+    field run: routing intent is frozen before the consumer override receives
+    the queryset, and the value it hands back is validated against
+    ``_ORDERSET_RESULT_POLICY`` (lazy, model rows of the captured model,
+    unsliced, uncombined, same routing) before any later step sees it. Every
+    step after ordering can only NARROW the sealed queryset (spec-030
+    Decision 7), so an override that widens, re-routes, re-tables or
+    pre-evaluates its result is rejected here rather than silently serving
+    foreign rows or a wrong page.
+    """
+    orderset_class = require_orderset_class(target_type, orderset_class)
+    method_name = f"{orderset_class.__name__}.apply_sync"
+    # Frozen BEFORE the override receives the queryset: it can mutate the
+    # object it was handed, so a post-call read is not a baseline.
+    expected_routing = _snapshot_routing_intent(queryset, method_name)
+    candidate = orderset_class.apply_sync(order_by, queryset, info)
+    if inspect.isawaitable(candidate):
+        _dispose_sync_awaitable(candidate)
+        raise SyncMisuseError(
+            f"{method_name} returned an awaitable in a sync resolver context. "
+            f"Make apply_sync synchronous or execute the query asynchronously.",
+        )
+    return _validate_post_orderset_result(
+        target_type,
+        expected_routing,
+        candidate,
+        method_name,
+        model=model,
+    )
+
+
+async def apply_orderset_async(
+    target_type: type,
+    orderset_class: type | None,
+    queryset: models.QuerySet,
+    order_by: Any,
+    info: Any,
+    *,
+    model: type[models.Model],
+) -> models.QuerySet:
+    """Async sibling of :func:`apply_orderset_sync`, running the same one seal.
+
+    The awaited result carries the same ``_ORDERSET_RESULT_POLICY`` contract;
+    the extra arms reject a public method that never returned an awaitable at
+    all, and one that awaited to a second awaitable.
+    """
+    orderset_class = require_orderset_class(target_type, orderset_class)
+    method_name = f"{orderset_class.__name__}.apply_async"
+    expected_routing = _snapshot_routing_intent(queryset, method_name)
+    candidate_awaitable = orderset_class.apply_async(order_by, queryset, info)
+    if not inspect.isawaitable(candidate_awaitable):
+        raise ConfigurationError(
+            f"{method_name} returned a non-awaitable value "
+            f"({_safe_type_name(candidate_awaitable)}); expected an awaitable coroutine or Future.",
+        )
+    candidate = await candidate_awaitable
+    if inspect.isawaitable(candidate):
+        _dispose_sync_awaitable(candidate)
+        raise ConfigurationError(
+            f"{method_name} returned a residual awaitable value "
+            f"({_safe_type_name(candidate)}); expected a QuerySet.",
+        )
+    return _validate_post_orderset_result(
+        target_type,
+        expected_routing,
+        candidate,
+        method_name,
+        model=model,
+    )
+
+
 def _seal_or_defect(
     candidate: Any,
     model: type[models.Model],

@@ -90,7 +90,6 @@ from django_strawberry_framework.list_field import (
     _model_from_definition,
     _normalize_list_arguments,
     _orderset_class_from_definition,
-    _require_orderset_class,
     _resolve_argument_wire_name,
     _resolver_root_and_info,
     _synthesized_list_signature,
@@ -102,6 +101,7 @@ from django_strawberry_framework.resource_policy import (
     stash_resource_policy,
 )
 from django_strawberry_framework.types.relay import SyncMisuseError
+from django_strawberry_framework.utils.querysets import require_orderset_class
 
 
 @pytest.fixture(autouse=True)
@@ -784,7 +784,7 @@ def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(s
     The no-``OrderSet`` row is the one the predicate can only decide because the
     field's captured sidecar is passed in: over the wire that target publishes
     no ``orderBy`` at all, but a direct call can supply one, and it must reach
-    ``_require_orderset_class``'s rejection without a scope having been opened
+    ``require_orderset_class``'s rejection without a scope having been opened
     for a handoff that can never happen.
     """
     from django_strawberry_framework.list_field import _order_normalization_scope
@@ -2067,9 +2067,9 @@ def test_require_orderset_class_rejects_a_target_without_one():
     assert _orderset_class_from_definition(Orderless.__django_strawberry_definition__) is None
     with pytest.raises(
         ConfigurationError,
-        match=r"DjangoListField target Orderless has no orderset_class configured\.",
+        match=r"Field target Orderless has no orderset_class configured\.",
     ):
-        _require_orderset_class(Orderless, None)
+        require_orderset_class(Orderless, None)
 
 
 @pytest.mark.django_db

@@ -114,6 +114,8 @@ from .utils.connections import (
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
+    apply_orderset_async,
+    apply_orderset_sync,
     apply_type_visibility_async,
     apply_type_visibility_sync,
     base_queryset,
@@ -1769,7 +1771,7 @@ def _prepare_pipeline_source(
 
 
 def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> tuple[tuple, ...]:
-    """Return the ``(set_class, input)`` sidecar steps this call actually applies.
+    """Return the ``(kind, set_class, input)`` sidecar steps this call actually applies.
 
     The gate is one rule - supplied AND declared - and the ORDER is contractual
     (filter narrows, then orderBy sorts). Both were spelled out twice, once per
@@ -1777,12 +1779,19 @@ def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> t
     between the halves. The colored ``apply_sync`` / ``apply_async`` dispatch
     deliberately stays at each caller: the ``await`` is written where it
     happens, never hidden behind a maybe-await.
+
+    ``kind`` is ``"filter"`` or ``"order"``, because the two arms do not run the
+    same boundary: an ``OrderSet`` return is re-sealed through
+    ``django_strawberry_framework/utils/querysets.py::apply_orderset_sync``
+    exactly as the list field seals it, while a ``FilterSet`` return is passed
+    through unsealed: no seal for that return exists yet at either field, and
+    this arm does not invent one.
     """
     steps = []
     if is_supplied(filter_input) and definition.filterset_class is not None:
-        steps.append((definition.filterset_class, filter_input))
+        steps.append(("filter", definition.filterset_class, filter_input))
     if is_supplied(order_by_input) and definition.orderset_class is not None:
-        steps.append((definition.orderset_class, order_by_input))
+        steps.append(("order", definition.orderset_class, order_by_input))
     return tuple(steps)
 
 
@@ -1813,6 +1822,15 @@ def _pipeline_sync(
     ones the SDL published are derived from the same object, so a stateful
     target metaclass cannot answer a request-time read differently and silently
     drop a supplied ``filter:`` / ``orderBy:``.
+
+    The ``orderBy`` step runs the SAME post-OrderSet seal the list field runs
+    (``django_strawberry_framework/utils/querysets.py::apply_orderset_sync``):
+    routing intent is frozen before the override is handed the queryset, and the
+    value it returns must still be a lazy, unsliced, uncombined queryset of the
+    captured model's rows on the captured connection, because every later step
+    here (default ordering, optimizer, the Relay window) can only NARROW it. The
+    ``filter`` step's return is NOT sealed: neither field seals a ``FilterSet``
+    return yet, and this pipeline matches the list field on that too.
     """
     source, is_queryset = _prepare_pipeline_source(
         source,
@@ -1824,8 +1842,18 @@ def _pipeline_sync(
     if not is_queryset:
         return source
     qs = apply_type_visibility_sync(target_type, source, info, model=definition.model)
-    for set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
-        qs = set_class.apply_sync(value, qs, info)
+    for kind, set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
+        if kind == "order":
+            qs = apply_orderset_sync(
+                target_type,
+                set_class,
+                qs,
+                value,
+                info,
+                model=definition.model,
+            )
+        else:
+            qs = set_class.apply_sync(value, qs, info)
     return _finalize_queryset(target_type, qs, info, definition=definition)
 
 
@@ -1849,7 +1877,10 @@ async def _pipeline_async(
     before ``_prepare_pipeline_source`` can treat it as a plain iterable.
 
     ``definition`` is the factory's one construction-time read, exactly as the
-    sync sibling takes it.
+    sync sibling takes it. The ``orderBy`` step runs the same post-OrderSet seal
+    the list field runs
+    (``django_strawberry_framework/utils/querysets.py::apply_orderset_async``);
+    the ``filter`` step's return stays unsealed, as at the list field.
     """
     source, is_queryset = _prepare_pipeline_source(
         source,
@@ -1861,8 +1892,18 @@ async def _pipeline_async(
     if not is_queryset:
         return source
     qs = await apply_type_visibility_async(target_type, source, info, model=definition.model)
-    for set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
-        qs = await set_class.apply_async(value, qs, info)
+    for kind, set_class, value in _sidecar_steps(definition, filter_input, order_by_input):
+        if kind == "order":
+            qs = await apply_orderset_async(
+                target_type,
+                set_class,
+                qs,
+                value,
+                info,
+                model=definition.model,
+            )
+        else:
+            qs = await set_class.apply_async(value, qs, info)
     return _finalize_queryset(target_type, qs, info, definition=definition)
 
 

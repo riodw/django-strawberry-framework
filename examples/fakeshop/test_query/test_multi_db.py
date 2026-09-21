@@ -29,7 +29,10 @@ the attestation rests on: the override mutates state INSIDE a hint object it pre
 by identity, so nothing the seal compares changed, yet a router reading into that
 object would now answer ``default``. The effective alias is frozen before the override
 runs and the result is pinned to it, so the completed read returns the ``shard_b`` row
-and ``default`` sees no ``library_branch`` SQL at all.
+and ``default`` sees no ``library_branch`` SQL at all. A sixth row runs the alias-change
+case through a ``DjangoConnectionField`` instead, because the connection field runs the
+SAME post-``OrderSet`` seal and would otherwise take its Relay window on the substituted
+shard's rows.
 
 Critical contract pins (do not violate without an explicit spec revision):
 
@@ -87,6 +90,8 @@ from strawberry.django.views import GraphQLView
 from strawberry.types import Info
 
 from django_strawberry_framework import (
+    DjangoConnection,
+    DjangoConnectionField,
     DjangoListField,
     DjangoMutation,
     DjangoMutationField,
@@ -179,6 +184,81 @@ def test_post_orderset_routing_mismatch_rejected_on_sharded_db(
     query {
       branchesShardB(orderBy: [{ city: ASC }]) {
         name
+      }
+    }
+    """
+    client = Client()
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DEBUG=True,
+        MIDDLEWARE=[entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
+    ):
+        clear_url_caches()
+        try:
+            payload = graphql_payload(query, client=client)
+        finally:
+            clear_url_caches()
+
+    assert payload["data"] is None
+    assert "errors" in payload
+    err_msg = payload["errors"][0]["message"]
+    assert "apply_sync changed database routing intent" in err_msg
+    assert "expected db='shard_b'" in err_msg
+    assert "got db='default'" in err_msg
+
+
+@pytest.fixture
+def _build_connection_routing_mismatch_schema(
+    _reload_project_schema_for_acceptance_tests,
+    monkeypatch,
+):
+    """Build a schema with a Genre CONNECTION whose OrderSet re-routes shard_b to default."""
+    from apps.library.orders_genre import GenreOrder
+    from apps.library.schema import GenreType
+
+    def _malicious_apply_sync(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        # Receives the shard_b queryset, maliciously returns a default one.
+        return models.Genre.objects.using("default").order_by("name")
+
+    monkeypatch.setattr(GenreOrder, "apply_sync", classmethod(_malicious_apply_sync))
+
+    @strawberry.type
+    class _ConnectionRoutingQuery:
+        genres_shard_b: DjangoConnection[GenreType] = DjangoConnectionField(
+            GenreType,
+            resolver=lambda root, info: models.Genre.objects.using("shard_b"),
+        )
+
+    _current["schema"] = DjangoSchema(
+        query=_ConnectionRoutingQuery,
+        config=strawberry_config(),
+    )
+    yield
+    _current["schema"] = None
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_post_orderset_routing_mismatch_rejected_on_connection_field(
+    _build_connection_routing_mismatch_schema,
+):
+    """The connection field runs the same post-OrderSet routing seal the list field runs.
+
+    Without it the Relay window would be taken on the ``default`` rows the
+    override substituted, serving another shard's data under a ``shard_b``
+    field.
+    """
+    models.Genre.objects.using("shard_b").create(name="Genre-ShardB")
+    models.Genre.objects.using("default").create(name="Genre-Default")
+
+    query = """
+    query {
+      genresShardB(orderBy: [{ name: ASC }]) {
+        edges { node { name } }
       }
     }
     """

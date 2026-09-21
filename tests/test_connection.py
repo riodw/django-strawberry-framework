@@ -1763,6 +1763,16 @@ _CATEGORY_ORDER_SHAPE_PREFIX = (
 )
 
 
+class _DeferredFilterQuerySet(models.QuerySet):
+    """A project queryset class, used here to carry a deferred filter Django never writes.
+
+    A PENDING predicate is ordinary: Django's related-manager machinery leaves
+    one on every relation queryset whatever class built it, and the seal bakes
+    it. What cannot be faithfully rebuilt is a deferred-filter STATE outside the
+    exact shape Django writes, which is what this class is planted with.
+    """
+
+
 async def _awaitable_queryset(queryset):
     return queryset
 
@@ -1777,6 +1787,19 @@ def _order_override_evaluated(
     return queryset
 
 
+def _order_override_untrusted(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    candidate = _DeferredFilterQuerySet(model=Category)
+    # ``negate`` decides whether the predicate is inverted and is truth-tested to
+    # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
+    candidate._deferred_filter = (1, (), {"name": "A"})
+    return candidate
+
+
 def _order_override_in_place_routing(
     cls,
     order_input,
@@ -1784,7 +1807,7 @@ def _order_override_in_place_routing(
     info,
 ):
     queryset._hints = {"tenant": 2}
-    return Category.objects.using("default")
+    return queryset
 
 
 def _order_override_passthrough(
@@ -1796,37 +1819,48 @@ def _order_override_passthrough(
     return super(_CategoryOrder, cls).apply_sync(order_input, queryset, info)
 
 
-#: One row per defect class the post-``OrderSet`` seal names at the CONNECTION
-#: field: ``(id, override, expected message start)``. The connection takes the
-#: Relay window on whatever ordering returned, so an unsealed result is a wrong
-#: page or a foreign row rather than a loud error - each row proves the seal
-#: rejects instead.
+#: One row per defect shape the post-``OrderSet`` seal names at the CONNECTION
+#: field; ``materialized-list`` and ``none`` share the ``type`` branch.
+#: ``(id, override, expected message start, required substrings)``. The
+#: connection takes the Relay window on whatever ordering returned, so an
+#: unsealed result is a wrong page or a foreign row rather than a loud error -
+#: each row proves the seal rejects instead.
 _CONNECTION_MALFORMED_ORDER_ROWS = (
-    ("evaluated", _order_override_evaluated, _CATEGORY_ORDER_SHAPE_PREFIX + "evaluated defect"),
+    (
+        "evaluated",
+        _order_override_evaluated,
+        _CATEGORY_ORDER_SHAPE_PREFIX + "evaluated defect",
+        (),
+    ),
     (
         "materialized-list",
         lambda cls, order_input, queryset, info: list(queryset),
         _CATEGORY_ORDER_SHAPE_PREFIX + "type defect",
+        (),
     ),
     (
         "none",
         lambda cls, order_input, queryset, info: None,
         _CATEGORY_ORDER_SHAPE_PREFIX + "type defect",
+        (),
     ),
     (
         "projection",
         lambda cls, order_input, queryset, info: queryset.values("name"),
         _CATEGORY_ORDER_SHAPE_PREFIX + "projection defect",
+        (),
     ),
     (
         "wrong-model",
         lambda cls, order_input, queryset, info: Item.objects.all(),
         _CATEGORY_ORDER_SHAPE_PREFIX + "table defect",
+        (),
     ),
     (
         "sliced",
         lambda cls, order_input, queryset, info: queryset.order_by("name")[:1],
         _CATEGORY_ORDER_SHAPE_PREFIX + "sliced defect",
+        (),
     ),
     (
         "combined",
@@ -1834,31 +1868,45 @@ _CONNECTION_MALFORMED_ORDER_ROWS = (
             queryset.filter(name="b"),
         ),
         _CATEGORY_ORDER_SHAPE_PREFIX + "combined defect",
+        (),
     ),
     (
         "awaitable-in-sync",
         lambda cls, order_input, queryset, info: _awaitable_queryset(queryset),
         "_CategoryOrder.apply_sync returned an awaitable in a sync resolver context.",
+        (),
     ),
     (
         "routing-rewritten-in-place",
         _order_override_in_place_routing,
         "_CategoryOrder.apply_sync changed database routing intent",
+        ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
+    ),
+    (
+        "malformed-deferred-filter",
+        _order_override_untrusted,
+        _CATEGORY_ORDER_SHAPE_PREFIX + "untrusted defect",
+        ("deferred filter negate is a int",),
     ),
 )
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    ("override", "message_start"),
+    ("override", "message_start", "substrings"),
     [row[1:] for row in _CONNECTION_MALFORMED_ORDER_ROWS],
     ids=[row[0] for row in _CONNECTION_MALFORMED_ORDER_ROWS],
 )
-def test_connection_seals_a_malformed_apply_sync_result(monkeypatch, override, message_start):
+def test_connection_seals_a_malformed_apply_sync_result(
+    monkeypatch,
+    override,
+    message_start,
+    substrings,
+):
     """Each malformed ``apply_sync`` result is rejected by name at the connection field.
 
     The connection runs the SAME post-``OrderSet`` seal the list field runs, so
-    every defect class the seal can name has to arrive here too; without it the
+    every defect shape the seal can name has to arrive here too; without it the
     Relay window is taken on whatever came back.
     """
     services.seed_data(2)
@@ -1874,6 +1922,8 @@ def test_connection_seals_a_malformed_apply_sync_result(monkeypatch, override, m
     assert result.data is None
     message = str(result.errors[0].message)
     assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
 
 
 @pytest.mark.django_db

@@ -608,8 +608,9 @@ none is a Definition-of-done row of this card.
   no sidecar input keeps `_DEFAULT_SEAL_POLICY`.
 - **An exact `QuerySet` carrying a foreign `_result_cache` escapes the raw-list ceiling** - only
   in-process application Python can write that slot, so the wire-input condition fails; a
-  robustness row. Owner: `maintainer`, `BACKLOG.md` (`bld-050-close-row_carry.md`, final
-  verification).
+  robustness row. Owner: `maintainer`, recorded in this catalog only: `BACKLOG.md` holds
+  scored strategic-differentiation cards, not robustness rows (`bld-050-close-row_carry.md`,
+  final verification).
 - **Retired "unresolved deferred filter" vocabulary** was identified by the historical review at
   the first-party visibility messages and module boundary. The live sites now name the refused
   condition as **malformed deferred-filter state**; the archived
@@ -618,8 +619,8 @@ none is a Definition-of-done row of this card.
   admits Django's well-formed pending predicate and refuses only malformed state.
 - **Archived `docs/SPECS/spec-047-resource_policy-0_0_14.md`** states the raw-list slice as a SQL
   `LIMIT` without the evaluated-source case; a dated `0.0.14` record. Owner: `maintainer`.
-- **`_UNRECOMPOSED_CHILD_POLICY` has zero production readers** - an existence question for the
-  next DRY cycle. Owner: `maintainer`.
+- **`_UNRECOMPOSED_CHILD_POLICY` had zero production readers - discharged** - `4d9f1c3d`
+  retired it, and no reference remains under `django_strawberry_framework/`.
 
 <!-- LINK DEFINITIONS -->
 

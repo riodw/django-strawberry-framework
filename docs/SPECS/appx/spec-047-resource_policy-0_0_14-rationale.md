@@ -284,6 +284,12 @@ the old sentence can see that it was retired deliberately rather than lost.
   export advertises to every importer. Nothing may describe the exported seam as taking a
   skip or a window; the ceiling those coordinates are checked against is unchanged, and the
   checking belongs to `list_field.py::_normalize_list_arguments`.
+- **[Decision 6][spec-047-d6] — "a `QuerySet` carries it into SQL as a `LIMIT`", for every
+  queryset.** Only an unevaluated queryset does. `3efa11a9` and `f7192bfb` (spec-050 Decision
+  8, after this register was measured) made the raw-list seam carry evaluation state: a
+  queryset that arrives already evaluated is windowed from the rows it holds, with no further
+  query, so no `LIMIT` is emitted for it. At `0.0.14` that case was an unstated corner, not a
+  documented contract. Nothing may describe every queryset reaching the seam as bounded in SQL.
 - **[Decision 7][spec-047-d7] — "both `resolve_connection` entry points".** There is one. The
   plain and `totalCount` shapes are one body reading a class flag, and
   `_resolve_connection_fast_path` — the head the spec named as the place the clamp and the
@@ -473,8 +479,8 @@ client `offset` / `requested_limit` coordinates, and a narrower promise for `max
 `63a132be` then moved the coordinates below the export, onto the package-private
 `_windowed_rows` / `_windowed_rows_async`, leaving the exported pair windowless. See
 [the post-release change register](#the-post-release-change-register), commits `dc00f4a6`,
-`ddd5dbb9` / `841e56d6`, `89ee8ac5` and `63a132be`, and the three claims the decision may no
-longer make.
+`ddd5dbb9` / `841e56d6`, `89ee8ac5` and `63a132be`, and the four claims the decision may no
+longer make; the fourth, the evaluated-source carry, landed after the register was measured.
 
 ### Decision 7 — The policy is a CEILING over `relay_max_results`, never a replacement
 

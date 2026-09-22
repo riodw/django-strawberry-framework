@@ -790,11 +790,13 @@ a malformed or over-ceiling coordinate receives, are spec-050's surface on `Djan
 reaches the private seam without passing it. What spec-047 owns is the ceiling those
 coordinates are checked against.
 
-- **The bound is applied by SLICING**, so a `QuerySet` carries it into SQL as a `LIMIT` (and
-  as an `OFFSET` when a skip coordinate is supplied) and is never evaluated unbounded. A
-  value that is already materialized (a consumer resolver's return, Django's prefetch cache)
-  is truncated in Python — which cannot un-fetch those rows but does stop the response from
-  serializing them.
+- **The bound is applied by SLICING**, so a `QuerySet` that has not been evaluated carries it
+  into SQL as a `LIMIT` (and as an `OFFSET` when a skip coordinate is supplied) and is never
+  evaluated unbounded. A queryset that arrives already evaluated (a warm prefetch cache, a
+  manager result a resolver iterated before returning it) is windowed from the rows it holds,
+  with no further query, and any other value that is already materialized (a consumer
+  resolver's list return) is truncated in Python. Neither can un-fetch those rows; both stop
+  the response from serializing them.
 - **A non-subscriptable iterable is bounded through `islice`, not waved through.** The
   alternative to slicing an unsliceable value is not "return it whole"; that would be a
   bound that silently stops applying to exactly the shapes nobody anticipated. The fallback

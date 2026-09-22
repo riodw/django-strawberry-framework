@@ -38,6 +38,7 @@ import inspect
 
 import pytest
 from django.db.backends.sqlite3 import base as sqlite_base
+from django.test import SimpleTestCase
 
 # Raw ``sqlite3.Connection`` handles opened while an event loop was running -
 # i.e. the context-local, per-asyncio-task connections that nothing else will
@@ -66,53 +67,84 @@ def _tracking_get_new_connection(self, conn_params):
 sqlite_base.DatabaseWrapper.get_new_connection = _tracking_get_new_connection
 
 
-def _marker_is_transactional(marker):
-    """Resolve a ``django_db`` marker's ``transaction`` argument the way pytest-django does.
+def _django_db_signature(
+    transaction=False,
+    reset_sequences=False,
+    databases=None,
+    serialized_rollback=False,
+    available_apps=None,
+):
+    """Bind a ``django_db`` marker's arguments exactly as pytest-django's signature does.
 
-    ``transaction`` is the first positional parameter, so both ``django_db(True)`` and
-    ``django_db(transaction=True)`` mean the same thing; every other argument
-    (``databases``, ``reset_sequences``, ...) is irrelevant here.
+    ``transaction`` and ``reset_sequences`` are the first two positional parameters, so
+    ``django_db(True)`` and ``django_db(transaction=True)`` mean the same thing; an argument
+    pytest-django would reject raises the same ``TypeError`` here.
     """
-    if "transaction" in marker.kwargs:
-        return bool(marker.kwargs["transaction"])
-    if marker.args:
-        return bool(marker.args[0])
-    return False
+    return transaction, reset_sequences
+
+
+def _uses_db_and_is_transactional(item):
+    """Resolve a test's database setup the way pytest-django orders and runs it.
+
+    Returns ``(uses_db, transactional)``. A ``django_db`` marker means database access, and
+    it is transactional when ``transaction`` or ``reset_sequences`` is set (pytest-django
+    runs a ``reset_sequences`` test as a ``TransactionTestCase``). Independently of any
+    marker, requesting ``db`` means database access, and requesting ``transactional_db`` or
+    ``live_server`` (directly or through another fixture, so ``django_db_reset_sequences``
+    counts) makes the test transactional whatever the marker says.
+    """
+    marker = item.get_closest_marker("django_db")
+    if marker is None:
+        uses_db = transactional = False
+    else:
+        transaction, reset_sequences = _django_db_signature(*marker.args, **marker.kwargs)
+        uses_db = True
+        transactional = bool(transaction or reset_sequences)
+    fixtures = getattr(item, "fixturenames", ())
+    transactional = transactional or "transactional_db" in fixtures or "live_server" in fixtures
+    uses_db = uses_db or "db" in fixtures
+    return uses_db, transactional
 
 
 def pytest_collection_modifyitems(items):
-    """Fail collection for an ``async`` test marked ``django_db`` without ``transaction=True``.
+    """Fail collection for an ``async`` test that uses the database non-transactionally.
 
     An async test reaches the ORM through ``sync_to_async`` (or Django's ``a*`` methods),
     which run on asgiref's thread-sensitive executor thread. That thread's connection sits
     outside the transaction pytest-django opens on the main thread for a plain ``django_db``
-    test, so rows written there are committed to the shared in-memory SQLite database and
-    leak into every later test in the process. ``transaction=True`` flushes after the test,
-    so the rule is "async + ``django_db`` => ``transaction=True``". Enforcing it at collection
-    makes the failure deterministic and names the offending test, instead of surfacing later
-    as a nondeterministic row-count failure in an unrelated module.
+    test or a ``db`` fixture, so rows written there are committed to the shared in-memory
+    SQLite database and leak into every later test in the process. A transactional test
+    flushes after the test, so the rule is "async + database => transactional". Enforcing it
+    at collection makes the failure deterministic and names the offending test, instead of
+    surfacing later as a nondeterministic row-count failure in an unrelated module.
 
     Every offender is collected before raising so one run reports them all. ``asyncio_mode =
     auto`` means async tests carry no explicit asyncio marker, so the coroutine check is the
     only signal; ``get_closest_marker`` covers module-level ``pytestmark`` and lets a
-    per-test marker override it.
+    per-test marker override it. Methods of Django's own test classes are skipped:
+    pytest-django ignores ``django_db`` on them, and Django runs an async test method
+    through ``async_to_sync``, which keeps its ORM calls on the thread holding the test's
+    transaction.
     """
     offenders = []
     for item in items:
         function = getattr(item, "obj", None)
         if function is None or not inspect.iscoroutinefunction(function):
             continue
-        marker = item.get_closest_marker("django_db")
-        if marker is None or _marker_is_transactional(marker):
+        test_class = getattr(item, "cls", None)
+        if test_class is not None and issubclass(test_class, SimpleTestCase):
             continue
-        offenders.append(item.nodeid)
+        uses_db, transactional = _uses_db_and_is_transactional(item)
+        if uses_db and not transactional:
+            offenders.append(item.nodeid)
     if offenders:
         listing = "\n".join(f"  {nodeid}" for nodeid in offenders)
         raise pytest.UsageError(
-            "async tests marked django_db must pass transaction=True - a plain django_db "
-            "transaction is opened on the main thread and cannot contain ORM writes made "
-            "on asgiref's executor thread, so those rows leak into later tests. Change the "
-            "marker to @pytest.mark.django_db(transaction=True) on:\n" + listing,
+            "async tests that use the database must be transactional - a plain django_db "
+            "marker or db fixture opens its transaction on the main thread and cannot contain "
+            "ORM writes made on asgiref's executor thread, so those rows leak into later "
+            "tests. Mark @pytest.mark.django_db(transaction=True) (or request "
+            "transactional_db) on:\n" + listing,
         )
 
 

@@ -1,6 +1,6 @@
 """FilterSet declarations for the library acceptance app (spec-027).
 
-Five filtersets mirror the relation shape ``apps.library.schema`` exposes
+Ten filtersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint. Inter-filterset references use
 the same-module unqualified-name form (e.g. ``RelatedFilter("ShelfFilter")``)
 so the lazy-resolution Layer-2 prefix-with-owner branch is exercised end
@@ -155,10 +155,74 @@ class PatronFilter(FilterSet):
         return queryset.filter(email=value)
 
 
+class PublisherFilter(FilterSet):
+    """Publisher filterset bound to ``PublisherType`` at finalize phase 2.5."""
+
+    editions = RelatedFilter("EditionFilter", field_name="editions")
+
+    class Meta:
+        model = models.Publisher
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"], "house_code": ["exact"]}
+
+
+class EditionFilter(FilterSet):
+    """Edition filterset bound to ``EditionType`` at finalize phase 2.5."""
+
+    publisher = RelatedFilter("PublisherFilter", field_name="publisher")
+
+    class Meta:
+        model = models.Edition
+        fields = {
+            "isbn_13": ["exact", "in"],
+            "isbn_10": ["exact"],
+            "imprint": ["exact", "icontains"],
+        }
+
+
+class PrintingFilter(FilterSet):
+    """Printing filterset bound to ``PrintingType`` at finalize phase 2.5."""
+
+    edition = RelatedFilter("EditionFilter", field_name="edition")
+
+    class Meta:
+        model = models.Printing
+        fields = {"id": ["exact", "in"], "run_size": ["exact", "gt"]}
+
+
+class PatronProfileFilter(FilterSet):
+    """Patron-profile filterset bound to ``PatronProfileType`` at finalize phase 2.5.
+
+    The model's primary key is its one-to-one key, so the declared scalars are
+    the profile's own address columns; the patron itself is reached through
+    the ``patron`` related filter.
+    """
+
+    patron = RelatedFilter("PatronFilter", field_name="patron")
+
+    class Meta:
+        model = models.PatronProfile
+        fields = {"postal_code": ["exact", "icontains"]}
+
+
+class AnnotationFilter(FilterSet):
+    """Annotation filterset bound to ``AnnotationType`` at finalize phase 2.5."""
+
+    profile = RelatedFilter("PatronProfileFilter", field_name="profile")
+
+    class Meta:
+        model = models.Annotation
+        fields = {"id": ["exact", "in"], "body": ["icontains"]}
+
+
 __all__ = (
+    "AnnotationFilter",
     "BookFilter",
     "BranchFilter",
+    "EditionFilter",
     "LoanFilter",
     "PatronFilter",
+    "PatronProfileFilter",
+    "PrintingFilter",
+    "PublisherFilter",
     "ShelfFilter",
 )

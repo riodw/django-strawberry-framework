@@ -925,6 +925,11 @@ slice ships the demonstration is one uncomment away.
 - **`apps.library`**: the acceptance app this tutorial is built on. FK, reverse FK,
   OneToOne, M2M, Relay nodes, keyset cursors, optimizer hints, consumer relation
   overrides, `FilterSet` / `OrderSet` on every type, root `node` / `nodes` refetch.
+  The publishing surface beneath it carries the shapes a query planner has to
+  resolve rather than assume: a relation primary key, a text primary key not named
+  `id`, `<word>_<digit>` field and relation names, a `to_field` foreign key, a Relay
+  id built off the primary key, explicitly named fields, and a child model whose
+  default manager cannot be windowed.
 - **`apps.products`**: the canonical consumer app and the subject of
   [`TODAY.md`][today]. Four Relay connections over `Category` / `Item` / `Property` /
   `Entry`, the full write surface in all three flavors, cascade visibility, plus the

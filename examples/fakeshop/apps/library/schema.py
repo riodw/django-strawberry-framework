@@ -456,6 +456,121 @@ class PeriodicalType(DjangoType):
         orderset_class = orders.PeriodicalOrder
 
 
+class PublisherType(DjangoType):
+    """Publisher published under its house code rather than its database key.
+
+    ``house_code: relay.NodeID[str]`` moves the GlobalID payload off the
+    primary key, so a forward key into a publisher cannot be answered from
+    the source row's stored key column: the id a client expects is built from
+    a column that column does not carry, and the join has to stay.
+
+    ``editions`` / ``editions_2`` are declared as plain lists because
+    ``EditionType`` is not Relay-Node-shaped; ``printings_2`` keeps the
+    Relay-node default and renders as a nested connection whose accessor
+    carries a ``<word>_<digit>`` boundary.
+    """
+
+    house_code: relay.NodeID[str]
+
+    class Meta:
+        model = models.Publisher
+        fields = (
+            "id",
+            "name",
+            "house_code",
+            "editions",
+            "editions_2",
+            "printings_2",
+        )
+        interfaces = (relay.Node,)
+        relation_shapes = {"editions": "list", "editions_2": "list"}
+        filterset_class = filters.PublisherFilter
+        orderset_class = orders.PublisherOrder
+
+
+class EditionType(DjangoType):
+    """Edition keyed by its ISBN instead of a surrogate integer.
+
+    The type stays non-Relay so the real primary-key column is published: a
+    client selects ``isbn13`` directly, which is what lets a key-only
+    selection on a forward key into an edition be answered from the source
+    row. ``isbn10`` is the plain scalar carrying the same digit boundary, and
+    ``publisher2`` the forward key carrying it on a relation.
+    """
+
+    class Meta:
+        model = models.Edition
+        fields = (
+            "isbn_13",
+            "isbn_10",
+            "imprint",
+            "publisher",
+            "publisher_2",
+            "printings",
+        )
+        filterset_class = filters.EditionFilter
+        orderset_class = orders.EditionOrder
+
+
+class PrintingType(DjangoType):
+    """One press run, the node of a publisher's ``printings2Connection``."""
+
+    class Meta:
+        model = models.Printing
+        fields = (
+            "id",
+            "run_size",
+            "edition",
+            "publisher_2",
+        )
+        interfaces = (relay.Node,)
+        filterset_class = filters.PrintingFilter
+        orderset_class = orders.PrintingOrder
+
+
+class PatronProfileType(DjangoType):
+    """Patron mailing details whose Relay id comes from a relation column.
+
+    The model's primary key is the ``patron`` one-to-one key, so the field
+    name and the column an id projection must load (``patron_id``) differ.
+
+    ``secondaryAddress`` and ``secondary_address`` are the two published
+    names of two different columns, and they differ only by casing
+    convention: matching a selection by a case-normalized name would collapse
+    them onto one column, so the exact published name is what resolves each.
+
+    ``annotations`` is served by the relation manager rather than a batched
+    window, because ``AnnotationManager`` returns a distinct queryset.
+    """
+
+    address_2: str = strawberry.field(name="secondaryAddress")
+    postal_code: str = strawberry.field(name="secondary_address")
+
+    class Meta:
+        model = models.PatronProfile
+        fields = (
+            "patron",
+            "address_2",
+            "postal_code",
+            "favorite_genre",
+            "annotations",
+        )
+        interfaces = (relay.Node,)
+        filterset_class = filters.PatronProfileFilter
+        orderset_class = orders.PatronProfileOrder
+
+
+class AnnotationType(DjangoType):
+    """A patron's page note, the node of a profile's ``annotationsConnection``."""
+
+    class Meta:
+        model = models.Annotation
+        fields = ("id", "body", "profile")
+        interfaces = (relay.Node,)
+        filterset_class = filters.AnnotationFilter
+        orderset_class = orders.AnnotationOrder
+
+
 @strawberry.type
 class Query:
     """Library acceptance root fields."""
@@ -466,6 +581,22 @@ class Query:
     all_library_issues_connection: DjangoConnection[IssueType] = DjangoConnectionField(IssueType)
     all_library_periodicals_connection: DjangoConnection[PeriodicalType] = DjangoConnectionField(
         PeriodicalType,
+    )
+
+    # The publishing surface: a publisher whose Relay id is its house code, the
+    # ISBN-keyed editions beneath it, the press runs beneath those, and the
+    # patron profile whose own key is the patron it extends.
+    all_library_publishers_connection: DjangoConnection[PublisherType] = DjangoConnectionField(
+        PublisherType,
+    )
+    all_library_editions: list[EditionType] = DjangoListField(
+        EditionType,
+    )
+    all_library_printings_connection: DjangoConnection[PrintingType] = DjangoConnectionField(
+        PrintingType,
+    )
+    all_library_patron_profiles_connection: DjangoConnection[PatronProfileType] = (
+        DjangoConnectionField(PatronProfileType)
     )
 
     all_library_branches_via_list_field: list[BranchType] = DjangoListField(

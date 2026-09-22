@@ -297,3 +297,150 @@ class Loan(models.Model):
 
     def __str__(self):
         return f"{self.book} to {self.patron}"
+
+
+class Publisher(models.Model):
+    """A publishing house whose wire identity is its stable house code.
+
+    ``PublisherType`` declares ``house_code`` as the Relay ``NodeID``, so the
+    id a client receives is built from a column a foreign key's stored key
+    column does not carry. A forward key pointing here therefore keeps its
+    join to the publisher row even when only the id is selected.
+    """
+
+    name = models.TextField(unique=True)
+    house_code = models.TextField(unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class Edition(models.Model):
+    """One published edition of a work, keyed by its ISBN.
+
+    The primary key is the text column ``isbn_13``: it is neither named
+    ``id`` nor an integer, and its ``<word>_<digit>`` name does not survive
+    the camel-case round trip, so a forward key to an edition has to resolve
+    the real primary-key name before it can answer a key-only selection from
+    the source row. ``isbn_10`` is the legacy ten-digit number, carrying the
+    same digit boundary on a plain scalar; ``publisher_2`` is the second
+    house on a jointly issued edition, carrying it on a relation.
+    """
+
+    isbn_13 = models.TextField(primary_key=True)
+    isbn_10 = models.TextField(blank=True, default="")
+    imprint = models.TextField(blank=True, default="")
+    publisher = models.ForeignKey(
+        Publisher,
+        related_name="editions",
+        on_delete=models.CASCADE,
+    )
+    publisher_2 = models.ForeignKey(
+        Publisher,
+        related_name="editions_2",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    def __str__(self):
+        return self.isbn_13
+
+
+class Printing(models.Model):
+    """One press run of an edition.
+
+    ``publisher_2`` is the second house of a jointly issued edition when that
+    house commissioned the run, so a publisher's ``printings_2`` reverse
+    relation carries a ``<word>_<digit>`` accessor that a nested connection
+    over it must resolve before the window can be planned.
+    """
+
+    edition = models.ForeignKey(
+        Edition,
+        related_name="printings",
+        on_delete=models.CASCADE,
+    )
+    publisher_2 = models.ForeignKey(
+        Publisher,
+        related_name="printings_2",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    run_size = models.IntegerField(default=0)
+
+    class Meta:
+        # The leading columns of a publisher's ``printings_2`` window, so each
+        # page is served from the index instead of a per-partition sort.
+        indexes = [
+            models.Index(
+                fields=[
+                    "publisher_2",
+                    "id",
+                ],
+                name="library_printing_window_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.edition_id} x{self.run_size}"
+
+
+class PatronProfile(models.Model):
+    """A patron's mailing details, keyed by the patron it extends.
+
+    The primary key is the one-to-one key itself, so the field name
+    (``patron``) and the column it loads (``patron_id``) differ and an id
+    projection has to read the column. ``favorite_genre`` is stored by genre
+    name rather than by genre key, so its column is not a related primary key
+    and the join it needs cannot be skipped.
+    """
+
+    patron = models.OneToOneField(
+        Patron,
+        related_name="profile",
+        on_delete=models.CASCADE,
+        primary_key=True,
+    )
+    address_2 = models.TextField(blank=True, default="")
+    postal_code = models.TextField(blank=True, default="")
+    favorite_genre = models.ForeignKey(
+        Genre,
+        to_field="name",
+        related_name="favoring_profiles",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    def __str__(self):
+        return f"profile for {self.patron_id}"
+
+
+class AnnotationManager(models.Manager):
+    """Default manager collapsing the duplicate rows older imports left behind.
+
+    ``distinct()`` on the base queryset cannot carry a per-parent window, so
+    a nested connection over ``PatronProfile.annotations`` is left to the
+    relation manager instead of being planned as one batched query.
+    """
+
+    def get_queryset(self):
+        return super().get_queryset().distinct()
+
+
+class Annotation(models.Model):
+    """A patron's note on a page, read through their profile."""
+
+    objects = AnnotationManager()
+
+    profile = models.ForeignKey(
+        PatronProfile,
+        related_name="annotations",
+        on_delete=models.CASCADE,
+    )
+    body = models.TextField()
+
+    def __str__(self):
+        return self.body

@@ -11,7 +11,6 @@ from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item
-from django.db import models
 from django.db.models import Prefetch
 from graphql import OperationType
 
@@ -265,65 +264,45 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
 def test_plan_relay_id_projects_attname_when_pk_is_relation():
     """Regression: walker ``id_attr in field_map`` mismatch when the pk is a relation.
 
-    When a Relay-declared ``DjangoType`` is backed by a model whose
-    primary key is a relation (e.g. ``OneToOneField(primary_key=True)``
-    or ``ForeignKey(primary_key=True)``), the pk's ``name`` and
-    ``attname`` differ: ``name="user"`` vs. ``attname="user_id"``. The
+    ``apps/library/models.py::PatronProfile`` is keyed by its own
+    ``OneToOneField`` to the patron it extends, so the pk's ``name`` and
+    ``attname`` differ: ``name="patron"`` vs. ``attname="patron_id"``. The
     walker's projection branch resolves ``id_attr`` to the attname
-    (``"user_id"``), but ``field_map`` is keyed by the field's ``name``
-    (``"user"``). A naive ``id_attr in field_map`` check would skip
+    (``"patron_id"``), but ``field_map`` is keyed by the field's ``name``
+    (``"patron"``). A naive ``id_attr in field_map`` check would skip
     projection and re-introduce the lazy-load N+1 the fix was meant to
     close. The walker must scan the ``FieldMeta`` values by both
     ``name`` and ``attname``.
     """
+    from apps.library.models import Patron, PatronProfile
     from strawberry import relay
 
     from django_strawberry_framework import DjangoType, finalize_django_types
 
-    class UserTarget(models.Model):
-        name = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class ProfileSource(models.Model):
-        user = models.OneToOneField(
-            UserTarget,
-            on_delete=models.CASCADE,
-            primary_key=True,
-            related_name="profile_for_test",
-        )
-        bio = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
     registry.clear()
     try:
 
-        class UserTargetNode(DjangoType):
+        class PatronNode(DjangoType):
             class Meta:
-                model = UserTarget
+                model = Patron
                 fields = ("name",)
 
-        class ProfileNode(DjangoType):
+        class PatronProfileNode(DjangoType):
             class Meta:
-                model = ProfileSource
-                fields = ("user", "bio")
+                model = PatronProfile
+                fields = ("patron", "postal_code")
                 interfaces = (relay.Node,)
 
         finalize_django_types()
-        plan = plan_optimizations([_sel("id")], ProfileSource)
+        plan = plan_optimizations([_sel("id")], PatronProfile)
 
-        # ``id_attr`` resolves to ``"user_id"`` (the pk's attname). The
+        # ``id_attr`` resolves to ``"patron_id"`` (the pk's attname). The
         # walker must locate the matching ``FieldMeta`` via its
-        # ``attname`` (the ``"user"`` FieldMeta has ``name="user"``,
-        # ``attname="user_id"``) and project ``"user_id"`` so Django's
-        # ``.only("user_id")`` loads the FK column without dragging in
-        # the related ``UserTarget`` row.
-        assert "user_id" in plan.only_fields
+        # ``attname`` (the ``"patron"`` FieldMeta has ``name="patron"``,
+        # ``attname="patron_id"``) and project ``"patron_id"`` so Django's
+        # ``.only("patron_id")`` loads the key column without dragging in
+        # the related ``Patron`` row.
+        assert "patron_id" in plan.only_fields
     finally:
         registry.clear()
 
@@ -405,108 +384,93 @@ def test_plan_converts_camel_case_to_snake_case():
 def test_plan_projects_digit_boundary_field_under_real_django_name():
     """A ``<word>_<digit>`` field survives the lossy camel/snake round-trip.
 
-    Strawberry's default ``to_camel_case`` drops the ``_`` before a digit, so a
-    Django field ``address_2`` is exposed in the schema as ``address2`` and a
-    forward FK ``parent_2`` as ``parent2``. ``snake_case`` cannot recover the
-    dropped underscore (``snake_case("address2") == "address2"``), so a lookup
-    by the reversed selection name misses the real ``"address_2"`` field-map
-    key. Before the walker's forward-resolution fallback the scalar was silently
-    dropped from ``.only(...)`` (a per-row deferred-load N+1) and the relation
-    was left entirely unplanned (a per-parent N+1) - exactly the failures the
-    optimizer exists to prevent. The walker now resolves the selection name
-    forward against the real field names and projects / plans the REAL Django
-    name.
+    Strawberry's default ``to_camel_case`` drops the ``_`` before a digit, so
+    ``apps/library/models.py::Edition``'s legacy number ``isbn_10`` is exposed in
+    the schema as ``isbn10`` and its second publishing house ``publisher_2`` as
+    ``publisher2``. ``snake_case`` cannot recover the dropped underscore
+    (``snake_case("isbn10") == "isbn10"``), so a lookup by the reversed selection
+    name misses the real ``"isbn_10"`` field-map key. Before the walker's
+    forward-resolution fallback the scalar was silently dropped from
+    ``.only(...)`` (a per-row deferred-load N+1) and the relation was left
+    entirely unplanned (a per-parent N+1) - exactly the failures the optimizer
+    exists to prevent. The walker now resolves the selection name forward against
+    the real field names and projects / plans the REAL Django name.
     """
+    from apps.library.models import Edition, Publisher
+
     from django_strawberry_framework import DjangoType, finalize_django_types
-
-    class DigitParent(models.Model):
-        name = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class DigitChild(models.Model):
-        title = models.CharField(max_length=32)
-        address_2 = models.CharField(max_length=32)
-        parent_2 = models.ForeignKey(
-            DigitParent,
-            on_delete=models.CASCADE,
-            related_name="children",
-        )
-
-        class Meta:
-            app_label = "tests"
-            managed = False
 
     registry.clear()
     try:
 
-        class DigitParentNode(DjangoType):
+        class PublisherNode(DjangoType):
             class Meta:
-                model = DigitParent
+                model = Publisher
                 fields = ("name",)
 
-        class DigitChildNode(DjangoType):
+        class EditionNode(DjangoType):
             class Meta:
-                model = DigitChild
-                fields = ("title", "address_2", "parent_2")
+                model = Edition
+                fields = (
+                    "isbn_13",
+                    "imprint",
+                    "isbn_10",
+                    "publisher_2",
+                )
 
         finalize_django_types()
 
-        # Scalar: selected as the schema name ``address2`` -> projected as the
-        # real ``address_2`` column (pre-fix: dropped, only_fields=("title",)).
+        # Scalar: selected as the schema name ``isbn10`` -> projected as the
+        # real ``isbn_10`` column (pre-fix: dropped, only_fields=("imprint",)).
         scalar_plan = plan_optimizations(
-            [_sel("title"), _sel("address2")],
-            DigitChild,
-            source_type=DigitChildNode,
+            [_sel("imprint"), _sel("isbn10")],
+            Edition,
+            source_type=EditionNode,
         )
-        assert "address_2" in scalar_plan.only_fields
-        assert "address2" not in scalar_plan.only_fields
+        assert "isbn_10" in scalar_plan.only_fields
+        assert "isbn10" not in scalar_plan.only_fields
 
-        # Relation: forward FK selected as ``parent2`` -> select_related on the
-        # real ``parent_2`` name (pre-fix: unplanned, select_related=()).
+        # Relation: forward FK selected as ``publisher2`` -> select_related on
+        # the real ``publisher_2`` name (pre-fix: unplanned, select_related=()).
         relation_plan = plan_optimizations(
-            [_sel("parent2", selections=[_sel("name")])],
-            DigitChild,
-            source_type=DigitChildNode,
+            [_sel("publisher2", selections=[_sel("name")])],
+            Edition,
+            source_type=EditionNode,
         )
-        assert relation_plan.select_related == ("parent_2",)
+        assert relation_plan.select_related == ("publisher_2",)
     finally:
         registry.clear()
 
 
 def test_plan_uses_exact_graphql_names_for_explicitly_named_fields():
-    """Explicit GraphQL names resolve forward and remain distinct during selection merging."""
+    """Explicit GraphQL names resolve forward and remain distinct during selection merging.
+
+    ``apps/library/models.py::PatronProfile`` publishes ``address_2`` and
+    ``postal_code`` under two names that differ only by casing convention, so a
+    case-normalized match would collapse both selections onto one column.
+    """
     import strawberry
+    from apps.library.models import PatronProfile
 
     from django_strawberry_framework import DjangoType, finalize_django_types
-
-    class Address(models.Model):
-        address_2 = models.CharField(max_length=32)
-        postal_code = models.CharField(max_length=16)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
 
     registry.clear()
     try:
 
-        class AddressNode(DjangoType):
+        class PatronProfileNode(DjangoType):
             address_2: str = strawberry.field(name="secondaryAddress")
             postal_code: str = strawberry.field(name="secondary_address")
 
             class Meta:
-                model = Address
+                model = PatronProfile
                 fields = ("address_2", "postal_code")
 
         finalize_django_types()
 
         plan = plan_optimizations(
             [_sel("secondaryAddress"), _sel("secondary_address")],
-            Address,
-            source_type=AddressNode,
+            PatronProfile,
+            source_type=PatronProfileNode,
         )
         assert plan.only_fields == ("address_2", "postal_code")
     finally:
@@ -983,31 +947,47 @@ def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
     assert isinstance(plan.prefetch_related[0], Prefetch)
 
 
-def test_plan_elides_forward_fk_when_target_pk_is_not_named_id():
-    """B2: elision uses the related model's actual PK field name, not literal ``id``."""
+def _printing_edition_key_only_plan():
+    """Plan a press run's ``edition { isbn13 }`` selection over the real library models.
 
-    class UuidTarget(models.Model):
-        uuid = models.CharField(max_length=32, primary_key=True)
-        name = models.CharField(max_length=32)
+    ``apps/library/models.py::Printing.edition`` points at
+    ``apps/library/models.py::Edition``, whose primary key ``isbn_13`` is both
+    named something other than ``id`` and carries a ``<word>_<digit>`` boundary,
+    so one selection answers both halves of the elision contract.
+    """
+    from apps.library.models import Edition, Printing
 
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class EditionType(DjangoType):
         class Meta:
-            app_label = "tests"
-            managed = False
+            model = Edition
+            fields = ("isbn_13", "imprint")
 
-    class UuidSource(models.Model):
-        target = models.ForeignKey(UuidTarget, on_delete=models.CASCADE)
-
+    class PrintingType(DjangoType):
         class Meta:
-            app_label = "tests"
-            managed = False
+            model = Printing
+            fields = ("id", "run_size", "edition")
 
-    plan = plan_optimizations(
-        [_sel("target", selections=[_sel("uuid")])],
-        UuidSource,
+    finalize_django_types()
+    return plan_optimizations(
+        [_sel("edition", selections=[_sel("isbn13")])],
+        Printing,
+        source_type=PrintingType,
     )
+
+
+def test_plan_elides_forward_fk_when_target_pk_is_not_named_id():
+    """B2: elision uses the related model's actual PK field name, not literal ``id``.
+
+    ``apps/library/models.py::Edition`` is keyed by the text column ``isbn_13``,
+    so a press run's forward key into it answers an ``{ isbn13 }``-only child
+    selection from the source row's stored key column.
+    """
+    plan = _printing_edition_key_only_plan()
     assert plan.select_related == ()
-    assert plan.only_fields == ("target_id",)
-    assert plan.fk_id_elisions == ("target@target",)
+    assert plan.only_fields == ("edition_id",)
+    assert plan.fk_id_elisions == ("PrintingType.edition@edition",)
 
 
 def test_plan_elides_forward_fk_when_target_pk_is_digit_boundary_name():
@@ -1015,134 +995,98 @@ def test_plan_elides_forward_fk_when_target_pk_is_digit_boundary_name():
 
     Site 3 of the digit-boundary reconciliation: ``_selected_scalar_names``
     reversed each pk selection with ``snake_case`` and missed a digit-boundary pk
-    field-map key (``code_2`` is exposed as ``code2``, and
-    ``snake_case("code2") == "code2"`` misses the real ``"code_2"`` key). The
-    miss made the helper return ``None`` (elision unsafe), so the walker fell
-    back to a redundant ``select_related`` JOIN loading the whole related row
-    rather than eliding to the source FK column. The helper now forward-resolves
-    the real ``code_2`` name through the same primitive as the main walk, so an
-    ``{ code2 }``-only child selection elides the JOIN.
+    field-map key (``apps/library/models.py::Edition``'s pk ``isbn_13`` is
+    exposed as ``isbn13``, and ``snake_case("isbn13") == "isbn13"`` misses the
+    real ``"isbn_13"`` key). The miss made the helper return ``None`` (elision
+    unsafe), so the walker fell back to a redundant ``select_related`` JOIN
+    loading the whole related row rather than eliding to the source FK column.
+    The helper now forward-resolves the real ``isbn_13`` name through the same
+    primitive as the main walk, so an ``{ isbn13 }``-only child selection elides
+    the JOIN.
     """
-
-    class DigitPkTarget(models.Model):
-        code_2 = models.IntegerField(primary_key=True)
-        label = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class DigitPkSource(models.Model):
-        target = models.ForeignKey(DigitPkTarget, on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    plan = plan_optimizations(
-        [_sel("target", selections=[_sel("code2")])],
-        DigitPkSource,
-    )
+    plan = _printing_edition_key_only_plan()
     assert plan.select_related == ()
-    assert plan.only_fields == ("target_id",)
-    assert plan.fk_id_elisions == ("target@target",)
+    assert plan.only_fields == ("edition_id",)
+    assert plan.fk_id_elisions == ("PrintingType.edition@edition",)
 
 
 def test_plan_does_not_elide_fk_to_non_pk_to_field():
-    """B2: FK ``to_field`` values are not treated as related PK values."""
+    """B2: FK ``to_field`` values are not treated as related PK values.
 
-    class CodeTarget(models.Model):
-        code = models.CharField(max_length=32, unique=True)
-        name = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class CodeSource(models.Model):
-        target = models.ForeignKey(
-            CodeTarget,
-            to_field="code",
-            on_delete=models.CASCADE,
-        )
-
-        class Meta:
-            app_label = "tests"
-            managed = False
+    ``apps/library/models.py::PatronProfile.favorite_genre`` stores the genre
+    NAME, so its column holds no genre key and the join it needs to answer
+    ``{ id }`` cannot be skipped.
+    """
+    from apps.library.models import PatronProfile
 
     plan = plan_optimizations(
-        [_sel("target", selections=[_sel("id")])],
-        CodeSource,
+        [_sel("favoriteGenre", selections=[_sel("id")])],
+        PatronProfile,
     )
-    assert plan.select_related == ("target",)
+    assert plan.select_related == ("favorite_genre",)
     assert plan.fk_id_elisions == ()
-    assert plan.only_fields == ("target_id", "target__id")
+    assert plan.only_fields == ("favorite_genre_id", "favorite_genre__id")
 
 
 def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
-    """B2: custom id resolvers may need more than the stubbed PK."""
+    """B2: custom id resolvers may need more than the stubbed PK.
 
-    class CustomIdTarget(models.Model):
-        name = models.CharField(max_length=32)
+    ``apps/library/schema.py::PublisherType`` moves the GlobalID payload onto
+    ``house_code`` with ``relay.NodeID[str]``. That is the second of the two
+    shapes ``types/definition.py::origin_has_custom_id_resolver`` reports - a
+    ``resolve_id`` override is the first - and both arms return the same single
+    boolean through ``has_custom_id_resolver_for``, so the walker's elision
+    guard cannot tell them apart and either one pins the branch. The stored key
+    column does not carry the house code, so an ``{ id }``-only child selection
+    keeps its join.
+    """
+    from apps.library.models import Edition, Publisher
+    from strawberry import relay
 
-        class Meta:
-            app_label = "tests"
-            managed = False
+    from django_strawberry_framework import DjangoType, finalize_django_types
 
-    class CustomIdSource(models.Model):
-        target = models.ForeignKey(CustomIdTarget, on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class CustomIdTargetType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
-
-        def resolve_id(self):
-            return f"{self.name}:{self.pk}"
-
-    registry.register(CustomIdTarget, CustomIdTargetType)
+    registry.clear()
     try:
+
+        class PublisherType(DjangoType):
+            house_code: relay.NodeID[str]
+
+            class Meta:
+                model = Publisher
+                fields = ("id", "name", "house_code")
+                interfaces = (relay.Node,)
+
+        class EditionType(DjangoType):
+            class Meta:
+                model = Edition
+                fields = ("isbn_13", "publisher")
+
+        finalize_django_types()
         plan = plan_optimizations(
-            [_sel("target", selections=[_sel("id")])],
-            CustomIdSource,
+            [_sel("publisher", selections=[_sel("id")])],
+            Edition,
+            source_type=EditionType,
         )
     finally:
         registry.clear()
 
-    assert plan.select_related == ("target",)
+    assert plan.select_related == ("publisher",)
     assert plan.fk_id_elisions == ()
-    assert plan.only_fields == ("target_id", "target__id")
+    assert plan.only_fields == ("publisher_id", "publisher__id")
 
 
 def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch):
     """B2: custom id resolver checks route through target definition metadata."""
+    from apps.library.models import Edition, Publisher
 
-    class CachedIdTarget(models.Model):
-        name = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class CachedIdSource(models.Model):
-        target = models.ForeignKey(CachedIdTarget, on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class CachedIdTargetType:
+    class PublisherType:
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
     registry.clear()
-    _register_type_definition(CachedIdTarget, CachedIdTargetType)
-    definition = registry.get_definition(CachedIdTargetType)
+    _register_type_definition(Publisher, PublisherType)
+    definition = registry.get_definition(PublisherType)
     assert definition is not None
     calls = []
 
@@ -1153,16 +1097,16 @@ def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch):
     monkeypatch.setattr(definition, "has_custom_id_resolver_for", has_custom_id_resolver_for)
     try:
         plan = plan_optimizations(
-            [_sel("target", selections=[_sel("id")])],
-            CachedIdSource,
+            [_sel("publisher", selections=[_sel("id")])],
+            Edition,
         )
     finally:
         registry.clear()
 
     assert calls == ["id"]
-    assert plan.select_related == ("target",)
+    assert plan.select_related == ("publisher",)
     assert plan.fk_id_elisions == ()
-    assert plan.only_fields == ("target_id", "target__id")
+    assert plan.only_fields == ("publisher_id", "publisher__id")
 
 
 def test_has_custom_id_resolver_fallback_matches_definition_path():
@@ -2799,93 +2743,73 @@ def test_nested_connection_planned_as_windowed_prefetch():
 def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch():
     """A ``<word>_<digit>`` many-relation's connection survives the lossy round-trip.
 
-    Gap 2a of the digit-boundary reconciliation. Strawberry renders the
-    synthesized ``line_2_connection`` sibling as ``line2Connection``
-    (``to_camel_case`` drops the ``_`` before the digit), but the walker
-    reversed the selection with ``snake_case`` -> ``"line2_connection"``, which
-    misses the ``"line_2_connection"`` ``relation_connections`` slot key.
+    Gap 2a of the digit-boundary reconciliation. A publisher reaches the press
+    runs it commissioned through ``apps/library/models.py::Printing.publisher_2``
+    (``related_name="printings_2"``), and Strawberry renders the synthesized
+    ``printings_2_connection`` sibling as ``printings2Connection``
+    (``to_camel_case`` drops the ``_`` before the digit). The walker reversed the
+    selection with ``snake_case`` -> ``"printings2_connection"``, which misses
+    the ``"printings_2_connection"`` ``relation_connections`` slot key.
     ``_field_by_graphql_name`` cannot rescue it either: the connection GraphQL
     name carries a ``Connection`` suffix the underlying relation name lacks
-    (``to_camel_case("line_2") == "line2" != "line2Connection"``). Before the
-    consolidated forward resolver the nested connection was dropped from the plan
-    entirely - no windowed ``Prefetch``, no ``planned_resolver_keys`` entry - so
-    every parent ran its own connection query (a per-parent N+1). The walker now
-    forward-matches the synthesized slot key and plans the batched window.
-
-    Uses the ``managed=False`` + installed-``products``-app-label pattern from
-    ``_ordered_connection_types`` so the reverse relation is wired into
-    ``_meta.get_fields()`` (Django only builds reverse relations for installed
-    apps) and the ``line2Connection`` sibling actually synthesizes.
+    (``to_camel_case("printings_2") == "printings2" != "printings2Connection"``).
+    Before the consolidated forward resolver the nested connection was dropped
+    from the plan entirely - no windowed ``Prefetch``, no
+    ``planned_resolver_keys`` entry - so every parent ran its own connection
+    query (a per-parent N+1). The walker now forward-matches the synthesized slot
+    key and plans the batched window.
     """
+    from apps.library.models import Printing, Publisher
     from strawberry import relay
     from strawberry.schema.name_converter import NameConverter
 
     from django_strawberry_framework import DjangoType, finalize_django_types
 
-    class DigitConnParent(models.Model):
-        name = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class DigitConnChild(models.Model):
-        title = models.CharField(max_length=32)
-        owner = models.ForeignKey(
-            DigitConnParent,
-            on_delete=models.CASCADE,
-            related_name="line_2",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
     registry.clear()
     try:
 
-        class DigitConnChildNode(DjangoType):
+        class PrintingNode(DjangoType):
             class Meta:
-                model = DigitConnChild
-                fields = ("id", "title")
+                model = Printing
+                fields = ("id", "run_size")
                 interfaces = (relay.Node,)
 
-        class DigitConnParentNode(DjangoType):
+        class PublisherNode(DjangoType):
             class Meta:
-                model = DigitConnParent
-                fields = ("id", "name", "line_2")
+                model = Publisher
+                fields = ("id", "name", "printings_2")
                 interfaces = (relay.Node,)
 
         finalize_django_types()
 
         # The synthesis records the slot under the Python attr name; Strawberry
-        # renders it in the schema as ``line2Connection``.
-        definition = registry.get_definition(DigitConnParentNode)
-        assert definition.relation_connections == {"line_2_connection": "line_2"}
+        # renders it in the schema as ``printings2Connection``.
+        definition = registry.get_definition(PublisherNode)
+        assert definition.relation_connections == {"printings_2_connection": "printings_2"}
 
         plan = plan_optimizations(
             [
                 _conn_sel(
-                    "line2Connection",
-                    node_selections=[_sel("title")],
+                    "printings2Connection",
+                    node_selections=[_sel("runSize")],
                     arguments={"first": 3},
                 ),
             ],
-            DigitConnParent,
+            Publisher,
             info=_fake_info(),
-            source_type=DigitConnParentNode,
+            source_type=PublisherNode,
         )
         # Planned as a batched windowed Prefetch on the real relation accessor
         # (pre-fix: prefetch_related=() and planned_resolver_keys=() - dropped).
         prefetch = _prefetch_entry(plan)
-        assert prefetch.to_attr == "_dst_line_2_connection"
-        assert prefetch.prefetch_through == "line_2"
-        assert plan.planned_resolver_keys == ("DigitConnParentNode.line_2@line2Connection",)
+        assert prefetch.to_attr == "_dst_printings_2_connection"
+        assert prefetch.prefetch_through == "printings_2"
+        assert plan.planned_resolver_keys == ("PublisherNode.printings_2@printings2Connection",)
 
         class ConnectionNameConverter(NameConverter):
             def get_graphql_name(self, field):
-                if field.python_name == "line_2_connection":
-                    return "numberedLines"
+                if field.python_name == "printings_2_connection":
+                    return "numberedRuns"
                 return super().get_graphql_name(field)
 
         custom_info = _fake_info()
@@ -2900,19 +2824,19 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
         custom_plan = plan_optimizations(
             [
                 _conn_sel(
-                    "numberedLines",
-                    node_selections=[_sel("title")],
+                    "numberedRuns",
+                    node_selections=[_sel("runSize")],
                     arguments={"first": 3},
                 ),
             ],
-            DigitConnParent,
+            Publisher,
             info=custom_info,
-            source_type=DigitConnParentNode,
+            source_type=PublisherNode,
         )
         custom_prefetch = _prefetch_entry(custom_plan)
-        assert custom_prefetch.to_attr == "_dst_line_2_connection"
-        assert custom_prefetch.prefetch_through == "line_2"
-        assert custom_plan.planned_resolver_keys == ("DigitConnParentNode.line_2@numberedLines",)
+        assert custom_prefetch.to_attr == "_dst_printings_2_connection"
+        assert custom_prefetch.prefetch_through == "printings_2"
+        assert custom_plan.planned_resolver_keys == ("PublisherNode.printings_2@numberedRuns",)
     finally:
         registry.clear()
 
@@ -5448,76 +5372,51 @@ def test_connection_default_manager_unsafe_queryset_is_left_unplanned():
     """Unsafe default-manager child querysets are classified before child planning.
 
     A target type without custom ``get_queryset`` still has consumer code in the
-    relation's default manager. If that manager returns ``distinct()``, the
-    nested connection must fall back fully unplanned rather than relying on
-    strategy-specific late guards.
-
-    The model pair is declared here rather than at module scope so the
-    package-wide ``tests/optimizer/conftest.py::_restore_app_registry`` fixture
-    covers it - a module-scope declaration registers at import time, before any
-    fixture runs, and leaks for the life of the worker process.
+    relation's default manager. ``apps/library/models.py::AnnotationManager``
+    returns ``distinct()``, so a profile's nested annotations connection must
+    fall back fully unplanned rather than relying on strategy-specific late
+    guards.
     """
+    from apps.library.models import Annotation, Patron, PatronProfile
     from strawberry import relay
 
     from django_strawberry_framework import DjangoType, finalize_django_types
 
-    class _DistinctChildManager(models.Manager):
-        """Default manager whose base ``.all()`` is unsafe for window planning."""
-
-        def get_queryset(self):
-            return super().get_queryset().distinct()
-
-    class _DistinctParent(models.Model):
-        name = models.CharField(max_length=32)
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class _DistinctChild(models.Model):
-        title = models.CharField(max_length=32)
-        parent = models.ForeignKey(
-            _DistinctParent,
-            related_name="children",
-            on_delete=models.CASCADE,
-        )
-
-        objects = _DistinctChildManager()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
     registry.clear()
     try:
 
-        class DistinctChildType(DjangoType):
+        class PatronNode(DjangoType):
             class Meta:
-                model = _DistinctChild
-                fields = ("id", "title")
+                model = Patron
+                fields = ("name",)
+
+        class AnnotationNode(DjangoType):
+            class Meta:
+                model = Annotation
+                fields = ("id", "body")
                 interfaces = (relay.Node,)
 
-        class DistinctParentType(DjangoType):
+        class PatronProfileNode(DjangoType):
             class Meta:
-                model = _DistinctParent
-                fields = ("id", "name", "children")
+                model = PatronProfile
+                fields = ("patron", "postal_code", "annotations")
                 interfaces = (relay.Node,)
 
         finalize_django_types()
         plan = plan_optimizations(
             [
                 _conn_sel(
-                    "childrenConnection",
-                    node_selections=[_sel("title")],
+                    "annotationsConnection",
+                    node_selections=[_sel("body")],
                     arguments={"first": 3},
                 ),
             ],
-            _DistinctParent,
+            PatronProfile,
             info=_fake_info(),
-            source_type=DistinctParentType,
+            source_type=PatronProfileNode,
         )
         assert not any(
-            getattr(pf, "to_attr", None) == "_dst_children_connection"
+            getattr(pf, "to_attr", None) == "_dst_annotations_connection"
             for pf in plan.prefetch_related
         )
         assert plan.planned_resolver_keys == ()

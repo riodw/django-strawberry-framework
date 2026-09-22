@@ -1,6 +1,6 @@
 """OrderSet declarations for library relation-graph and keyset-cursor acceptance coverage.
 
-Seven ordersets mirror the relation shape ``apps.library.schema`` exposes
+Twelve ordersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint; ``PeriodicalOrder`` and
 ``IssueOrder`` are the keyset-cursor ``orderBy:`` substrate: a root
 ``orderBy: {title: ASC}`` page over ``IssueOrder`` mints value cursors
@@ -181,12 +181,72 @@ class IssueOrder(OrderSet):
         fields = ["id", "number", "title"]
 
 
+class PublisherOrder(OrderSet):
+    """Publisher orderset bound to ``PublisherType`` at finalize phase 2.5."""
+
+    editions = RelatedOrder("EditionOrder", field_name="editions")
+
+    class Meta:
+        model = models.Publisher
+        fields = ["id", "name", "house_code"]
+
+
+class EditionOrder(OrderSet):
+    """Edition orderset bound to ``EditionType`` at finalize phase 2.5."""
+
+    publisher = RelatedOrder("PublisherOrder", field_name="publisher")
+
+    class Meta:
+        model = models.Edition
+        fields = ["isbn_13", "imprint"]
+
+
+class PrintingOrder(OrderSet):
+    """Printing orderset bound to ``PrintingType`` at finalize phase 2.5."""
+
+    edition = RelatedOrder("EditionOrder", field_name="edition")
+
+    class Meta:
+        model = models.Printing
+        fields = ["id", "run_size"]
+
+
+class PatronProfileOrder(OrderSet):
+    """Patron-profile orderset bound to ``PatronProfileType`` at finalize phase 2.5.
+
+    The model's primary key is its one-to-one key, so the declared scalars are
+    the profile's own address columns and the patron is ordered through the
+    ``patron`` related order.
+    """
+
+    patron = RelatedOrder("PatronOrder", field_name="patron")
+
+    class Meta:
+        model = models.PatronProfile
+        fields = ["postal_code"]
+
+
+class AnnotationOrder(OrderSet):
+    """Annotation orderset bound to ``AnnotationType`` at finalize phase 2.5."""
+
+    profile = RelatedOrder("PatronProfileOrder", field_name="profile")
+
+    class Meta:
+        model = models.Annotation
+        fields = ["id", "body"]
+
+
 __all__ = (
+    "AnnotationOrder",
     "BookOrder",
     "BranchOrder",
+    "EditionOrder",
     "IssueOrder",
     "LoanOrder",
     "PatronOrder",
+    "PatronProfileOrder",
     "PeriodicalOrder",
+    "PrintingOrder",
+    "PublisherOrder",
     "ShelfOrder",
 )

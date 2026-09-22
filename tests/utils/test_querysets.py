@@ -3449,10 +3449,16 @@ def test_reconstruction_never_grows_the_retained_type_set_with_a_planted_type():
     request ended. The single writer is the ``_RETAINED_SCHEMA_BASES`` branch of
     ``_is_reconstructable_node``, which admits only ``models.Field`` subclasses, model
     classes, and relation descriptors; the slotted-node path deliberately has none.
+
+    The priming seal below runs before the snapshot because that schema-bases branch
+    legitimately records the queried model's own field and metaclass types on first contact
+    in a process, which is growth attributable to the schema and not to any planted value.
+    Snapshotting after it leaves the assertion measuring only what the planted value adds.
     """
     from django.db.models.sql.query import ExplainInfo
     from django.utils.safestring import SafeString
 
+    _seal_or_defect(Category.objects.filter(is_private=False), Category, None)
     before = frozenset(_RETAINED_TYPES)
     for planted in (ExplainInfo("text", {"analyze": True}), SafeString("self")):
         source = Category.objects.filter(is_private=False)

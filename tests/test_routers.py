@@ -2173,7 +2173,7 @@ def test_the_two_new_websocket_keywords_are_keyword_only():
 # connection lingers (in-memory sqlite ``close()`` is a no-op).
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_http_branch_delegates_every_path_to_the_supplied_application():
     """Spec-046 Decision 13: HTTP is delegation, for GraphQL paths too.
 
@@ -2211,7 +2211,7 @@ async def test_http_branch_delegates_every_path_to_the_supplied_application():
         pytest.param([], False, id="missing-origin"),
     ],
 )
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_websocket_handshake_origin_directions(headers, expected_connected):
     """The three origin directions (match / mismatch / missing) on the WS branch.
 
@@ -2254,7 +2254,7 @@ async def test_websocket_handshake_origin_directions(headers, expected_connected
         pytest.param("/graphql/extra", False, id="path-extension"),
     ],
 )
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_default_websocket_url_pattern_matches_exactly(path, expected_connected):
     """Spec-046 row 11, behavioral half: the default pattern is exact.
 
@@ -2287,7 +2287,7 @@ async def test_default_websocket_url_pattern_matches_exactly(path, expected_conn
         await communicator.wait(timeout=10)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_schema_object_passes_through_unchanged_with_extensions_intact():
     """Spec-046 row 12: the consumer holds the exact schema; extensions execute.
 
@@ -2562,7 +2562,7 @@ def test_the_host_projection_matches_djangos_asgi_adapter_key_for_key(headers, s
         pytest.param("evil.example", "http://evil.example.com", False, id="both-hostile"),
     ],
 )
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_the_websocket_host_and_origin_checks_are_independent(
     host,
     origin,
@@ -2607,7 +2607,7 @@ async def test_the_websocket_host_and_origin_checks_are_independent(
         pytest.param(["testserver"], "", "http://testserver", id="empty"),
     ],
 )
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_django_owns_the_websocket_host_matching(allowed_hosts, host, origin):
     """The verdict IS Django's verdict, asserted by delegation.
 
@@ -2636,7 +2636,7 @@ async def test_django_owns_the_websocket_host_matching(allowed_hosts, host, orig
     assert connected is (django_verdict is not None)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_the_debug_localhost_default_matches_djangos_own_websocket_side():
     """``DEBUG`` + empty ``ALLOWED_HOSTS`` is Django's decision too.
 
@@ -2664,7 +2664,7 @@ async def test_the_debug_localhost_default_matches_djangos_own_websocket_side():
     assert hostile is False
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form():
     """Ambiguity fails closed, in Django's own comma-joined form.
 
@@ -2696,7 +2696,7 @@ async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form()
     assert duplicate is False
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_an_odd_cased_host_header_still_reaches_the_boundary():
     """Header-name casing is normalized, not trusted.
 
@@ -2724,7 +2724,7 @@ async def test_an_odd_cased_host_header_still_reaches_the_boundary():
     assert detail == _TRANSPORT_WS
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_handshake_carrying_no_host_information_at_all_is_denied():
     """The fallback arm's verdict, pinned behaviorally.
 
@@ -2761,7 +2761,7 @@ async def test_a_handshake_carrying_no_host_information_at_all_is_denied():
     assert (control, detail) == (True, _TRANSPORT_WS)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
     """The transport codec, on the one input that shows it.
 
@@ -2796,7 +2796,7 @@ async def test_a_latin_1_only_host_header_is_decoded_rather_than_crashing():
 
 
 @pytest.mark.parametrize("use_x_forwarded_host", [True, False])
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_x_forwarded_host_is_honoured_only_under_the_django_setting(use_x_forwarded_host):
     """``USE_X_FORWARDED_HOST`` behaves identically to HTTP.
 
@@ -2835,7 +2835,7 @@ async def test_x_forwarded_host_is_honoured_only_under_the_django_setting(use_x_
     assert connected is use_x_forwarded_host
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host():
     """The forwarded header's DENY direction.
 
@@ -2869,7 +2869,7 @@ async def test_a_hostile_x_forwarded_host_is_refused_even_behind_an_allowed_host
     assert detail == _DENIED_HANDSHAKE_CLOSE_CODE
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
     """``scope["server"]`` is Django's normal no-host-header fallback.
 
@@ -2907,7 +2907,7 @@ async def test_with_no_host_header_the_scope_server_supplies_djangos_fallback():
     assert hostile is False
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch):
     """An unexpected exception propagates instead of being reported as a host.
 
@@ -2942,7 +2942,7 @@ async def test_only_disallowed_host_becomes_a_websocket_denial(monkeypatch):
         await communicator.wait(timeout=10)
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_non_conformant_header_shape_propagates_instead_of_denying():
     """The same contract, with nothing monkeypatched.
 
@@ -2974,7 +2974,7 @@ async def test_a_non_conformant_header_shape_propagates_instead_of_denying():
 
 
 @pytest.mark.parametrize("subdomain", ["sub.localhost", "deep.sub.localhost"])
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_the_debug_host_and_origin_defaults_diverge_on_a_localhost_subdomain(subdomain):
     """The one configuration where the two lists differ.
 
@@ -3037,7 +3037,7 @@ def _recording_websocket_application(reached):
     return application
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(monkeypatch):
     """spec-046 Decision 19 #"before authentication": the ordering, with two sentinels.
 
@@ -3088,7 +3088,7 @@ async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(m
     assert reached == ["/graphql"]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
     """Spec-046 row 28 + Decision 19: injection opts out of neither check.
 
@@ -3330,7 +3330,7 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_request_contract_resolves_over_the_websocket_branch():
     """A framework-shaped resolver works under the Channels context.
 
@@ -3661,7 +3661,7 @@ async def test_a_failing_auth_backend_load_also_fails_closed(monkeypatch, caplog
     assert "fail-closed" in records[0].getMessage()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_an_anonymous_socket_is_not_revalidated(monkeypatch, caplog):
     """The anonymous carve-out really skips the session read.
 
@@ -6003,7 +6003,7 @@ async def test_a_transition_in_flight_denies_both_checkpoints_inside_a_positive_
         pytest.param(_LEGACY_WS, 1002, id="graphql-ws"),
     ],
 )
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_router_delegates_non_text_frame_close_behavior_per_protocol(
     subprotocol,
     expected_close,
@@ -6022,7 +6022,7 @@ async def test_router_delegates_non_text_frame_close_behavior_per_protocol(
     assert output["code"] == expected_close
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_router_delegates_legacy_invalid_json_continuation():
     """Legacy graphql-ws ignores malformed JSON and continues its connection.
 
@@ -6039,7 +6039,7 @@ async def test_router_delegates_legacy_invalid_json_continuation():
     assert output["type"] == "connection_ack"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unauthenticated():
     """A custom or duck-typed actor object lacking is_authenticated is treated as unauthenticated.
 
@@ -6154,7 +6154,7 @@ def _mounted_handler(handler_class, websocket):
         pytest.param("{}", id="object-without-type"),
     ],
 )
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_non_dispatchable_frame_is_refused_and_the_connection_ends(
     frame_text,
     subprotocol,
@@ -6194,7 +6194,7 @@ async def test_a_non_dispatchable_frame_is_refused_and_the_connection_ends(
 
 
 @pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_an_unhashable_operation_id_is_refused_and_the_connection_ends(
     subprotocol,
 ):
@@ -6215,7 +6215,7 @@ async def test_an_unhashable_operation_id_is_refused_and_the_connection_ends(
 
 
 @pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_non_mapping_payload_is_refused_and_the_connection_ends_properly(
     subprotocol,
 ):
@@ -6234,7 +6234,7 @@ async def test_a_non_mapping_payload_is_refused_and_the_connection_ends_properly
 
 
 @pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_missing_payload_is_refused_per_protocol(subprotocol):
     """A missing payload field refuses the connection on BOTH protocols.
 
@@ -6255,7 +6255,7 @@ async def test_a_missing_payload_is_refused_per_protocol(subprotocol):
     await communicator.disconnect()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_legacy_stop_for_an_unstarted_id_is_refused_and_the_connection_ends():
     """``stop`` for an id that was never started must not kill the legacy loop.
 
@@ -6277,7 +6277,7 @@ async def test_a_legacy_stop_for_an_unstarted_id_is_refused_and_the_connection_e
     await communicator.disconnect()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_transport_ws_complete_for_an_unstarted_id_still_leaves_a_live_socket():
     """The contained-upstream contrast: an unknown ``complete`` is not an error.
 
@@ -6298,7 +6298,7 @@ async def test_a_transport_ws_complete_for_an_unstarted_id_still_leaves_a_live_s
 
 
 @pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_stack_overflowing_document_is_refused_and_the_connection_ends(
     pathological_json_text,
     subprotocol,
@@ -6324,7 +6324,7 @@ async def test_a_stack_overflowing_document_is_refused_and_the_connection_ends(
 
 
 @pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loop(
     subprotocol,
 ):

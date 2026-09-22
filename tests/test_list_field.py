@@ -619,7 +619,7 @@ def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_i
     assert exc.value.reason == "non_integer"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
     """Hostile aclose lookup during rejected async iterable cleanup attaches to error notes."""
     from django_strawberry_framework.orders import OrderSet

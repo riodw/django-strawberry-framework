@@ -5690,7 +5690,7 @@ def _generic_connection_types():
     return {"Branch": (Branch, BranchNode), "TaggedItem": (TaggedItem, TaggedItemNode)}
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_generic_connection_planning_does_no_sync_db_io_under_async():
     """Planning a generic connection under an event loop raises no ``SynchronousOnlyOperation``.
 

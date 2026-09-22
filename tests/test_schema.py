@@ -474,7 +474,7 @@ async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_tran
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_execute_mutation_field_async_exception_rolls_back():
     class DummyMutationCls:
         _mutation_meta = MagicMock(model=None)

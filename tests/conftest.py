@@ -34,6 +34,7 @@ relaxing ``-W error`` or filtering the warning.
 
 import asyncio
 import contextlib
+import inspect
 
 import pytest
 from django.db.backends.sqlite3 import base as sqlite_base
@@ -63,6 +64,56 @@ def _tracking_get_new_connection(self, conn_params):
 
 
 sqlite_base.DatabaseWrapper.get_new_connection = _tracking_get_new_connection
+
+
+def _marker_is_transactional(marker):
+    """Resolve a ``django_db`` marker's ``transaction`` argument the way pytest-django does.
+
+    ``transaction`` is the first positional parameter, so both ``django_db(True)`` and
+    ``django_db(transaction=True)`` mean the same thing; every other argument
+    (``databases``, ``reset_sequences``, ...) is irrelevant here.
+    """
+    if "transaction" in marker.kwargs:
+        return bool(marker.kwargs["transaction"])
+    if marker.args:
+        return bool(marker.args[0])
+    return False
+
+
+def pytest_collection_modifyitems(items):
+    """Fail collection for an ``async`` test marked ``django_db`` without ``transaction=True``.
+
+    An async test reaches the ORM through ``sync_to_async`` (or Django's ``a*`` methods),
+    which run on asgiref's thread-sensitive executor thread. That thread's connection sits
+    outside the transaction pytest-django opens on the main thread for a plain ``django_db``
+    test, so rows written there are committed to the shared in-memory SQLite database and
+    leak into every later test in the process. ``transaction=True`` flushes after the test,
+    so the rule is "async + ``django_db`` => ``transaction=True``". Enforcing it at collection
+    makes the failure deterministic and names the offending test, instead of surfacing later
+    as a nondeterministic row-count failure in an unrelated module.
+
+    Every offender is collected before raising so one run reports them all. ``asyncio_mode =
+    auto`` means async tests carry no explicit asyncio marker, so the coroutine check is the
+    only signal; ``get_closest_marker`` covers module-level ``pytestmark`` and lets a
+    per-test marker override it.
+    """
+    offenders = []
+    for item in items:
+        function = getattr(item, "obj", None)
+        if function is None or not inspect.iscoroutinefunction(function):
+            continue
+        marker = item.get_closest_marker("django_db")
+        if marker is None or _marker_is_transactional(marker):
+            continue
+        offenders.append(item.nodeid)
+    if offenders:
+        listing = "\n".join(f"  {nodeid}" for nodeid in offenders)
+        raise pytest.UsageError(
+            "async tests marked django_db must pass transaction=True - a plain django_db "
+            "transaction is opened on the main thread and cannot contain ORM writes made "
+            "on asgiref's executor thread, so those rows leak into later tests. Change the "
+            "marker to @pytest.mark.django_db(transaction=True) on:\n" + listing,
+        )
 
 
 @pytest.fixture

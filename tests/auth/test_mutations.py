@@ -889,7 +889,7 @@ def test_async_has_permission_raises_sync_misuse_never_a_silent_allow():
     assert "AsyncGate.has_permission returned a coroutine" in res.errors[0].message
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_async_permission_hook_rejected_inside_the_sync_worker_too():
     """The ``SyncMisuseError`` discipline holds inside the one ``sync_to_async`` boundary."""
 

@@ -32,6 +32,16 @@ custom-``get_queryset`` plan is rebuilt every request. Package tier: the helpers
 operate on model ``_meta`` and a strategy-agnostic join descriptor, unreachable
 from a live /graphql query (no observable schema surface); the deferral is driven
 through an in-process schema.
+
+The unmanaged ``_Idx*`` models exist because a model carries exactly one index
+set, so each index variant (bare, composite, expression, partial, reversed,
+constraint, migration-lagged, opclass, GIN) needs a model of its own, and the
+opclass / GIN variants are PostgreSQL-only DDL no SQLite-migrated fakeshop model
+can declare; they pin the covered / absent / unknown
+tri-state in
+``django_strawberry_framework/optimizer/nested_planner.py::_index_coverage`` and
+the warning it gates in
+``django_strawberry_framework/optimizer/nested_planner.py::_advise_composite_index``.
 """
 
 from types import SimpleNamespace

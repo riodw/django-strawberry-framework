@@ -30,14 +30,12 @@ registration refusal.
 
 from __future__ import annotations
 
-import itertools
 import sys
 
 import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
-from django.db import models
 from strawberry import relay
 
 import django_strawberry_framework
@@ -77,14 +75,6 @@ def _isolate_registry():
     registry.clear()
     yield
     registry.clear()
-
-
-_app_label_counter = itertools.count(1)
-
-
-def _unique_app_label() -> str:
-    """Return a unique ``app_label`` per call to avoid Django's re-register warning."""
-    return f"test_mutation_sets__{next(_app_label_counter)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1193,15 +1183,9 @@ def test_registry_clear_co_clears_mutation_namespace_and_declarations():
 def test_bind_no_registered_type_raises_no_type_to_return():
     """A mutation over a model with no registered ``DjangoType`` raises at finalize."""
 
-    class Lonely(models.Model):
-        name = models.TextField()
-
+    class CreatePeriodical(DjangoMutation):
         class Meta:
-            app_label = _unique_app_label()
-
-    class CreateLonely(DjangoMutation):
-        class Meta:
-            model = Lonely
+            model = library_models.Periodical
             operation = "create"
 
     with pytest.raises(ConfigurationError, match="no type to return"):
@@ -1219,29 +1203,23 @@ def test_bind_resolve_primary_distinguishes_ambiguous_from_zero_type():
     """
     from django_strawberry_framework.mutations.sets import _resolve_primary_type
 
-    class Twin(models.Model):
-        name = models.TextField()
-
+    class IssueTypeA(DjangoType):
         class Meta:
-            app_label = _unique_app_label()
+            model = library_models.Issue
+            fields = ("id", "title")
 
-    class TwinTypeA(DjangoType):
+    class IssueTypeB(DjangoType):
         class Meta:
-            model = Twin
-            fields = ("id", "name")
+            model = library_models.Issue
+            fields = ("id", "title")
 
-    class TwinTypeB(DjangoType):
+    class CreateIssue(DjangoMutation):
         class Meta:
-            model = Twin
-            fields = ("id", "name")
-
-    class CreateTwin(DjangoMutation):
-        class Meta:
-            model = Twin
+            model = library_models.Issue
             operation = "create"
 
     with pytest.raises(ConfigurationError, match="multiple registered DjangoTypes"):
-        _resolve_primary_type(CreateTwin, Twin)
+        _resolve_primary_type(CreateIssue, library_models.Issue)
 
     # The full finalize path catches this earlier at the Phase-1 ambiguity audit.
     with pytest.raises(ConfigurationError, match="multiple registered DjangoType subclasses"):

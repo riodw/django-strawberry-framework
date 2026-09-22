@@ -700,8 +700,9 @@ def instance_accessor(field: object) -> str:
     ``get_accessor_name()`` (``"book_set"``); ``getattr(root, field.name)``
     raises ``AttributeError`` there, and Django's
     ``prefetch_related`` rejects the query name as a lookup for the same
-    reason. They coincide whenever ``related_name`` is set, which is why
-    every fakeshop fixture masked the split. Forward fields
+    reason. They coincide whenever ``related_name`` is set, so only a
+    relation declared without one exposes the split (fakeshop's
+    ``RepairTicket.venue``, ``VenueBadge.venue``, ``VenueSponsor.venues``). Forward fields
     (``ForeignKey``, ``ManyToManyField``, ``OneToOneField``) have no
     ``get_accessor_name`` and their ``name`` IS the instance attribute.
 

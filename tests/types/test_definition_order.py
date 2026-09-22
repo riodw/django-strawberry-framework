@@ -5,6 +5,15 @@ SDL of annotation-only scalar overrides and ``field: auto`` lives in
 (``test_override_specimen_consumer_field_overrides_resolve_over_http``). This
 module keeps declaration-order traps, collision guards, Relay id-annotation
 rules, and ``_build_annotations`` internals that no request observes.
+
+The synthetic models declared inside tests here carry shapes the package refuses
+to expose (two columns camel-casing to one GraphQL name, a Strawberry
+``name=`` colliding with a column, an empty ``Meta.fields``, an unsupported
+field class, grouped choices), so no fakeshop model can carry them; they alone
+reach the collision and empty-surface raises in
+``django_strawberry_framework/types/finalizer.py::_audit_field_surface`` and the
+consumer-annotation bypass of those converter raises in
+``django_strawberry_framework/types/base.py::_build_annotations``.
 """
 
 import importlib

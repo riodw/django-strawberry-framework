@@ -7,10 +7,13 @@ in ``examples/fakeshop/tests/test_inspect_django_type.py``. What stays here has 
 fakeshop shape: argparse ``--schema`` help; a custom ``NameConverter`` (prefixing
 every SDL name would break the live GraphQL suite); empty-registry unfinalized /
 no-Meta bases; function-local UNRESOLVED forward refs; direct ``relay.Node``
-inheritance; OneToOne / MTI relation pks; a ``Meta.name`` / ``__name__`` collision;
-helper rendering (``_matched_scalar_key``, ``_sdl_type_name``, ``_render_annotation``,
-``_scalar_name``). Adding those models or a process-wide name converter to fakeshop
-would change the shipped SDL.
+inheritance; a ``Meta.name`` / ``__name__`` collision; helper rendering
+(``_matched_scalar_key``, ``_sdl_type_name``, ``_render_annotation``,
+``_scalar_name``). A process-wide name converter in fakeshop would change the
+shipped SDL. The relation-pk rows read real library models (the
+``PatronProfile.patron`` one-to-one pk and the ``LendingDesk.venue_ptr`` parent
+link) through test-local Relay-shaped types; this module declares no Django
+model.
 """
 
 import sys
@@ -21,6 +24,7 @@ from typing import NewType
 
 import pytest
 import strawberry
+from apps.library.models import LendingDesk, Patron, PatronProfile, Venue
 from apps.products.models import Category, Item
 from django.core.management import CommandError, call_command
 from django.db import models
@@ -37,52 +41,6 @@ from django_strawberry_framework.management.commands.inspect_django_type import 
     _sdl_type_name,
 )
 from django_strawberry_framework.registry import registry
-
-
-class InspRelPkTarget(models.Model):
-    """Implicit-id target for the test-only OneToOneField primary key below."""
-
-    label = models.TextField()
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class InspRelPkProfile(models.Model):
-    """A OneToOneField primary key - a legal single-column relation pk."""
-
-    target = models.OneToOneField(
-        InspRelPkTarget,
-        primary_key=True,
-        on_delete=models.CASCADE,
-        related_name="+",
-    )
-    label = models.TextField()
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class InspRelPkParent(models.Model):
-    """MTI parent: its child's parent-link pk is a relation field."""
-
-    label = models.TextField()
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class InspRelPkChild(InspRelPkParent):
-    """MTI child: ``insprelpkparent_ptr`` IS ``_meta.pk`` (a relation)."""
-
-    extra = models.TextField()
-
-    class Meta:
-        app_label = "products"
-        managed = False
 
 
 @pytest.fixture(autouse=True)
@@ -380,8 +338,10 @@ def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
 
     ``_build_annotations`` suppresses the pk annotation for a Relay-shaped type
     only in its NON-relation branch, so a relation pk keeps its auto-synthesized
-    annotation and finalize resolves it to the target type. The schema surface
-    therefore exposes ``target: <TargetType>!`` (the pk column's relation field)
+    annotation and finalize resolves it to the target type.
+    ``apps/library/models.py::PatronProfile`` is keyed by its one-to-one
+    ``patron``, so the schema surface
+    exposes ``patron: <TargetType>!`` (the pk column's relation field)
     alongside the interface-supplied ``id: GlobalID!`` - the pk field is NOT the
     id field. The table must mirror that: a relation row naming the resolved
     target type, never the interface's GlobalID row.
@@ -389,14 +349,14 @@ def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
 
     class InspRelPkTargetType(DjangoType):
         class Meta:
-            model = InspRelPkTarget
+            model = Patron
             primary = True
-            fields = ("id", "label")
+            fields = ("id", "name")
 
     class InspRelPkProfileType(DjangoType):
         class Meta:
-            model = InspRelPkProfile
-            fields = "__all__"
+            model = PatronProfile
+            fields = ("patron", "postal_code")
             interfaces = (relay.Node,)
 
     finalize_django_types()
@@ -404,7 +364,7 @@ def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
     call_command("inspect_django_type", "InspRelPkProfileType", stdout=out)
     text = out.getvalue()
 
-    target_row = _connection_row(text, "target")
+    target_row = _connection_row(text, "patron")
     assert "InspRelPkTargetType!" in target_row
     assert "relation: forward FK" in target_row
     assert "GlobalID!" not in target_row
@@ -418,7 +378,7 @@ def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
             raise NotImplementedError
 
     sdl = str(strawberry.Schema(query=Query))
-    assert "target: InspRelPkTargetType!" in sdl
+    assert "patron: InspRelPkTargetType!" in sdl
 
 
 def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
@@ -428,18 +388,19 @@ def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
     child, so the same non-suppression contract applies: the field renders the
     resolved parent type, not the interface's GlobalID (the id derives FROM the
     ptr column, but the GraphQL field named for it is a relation type).
+    ``apps/library/models.py::LendingDesk``'s ``venue_ptr`` is that pk.
     """
 
     class InspRelPkParentType(DjangoType):
         class Meta:
-            model = InspRelPkParent
+            model = Venue
             primary = True
-            fields = ("id", "label")
+            fields = ("id", "name")
 
     class InspRelPkChildType(DjangoType):
         class Meta:
-            model = InspRelPkChild
-            fields = "__all__"
+            model = LendingDesk
+            fields = ("venue_ptr", "window_count")
             interfaces = (relay.Node,)
 
     finalize_django_types()
@@ -447,7 +408,7 @@ def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
     call_command("inspect_django_type", "InspRelPkChildType", stdout=out)
     text = out.getvalue()
 
-    ptr_row = _connection_row(text, "insprelpkparent_ptr")
+    ptr_row = _connection_row(text, "venue_ptr")
     assert "InspRelPkParentType" in ptr_row
     assert "relation: forward FK" in ptr_row
     assert "GlobalID!" not in ptr_row

@@ -1,25 +1,17 @@
-"""Shared TEST-ONLY relation fixture models for row-preserving-predicate work.
+"""Shared TEST-ONLY composite-primary-key relation fixture models.
 
-These ``Rp*`` models exercise two relation shapes that the fakeshop example
-apps do not carry as first-class models: a forward ``to_field`` foreign key
-whose join binds on a non-pk column (with its reverse to-many hop), and a
-``CompositePrimaryKey`` parent with a reverse to-many. They are consumed by
-later tasks (GlobalID ``to_field`` handling and composite-pk correlation
-execution) and are defined here ONCE so every consumer imports the same
-classes.
+These ``Rp*`` models carry a ``CompositePrimaryKey`` parent with a reverse
+to-many, a relation shape the fakeshop example apps do not carry as
+first-class models. They are defined here ONCE so every consumer imports the
+same classes.
 
-They follow this repo's established test-model idiom rather than living in a
-Django app: each model is a plain ``django.db.models.Model`` with
+Each model is a plain ``django.db.models.Model`` with
 ``class Meta: app_label = "products"`` and ``managed = False``. The
 ``app_label`` MUST name an installed app so Django wires the reverse
 relations into ``_meta.get_fields()``; ``managed = False`` keeps ``migrate``
 and the test runner from ever creating or dropping their tables on their own.
 Because nothing manages the tables, callers create and drop them on demand
-with ``connection.schema_editor()`` via ``relation_fixture_tables`` -- see
-``tests/test_relay_connection.py`` (the ``PlainAuthor`` / ``PlainBook``
-reverse-FK fixture) and ``tests/test_lateral_pg_parity.py`` (the
-``NaturalParent`` / ``NaturalChild`` / ``NaturalMembership`` lifecycle) for
-the same pattern.
+with ``connection.schema_editor()`` via ``relation_fixture_tables``.
 
 None of these classes is wrapped in a Strawberry ``DjangoType``; they must
 never enter any GraphQL schema. The ``Rp`` prefix keeps the class and table
@@ -31,45 +23,19 @@ import contextlib
 from django.db import models
 
 
-class RpToFieldTarget(models.Model):
-    """A ``to_field`` target whose auto pk deliberately differs from ``code``.
-
-    ``code`` is the unique column that ``RpToFieldChild.target`` references,
-    so the forward FK join and the reverse ``children`` hop both bind on
-    ``code`` rather than on the auto pk -- the acceptance "matrix row 7"
-    shape.
-    """
-
-    code = models.CharField(max_length=32, unique=True)
-    label = models.CharField(max_length=64)
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class RpToFieldChild(models.Model):
-    """A child whose FK targets ``RpToFieldTarget.code`` (a non-pk column)."""
-
-    target = models.ForeignKey(
-        RpToFieldTarget,
-        to_field="code",
-        on_delete=models.CASCADE,
-        related_name="children",
-    )
-    name = models.CharField(max_length=64)
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
 class RpCompositeParent(models.Model):
     """A composite-primary-key parent (``tenant_id`` + ``code``).
 
     Django's ``CompositePrimaryKey`` (supported on the >= 5.2.16 floor this repo
     targets) names the concrete member fields; instance ``pk`` reads back as a
     tuple in declaration order (e.g. ``(1, "X")``).
+
+    This family models a composite-primary-key parent whose reverse to-many
+    needs a ``ForeignObject`` child (Django refuses a plain ``ForeignKey`` to a
+    ``CompositePrimaryKey`` target, ``fields.E347``), a shape fakeshop excludes
+    because Relay finalization rejects composite pks, and it alone executes
+    ``django_strawberry_framework/optimizer/predicates.py::correlated_inner_root``
+    against a real composite-pk table.
     """
 
     tenant_id = models.IntegerField()
@@ -118,7 +84,7 @@ def relation_fixture_tables(connection):
     """Create the ``Rp*`` fixture tables via ``schema_editor``; drop on exit.
 
     The models are ``managed = False``, so their tables never exist until a
-    caller materializes them. This context manager creates all four in FK
+    caller materializes them. This context manager creates both in FK
     dependency order and deletes them in reverse on exit (including on
     error), leaving no residue in the test database.
 
@@ -127,12 +93,7 @@ def relation_fixture_tables(connection):
     wrapper) and pass the test ``connection``
     (``from django.db import connection``).
     """
-    models_in_order = [
-        RpToFieldTarget,
-        RpToFieldChild,
-        RpCompositeParent,
-        RpCompositeChild,
-    ]
+    models_in_order = [RpCompositeParent, RpCompositeChild]
     created: list[type[models.Model]] = []
     try:
         with connection.schema_editor() as editor:

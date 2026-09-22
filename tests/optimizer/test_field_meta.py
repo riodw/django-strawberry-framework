@@ -11,36 +11,26 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
-from apps.library.models import Book, Branch, Genre, MembershipCard, Patron, TaggedItem
+from apps.library.models import (
+    Book,
+    Branch,
+    Genre,
+    LendingDesk,
+    MembershipCard,
+    Patron,
+    RepairTicket,
+    TaggedItem,
+    Venue,
+)
 from apps.products import services
 from apps.products.models import Category, Item
-from django.db import models
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta, _target_pk_name
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.relations import has_composite_pk
-
-
-class _MtiPlace(models.Model):
-    """Unmanaged MTI parent used for metadata-only tests."""
-
-    name = models.CharField(max_length=50)
-
-    class Meta:
-        app_label = "tests"
-        managed = False
-
-
-class _MtiRestaurant(_MtiPlace):
-    """MTI child whose primary key is an auto-created parent link."""
-
-    serves_pizza = models.BooleanField(default=False)
-
-    class Meta:
-        app_label = "tests"
-        managed = False
+from tests._relation_fixtures import RpCompositeParent
 
 
 @pytest.fixture(autouse=True)
@@ -126,23 +116,20 @@ def test_from_django_field_reverse_fk():
 def test_from_django_field_populates_accessor_name_for_unnamed_reverse_fk():
     """``accessor_name`` carries ``get_accessor_name()`` when it diverges from ``name``.
 
-    A reverse FK without ``related_name`` exposes the related QUERY name as
-    ``field.name`` and the ``*_set`` accessor as the instance attribute.
+    ``apps/library/models.py::RepairTicket.venue`` declares no ``related_name``,
+    so the reverse relation on ``Venue`` exposes the related QUERY name
+    ``repairticket`` as ``field.name`` and ``repairticket_set`` as the
+    instance attribute.
     ``FieldMeta`` is a frozen snapshot that cannot answer
     ``get_accessor_name()`` live, so the builder precomputes the accessor
     for the optimizer's prefetch lookups and the strictness cache probes.
     """
-    from types import SimpleNamespace
-
-    rel_like = SimpleNamespace(
-        name="plainbook",
-        is_relation=True,
-        one_to_many=True,
-        auto_created=True,
-        get_accessor_name=lambda: "plainbook_set",
-    )
-    fm = FieldMeta.from_django_field(rel_like)
-    assert fm.accessor_name == "plainbook_set"
+    rel = Venue._meta.get_field("repairticket")
+    assert rel.name == "repairticket"
+    assert rel.related_model is RepairTicket
+    fm = FieldMeta.from_django_field(rel)
+    assert fm.name == "repairticket"
+    assert fm.accessor_name == "repairticket_set"
 
 
 def test_from_django_field_reverse_many_to_many():
@@ -520,18 +507,8 @@ def test_fk_id_elision_edge_cases():
     assert fm_to_field.target_pk_name == "id"
     assert fm_to_field.fk_id_elision_eligible is False
 
-    # Composite PK model: not eligible
-    class DummyCompositeModel(models.Model):
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    DummyCompositeModel._meta.pk_fields = (
-        SimpleNamespace(name="tenant_id"),
-        SimpleNamespace(name="id"),
-    )
-    DummyCompositeModel._meta.pk = SimpleNamespace(name="id")
-    assert has_composite_pk(DummyCompositeModel) is True
+    # Composite PK target (``tests/_relation_fixtures.py::RpCompositeParent``): not eligible
+    assert has_composite_pk(RpCompositeParent) is True
 
     fake_comp_fk = SimpleNamespace(
         name="comp_rel",
@@ -540,7 +517,7 @@ def test_fk_id_elision_edge_cases():
         one_to_many=False,
         one_to_one=False,
         attname="comp_rel_id",
-        related_model=DummyCompositeModel,
+        related_model=RpCompositeParent,
         target_field=SimpleNamespace(name="id", attname="id"),
     )
     fm_comp = FieldMeta.from_django_field(fake_comp_fk)
@@ -736,7 +713,8 @@ def test_walker_produces_same_plan_with_cached_map(django_assert_num_queries):
 
 def test_from_django_field_mti_parent_link_is_forward_single_and_non_null():
     """The concrete auto-created MTI link stays forward, required, and elidable."""
-    parent_link = _MtiRestaurant._meta.pk
+    parent_link = LendingDesk._meta.pk
+    assert parent_link.name == "venue_ptr"
     assert parent_link.one_to_one is True
     assert parent_link.auto_created is True
     assert parent_link.concrete is True
@@ -746,7 +724,7 @@ def test_from_django_field_mti_parent_link_is_forward_single_and_non_null():
     assert fm.one_to_one is True
     assert fm.auto_created is True
     assert fm.concrete is True
-    assert fm.related_model is _MtiPlace
+    assert fm.related_model is Venue
     assert fm.relation_kind == "forward_single"
     assert fm.is_many_side is False
     assert fm.nullable is False
@@ -778,26 +756,26 @@ def test_resolve_field_map_unregistered_stamps_field_meta_under_raw_name():
 def test_mti_child_type_renders_parent_link_non_null():
     """A DjangoType exposes the MTI parent link as required in the SDL."""
 
-    class MtiPlaceType(DjangoType):
+    class VenueNode(DjangoType):
         class Meta:
-            model = _MtiPlace
+            model = Venue
             fields = ("id", "name")
 
-    class MtiRestaurantType(DjangoType):
+    class LendingDeskNode(DjangoType):
         class Meta:
-            model = _MtiRestaurant
-            fields = "__all__"
+            model = LendingDesk
+            fields = ("venue_ptr", "window_count")
 
     @strawberry.type
     class Query:
         @strawberry.field
-        def restaurant(self) -> MtiRestaurantType:
+        def desk(self) -> LendingDeskNode:
             raise NotImplementedError
 
     finalize_django_types()
     sdl = str(strawberry.Schema(query=Query))
 
-    assert "MtiplacePtr: MtiPlaceType!" in sdl
+    assert "venuePtr: VenueNode!" in sdl
 
 
 def test_from_django_field_non_string_attributes():

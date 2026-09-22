@@ -14,7 +14,7 @@ import dataclasses
 from types import SimpleNamespace
 
 import pytest
-from apps.library.models import Book, Genre, Shelf
+from apps.library.models import Book, Genre, LendingDesk, Shelf
 from django.db import connections, models
 from django.db.models import F, Prefetch, Value
 from django.db.models.fields.related_descriptors import _filter_prefetch_queryset
@@ -369,49 +369,40 @@ def test_spec_downgrades_on_columnless_primary_key():
 
 
 def test_spec_downgrades_for_multi_table_inherited_order_column():
-    """Parent-table order columns cannot be rendered against the child table."""
+    """Parent-table order columns cannot be rendered against the child table.
 
-    class ParentOrderRecord(models.Model):
-        inherited_order = models.IntegerField()
+    ``LendingDesk.opened_on`` lives on the ``Venue`` table, one parent-link join
+    away from the child table the lateral branch reads; the child-local
+    ``window_count`` beside it maps onto the child's own columns.
+    """
+    from django_strawberry_framework.optimizer.lateral_fetch import _order_columns
 
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class ChildOrderRecord(ParentOrderRecord):
-        local_value = models.IntegerField()
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
+    assert _order_columns(("window_count", "pk"), LendingDesk._meta) == (
+        ("window_count", False),
+        ("venue_ptr_id", False),
+    )
+    assert _order_columns(("opened_on", "pk"), LendingDesk._meta) is None
     request = _shelf_books_request(
-        child_queryset=ChildOrderRecord.objects.all(),
-        order_by=("inherited_order", "pk"),
+        child_queryset=LendingDesk.objects.only("window_count"),
+        order_by=("opened_on", "pk"),
     )
     assert _build_lateral_spec(request) is None
 
 
 def test_spec_downgrades_for_selected_multi_table_parent_column():
-    """A parent-table projection needs Django's join, so raw lateral SQL downgrades."""
+    """A parent-table projection needs Django's join, so raw lateral SQL downgrades.
 
-    class ParentProjectionRecord(models.Model):
-        inherited_value = models.IntegerField()
+    The order ``("window_count", "pk")`` is child-local and renderable, so the
+    refusal is the projection's: ``.only("name", "window_count")`` selects the
+    inherited ``name``, which lives on the ``Venue`` parent table.
+    """
+    from django_strawberry_framework.optimizer.lateral_fetch import _select_columns
 
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class ChildProjectionRecord(ParentProjectionRecord):
-        local_order = models.IntegerField()
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
+    child_queryset = LendingDesk.objects.only("name", "window_count")
+    assert _select_columns(child_queryset, LendingDesk._meta) is None
     request = _shelf_books_request(
-        child_queryset=ChildProjectionRecord.objects.all(),
-        order_by=("local_order", "pk"),
+        child_queryset=child_queryset,
+        order_by=("window_count", "pk"),
     )
     assert _build_lateral_spec(request) is None
 

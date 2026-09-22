@@ -28,8 +28,8 @@ This module keeps claims no GraphQL request can express:
   on the shipped schema. Related-path acceptance is live
   (``test_root_keyset_order_by_related_path_seeks_via_annotation``).
 - Pure helpers ``_keyset_order_ref`` and ``_resolve_order_path_field``
-  (including detached / virtual fields and an unmanaged MTI parent link
-  fakeshop does not ship).
+  (including detached / virtual fields, and the ``LendingDesk.venue_ptr``
+  parent link no keyset type orders through).
 - Nested-planner ``_keyset_window_slice_from_arguments`` returning ``None`` /
   ``UnwindowableConnection`` (the walker swallows those internally). Live
   nested first/after/last rows pin the consumer consequence.
@@ -43,9 +43,8 @@ This module keeps claims no GraphQL request can express:
 from types import SimpleNamespace
 
 import pytest
-from apps.library.models import Book, Issue, Patron, Periodical
+from apps.library.models import Book, Issue, LendingDesk, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
-from django.db import models
 from django.db.models import Count, F
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
@@ -373,22 +372,10 @@ def test_resolve_order_path_field_arms():
 
 def test_resolve_order_path_field_accepts_mti_parent_link():
     """A concrete auto-created parent link is a safe non-null forward hop."""
+    parent_link = LendingDesk._meta.pk
+    assert parent_link.name == "venue_ptr"
 
-    class Parent(models.Model):
-        label = models.CharField(max_length=20)
-
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    class Child(Parent):
-        class Meta:
-            app_label = "tests"
-            managed = False
-
-    parent_link = Child._meta.pk
-
-    assert _resolve_order_path_field(Child, f"{parent_link.name}__label").name == "label"
+    assert _resolve_order_path_field(LendingDesk, "venue_ptr__name").name == "name"
 
 
 # =============================================================================

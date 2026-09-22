@@ -85,11 +85,16 @@ from django_strawberry_framework.optimizer.predicates import correlated_inner_ro
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
-from tests._relation_fixtures import (
-    RpToFieldChild,
-    RpToFieldTarget,
-    relation_fixture_tables,
-)
+
+
+def _favoring_profile(genre, postal_code):
+    """Create a patron and a profile whose ``favorite_genre`` is ``genre``."""
+    patron = library_models.Patron.objects.create(name=f"patron-{postal_code}")
+    return library_models.PatronProfile.objects.create(
+        patron=patron,
+        postal_code=postal_code,
+        favorite_genre=genre,
+    )
 
 
 class ShelfProxy(library_models.Shelf):
@@ -98,7 +103,10 @@ class ShelfProxy(library_models.Shelf):
     Declared at module scope (not inside the test body) so Django's app
     registry sees it during normal app loading; late-bound model
     registration inside a function body has shifting tolerance across
-    Django releases.
+    Django releases. A proxy of a concrete model is a legal shape (fakeshop
+    ships ``ProxyBranch``); conversion onto it is deferred, and this proxy pins
+    the proxy rejection of
+    ``django_strawberry_framework/filters/sets.py::FilterSet._apply_related_constraints``.
     """
 
     class Meta:
@@ -718,23 +726,24 @@ def test_filter_for_field_marks_non_pk_to_field_relation_globalid_with_pk_path()
     The generated ``GlobalIDFilter`` must carry the boolean
     ``_GLOBALID_RELATION_PK_ATTR`` flag set ``True`` so its predicate derives
     ``f"{field_name}__pk"`` and compares the target's primary key (which a Relay
-    GlobalID carries) rather than the raw FK-stored ``code`` column.
+    GlobalID carries) rather than the raw FK-stored ``name`` column of
+    ``PatronProfile.favorite_genre``.
     """
 
-    class TargetType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = RpToFieldTarget
+            model = library_models.Genre
             interfaces = (strawberry.relay.Node,)
 
-    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class ChildFilter(FilterSet):
         class Meta:
-            model = RpToFieldChild
-            fields = {"name": ["exact"]}
+            model = library_models.PatronProfile
+            fields = {"postal_code": ["exact"]}
 
-    field = RpToFieldChild._meta.get_field("target")
-    resolved = ChildFilter.filter_for_field(field, "target")
+    field = library_models.PatronProfile._meta.get_field("favorite_genre")
+    resolved = ChildFilter.filter_for_field(field, "favorite_genre")
     assert isinstance(resolved, GlobalIDFilter)
     assert getattr(resolved, _GLOBALID_RELATION_PK_ATTR, None) is True
 
@@ -867,163 +876,168 @@ def test_generated_forward_fk_in_execution_matches_requested_targets():
 def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice():
     """Forward Relay FK ``in`` over a non-pk ``to_field`` is pk-qualified.
 
-    ``RpToFieldChild.target`` binds on ``RpToFieldTarget.code`` (a non-pk column), so
-    the generated ``target__in`` leaf must be a ``GlobalIDMultipleChoiceFilter`` that
-    STILL carries the boolean ``_GLOBALID_RELATION_PK_ATTR`` marker (stamped after the
-    lookup-aware class is chosen) so its predicate derives ``target__pk__in`` and
-    compares the target primary key a Relay GlobalID carries. The sibling exact leaf
+    ``PatronProfile.favorite_genre`` binds on ``Genre.name`` (a non-pk column), so the
+    generated ``favorite_genre__in`` leaf must be a ``GlobalIDMultipleChoiceFilter``
+    that STILL carries the boolean ``_GLOBALID_RELATION_PK_ATTR`` marker (stamped after
+    the lookup-aware class is chosen) so its predicate derives
+    ``favorite_genre__pk__in`` and compares the genre primary key a Relay GlobalID
+    carries. The sibling exact leaf
     keeps the marked scalar ``GlobalIDFilter`` shape.
     """
 
-    class TargetType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = RpToFieldTarget
+            model = library_models.Genre
             interfaces = (strawberry.relay.Node,)
 
-    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class ChildFilter(FilterSet):
         class Meta:
-            model = RpToFieldChild
-            fields = {"target": ["exact", "in"]}
+            model = library_models.PatronProfile
+            fields = {"favorite_genre": ["exact", "in"]}
 
-    field = RpToFieldChild._meta.get_field("target")
+    field = library_models.PatronProfile._meta.get_field("favorite_genre")
     generated = ChildFilter.get_filters()
 
-    in_leaf = generated["target__in"]
+    in_leaf = generated["favorite_genre__in"]
     assert isinstance(in_leaf, GlobalIDMultipleChoiceFilter)
     assert getattr(in_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
     assert convert_filter_to_input_annotation(in_leaf, field) == list[str] | None
 
-    exact_leaf = generated["target"]
+    exact_leaf = generated["favorite_genre"]
     assert isinstance(exact_leaf, GlobalIDFilter)
     assert not isinstance(exact_leaf, GlobalIDMultipleChoiceFilter)
     assert getattr(exact_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_generated_forward_fk_to_field_in_execution_matches_by_decoded_pk():
     """The generated non-pk-``to_field`` ``in`` leaf unions targets by decoded pk.
 
-    The FK stores / joins on ``code`` but a Relay GlobalID carries the target's pk, so
-    the pk-qualified ``target__pk__in`` predicate returns the children of the encoded
-    targets, whereas the raw ``target__in`` (pk values against the ``code`` column)
-    matches nothing -- the red->green proof that ``pk != code`` matters.
+    The FK stores / joins on ``name`` but a Relay GlobalID carries the genre's pk, so
+    the pk-qualified ``favorite_genre__pk__in`` predicate returns the profiles of the
+    encoded genres, whereas the raw ``favorite_genre__in`` (pk values against the
+    ``name`` column) matches nothing.
     """
-    from django.db import connection
 
-    class TargetType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = RpToFieldTarget
+            model = library_models.Genre
             interfaces = (strawberry.relay.Node,)
 
-    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class ChildFilter(FilterSet):
         class Meta:
-            model = RpToFieldChild
-            fields = {"target": ["in"]}
+            model = library_models.PatronProfile
+            fields = {"favorite_genre": ["in"]}
 
-    in_leaf = ChildFilter.get_filters()["target__in"]
+    in_leaf = ChildFilter.get_filters()["favorite_genre__in"]
     assert isinstance(in_leaf, GlobalIDMultipleChoiceFilter)
     assert getattr(in_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
 
-    with relation_fixture_tables(connection):
-        alpha = RpToFieldTarget.objects.create(code="ALPHA", label="A")
-        beta = RpToFieldTarget.objects.create(code="BETA", label="B")
-        gamma = RpToFieldTarget.objects.create(code="GAMMA", label="G")
-        RpToFieldChild.objects.create(target=alpha, name="a-child")
-        RpToFieldChild.objects.create(target=beta, name="b-child")
-        RpToFieldChild.objects.create(target=gamma, name="g-child")
-        assert alpha.pk != alpha.code
+    alpha = library_models.Genre.objects.create(name="ALPHA")
+    beta = library_models.Genre.objects.create(name="BETA")
+    gamma = library_models.Genre.objects.create(name="GAMMA")
+    _favoring_profile(alpha, "a-child")
+    _favoring_profile(beta, "b-child")
+    _favoring_profile(gamma, "g-child")
+    assert str(alpha.pk) != alpha.name
 
-        requested = [
-            strawberry.relay.to_base64("TargetType", str(alpha.pk)),
-            strawberry.relay.to_base64("TargetType", str(beta.pk)),
-        ]
-        result = in_leaf.filter(RpToFieldChild.objects.all(), requested)
-        assert set(result.values_list("name", flat=True)) == {"a-child", "b-child"}
-        expected = RpToFieldChild.objects.filter(target__pk__in=[alpha.pk, beta.pk])
-        assert set(result.values_list("pk", flat=True)) == set(
-            expected.values_list("pk", flat=True),
-        )
+    requested = [
+        strawberry.relay.to_base64("GenreType", str(alpha.pk)),
+        strawberry.relay.to_base64("GenreType", str(beta.pk)),
+    ]
+    result = in_leaf.filter(library_models.PatronProfile.objects.all(), requested)
+    assert set(result.values_list("postal_code", flat=True)) == {"a-child", "b-child"}
+    expected = library_models.PatronProfile.objects.filter(
+        favorite_genre__pk__in=[alpha.pk, beta.pk],
+    )
+    assert set(result.values_list("pk", flat=True)) == set(
+        expected.values_list("pk", flat=True),
+    )
 
-        # The raw non-pk path compares the pk values against the stored ``code``
-        # column and matches nothing -- why the ``__pk`` qualification is required.
-        wrong = RpToFieldChild.objects.filter(target__in=[str(alpha.pk), str(beta.pk)])
-        assert wrong.count() == 0
+    # The raw non-pk path compares the pk values against the stored ``name``
+    # column and matches nothing -- why the ``__pk`` qualification is required.
+    wrong = library_models.PatronProfile.objects.filter(
+        favorite_genre__in=[str(alpha.pk), str(beta.pk)],
+    )
+    assert wrong.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_expanded_related_filter_derives_pk_path_from_live_field_name():
     """An expanded ``to_field`` GlobalID leaf compiles against the rebased path.
 
     ``_expand_related_filter`` deepcopies a child leaf and rebases its
-    ``field_name`` to ``"<relation>__<child_field>"``. The old ABSOLUTE-string
-    marker (``"target__pk"``) went stale after that rebase and compiled
-    ``target__pk`` against the PARENT model -> ``FieldError``. The boolean flag
-    survives the deepcopy, and ``GlobalIDFilter.filter`` derives
-    ``"children__target__pk"`` from the LIVE ``field_name``, so the expanded leaf
-    filters the parent correctly against the target's primary key (``pk != code``).
+    ``field_name`` to ``"<relation>__<child_field>"``. An ABSOLUTE-string marker
+    (``"favorite_genre__pk"``) would go stale after that rebase and compile
+    ``favorite_genre__pk`` against the PARENT model -> ``FieldError``. The boolean
+    flag survives the deepcopy, and ``GlobalIDFilter.filter`` derives
+    ``"favoring_profiles__favorite_genre__pk"`` from the LIVE ``field_name``, so the
+    expanded leaf filters the parent correctly against the genre's primary key
+    (``pk != name``).
     """
     from django.core.exceptions import FieldError
-    from django.db import connection
 
-    class TargetType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = RpToFieldTarget
+            model = library_models.Genre
             interfaces = (strawberry.relay.Node,)
 
-    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class ChildFilter(FilterSet):
         class Meta:
-            model = RpToFieldChild
-            fields = {"target": ["exact"]}
+            model = library_models.PatronProfile
+            fields = {"favorite_genre": ["exact"]}
 
     class ParentFilter(FilterSet):
-        children = RelatedFilter(ChildFilter)
+        favoring_profiles = RelatedFilter(ChildFilter)
 
         class Meta:
-            model = RpToFieldTarget
-            fields = {"code": ["exact"]}
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
 
     # (a) The expanded leaf's LIVE field_name is the full relation path, and the
     # boolean pk-qualification flag rode the deepcopy through unchanged.
-    expanded_leaf = ParentFilter.get_filters()["children__target"]
+    expanded_leaf = ParentFilter.get_filters()["favoring_profiles__favorite_genre"]
     assert isinstance(expanded_leaf, GlobalIDFilter)
-    assert expanded_leaf.field_name == "children__target"
+    assert expanded_leaf.field_name == "favoring_profiles__favorite_genre"
     assert getattr(expanded_leaf, _GLOBALID_RELATION_PK_ATTR, False) is True
 
-    with relation_fixture_tables(connection):
-        t1 = RpToFieldTarget.objects.create(code="C1", label="one")
-        t2 = RpToFieldTarget.objects.create(code="C2", label="two")
-        RpToFieldTarget.objects.create(code="C3", label="three")  # no children
-        RpToFieldChild.objects.create(target=t1, name="t1-child")
-        RpToFieldChild.objects.create(target=t2, name="t2-child")
-        assert t1.pk != t1.code
+    t1 = library_models.Genre.objects.create(name="C1")
+    t2 = library_models.Genre.objects.create(name="C2")
+    library_models.Genre.objects.create(name="C3")  # no profiles
+    _favoring_profile(t1, "t1-child")
+    _favoring_profile(t2, "t2-child")
+    assert str(t1.pk) != t1.name
 
-        encoded = strawberry.relay.to_base64("TargetType", str(t1.pk))
-        result = expanded_leaf.filter(RpToFieldTarget.objects.all(), encoded)
+    encoded = strawberry.relay.to_base64("GenreType", str(t1.pk))
+    result = expanded_leaf.filter(library_models.Genre.objects.all(), encoded)
 
-        # (b) The derived ``children__target__pk`` predicate returns exactly the
-        # parent whose children point back at ``t1`` -- matching the explicit ORM.
-        production = list(result.order_by("id").values_list("pk", flat=True))
-        expected = list(
-            RpToFieldTarget.objects.filter(children__target__pk=t1.pk)
-            .order_by("id")
-            .values_list("pk", flat=True),
-        )
-        assert production == expected == [t1.pk]
+    # (b) The derived ``favoring_profiles__favorite_genre__pk`` predicate returns
+    # exactly the genre whose profiles point back at ``t1`` -- matching the ORM.
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    expected = list(
+        library_models.Genre.objects.filter(favoring_profiles__favorite_genre__pk=t1.pk)
+        .order_by("id")
+        .values_list("pk", flat=True),
+    )
+    assert production == expected == [t1.pk]
 
-        # The rebased-but-NOT-pk-qualified predicate compares against the ``code``
-        # column (pk != code) and wrongly matches nothing -- why ``__pk`` matters.
-        assert list(RpToFieldTarget.objects.filter(children__target=str(t1.pk))) == []
+    # The rebased-but-NOT-pk-qualified predicate compares against the ``name``
+    # column (pk != name) and wrongly matches nothing -- why ``__pk`` matters.
+    unqualified = library_models.Genre.objects.filter(
+        favoring_profiles__favorite_genre=str(t1.pk),
+    )
+    assert list(unqualified) == []
 
-        # The OLD absolute-string marker ("target__pk") would compile against the
-        # PARENT model, which has no ``target`` field -> FieldError.
-        with pytest.raises(FieldError):
-            list(RpToFieldTarget.objects.filter(target__pk=str(t1.pk)))
+    # An absolute-string marker ("favorite_genre__pk") would compile against the
+    # PARENT model, which has no ``favorite_genre`` field -> FieldError.
+    with pytest.raises(FieldError):
+        list(library_models.Genre.objects.filter(favorite_genre__pk=str(t1.pk)))
 
 
 # ---------------------------------------------------------------------------
@@ -1220,174 +1234,173 @@ def test_consumer_override_relation_nonstandard_lookup_not_rejected():
     assert isinstance(leaf, CustomM2M)
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_expanded_to_field_leaf_routes_pk_qualified_through_correlated_exists():
     """An expanded non-pk-``to_field`` GlobalID leaf routes and compiles ``__pk``.
 
-    Exercises the expanded ``children__target`` shape through the PARENT
+    Exercises the expanded ``favoring_profiles__favorite_genre`` shape through the PARENT
     ``FilterSet`` and its ``.qs`` -> ``FilterSet._apply_flat_leaves`` --
     NOT ``expanded_leaf.filter()`` in isolation like
     ``test_expanded_related_filter_derives_pk_path_from_live_field_name``, which
     never instantiates the parent. The leaf is a
-    ``GlobalIDFilter`` on ``RpToFieldChild.target`` (a forward FK on the non-pk
-    ``to_field="code"``), reached across the reverse to-many ``children`` prefix,
-    so it is routable AND pk-marked.
+    ``GlobalIDFilter`` on ``PatronProfile.favorite_genre`` (a forward FK on the
+    non-pk ``to_field="name"``), reached across the reverse to-many
+    ``favoring_profiles`` prefix, so it is routable AND pk-marked.
 
     The pk-qualification is what makes this correct rather than merely fast: the
-    auto pk and the FK-stored ``code`` column differ, so only the ``__pk``
+    auto pk and the FK-stored ``name`` column differ, so only the ``__pk``
     qualification returns the right row. Asserts ONE correlated ``EXISTS`` and the
     pk-qualified row set.
     """
-    from django.db import connection
 
-    class TargetType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = RpToFieldTarget
+            model = library_models.Genre
             interfaces = (strawberry.relay.Node,)
 
-    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class ChildFilter(FilterSet):
         class Meta:
-            model = RpToFieldChild
-            fields = {"target": ["exact"]}
+            model = library_models.PatronProfile
+            fields = {"favorite_genre": ["exact"]}
 
     class ParentFilter(FilterSet):
-        children = RelatedFilter(ChildFilter)
+        favoring_profiles = RelatedFilter(ChildFilter)
 
         class Meta:
-            model = RpToFieldTarget
-            fields = {"code": ["exact"]}
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
 
     # Publish the atomic expansion snapshot (sets ``base_filters`` + candidate
     # rows). The expanded to_field leaf is an eligible, pk-marked, ROUTABLE candidate.
     ParentFilter.get_filters()
-    candidate = ParentFilter._expansion_snapshot().candidates["children__target"]
+    candidate = ParentFilter._expansion_snapshot().candidates["favoring_profiles__favorite_genre"]
     assert candidate.eligible is True
     assert candidate.routable is True
 
-    with relation_fixture_tables(connection):
-        t1 = RpToFieldTarget.objects.create(code="C1", label="one")
-        RpToFieldChild.objects.create(target=t1, name="t1-child")
-        t2 = RpToFieldTarget.objects.create(code="C2", label="two")
-        RpToFieldChild.objects.create(target=t2, name="t2-child")
-        t3 = RpToFieldTarget.objects.create(code="C3", label="three")  # no children
-        # The auto pk and the FK-stored ``code`` to_field column differ, so ONLY the
-        # ``__pk`` qualification returns the right row.
-        assert t1.pk != t1.code
-        encoded = strawberry.relay.to_base64("TargetType", str(t1.pk))
-        outer = RpToFieldTarget.objects.order_by("id")
+    t1 = library_models.Genre.objects.create(name="C1")
+    _favoring_profile(t1, "t1-child")
+    t2 = library_models.Genre.objects.create(name="C2")
+    _favoring_profile(t2, "t2-child")
+    t3 = library_models.Genre.objects.create(name="C3")  # no profiles
+    # The auto pk and the FK-stored ``name`` to_field column differ, so ONLY the
+    # ``__pk`` qualification returns the right row.
+    assert str(t1.pk) != t1.name
+    encoded = strawberry.relay.to_base64("GenreType", str(t1.pk))
+    outer = library_models.Genre.objects.order_by("id")
 
-        def _build_fs():
-            return ParentFilter(
-                data={"children__target": encoded},
-                queryset=outer,
-                request=HttpRequest(),
-            )
+    def _build_fs():
+        return ParentFilter(
+            data={"favoring_profiles__favorite_genre": encoded},
+            queryset=outer,
+            request=HttpRequest(),
+        )
 
-        # Routed -> ONE correlated EXISTS, returning the pk-qualified rows (only
-        # ``t1``, whose child's ``target`` pk is ``t1``).
-        clean_fs = _build_fs()
-        clean_qs = clean_fs.qs
-        assert len(_reserved_aliases(clean_qs)) == 1
-        assert str(clean_qs.query).upper().count("EXISTS") == 1
-        assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk]
+    # Routed -> ONE correlated EXISTS, returning the pk-qualified rows (only
+    # ``t1``, whose profile's ``favorite_genre`` pk is ``t1``).
+    clean_fs = _build_fs()
+    clean_qs = clean_fs.qs
+    assert len(_reserved_aliases(clean_qs)) == 1
+    assert str(clean_qs.query).upper().count("EXISTS") == 1
+    assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
     """The expanded non-pk-``to_field`` ``in`` leaf through the adapter.
 
     The only regression that composes all three recently corrected mechanisms at
     once -- lookup-aware ``in``, non-pk pk-qualification, and live candidate
-    authorization -- over the reverse to-many ``children`` prefix. The earlier
-    ``in`` tests invoked the generated CHILD leaf directly on the child queryset;
-    this expands ``children__target__in`` across the reverse hop through the PARENT
+    authorization -- over the reverse to-many ``favoring_profiles`` prefix. The
+    earlier ``in`` tests invoked the generated CHILD leaf directly on the child
+    queryset; this expands ``favoring_profiles__favorite_genre__in`` across the
+    reverse hop through the PARENT
     ``FilterSet`` and its ``.qs`` -> ``_apply_flat_leaves`` gate. Proves the
     expanded live class + list annotation, marker survival through
     deepcopy/rebasing, one correlated ``EXISTS`` (no outer join / ``DISTINCT``),
-    correct rows for two encoded target pks (where ``pk != code``), and restrictive
+    correct rows for two encoded genre pks (where ``pk != name``), and restrictive
     empty-list behavior through the adapter.
     """
-    from django.db import connection
 
-    class TargetType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = RpToFieldTarget
+            model = library_models.Genre
             interfaces = (strawberry.relay.Node,)
 
-    apply_interfaces(TargetType, TargetType.__django_strawberry_definition__)
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class ChildFilter(FilterSet):
         class Meta:
-            model = RpToFieldChild
-            fields = {"target": ["in"]}
+            model = library_models.PatronProfile
+            fields = {"favorite_genre": ["in"]}
 
     class ParentFilter(FilterSet):
-        children = RelatedFilter(ChildFilter)
+        favoring_profiles = RelatedFilter(ChildFilter)
 
         class Meta:
-            model = RpToFieldTarget
-            fields = {"code": ["exact"]}
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
 
     ParentFilter.get_filters()
-    candidate = ParentFilter._expansion_snapshot().candidates["children__target__in"]
+    candidate = ParentFilter._expansion_snapshot().candidates[
+        "favoring_profiles__favorite_genre__in"
+    ]
     assert candidate.eligible is True
     assert candidate.routable is True
 
-    expanded_leaf = ParentFilter.get_filters()["children__target__in"]
+    expanded_leaf = ParentFilter.get_filters()["favoring_profiles__favorite_genre__in"]
     assert isinstance(expanded_leaf, GlobalIDMultipleChoiceFilter)
     assert getattr(expanded_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
-    child_target_field = RpToFieldChild._meta.get_field("target")
+    child_target_field = library_models.PatronProfile._meta.get_field("favorite_genre")
     assert (
         convert_filter_to_input_annotation(expanded_leaf, child_target_field) == list[str] | None
     )
 
-    with relation_fixture_tables(connection):
-        t1 = RpToFieldTarget.objects.create(code="C1", label="one")
-        RpToFieldChild.objects.create(target=t1, name="c1")
-        t2 = RpToFieldTarget.objects.create(code="C2", label="two")
-        RpToFieldChild.objects.create(target=t2, name="c2")
-        t3 = RpToFieldTarget.objects.create(code="C3", label="three")  # no children
-        assert t1.pk != t1.code
-        requested = [
-            strawberry.relay.to_base64("TargetType", str(t1.pk)),
-            strawberry.relay.to_base64("TargetType", str(t2.pk)),
-        ]
-        outer = RpToFieldTarget.objects.order_by("id")
+    t1 = library_models.Genre.objects.create(name="C1")
+    _favoring_profile(t1, "c1")
+    t2 = library_models.Genre.objects.create(name="C2")
+    _favoring_profile(t2, "c2")
+    t3 = library_models.Genre.objects.create(name="C3")  # no profiles
+    assert str(t1.pk) != t1.name
+    requested = [
+        strawberry.relay.to_base64("GenreType", str(t1.pk)),
+        strawberry.relay.to_base64("GenreType", str(t2.pk)),
+    ]
+    outer = library_models.Genre.objects.order_by("id")
 
-        clean_fs = ParentFilter(
-            data={"children__target__in": requested},
-            queryset=outer,
-            request=HttpRequest(),
-        )
-        clean_qs = clean_fs.qs
-        # The pk-qualification marker survived the deepcopy/rebasing onto the live
-        # instance (it is what makes the expanded leaf compile ``__pk``).
-        live = clean_fs.filters["children__target__in"]
-        assert getattr(live, _GLOBALID_RELATION_PK_ATTR, None) is True
-        # One correlated EXISTS; no outer join (root table only) and no DISTINCT.
-        assert len(_reserved_aliases(clean_qs)) == 1
-        sql = str(clean_qs.query).upper()
-        assert sql.count("EXISTS") == 1
-        assert "DISTINCT" not in sql
-        outer_tables = sorted({j.table_name for j in clean_qs.query.alias_map.values()})
-        assert outer_tables == [RpToFieldTarget._meta.db_table]
-        # Correct rows: t3 has no child, so only the two encoded (by pk) targets match.
-        assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk, t2.pk]
+    clean_fs = ParentFilter(
+        data={"favoring_profiles__favorite_genre__in": requested},
+        queryset=outer,
+        request=HttpRequest(),
+    )
+    clean_qs = clean_fs.qs
+    # The pk-qualification marker survived the deepcopy/rebasing onto the live
+    # instance (it is what makes the expanded leaf compile ``__pk``).
+    live = clean_fs.filters["favoring_profiles__favorite_genre__in"]
+    assert getattr(live, _GLOBALID_RELATION_PK_ATTR, None) is True
+    # One correlated EXISTS; no outer join (root table only) and no DISTINCT.
+    assert len(_reserved_aliases(clean_qs)) == 1
+    sql = str(clean_qs.query).upper()
+    assert sql.count("EXISTS") == 1
+    assert "DISTINCT" not in sql
+    outer_tables = sorted({j.table_name for j in clean_qs.query.alias_map.values()})
+    assert outer_tables == [library_models.Genre._meta.db_table]
+    # Correct rows: t3 has no child, so only the two encoded (by pk) targets match.
+    assert list(clean_qs.order_by("id").values_list("pk", flat=True)) == [t1.pk, t2.pk]
 
-        # Restrictive empty list THROUGH the adapter: the leaf is still routed (it is
-        # a routable candidate), invoked on the inner root, and yields
-        # ``inner_root.none()``; ``attach_exists`` composes ``Exists(none)``, which
-        # Django folds to a constant-false predicate. The result is 0 rows out of the
-        # 3 seeded targets -- restrictive, NOT the no-op that would return all rows.
-        empty_qs = ParentFilter(
-            data={"children__target__in": []},
-            queryset=outer,
-            request=HttpRequest(),
-        ).qs
-        assert RpToFieldTarget.objects.count() == 3
-        assert list(empty_qs.values_list("pk", flat=True)) == []
+    # Restrictive empty list THROUGH the adapter: the leaf is still routed (it is
+    # a routable candidate), invoked on the inner root, and yields
+    # ``inner_root.none()``; ``attach_exists`` composes ``Exists(none)``, which
+    # Django folds to a constant-false predicate. The result is 0 rows out of the
+    # 3 seeded targets -- restrictive, NOT the no-op that would return all rows.
+    empty_qs = ParentFilter(
+        data={"favoring_profiles__favorite_genre__in": []},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
+    assert library_models.Genre.objects.count() == 3
+    assert list(empty_qs.values_list("pk", flat=True)) == []
 
 
 # ---------------------------------------------------------------------------
@@ -2318,8 +2331,8 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate():
 #
 # Matrix row 7 (``to_field`` FK-to-non-pk hop) is proven by
 # ``test_c4_to_field_reverse_to_many_children_is_row_preserving`` below, over the
-# ``tests/_relation_fixtures.py`` ``RpToFieldTarget`` reverse to-many
-# (``children__name``, whose join binds on the non-pk ``code`` column).
+# ``Genre`` reverse to-many ``favoring_profiles__postal_code`` (whose join binds
+# on the non-pk ``name`` column of ``PatronProfile.favorite_genre``).
 #
 # Package-tier notes:
 # - matrix row 11 GlobalID-list sub-case: a framework-generated FLAT Relay M2M
@@ -2592,62 +2605,59 @@ def test_c4_nullable_intermediate_to_one_hop_is_row_preserving():
     assert oracle == production
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_c4_to_field_reverse_to_many_children_is_row_preserving():
     """Matrix row 7 (``to_field`` FK-to-non-pk hop), now executable.
 
-    ``RpToFieldTarget`` root over its reverse to-many ``children__name`` -- the
-    hop whose join binds on the non-pk ``code`` column (``RpToFieldChild.target``
-    is ``FK(to_field="code")``). The production ``FilterSet`` applicator
-    (correlated ``EXISTS``) returns each matching target exactly once, equal to
-    the deduped direct-JOIN baseline oracle, with ONE correlated ``EXISTS``, no
-    framework ``DISTINCT``, correlating on the parent pk while the inner join
-    binds children on ``code``.
+    ``Genre`` root over its reverse to-many ``favoring_profiles__postal_code`` --
+    the hop whose join binds on the non-pk ``name`` column
+    (``PatronProfile.favorite_genre`` is ``FK(to_field="name")``). The production
+    ``FilterSet`` applicator (correlated ``EXISTS``) returns each matching genre
+    exactly once, equal to the deduped direct-JOIN baseline oracle, with ONE
+    correlated ``EXISTS``, no framework ``DISTINCT``, correlating on the parent pk
+    while the inner join binds profiles on ``name``.
     """
-    from django.db import connection
+    matched = library_models.Genre.objects.create(name="T1")
+    _favoring_profile(matched, "cardio one")
+    _favoring_profile(matched, "cardio two")
+    other = library_models.Genre.objects.create(name="T2")
+    _favoring_profile(other, "neuro")
 
-    with relation_fixture_tables(connection):
-        matched = RpToFieldTarget.objects.create(code="T1", label="matched")
-        RpToFieldChild.objects.create(target=matched, name="cardio one")
-        RpToFieldChild.objects.create(target=matched, name="cardio two")
-        other = RpToFieldTarget.objects.create(code="T2", label="other")
-        RpToFieldChild.objects.create(target=other, name="neuro")
+    class TargetChildrenFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"favoring_profiles__postal_code": ["icontains"]}
 
-        class TargetChildrenFilter(FilterSet):
-            class Meta:
-                model = RpToFieldTarget
-                fields = {"children__name": ["icontains"]}
+    leaf = TargetChildrenFilter.get_filters()["favoring_profiles__postal_code__icontains"]
+    assert leaf.distinct is True
+    outer = library_models.Genre.objects.order_by("id")
+    result = TargetChildrenFilter(
+        data={"favoring_profiles__postal_code__icontains": "cardio"},
+        queryset=outer,
+        request=HttpRequest(),
+    ).qs
 
-        leaf = TargetChildrenFilter.get_filters()["children__name__icontains"]
-        assert leaf.distinct is True
-        outer = RpToFieldTarget.objects.order_by("id")
-        result = TargetChildrenFilter(
-            data={"children__name__icontains": "cardio"},
-            queryset=outer,
-            request=HttpRequest(),
-        ).qs
+    production = list(result.order_by("id").values_list("pk", flat=True))
+    # Test-local baseline oracle: the raw JOIN fans the parent out once per
+    # matching child; dedup to the expected parent set.
+    baseline = list(
+        library_models.Genre.objects.filter(favoring_profiles__postal_code__icontains="cardio")
+        .order_by("id")
+        .values_list("pk", flat=True),
+    )
+    assert baseline == [matched.pk, matched.pk]
+    expected = sorted(set(baseline))
+    assert production == expected == [matched.pk]
+    assert result.count() == 1
 
-        production = list(result.order_by("id").values_list("pk", flat=True))
-        # Test-local baseline oracle: the raw JOIN fans the parent out once per
-        # matching child; dedup to the expected parent set.
-        baseline = list(
-            RpToFieldTarget.objects.filter(children__name__icontains="cardio")
-            .order_by("id")
-            .values_list("pk", flat=True),
-        )
-        assert baseline == [matched.pk, matched.pk]
-        expected = sorted(set(baseline))
-        assert production == expected == [matched.pk]
-        assert result.count() == 1
-
-        sql = str(result.query)
-        assert sql.upper().count("EXISTS") == 1
-        assert "DISTINCT" not in sql.upper()
-        # Correlated on the parent pk (the outer target's auto pk column).
-        assert '"products_rptofieldtarget"."id"' in sql
-        # The inner join binds children on the non-pk ``code`` to_field column.
-        assert '"code" = ' in sql
-        assert "target_id" in sql
+    sql = str(result.query)
+    assert sql.upper().count("EXISTS") == 1
+    assert "DISTINCT" not in sql.upper()
+    # Correlated on the parent pk (the outer genre's auto pk column).
+    assert '"library_genre"."id"' in sql
+    # The inner join binds profiles on the non-pk ``name`` to_field column.
+    assert '"name" = ' in sql
+    assert "favorite_genre_id" in sql
 
 
 @pytest.mark.django_db

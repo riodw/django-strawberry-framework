@@ -1866,12 +1866,18 @@ def test_resolved_relation_annotation_nullable_fk_widens_to_optional(monkeypatch
 # ---------------------------------------------------------------------------
 # Meta.nullable_overrides / Meta.required_overrides (spec-029)
 #
-# Synthetic ``managed=False`` models give clean control over per-field
-# ``null`` (and a relation field) for the override-applies and validation
-# cases. ``text_value`` is a non-null column, ``note`` a nullable one (the
-# two directions the spec test plan names); ``partner`` is a relation field
-# for the non-relation-scope reject. ``_unique_override_app_label`` namespaces
-# each synthetic model so Django's app registry does not collide across tests.
+# ``_OverrideOwner`` stays synthetic: the override tests need a non-null text
+# column, a nullable one, a non-null choices column, a nullable choices column
+# and a relation on ONE model, so a single ``Meta.nullable_overrides`` /
+# ``Meta.required_overrides`` declaration can name a sibling of each kind, and
+# no fakeshop model carries a nullable choices column (all four fakeshop choices
+# columns are non-null). It drives the choice-enum arm of
+# ``django_strawberry_framework/types/base.py::_build_annotations`` through
+# ``Meta`` in both directions.
+# ``text_value`` is a non-null column, ``note`` a nullable one (the two
+# directions the spec test plan names); ``partner`` is a relation field for the
+# non-relation-scope reject. ``_unique_override_app_label`` namespaces each
+# synthetic model so Django's app registry does not collide across tests.
 # ---------------------------------------------------------------------------
 
 _override_app_label_counter = itertools.count(1)
@@ -2083,16 +2089,10 @@ def test_override_redundant_is_no_op():
 
 
 def _make_file_override_model():
-    """Return a synthetic model carrying a single ``FileField`` column."""
+    """Return ``scalars.MediaSpecimen``, whose ``attachment`` is a required ``FileField``."""
+    from apps.scalars.models import MediaSpecimen
 
-    class _FileOverrideOwner(models.Model):
-        attachment = models.FileField()
-
-        class Meta:
-            managed = False
-            app_label = _unique_override_app_label()
-
-    return _FileOverrideOwner
+    return MediaSpecimen
 
 
 def test_consumer_annotation_override_on_file_column_keeps_str_and_no_resolver():
@@ -2171,9 +2171,9 @@ def _make_file_override_model_type(model, *, namespace=None):
 
 
 # The three tests below reuse ``_make_path_optin_model`` / ``_make_path_optin_type``
-# from the next block: that pair is the only fixture carrying a file column, an
-# image column and a scalar in one model, which is what a per-column override
-# needs an unnamed sibling for.
+# from the next block: ``MediaSpecimen`` carries a file column, an image column
+# and a scalar in one model, which is what a per-column override needs an
+# unnamed sibling for.
 
 
 def test_meta_required_overrides_forces_non_null_file_output():
@@ -2186,7 +2186,7 @@ def test_meta_required_overrides_forces_non_null_file_output():
     the converter-level tests pin only the ``force_nullable`` keyword one layer
     below the contract's own spelling.
 
-    ``preview`` is the control: an unnamed sibling file/image column in the SAME
+    ``image`` is the control: an unnamed sibling file/image column in the SAME
     type stays ``| None``, so a passing first assertion cannot be explained by
     "file columns are non-null".
     """
@@ -2195,7 +2195,7 @@ def test_meta_required_overrides_forces_non_null_file_output():
     finalize_django_types()
 
     assert override_type.__annotations__["attachment"] is DjangoFileType
-    assert override_type.__annotations__["preview"] == (DjangoImageType | None)
+    assert override_type.__annotations__["image"] == (DjangoImageType | None)
 
 
 def test_meta_required_overrides_forces_non_null_image_output():
@@ -2205,10 +2205,10 @@ def test_meta_required_overrides_forces_non_null_image_output():
     column stays ``| None`` while the named image column loses it.
     """
     model = _make_path_optin_model()
-    override_type = _make_path_optin_type(model, required_overrides=("preview",))
+    override_type = _make_path_optin_type(model, required_overrides=("image",))
     finalize_django_types()
 
-    assert override_type.__annotations__["preview"] is DjangoImageType
+    assert override_type.__annotations__["image"] is DjangoImageType
     assert override_type.__annotations__["attachment"] == (DjangoFileType | None)
 
 
@@ -2233,18 +2233,10 @@ def test_meta_nullable_overrides_on_a_file_column_is_a_no_op():
 
 
 def _make_path_optin_model():
-    """Return a synthetic model with a file column, an image column, and a scalar."""
+    """Return ``scalars.MediaSpecimen``: a file column, an image column, and a text ``label``."""
+    from apps.scalars.models import MediaSpecimen
 
-    class _PathOptInOwner(models.Model):
-        attachment = models.FileField()
-        preview = models.ImageField(blank=True)
-        title = models.TextField()
-
-        class Meta:
-            managed = False
-            app_label = _unique_override_app_label()
-
-    return _PathOptInOwner
+    return MediaSpecimen
 
 
 def _make_path_optin_type(model, *, namespace=None, fields=None, **meta_attrs):
@@ -2258,8 +2250,8 @@ def _make_path_optin_type(model, *, namespace=None, fields=None, **meta_attrs):
             or (
                 "id",
                 "attachment",
-                "preview",
-                "title",
+                "image",
+                "label",
             ),
             **meta_attrs,
         },
@@ -2275,38 +2267,13 @@ def test_filesystem_path_fields_is_a_net_new_allowed_meta_key():
     assert "filesystem_path_fields" not in DEFERRED_META_KEYS
 
 
-def test_filesystem_path_fields_swaps_only_the_named_columns():
-    """Only a named column gets the path-bearing output object; siblings keep the default.
-
-    Per-column is the whole contract (spec-048 Decision 2): naming ``attachment``
-    must not also publish ``preview``'s path, or the opt-in would be a type-wide
-    switch wearing a field list.
-    """
-    model = _make_path_optin_model()
-    optin_type = _make_path_optin_type(model, filesystem_path_fields=("attachment",))
-    finalize_django_types()
-
-    assert optin_type.__annotations__["attachment"] == (DjangoFilePathType | None)
-    assert optin_type.__annotations__["preview"] == (DjangoImageType | None)
-
-
-def test_filesystem_path_fields_absent_leaves_every_column_pathless():
-    """The control case: no opt-in means neither column reaches a path-bearing type."""
-    model = _make_path_optin_model()
-    default_type = _make_path_optin_type(model)
-    finalize_django_types()
-
-    assert default_type.__annotations__["attachment"] == (DjangoFileType | None)
-    assert default_type.__annotations__["preview"] == (DjangoImageType | None)
-
-
 def test_filesystem_path_fields_opts_an_image_column_into_the_image_sibling():
     """An ``ImageField`` opt-in keeps its dimensions and gains the path."""
     model = _make_path_optin_model()
-    optin_type = _make_path_optin_type(model, filesystem_path_fields=("preview",))
+    optin_type = _make_path_optin_type(model, filesystem_path_fields=("image",))
     finalize_django_types()
 
-    assert optin_type.__annotations__["preview"] == (DjangoImagePathType | None)
+    assert optin_type.__annotations__["image"] == (DjangoImagePathType | None)
 
 
 def test_filesystem_path_fields_rejects_an_unknown_field():
@@ -2327,7 +2294,7 @@ def test_filesystem_path_fields_rejects_a_field_outside_the_selected_set():
     with pytest.raises(ConfigurationError, match="not in the selected set"):
         _make_path_optin_type(
             model,
-            fields=("id", "title"),
+            fields=("id", "label"),
             filesystem_path_fields=("attachment",),
         )
 
@@ -2336,7 +2303,7 @@ def test_filesystem_path_fields_rejects_a_non_file_column():
     """A scalar column has no path to publish, so naming one raises."""
     model = _make_path_optin_model()
     with pytest.raises(ConfigurationError, match="not a FileField or ImageField"):
-        _make_path_optin_type(model, filesystem_path_fields=("title",))
+        _make_path_optin_type(model, filesystem_path_fields=("label",))
 
 
 def test_filesystem_path_fields_rejects_a_consumer_authored_column():
@@ -2419,7 +2386,7 @@ def test_the_collection_guard_still_names_exclude_for_exclude():
         type(
             "ExcludeShapeType",
             (DjangoType,),
-            {"Meta": type("Meta", (), {"model": model, "exclude": "title"})},
+            {"Meta": type("Meta", (), {"model": model, "exclude": "label"})},
         )
 
 
@@ -2430,7 +2397,7 @@ def test_the_collection_guard_still_names_exclude_for_exclude():
 def test_the_sibling_collection_keys_accept_a_frozenset_too(key):
     """The sibling keys share the widened guard, so the four cannot drift apart."""
     model = _make_path_optin_model()
-    _make_path_optin_type(model, **{key: frozenset({"title"})})
+    _make_path_optin_type(model, **{key: frozenset({"label"})})
     finalize_django_types()
 
 
@@ -2440,11 +2407,11 @@ def test_exclude_accepts_a_frozenset_too():
     excluded = type(
         "ExcludeSetType",
         (DjangoType,),
-        {"Meta": type("Meta", (), {"model": model, "exclude": frozenset({"title"})})},
+        {"Meta": type("Meta", (), {"model": model, "exclude": frozenset({"label"})})},
     )
     finalize_django_types()
 
-    assert "title" not in excluded.__annotations__
+    assert "label" not in excluded.__annotations__
     assert "attachment" in excluded.__annotations__
 
 

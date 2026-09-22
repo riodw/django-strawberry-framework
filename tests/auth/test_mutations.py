@@ -1099,6 +1099,10 @@ def _privilege_required_user():
     ``_unique_app_label()`` so Django's app registry does not warn about a
     re-registered model, and
     the class name is load-bearing - ``_PROTECTED_FIELD_REJECT`` matches on it.
+    Fakeshop's ``AUTH_USER_MODEL`` is Django's ``auth.User``, and a user model
+    whose ``REQUIRED_FIELDS`` names ``is_staff`` is the shape the package refuses to
+    expose, so it alone reaches the protected-field raise in
+    ``django_strawberry_framework/auth/mutations.py::derive_register_fields``.
     """
 
     class PrivilegeRequiredUser(djmodels.Model):
@@ -1120,7 +1124,14 @@ def test_derive_register_fields_default_user_model():
 
 
 def test_derive_register_fields_custom_username_and_required_fields():
-    """A custom-``USERNAME_FIELD`` model derives + dedupes in declaration order."""
+    """A custom-``USERNAME_FIELD`` model derives + dedupes in declaration order.
+
+    A project has one ``AUTH_USER_MODEL`` and fakeshop's is Django's ``auth.User``,
+    whose ``REQUIRED_FIELDS`` repeats nothing, so only this second user shape makes
+    the ``dict.fromkeys`` dedup in
+    ``django_strawberry_framework/auth/mutations.py::derive_register_fields``
+    observable.
+    """
 
     class CustomLoginUser(djmodels.Model):
         email = djmodels.EmailField(unique=True)
@@ -1163,7 +1174,13 @@ def test_register_mutation_rejects_a_protected_required_field_at_the_factory_cal
 
 
 def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields():
-    """Unknown / non-editable names delegate to the standard narrowing reject."""
+    """Unknown / non-editable names delegate to the standard narrowing reject.
+
+    A ``REQUIRED_FIELDS`` entry naming no column is a malformed user model no
+    fakeshop user can declare; it alone drives
+    ``django_strawberry_framework/auth/mutations.py::derive_register_fields`` into
+    the unknown-name raise of its ``editable_input_fields`` delegation.
+    """
 
     class BrokenRequiredUser(djmodels.Model):
         handle = djmodels.CharField(max_length=50)

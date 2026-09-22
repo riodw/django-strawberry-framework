@@ -7,9 +7,9 @@ the lazy-resolution mixin, and `RelatedFilter`.
 Own-PK empty / malformed GlobalID filter rejection lives in
 ``test_library_api.py``. This file keeps primitive ``filter()`` methods,
 marked non-pk ``to_field`` decode, lazy ``RelatedFilter`` resolution, and
-encode-only strategy fail-closed. No fakeshop relation ships a non-pk
-``to_field``; GraphQL never delivers a non-list container to
-``GlobalIDMultipleChoiceFilter``.
+encode-only strategy fail-closed. No fakeshop filterset exposes the one
+non-pk ``to_field`` relation (``PatronProfile.favorite_genre``); GraphQL never
+delivers a non-list container to ``GlobalIDMultipleChoiceFilter``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from __future__ import annotations
 import pytest
 from apps.library import models
 from django.core.exceptions import ValidationError
-from django.db import connection
 from django.http import QueryDict
 from graphql import GraphQLError
 from strawberry import relay
@@ -50,11 +49,6 @@ from django_strawberry_framework.filters.base import (
     resolve_globalid_target_definition,
 )
 from django_strawberry_framework.registry import registry
-from tests._relation_fixtures import (
-    RpToFieldChild,
-    RpToFieldTarget,
-    relation_fixture_tables,
-)
 
 
 @pytest.fixture(autouse=True)
@@ -522,8 +516,8 @@ def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predica
 
 
 def test_relation_uses_non_pk_to_field_true_for_to_field_fk():
-    """A forward FK bound on a non-pk ``to_field`` (``target`` -> ``code``) is flagged."""
-    field = RpToFieldChild._meta.get_field("target")
+    """A forward FK on a non-pk ``to_field`` (``favorite_genre`` -> ``name``) is flagged."""
+    field = models.PatronProfile._meta.get_field("favorite_genre")
     assert _relation_uses_non_pk_to_field(field) is True
 
 
@@ -551,63 +545,68 @@ def test_relation_uses_non_pk_to_field_false_for_non_relation():
     assert _relation_uses_non_pk_to_field(field) is False
 
 
-@pytest.mark.django_db(transaction=True)
+def _seed_favorite_genre_profiles(*genre_names):
+    """Create one genre per name and one patron profile favoring each, in order."""
+    genres = []
+    for index, genre_name in enumerate(genre_names):
+        genre = models.Genre.objects.create(name=genre_name)
+        patron = models.Patron.objects.create(name=f"patron-{index}")
+        models.PatronProfile.objects.create(
+            patron=patron,
+            postal_code=f"{genre_name}-zip",
+            favorite_genre=genre,
+        )
+        genres.append(genre)
+    return genres
+
+
+@pytest.mark.django_db
 def test_global_id_filter_non_pk_to_field_matches_by_target_pk():
     """A marked forward-FK GlobalID filter compiles against the target's pk.
 
-    The Relay GlobalID carries the target's PRIMARY KEY, but the FK stores /
-    joins on ``code``. The pk-qualified predicate (``target__pk``) returns
-    exactly the children of the encoded target, whereas the OLD unqualified
-    predicate (``target=<pk>``) compares the PK value against the stored
-    ``code`` column and matches nothing -- the red->green proof that
-    ``pk != code`` matters.
+    The Relay GlobalID carries the genre's PRIMARY KEY, but
+    ``PatronProfile.favorite_genre`` stores / joins on ``name``. The
+    pk-qualified predicate (``favorite_genre__pk``) returns exactly the profile
+    of the encoded genre, whereas the unqualified predicate
+    (``favorite_genre=<pk>``) compares the pk value against the stored ``name``
+    column and matches nothing.
     """
-    with relation_fixture_tables(connection):
-        alpha = RpToFieldTarget.objects.create(code="ALPHA", label="A")
-        beta = RpToFieldTarget.objects.create(code="BETA", label="B")
-        RpToFieldChild.objects.create(target=alpha, name="a-child")
-        RpToFieldChild.objects.create(target=beta, name="b-child")
+    alpha, _beta = _seed_favorite_genre_profiles("ALPHA", "BETA")
+    assert str(alpha.pk) != alpha.name
+    encoded = relay.to_base64("GenreType", str(alpha.pk))
 
-        assert alpha.pk != alpha.code
-        encoded = relay.to_base64("RpToFieldTargetType", str(alpha.pk))
+    f = GlobalIDFilter(field_name="favorite_genre", lookup_expr="exact")
+    # Boolean flag: ``filter`` derives ``f"{field_name}__pk"``.
+    setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
+    result = f.filter(models.PatronProfile.objects.all(), encoded)
+    assert set(result.values_list("postal_code", flat=True)) == {"ALPHA-zip"}
 
-        f = GlobalIDFilter(field_name="target", lookup_expr="exact")
-        # Boolean flag: ``filter`` derives ``f"{field_name}__pk"`` == "target__pk".
-        setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
-        result = f.filter(RpToFieldChild.objects.all(), encoded)
-        assert set(result.values_list("name", flat=True)) == {"a-child"}
-
-        # The old/unqualified predicate compared the pk value against the stored
-        # ``code`` column and returned the WRONG (empty) result.
-        wrong = RpToFieldChild.objects.filter(target__exact=str(alpha.pk))
-        assert wrong.count() == 0
+    # The unqualified predicate compares the pk value against the stored
+    # ``name`` column and returns the WRONG (empty) result.
+    wrong = models.PatronProfile.objects.filter(favorite_genre__exact=str(alpha.pk))
+    assert wrong.count() == 0
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_global_id_multiple_choice_filter_non_pk_to_field_union_by_pk():
-    """A marked multi-choice ``in`` filter unions both targets' children by pk."""
-    with relation_fixture_tables(connection):
-        alpha = RpToFieldTarget.objects.create(code="ALPHA", label="A")
-        beta = RpToFieldTarget.objects.create(code="BETA", label="B")
-        gamma = RpToFieldTarget.objects.create(code="GAMMA", label="G")
-        RpToFieldChild.objects.create(target=alpha, name="a-child")
-        RpToFieldChild.objects.create(target=beta, name="b-child")
-        RpToFieldChild.objects.create(target=gamma, name="g-child")
+    """A marked multi-choice ``in`` filter unions both genres' profiles by pk."""
+    alpha, beta, _gamma = _seed_favorite_genre_profiles("ALPHA", "BETA", "GAMMA")
+    encoded = [
+        relay.to_base64("GenreType", str(alpha.pk)),
+        relay.to_base64("GenreType", str(beta.pk)),
+    ]
+    f = GlobalIDMultipleChoiceFilter(field_name="favorite_genre", lookup_expr="in")
+    # Boolean flag: ``filter`` derives ``f"{field_name}__pk"``.
+    setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
+    result = f.filter(models.PatronProfile.objects.all(), encoded)
+    assert set(result.values_list("postal_code", flat=True)) == {"ALPHA-zip", "BETA-zip"}
 
-        encoded = [
-            relay.to_base64("RpToFieldTargetType", str(alpha.pk)),
-            relay.to_base64("RpToFieldTargetType", str(beta.pk)),
-        ]
-        f = GlobalIDMultipleChoiceFilter(field_name="target", lookup_expr="in")
-        # Boolean flag: ``filter`` derives ``f"{field_name}__pk"`` == "target__pk".
-        setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
-        result = f.filter(RpToFieldChild.objects.all(), encoded)
-        assert set(result.values_list("name", flat=True)) == {"a-child", "b-child"}
-
-        # The old/unqualified ``target__in`` compared the pk values against the
-        # stored ``code`` column and matched nothing.
-        wrong = RpToFieldChild.objects.filter(target__in=[str(alpha.pk), str(beta.pk)])
-        assert wrong.count() == 0
+    # The unqualified ``favorite_genre__in`` compares the pk values against the
+    # stored ``name`` column and matches nothing.
+    wrong = models.PatronProfile.objects.filter(
+        favorite_genre__in=[str(alpha.pk), str(beta.pk)],
+    )
+    assert wrong.count() == 0
 
 
 def test_global_id_filter_fk_to_pk_predicate_is_byte_identical():
@@ -651,20 +650,20 @@ def test_global_id_filter_marked_empty_node_id_rejects_before_query():
 
     Unmarked own-PK empty-id over HTTP:
     ``test_library_api.py::test_library_genres_filter_empty_id_scalar_global_id_raises_globalid_invalid``.
-    No fakeshop relation uses a non-pk ``to_field``, so this marked path stays
-    package-side.
+    No fakeshop filterset exposes the one non-pk ``to_field`` relation
+    (``PatronProfile.favorite_genre``), so this marked path stays package-side.
 
-    Previously a MARKED leaf compiled ``<relation>__pk__exact=""`` (a 500
-    ``ValueError`` on the integer target pk) whenever the empty id slipped past the
-    scalar no-op. Because the reject now happens inside
-    ``_decode_and_validate_global_id`` -- before the marked/unmarked branch and
-    before any queryset access -- the marked path raises the same clean
-    ``GLOBALID_INVALID`` and never touches the database.
+    A MARKED leaf would compile ``<relation>__pk__exact=""`` (a 500
+    ``ValueError`` on the integer target pk) if the empty id slipped past the
+    scalar no-op. The reject happens inside ``_decode_and_validate_global_id``
+    -- before the marked/unmarked branch and before any queryset access -- so
+    the marked path raises the same clean ``GLOBALID_INVALID`` and never
+    touches the database.
     """
-    f = GlobalIDFilter(field_name="target", lookup_expr="exact")
+    f = GlobalIDFilter(field_name="favorite_genre", lookup_expr="exact")
     setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
     with pytest.raises(GraphQLError, match="empty node id") as exc_info:
-        f.filter(object(), relay.to_base64("RpToFieldTargetType", ""))
+        f.filter(object(), relay.to_base64("GenreType", ""))
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 

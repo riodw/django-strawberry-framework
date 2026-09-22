@@ -15,30 +15,40 @@ Filter/order gate composition on the wire is
 
 This file keeps apply-time ``ConfigurationError`` (cycles, GFK preflight,
 ``fields=`` validation, hook-return / root-seal / alias defects) that a
-shipped schema never declares; MTI parent-link and other unmanaged
-synthetic graphs fakeshop does not carry; ``fields=`` scoping (shipped
-hooks pass ``fields=None``); SQL-shape of sealed cascade internals a live
-capture cannot uniquely show; thread / task ``ContextVar`` isolation; the
-async ``aapply`` off-loop contract; identity-hook default-manager
-composition (every products type declares a custom ``get_queryset``);
-mixed-actor cascade-then-gate composition (anonymous-narrowed queryset +
-staff ``apply_sync``) that one HTTP request cannot split.
+shipped schema never declares; edge classification over real relation
+shapes; ``fields=`` scoping (shipped hooks pass ``fields=None`` or a fixed
+subset); SQL-shape of sealed cascade internals a live capture cannot uniquely
+show; thread / task ``ContextVar`` isolation; the async ``aapply`` off-loop
+contract; identity-hook default-manager composition over products types
+(every products type declares a custom ``get_queryset``); mixed-actor
+cascade-then-gate composition (anonymous-narrowed queryset + staff
+``apply_sync``) that one HTTP request cannot split.
 ``strictness="raise"`` cascade silence is live
 (``test_list_field_api.py::test_cascaded_item_list_stays_silent_under_strictness_raise``).
+The MTI parent-link row cascade, the nullable-edge ``IS NULL`` disjunct and a
+filtering proxy default manager as the cascade base are live in
+``examples/fakeshop/test_query/test_library_inheritance_api.py``.
 
 Fixture mechanics
 =================
-Synthetic model graphs the fakeshop schema does not carry (A<->B cycle, MTI
-parent-link, the all-relation-kinds scope model, a nullable FK, a self-referential
-FK) are declared as ``managed = False`` models under the installed ``products``
-app label and given real tables via ``connection.schema_editor()`` (the
-``tests/test_relay_connection.py`` / ``tests/optimizer/test_relay_id_projection.py``
-pattern); the app label must be an INSTALLED app so Django wires reverse relations
-into ``_meta.get_fields()``. Tests that only inspect the COMPOSED query (scope,
-MTI, identity-hook, multi-DB) need no table and assert on ``str(qs.query)`` /
-``qs.db`` directly. The multi-DB pin is ``FAKESHOP_SHARDED``-gated (the
-``shard_b`` alias only exists under that env var) and does not run under a
-bare ``uv run pytest``.
+Relation shapes run over real fakeshop models under test-local types
+(``registry.clear()`` around every test): the ``Venue`` <-> ``RepairTicket``
+key cycle, ``CirculationDesk`` (every relation kind on one model),
+``TaggedItem`` (GFK), ``PatronProfile.favorite_genre`` (``to_field``),
+``ScalarSpecimen.parent`` (self key) and ``Shelf.branch`` (concrete target of
+the ``ProxyBranch`` proxy). The synthetic models are each declared
+``managed = False`` under the installed ``products`` app label (so Django
+wires reverse relations into ``_meta.get_fields()``) and, where a test reads
+rows, given a real table via ``connection.schema_editor()``. The three-model
+ring, the cyclic diamond and the two-parent MTI child are shapes no fakeshop
+app carries (a cycle in an acceptance app would change every cascade its
+types compose). The acyclic diamond and the ``_Ct*`` hook-return battery
+(a target, an MTI child of it, a non-null key into it and an unrelated table)
+are shapes fakeshop does carry (``Edition.publisher`` / ``publisher_2``;
+``Venue`` / ``LendingDesk`` / ``RepairTicket.venue``). Tests that only
+inspect the COMPOSED query assert on ``str(qs.query)`` / ``qs.db`` directly.
+The multi-DB pin is ``FAKESHOP_SHARDED``-gated (the ``shard_b`` alias only
+exists under that env var) and does not run under a bare ``uv run pytest``.
 
 The mutation update/delete lookup-scoping pin (spec-036) is NOT homed here; a
 hidden row must read as not-found with no existence leak, and that is pinned at
@@ -46,13 +56,27 @@ hidden row must read as not-found with no existence leak, and that is pinned at
 """
 
 import contextlib
+import datetime
 import os
+import uuid
 from types import SimpleNamespace
 
 import pytest
+from apps.library.models import (
+    Branch,
+    CirculationDesk,
+    Genre,
+    Patron,
+    PatronProfile,
+    ProxyBranch,
+    RepairTicket,
+    Shelf,
+    TaggedItem,
+    Venue,
+)
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from apps.scalars.models import ScalarSpecimen
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as db_connection
 from django.db import models
@@ -172,109 +196,78 @@ def _cascade_only(cls, qs, info):
 # =============================================================================
 
 
-class _MutualA(models.Model):
-    """A<->B mutual-cycle fixture (module level so both cycle tests share it)."""
-
-    name = models.TextField()
-    b = models.ForeignKey(
-        "_MutualB",
-        null=True,
-        on_delete=models.CASCADE,
-        related_name="a_set",
-    )
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class _MutualB(models.Model):
-    name = models.TextField()
-    a = models.ForeignKey(
-        _MutualA,
-        null=True,
-        on_delete=models.CASCADE,
-        related_name="b_set",
-    )
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-def _cascading_hook(hidden_name):
-    """Build the recurring cascade-and-hide hook narrowing ``name != hidden_name``."""
+def _cascading_hook(**hidden):
+    """Build the recurring cascade-and-hide hook narrowing out the rows matching ``hidden``."""
     return lambda cls, qs, info: apply_cascade_permissions(
         cls,
-        qs.exclude(name=hidden_name),
+        qs.exclude(**hidden),
         info,
     )
 
 
-@pytest.mark.django_db(transaction=True)
 def test_mutual_cycle_fails_closed_with_path():
     """A<->B mutual cascade raises the path-rich cycle error; state resets.
 
-    The previous contract returned the re-entered queryset un-narrowed, which
-    skipped the re-entered type's OUTGOING visibility edges: here, the ``B``
-    subquery's ``a``-edge constraint would bind ``A`` rows WITHOUT ``A``'s own
-    ``b``-edge cascade, so a ``B`` row whose ``a`` target itself points at a
-    hidden ``B`` stayed visible through the nested walk - a leak shape. The
+    ``apps/library/models.py::Venue.lead_ticket`` and
+    ``apps/library/models.py::RepairTicket.venue`` close a foreign-key cycle.
+    The shipped ``RepairTicketType`` does not cascade back, so the cycle is only
+    re-entered by the test-local pair below where both hooks cascade. The
+    previous contract returned the re-entered queryset un-narrowed, which skipped
+    the re-entered type's OUTGOING visibility edges: the ``RepairTicket``
+    subquery's ``venue``-edge constraint would bind ``Venue`` rows WITHOUT the
+    venue's own ``lead_ticket``-edge cascade, so a ticket whose venue is led by a
+    hidden ticket stayed visible through the nested walk - a leak shape. The
     hardened contract fails closed instead: re-entry into an active type raises
-    ``ConfigurationError`` carrying the full edge path, and every token reset
-    fires so the traversal state is clean after the raise.
+    ``ConfigurationError`` carrying the full edge path, before any SQL runs, and
+    every token reset fires so the traversal state is clean after the raise.
     """
-    with _tables(_MutualA, _MutualB):
-        a_type = _make_type("CycleAType", _MutualA, get_queryset=_cascading_hook("hidden_a"))
-        _make_type("CycleBType", _MutualB, get_queryset=_cascading_hook("hidden_b"))
-        finalize_django_types()
+    venue_type = _make_type("CycleAType", Venue, get_queryset=_cascading_hook(name="hidden_a"))
+    _make_type("CycleBType", RepairTicket, get_queryset=_cascading_hook(code="hidden_b"))
+    finalize_django_types()
 
-        # The leak-shape data the old re-entry contract mis-served: ``leak_b``'s
-        # ``a`` target points at a hidden ``B``, so ``A``'s own cascade would hide
-        # ``chained_a`` - but the old nested re-entry skipped that edge.
-        hidden_b = _MutualB.objects.create(name="hidden_b")
-        chained_a = _MutualA.objects.create(name="chained_a", b=hidden_b)
-        _MutualB.objects.create(name="leak_b", a=chained_a)
-        _MutualA.objects.create(name="root_a")
-
-        with pytest.raises(ConfigurationError) as excinfo:
-            apply_cascade_permissions(a_type, _MutualA.objects.all(), _INFO)
-        message = str(excinfo.value)
-        # Path-rich: the full edge chain back to the re-entered type.
-        assert "CycleAType.b -> CycleBType.a -> CycleAType" in message
-        assert "fields=" in message  # the documented recourse
-        # Deterministic: the same walk raises identically on a second root call.
-        with pytest.raises(ConfigurationError, match="CycleAType.b -> CycleBType.a"):
-            apply_cascade_permissions(a_type, _MutualA.objects.all(), _INFO)
-        # Every token reset fired despite the raise.
-        assert _cascade_state.get() is None
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_cascade_permissions(venue_type, Venue.objects.all(), _INFO)
+    message = str(excinfo.value)
+    # Path-rich: the full edge chain back to the re-entered type.
+    assert "CycleAType.lead_ticket -> CycleBType.venue -> CycleAType" in message
+    assert "fields=" in message  # the documented recourse
+    # Deterministic: the same walk raises identically on a second root call.
+    with pytest.raises(ConfigurationError, match="CycleAType.lead_ticket -> CycleBType.venue"):
+        apply_cascade_permissions(venue_type, Venue.objects.all(), _INFO)
+    # Every token reset fired despite the raise.
+    assert _cascade_state.get() is None
 
 
-@pytest.mark.django_db(transaction=True)
 def test_hook_exception_propagates_and_resets_state():
     """A target-hook exception propagates unchanged; every state token resets.
 
-    The hook is reached during the root's walk (inside the edge frame), so the
-    raise unwinds through the edge token AND the root token - both ``finally``
-    resets must fire, leaving ``_cascade_state`` at ``None``.
+    The hook is reached during the root's walk (inside the ``lead_ticket`` edge
+    frame), so the raise unwinds through the edge token AND the root token - both
+    ``finally`` resets must fire, leaving ``_cascade_state`` at ``None``.
     """
-    with _tables(_MutualA, _MutualB):
-        raiser_a = _make_type("RaiserAType", _MutualA)
+    raiser_venue = _make_type("RaiserAType", Venue)
 
-        def _boom(cls, qs, info):
-            raise RuntimeError("boom")
+    def _boom(cls, qs, info):
+        raise RuntimeError("boom")
 
-        _make_type("RaiserBType", _MutualB, get_queryset=_boom)
-        finalize_django_types()
+    _make_type("RaiserBType", RepairTicket, get_queryset=_boom)
+    finalize_django_types()
 
-        with pytest.raises(RuntimeError, match="boom"):
-            apply_cascade_permissions(raiser_a, _MutualA.objects.all(), _INFO)
-        # The token resets cleared the traversal state despite the exception.
-        assert _cascade_state.get() is None
+    with pytest.raises(RuntimeError, match="boom"):
+        apply_cascade_permissions(raiser_venue, Venue.objects.all(), _INFO)
+    # The token resets cleared the traversal state despite the exception.
+    assert _cascade_state.get() is None
 
 
 def test_longer_cycle_renders_full_path():
-    """A three-type A->B->C->A cycle raises with every hop in the path."""
+    """A three-type A->B->C->A cycle raises with every hop in the path.
+
+    Fakeshop's one multi-model foreign-key cycle is the ``Venue`` / ``RepairTicket`` pair, and adding
+    a three-model ring to an acceptance app would change the cascade every one of its types
+    composes; this synthetic ring alone pins that
+    ``django_strawberry_framework/permissions.py::_cycle_error`` renders a path frame for every hop
+    ``django_strawberry_framework/permissions.py::_walk`` pushed, not just the first two.
+    """
 
     class RingA(models.Model):
         b = models.ForeignKey("RingB", null=True, on_delete=models.CASCADE, related_name="+")
@@ -335,7 +328,14 @@ def test_root_queryset_filter_override_is_neutralized_by_sealing():
 
 
 def test_cyclic_diamond_fails_closed():
-    """A diamond whose sink cascades back to the source raises on either branch."""
+    """A diamond whose sink cascades back to the source raises on either branch.
+
+    Fakeshop's one converging graph (``Printing`` reaching ``Publisher`` directly and through
+    ``Edition``) never closes back into its source, and a cyclic one would make every cascading
+    type on it raise; this synthetic graph alone pins that
+    ``django_strawberry_framework/permissions.py::apply_cascade_permissions`` raises on the first
+    branch that re-enters the source rather than after walking both.
+    """
 
     class DmSource(models.Model):
         left = models.ForeignKey("DmLeft", null=True, on_delete=models.CASCADE, related_name="+")
@@ -385,9 +385,11 @@ def test_cyclic_diamond_fails_closed():
 def test_acyclic_diamond_composes_sink_through_both_branches():
     """An acyclic diamond composes: the sink's visibility applies via BOTH branches.
 
-    Re-reaching the sink type through the second branch is NOT a cycle - the
-    active tuple pops on frame exit (token reset), so only genuine in-flight
-    re-entry raises. The sink's hook narrows both subquery chains.
+    Re-reaching the sink type through the second branch is NOT a cycle - the active tuple pops on
+    frame exit (token reset), so only genuine in-flight re-entry raises. The sink's hook narrows
+    both subquery chains. The active-tuple pop in
+    ``django_strawberry_framework/permissions.py::apply_cascade_permissions`` is what tells a second
+    arrival at a finished type apart from re-entry into an active one.
     """
 
     class AdSource(models.Model):
@@ -449,136 +451,52 @@ def test_acyclic_diamond_composes_sink_through_both_branches():
 def test_single_column_scope_skips_m2m_reverse_and_generic():
     """Reverse / M2M / ``GenericRelation`` edges stay skipped; GFK is UNSUPPORTED.
 
-    A model carrying an M2M, a reverse FK, a reverse O2O, a ``GenericForeignKey``,
-    a ``GenericRelation``, and a forward FK + forward O2O: the cascadable set is
-    exactly the single-column concrete forward relations (``fk`` / ``o2o`` /
-    the GFK's backing ``content_type``), the reverse / M2M / ``GenericRelation``
-    edges are outside parent-row cascade semantics (skippable), and the virtual
-    ``GenericForeignKey`` itself is classified UNSUPPORTED - it can neither be
-    composed as a one-column subquery nor safely skipped, so the walk
-    preflights it closed (pinned by the ``test_gfk_*`` tests below).
+    ``apps/library/models.py::CirculationDesk`` carries every relation kind: a
+    forward FK (``branch``), a forward O2O (``shelf``), an M2M (``genres``), a
+    ``GenericForeignKey`` (``content_object`` over ``content_type`` /
+    ``object_id``), a ``GenericRelation`` (``tags``), a reverse FK
+    (``children``) and a reverse O2O (``profile``). The cascadable set is
+    exactly the single-column concrete forward relations (``branch`` /
+    ``shelf`` / the GFK's backing ``content_type``), the reverse / M2M /
+    ``GenericRelation`` edges are outside parent-row cascade semantics
+    (skippable), and the virtual ``GenericForeignKey`` itself is classified
+    UNSUPPORTED - it can neither be composed as a one-column subquery nor safely
+    skipped, so the walk preflights it closed (pinned by the ``test_gfk_*``
+    tests below). The shipped ``CirculationDeskType`` scopes its cascade with
+    ``fields=``, so no request reaches this classification of the full set.
     """
-
-    class ScopeTarget(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class ScopeOther(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class ScopeTag(models.Model):
-        label = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class ScopeModel(models.Model):
-        # forward FK + forward O2O = the two cascadable edges
-        fk = models.ForeignKey(ScopeTarget, on_delete=models.CASCADE, related_name="via_fk")
-        o2o = models.OneToOneField(ScopeOther, on_delete=models.CASCADE, related_name="via_o2o")
-        # M2M (join-table-backed, never a single-column cascade edge)
-        m2m = models.ManyToManyField(ScopeTag, related_name="scope_models")
-        # GenericForeignKey (``related_model`` absent) + its GenericRelation
-        # (virtual, no ``column``) both live on this model so the walk's edge scan
-        # sees and skips them. ``DO_NOTHING`` for the same reason as ``_GfkHost``:
-        # this table-less fixture must not join real models' deletion collectors.
-        content_type = models.ForeignKey(ContentType, on_delete=models.DO_NOTHING)
-        object_id = models.PositiveIntegerField()
-        content_object = GenericForeignKey("content_type", "object_id")
-        generics = GenericRelation("ScopeModel")
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    # reverse FK: ScopeChild.parent -> ScopeModel (ScopeModel sees ``children``)
-    class ScopeChild(models.Model):
-        parent = models.ForeignKey(ScopeModel, on_delete=models.CASCADE, related_name="children")
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    # reverse O2O: ScopeProfile.owner -> ScopeModel (ScopeModel sees ``profile``)
-    class ScopeProfile(models.Model):
-        owner = models.OneToOneField(ScopeModel, on_delete=models.CASCADE, related_name="profile")
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    # The cascadable set is exactly the forward single-column concrete relations:
-    # the explicit ``fk`` / ``o2o`` plus ``content_type`` (the GFK's *backing* FK
-    # is itself an ordinary single-column forward FK and legitimately cascadable).
-    # The M2M, reverse FK, reverse O2O, and GenericRelation all drop out as
-    # skippable; the virtual ``content_object`` GFK is UNSUPPORTED (fail-closed).
-    plan = _edge_plan(ScopeModel)
-    assert _cascadable_edge_names(ScopeModel) == {"fk", "o2o", "content_type"}
+    # The GFK's *backing* FK is itself an ordinary single-column forward FK and
+    # legitimately cascadable; the virtual ``content_object`` is UNSUPPORTED.
+    plan = _edge_plan(CirculationDesk)
+    assert _cascadable_edge_names(CirculationDesk) == {"branch", "shelf", "content_type"}
     assert plan.unsupported == ("content_object",)
 
     # Each edge passes / fails the predicates for the documented reason.
-    by_name = {f.name: f for f in ScopeModel._meta.get_fields()}
-    assert _is_cascadable_edge(by_name["fk"]) is True
-    assert _is_cascadable_edge(by_name["o2o"]) is True
+    by_name = {f.name: f for f in CirculationDesk._meta.get_fields()}
+    assert _is_cascadable_edge(by_name["branch"]) is True
+    assert _is_cascadable_edge(by_name["shelf"]) is True
     assert _is_cascadable_edge(by_name["content_type"]) is True  # backing FK, single column
-    assert getattr(by_name["m2m"], "many_to_many", False) is True
-    assert _is_cascadable_edge(by_name["m2m"]) is False  # M2M, join table
-    assert _is_unsupported_forward_edge(by_name["m2m"]) is False  # ...and skippable
+    assert getattr(by_name["genres"], "many_to_many", False) is True
+    assert _is_cascadable_edge(by_name["genres"]) is False  # M2M, join table
+    assert _is_unsupported_forward_edge(by_name["genres"]) is False  # ...and skippable
     assert _is_cascadable_edge(by_name["content_object"]) is False  # GFK, virtual
     assert _is_unsupported_forward_edge(by_name["content_object"]) is True  # fail-closed
-    assert _is_cascadable_edge(by_name["generics"]) is False  # GenericRelation, one-to-many
-    assert _is_unsupported_forward_edge(by_name["generics"]) is False
+    assert _is_cascadable_edge(by_name["tags"]) is False  # GenericRelation, one-to-many
+    assert _is_unsupported_forward_edge(by_name["tags"]) is False
     assert _is_cascadable_edge(by_name["children"]) is False  # reverse FK
     assert _is_unsupported_forward_edge(by_name["children"]) is False
     assert _is_cascadable_edge(by_name["profile"]) is False  # reverse O2O
     assert _is_unsupported_forward_edge(by_name["profile"]) is False
 
 
-class _GfkHost(models.Model):
-    """GFK-carrying fixture shared by the preflight / explicit-selection pins.
-
-    This is an inspection-only fixture (its tests only build/inspect the COMPOSED
-    cascade query, never insert rows), so - per this module's design - it is NOT
-    given a real ``schema_editor()`` table. Because the model class is registered
-    module-wide at import, its forward FKs to the REAL ``Category`` / ``ContentType``
-    tables would otherwise wire table-less reverse edges into those models'
-    ``deletion.Collector`` graphs: ANY ``Category.delete()`` anywhere in the suite
-    would then emit ``DELETE FROM products__gfkhost`` against a table that does not
-    exist. ``on_delete=DO_NOTHING`` excludes the edges from the collector
-    (``deletion.py`` short-circuits ``DO_NOTHING`` before querying) while leaving
-    them as ordinary forward FK edges the visibility cascade still walks.
-    """
-
-    target = models.ForeignKey(
-        Category,
-        null=True,
-        on_delete=models.DO_NOTHING,
-        related_name="+",
-    )
-    content_type = models.ForeignKey(ContentType, on_delete=models.DO_NOTHING)
-    object_id = models.PositiveIntegerField()
-    content_object = GenericForeignKey("content_type", "object_id")
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
 def test_gfk_default_walk_preflights_closed():
     """A full walk (``fields=None``) over a GFK-carrying model fails before any hook.
 
-    Silently skipping the GFK would leak rows pointing at hidden polymorphic
-    targets; composing it is impossible (no single visibility policy). The
-    preflight raises BEFORE any target hook runs - the registered target's hook
-    observes zero invocations.
+    ``apps/library/models.py::TaggedItem`` carries a ``GenericForeignKey`` over
+    its ``content_type`` key. Silently skipping the GFK would leak rows pointing
+    at hidden polymorphic targets; composing it is impossible (no single
+    visibility policy). The preflight raises BEFORE any target hook runs - the
+    registered ``ContentType`` target's hook observes zero invocations.
     """
     hook_calls = []
 
@@ -586,12 +504,12 @@ def test_gfk_default_walk_preflights_closed():
         hook_calls.append(cls)
         return qs
 
-    _make_type("GfkCategoryType", Category, get_queryset=_counting_hook)
-    host_type = _make_type("GfkHostType", _GfkHost, primary=False)
+    _make_type("GfkContentTypeCountType", ContentType, get_queryset=_counting_hook)
+    host_type = _make_type("GfkHostType", TaggedItem, primary=False)
     finalize_django_types()
 
     with pytest.raises(ConfigurationError) as excinfo:
-        apply_cascade_permissions(host_type, _GfkHost.objects.all(), _INFO)
+        apply_cascade_permissions(host_type, TaggedItem.objects.all(), _INFO)
     message = str(excinfo.value)
     assert "content_object" in message  # the offending edge is named
     assert "fields=" in message  # the recourse is named
@@ -600,13 +518,13 @@ def test_gfk_default_walk_preflights_closed():
 
 
 def _gfk_host_with_content_type_hook():
-    """Register a ContentType hook + GFK host; return the host type."""
+    """Register a ContentType hook + the ``TaggedItem`` GFK host; return the host type."""
     _make_type(
         "GfkContentTypeType",
         ContentType,
         get_queryset=lambda cls, qs, info: qs.exclude(model="hiddenmodel"),
     )
-    return _make_type("GfkHostSelType", _GfkHost, primary=False)
+    return _make_type("GfkHostSelType", TaggedItem, primary=False)
 
 
 def test_gfk_explicit_selection_rejected():
@@ -617,7 +535,7 @@ def test_gfk_explicit_selection_rejected():
     with pytest.raises(ConfigurationError) as excinfo:
         apply_cascade_permissions(
             host_type,
-            _GfkHost.objects.all(),
+            TaggedItem.objects.all(),
             _INFO,
             fields=["content_object"],
         )
@@ -632,7 +550,7 @@ def test_gfk_backing_content_type_fk_composes():
 
     result = apply_cascade_permissions(
         host_type,
-        _GfkHost.objects.all(),
+        TaggedItem.objects.all(),
         _INFO,
         fields=["content_type"],
     )
@@ -647,130 +565,20 @@ def test_gfk_object_id_is_not_cascadable():
     with pytest.raises(ConfigurationError, match="not cascadable"):
         apply_cascade_permissions(
             host_type,
-            _GfkHost.objects.all(),
+            TaggedItem.objects.all(),
             _INFO,
             fields=["object_id"],
         )
 
 
-# --- MTI parent links now cascade -------------------------------------------
-
-
-def test_mti_parent_link_edge_included():
-    """An MTI child's ``<parent>_ptr`` parent-link IS a cascadable edge.
-
-    The parent link is a real single-column concrete forward OneToOne: a hidden
-    MTI parent must hide its child rows, so the previous ``parent_link``
-    exclusion (which left a hidden parent reachable through its child type) is
-    gone. Classification-level pin; the row-level pins follow.
-    """
-
-    class MtiParent(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class MtiChild(MtiParent):
-        extra = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    ptr = MtiChild._meta.get_field("mtiparent_ptr")
-    assert ptr.related_model is MtiParent
-    assert getattr(ptr.remote_field, "parent_link", False) is True
-    assert _is_cascadable_edge(ptr) is True
-    assert "mtiparent_ptr" in _cascadable_edge_names(MtiChild)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_mti_single_level_parent_visibility_hides_child_rows():
-    """A hidden MTI parent hides its child row through the ``<parent>_ptr`` cascade."""
-
-    class MtiOrg(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class MtiShop(MtiOrg):
-        city = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(MtiOrg, MtiShop):
-        _make_type(
-            "MtiOrgType",
-            MtiOrg,
-            get_queryset=lambda cls, qs, info: qs.exclude(name="hidden_org"),
-        )
-        shop_type = _make_type("MtiShopType", MtiShop, primary=False)
-        finalize_django_types()
-
-        keeps = MtiShop.objects.create(name="ok_org", city="a")
-        MtiShop.objects.create(name="hidden_org", city="b")
-
-        result = apply_cascade_permissions(shop_type, MtiShop.objects.all(), _INFO)
-        # The parent link is non-nullable, so no ``__isnull`` disjunct is added.
-        assert "IS NULL" not in str(result.query)
-        assert list(result) == [keeps]
-        assert _cascade_state.get() is None
-
-
-@pytest.mark.django_db(transaction=True)
-def test_mti_multi_level_parent_links_cascade_transitively():
-    """Grandchild -> child -> parent MTI chain narrows transitively via cascading hooks."""
-
-    class MtiBase(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class MtiMiddle(MtiBase):
-        tier = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class MtiLeaf(MtiMiddle):
-        leaf = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(MtiBase, MtiMiddle, MtiLeaf):
-        _make_type(
-            "MtiBaseType",
-            MtiBase,
-            get_queryset=lambda cls, qs, info: qs.exclude(name="hidden_base"),
-        )
-        _make_type("MtiMiddleType", MtiMiddle, get_queryset=_cascade_only, primary=False)
-        leaf_type = _make_type("MtiLeafType", MtiLeaf, primary=False)
-        finalize_django_types()
-
-        keeps = MtiLeaf.objects.create(name="ok", tier="t", leaf="l")
-        MtiLeaf.objects.create(name="hidden_base", tier="t", leaf="l")
-
-        # Leaf walk cascades ``mtimiddle_ptr`` -> MtiMiddleType, whose hook
-        # cascades ``mtibase_ptr`` -> MtiBaseType (which hides the base row) -
-        # the hidden base drops the leaf two parent links away.
-        result = apply_cascade_permissions(leaf_type, MtiLeaf.objects.all(), _INFO)
-        assert list(result) == [keeps]
-        assert _cascade_state.get() is None
-
-
 def test_mti_multiple_parent_links_both_cascade():
-    """A child of TWO concrete MTI parents composes a subquery per parent link."""
+    """A child of TWO concrete MTI parents composes a subquery per parent link.
+
+    Multiple concrete inheritance is outside the single ``Venue`` chain the fakeshop library app
+    models, and a second parent there would reshape its documented surface; this synthetic child
+    alone pins that ``django_strawberry_framework/permissions.py::_edge_plan`` yields one
+    cascadable parent link per concrete parent.
+    """
 
     class MtiLeftBase(models.Model):
         name = models.TextField()
@@ -838,21 +646,8 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     router resolution when no explicit ``.using`` was applied, not the private
     ``_db``. Built on the ``tests/optimizer/test_multi_db.py`` in-test alias pattern;
     ``FAKESHOP_SHARDED``-gated, so it does not run under a bare ``uv run pytest``.
+    The edge is ``apps/products/models.py::Item.category``.
     """
-
-    class AliasTarget(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class AliasParent(models.Model):
-        target = models.ForeignKey(AliasTarget, on_delete=models.CASCADE, related_name="parents")
-
-        class Meta:
-            app_label = "products"
-            managed = False
 
     # Capture the alias the cascade actually hands the target hook. The walk builds
     # the RHS base as ``related_model._default_manager.using(queryset.db).all()``, so
@@ -866,18 +661,18 @@ def test_multi_db_subquery_pinned_to_caller_alias():
         received_dbs.append(qs.db)
         return qs.exclude(name="hidden")
 
-    target_type = _make_type("AliasTargetType", AliasTarget, get_queryset=_record_alias_hook)
-    _make_type("AliasParentType", AliasParent, primary=False)
+    target_type = _make_type("AliasCategoryType", Category, get_queryset=_record_alias_hook)
+    _make_type("AliasItemType", Item, primary=False)
     finalize_django_types()
 
     # The caller resolved ``shard_b`` explicitly; the cascade subquery must inherit it.
     result = apply_cascade_permissions(
-        registry.get(AliasParent),
-        AliasParent.objects.using("shard_b").all(),
+        registry.get(Item),
+        Item.objects.using("shard_b").all(),
         _INFO,
     )
     assert result.db == "shard_b"
-    assert target_type is registry.get(AliasTarget)
+    assert target_type is registry.get(Category)
     # The cascade composed a constraint (an inlined ``__in`` subquery). ``str(query)``
     # forces ``DEFAULT_DB_ALIAS`` compilation, which cannot render a subquery pinned to
     # a non-default alias ("Subqueries aren't allowed across different databases"), so
@@ -890,51 +685,6 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     assert received_dbs == ["shard_b"]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_nullable_fk_rows_preserved():
-    """``NULL``-FK rows survive a cascade that hides every target row.
-
-    The ``| Q(fk__isnull=True)`` disjunct: a target hook that hides everything
-    drops every non-null-FK row but keeps the null-FK rows. No error, no leak.
-    """
-
-    class NullTarget(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class NullParent(models.Model):
-        name = models.TextField()
-        target = models.ForeignKey(
-            NullTarget,
-            null=True,
-            on_delete=models.CASCADE,
-            related_name="parents",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(NullTarget, NullParent):
-        # Target hook hides EVERYTHING.
-        _make_type("NullTargetType", NullTarget, get_queryset=lambda cls, qs, info: qs.none())
-        parent_type = _make_type("NullParentType", NullParent, primary=False)
-        finalize_django_types()
-
-        target = NullTarget.objects.create(name="t")
-        NullParent.objects.create(name="has_fk", target=target)
-        null_row = NullParent.objects.create(name="null_fk", target=None)
-
-        result = apply_cascade_permissions(parent_type, NullParent.objects.all(), _INFO)
-        names = sorted(result.values_list("name", flat=True))
-        # The non-null-FK row drops (its target is hidden); the NULL-FK row survives.
-        assert names == ["null_fk"]
-        assert null_row in result
-
-
 # --- the rest of the cascade-foundation contract -----------------------------
 
 
@@ -944,11 +694,13 @@ def test_identity_hook_targets_compose_default_manager(django_assert_num_queries
 
     The previous ``has_custom_get_queryset() is False`` skip silently bypassed a
     registered type whose filtered ``_default_manager`` IS its visibility policy
-    (the proxy shape pinned below). Every registered target now contributes a
-    subquery - and the subqueries still compile into the caller's single
-    ``SELECT``, so identity composition adds zero query round-trips. Every
-    shipped products type declares a custom ``get_queryset``, so a live request
-    cannot observe an identity-hook target; the custom-hook HTTP twin is
+    (the ``VisibleBranch`` proxy, whose row-level effect is
+    ``test_library_inheritance_api.py::test_signage_on_a_city_less_branch_is_hidden_by_the_proxy_default_manager``).
+    Every registered target now contributes a subquery - and the subqueries
+    still compile into the caller's single ``SELECT``, so identity composition
+    adds zero query round-trips. Every shipped products type declares a custom
+    ``get_queryset``, so no live products request carries two identity-hook
+    targets on one root; the custom-hook HTTP twin is
     ``test_cascade_query_count_fixed``.
     """
     _make_type("IdentItemType", Item)  # identity default - no get_queryset override
@@ -970,113 +722,34 @@ def test_identity_hook_targets_compose_default_manager(django_assert_num_queries
         assert list(result) == [entry]
 
 
-@pytest.mark.django_db(transaction=True)
-def test_proxy_target_filtered_default_manager_composes():
-    """A registered proxy type's filtered ``_default_manager`` narrows the cascade.
-
-    The proxy declares no ``get_queryset`` override - its visibility policy lives
-    entirely in the proxy's default manager. The old identity-hook skip bypassed
-    it; the hardened walk seeds every edge subquery from the target's
-    ``_default_manager``, so the proxy's filter is the subquery base.
-    """
-
-    class ProxTarget(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class _VisibleOnlyManager(models.Manager):
-        def get_queryset(self):
-            return super().get_queryset().exclude(name="manager_hidden")
-
-    class ProxVisibleTarget(ProxTarget):
-        objects = _VisibleOnlyManager()
-
-        class Meta:
-            app_label = "products"
-            proxy = True
-            managed = False
-
-    class ProxParent(models.Model):
-        name = models.TextField()
-        target = models.ForeignKey(
-            ProxVisibleTarget,
-            on_delete=models.CASCADE,
-            related_name="parents",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(ProxTarget, ProxParent):
-        _make_type("ProxVisibleTargetType", ProxVisibleTarget)  # identity hook
-        parent_type = _make_type("ProxParentType", ProxParent, primary=False)
-        finalize_django_types()
-
-        visible = ProxTarget.objects.create(name="ok")
-        hidden = ProxTarget.objects.create(name="manager_hidden")
-        keeps = ProxParent.objects.create(name="keeps", target_id=visible.pk)
-        ProxParent.objects.create(name="drops", target_id=hidden.pk)
-
-        result = apply_cascade_permissions(parent_type, ProxParent.objects.all(), _INFO)
-        assert "IN (SELECT" in str(result.query)
-        # The proxy manager's exclusion is live inside the subquery.
-        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
-        assert keeps in result
-
-
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_proxy_hook_return_over_concrete_target_accepted():
     """A hook returning a proxy queryset for a concrete-target edge is compatible.
 
+    ``apps/library/models.py::Shelf.branch`` targets the concrete ``Branch``;
+    the target hook answers with a queryset over the ``ProxyBranch`` proxy.
     Proxy and concrete siblings share one concrete table, so the subquery is
     sound; the validator keys on ``_meta.concrete_model``, not the class.
     """
+    # The concrete target's hook answers with a PROXY queryset.
+    _make_type(
+        "PcBranchType",
+        Branch,
+        get_queryset=lambda cls, qs, info: ProxyBranch.objects.using(qs.db).exclude(
+            name="hidden",
+        ),
+    )
+    shelf_type = _make_type("PcShelfType", Shelf, primary=False)
+    finalize_django_types()
 
-    class PcTarget(models.Model):
-        name = models.TextField()
+    visible = Branch.objects.create(name="ok")
+    hidden = Branch.objects.create(name="hidden")
+    keeps = Shelf.objects.create(code="keeps", branch=visible)
+    Shelf.objects.create(code="drops", branch=hidden)
 
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class PcTargetProxy(PcTarget):
-        class Meta:
-            app_label = "products"
-            proxy = True
-            managed = False
-
-    class PcParent(models.Model):
-        name = models.TextField()
-        target = models.ForeignKey(PcTarget, on_delete=models.CASCADE, related_name="parents")
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(PcTarget, PcParent):
-        # The concrete target's hook answers with a PROXY queryset.
-        _make_type(
-            "PcTargetType",
-            PcTarget,
-            get_queryset=lambda cls, qs, info: PcTargetProxy.objects.using(qs.db).exclude(
-                name="hidden",
-            ),
-        )
-        parent_type = _make_type("PcParentType", PcParent, primary=False)
-        finalize_django_types()
-
-        visible = PcTarget.objects.create(name="ok")
-        hidden = PcTarget.objects.create(name="hidden")
-        keeps = PcParent.objects.create(name="keeps", target=visible)
-        PcParent.objects.create(name="drops", target=hidden)
-
-        result = apply_cascade_permissions(parent_type, PcParent.objects.all(), _INFO)
-        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
-        assert keeps in result
+    result = apply_cascade_permissions(shelf_type, Shelf.objects.all(), _INFO)
+    assert sorted(result.values_list("code", flat=True)) == ["keeps"]
+    assert keeps in result
 
 
 @pytest.mark.django_db
@@ -1127,42 +800,30 @@ def test_secondary_type_never_cascade_target():
 def test_secondary_root_self_edge_reaches_primary_then_fails_closed():
     """A secondary-rooted self-edge resolves to the PRIMARY, whose recursion fails closed.
 
-    The ``parent`` edge re-reaches the same model via ``registry.get`` -> the
+    ``apps/scalars/models.py::ScalarSpecimen.parent`` is a self-referential
+    key; its ``tag`` edge targets an unregistered model and is skipped. The
+    ``parent`` edge re-reaches the same model via ``registry.get`` -> the
     **primary** (a different class from the rooting secondary, so THAT step is
     not a cycle). The primary's own cascading hook then re-enters the primary on
     its self-edge - a genuine recursion - and the walk raises the path-rich
     cycle error instead of silently under-narrowing.
     """
-
-    class SelfRef(models.Model):
-        name = models.TextField()
-        parent = models.ForeignKey(
-            "self",
-            null=True,
-            on_delete=models.CASCADE,
-            related_name="children",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
     _make_type(
         "SelfRefPrimaryType",
-        SelfRef,
+        ScalarSpecimen,
         get_queryset=lambda cls, qs, info: apply_cascade_permissions(
             cls,
-            qs.exclude(name="primary_hidden"),
+            qs.exclude(label="primary_hidden"),
             info,
         ),
         primary=True,
     )
     secondary = _make_type(
         "SelfRefSecondaryType",
-        SelfRef,
+        ScalarSpecimen,
         get_queryset=lambda cls, qs, info: apply_cascade_permissions(
             cls,
-            qs.exclude(name="secondary_hidden"),
+            qs.exclude(label="secondary_hidden"),
             info,
         ),
         primary=False,
@@ -1170,7 +831,7 @@ def test_secondary_root_self_edge_reaches_primary_then_fails_closed():
     finalize_django_types()
 
     with pytest.raises(ConfigurationError) as excinfo:
-        apply_cascade_permissions(secondary, SelfRef.objects.all(), _INFO)
+        apply_cascade_permissions(secondary, ScalarSpecimen.objects.all(), _INFO)
     # The path shows the secondary root reaching the primary, then the primary
     # re-entering itself: secondary.parent -> primary.parent -> primary.
     assert "SelfRefSecondaryType.parent -> SelfRefPrimaryType.parent -> SelfRefPrimaryType" in str(
@@ -1180,7 +841,13 @@ def test_secondary_root_self_edge_reaches_primary_then_fails_closed():
 
 
 class _CtTarget(models.Model):
-    """Hook-return-contract fixture target (shared by the battery below)."""
+    """Hook-return-contract fixture target (shared by the battery below).
+
+    The battery composes hostile hooks over this target through ``_CtParent.target`` and returns
+    ``_CtTargetChild`` (an MTI child, a different concrete table) and ``_CtOther`` (an unrelated
+    table) as wrong-table results, rendered through
+    ``django_strawberry_framework/permissions.py::_edge_error_renderer``.
+    """
 
     name = models.TextField()
 
@@ -1264,55 +931,49 @@ def test_hook_values_and_values_list_projections_are_normalized(hook):
         assert keeps in result
 
 
-@pytest.mark.django_db(transaction=True)
+def _profiles_by_genre(*, visible, hidden, attack_code):
+    """Seed one ``PatronProfile`` per genre, keyed by genre name through ``favorite_genre``."""
+    for postal_code, genre in (("keeps", visible), (attack_code, hidden)):
+        PatronProfile.objects.create(
+            patron=Patron.objects.create(name=f"patron-{postal_code}"),
+            postal_code=postal_code,
+            favorite_genre=genre,
+        )
+
+
+@pytest.mark.django_db
 def test_to_field_edge_compares_target_column():
     """A ``ForeignKey(to_field=...)`` edge binds the ``to_field`` column, never the pk.
 
-    The normalization projects ``field.target_field.attname`` (here ``code``), so
-    even a hook that explicitly projected the pk narrows by the correct column.
+    ``apps/library/models.py::PatronProfile.favorite_genre`` is keyed by
+    ``Genre.name``, so the normalization projects ``field.target_field.attname``
+    (``name``) and even a hook that explicitly projected the pk narrows by the
+    correct column. ``PatronProfile.patron`` targets an unregistered model and
+    is skipped. No shipped ``GenreType`` hook exists, so no request composes
+    this edge.
     """
+    visible = Genre.objects.create(name="ok")
+    hidden = Genre.objects.create(name="hx")
+    # The hook projects the WRONG column (the pk); normalization overrides it.
+    _make_type(
+        "TfGenreType",
+        Genre,
+        get_queryset=lambda cls, qs, info: qs.exclude(pk=hidden.pk).values("id"),
+    )
+    profile_type = _make_type(
+        "TfPatronProfileType",
+        PatronProfile,
+        fields=("postal_code",),
+        primary=False,
+    )
+    finalize_django_types()
+    _profiles_by_genre(visible=visible, hidden=hidden, attack_code="drops")
 
-    class TfTarget(models.Model):
-        code = models.TextField(unique=True)
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class TfParent(models.Model):
-        name = models.TextField()
-        target = models.ForeignKey(
-            TfTarget,
-            to_field="code",
-            on_delete=models.CASCADE,
-            related_name="parents",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(TfTarget, TfParent):
-        # The hook projects the WRONG column (the pk); normalization overrides it.
-        _make_type(
-            "TfTargetType",
-            TfTarget,
-            get_queryset=lambda cls, qs, info: qs.exclude(name="hidden").values("id"),
-        )
-        parent_type = _make_type("TfParentType", TfParent, primary=False)
-        finalize_django_types()
-
-        visible = TfTarget.objects.create(code="ok", name="t")
-        hidden = TfTarget.objects.create(code="hx", name="hidden")
-        keeps = TfParent.objects.create(name="keeps", target=visible)
-        TfParent.objects.create(name="drops", target=hidden)
-
-        result = apply_cascade_permissions(parent_type, TfParent.objects.all(), _INFO)
-        # The subquery selects the ``code`` column, not ``id``.
-        assert '"code"' in str(result.query)
-        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
-        assert keeps in result
+    result = apply_cascade_permissions(profile_type, PatronProfile.objects.all(), _INFO)
+    # The subquery selects the ``name`` column, not ``id``.
+    assert '"favorite_genre_id" IN (SELECT "U0"."name" AS "name"' in str(result.query)
+    assert sorted(result.values_list("postal_code", flat=True)) == ["keeps"]
+    assert PatronProfile.objects.get(postal_code="keeps") in result
 
 
 def _hook_returns_list(cls, qs, info):
@@ -1580,55 +1241,36 @@ def test_annotation_alias_shadow_cannot_bypass_visibility():
         assert list(leaked.values_list("name", flat=True)) == ["attack"]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_annotation_alias_shadow_to_field_cannot_bypass_visibility():
     """The ``to_field`` twin: annotating the ``to_field`` column to a constant is rejected.
 
-    A ``ForeignKey(to_field="code")`` edge re-projects to ``code``; a hook doing
-    ``values("name").annotate(code=Value(<hidden_code>))`` would smuggle the
-    hidden row's ``code`` exactly as the pk case smuggles its ``id``.
+    ``PatronProfile.favorite_genre`` re-projects to ``Genre.name``; a hook doing
+    ``values("id").annotate(name=Value(<hidden_name>))`` would smuggle the
+    hidden row's ``name`` exactly as the pk case smuggles its ``id``.
     """
+    visible = Genre.objects.create(name="visible")
+    hidden = Genre.objects.create(name="hidden")
+    _profiles_by_genre(visible=visible, hidden=hidden, attack_code="attack")
 
-    class TfShadowTarget(models.Model):
-        code = models.TextField(unique=True)
-        name = models.TextField()
+    _make_type(
+        "TfShadowGenreType",
+        Genre,
+        get_queryset=lambda cls, qs, info: qs.values("id").annotate(
+            name=models.Value(hidden.name),
+        ),
+    )
+    profile_type = _make_type(
+        "TfShadowPatronProfileType",
+        PatronProfile,
+        fields=("postal_code",),
+        primary=False,
+    )
+    finalize_django_types()
 
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class TfShadowParent(models.Model):
-        name = models.TextField()
-        target = models.ForeignKey(
-            TfShadowTarget,
-            to_field="code",
-            on_delete=models.CASCADE,
-            related_name="parents",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(TfShadowTarget, TfShadowParent):
-        visible = TfShadowTarget.objects.create(code="ok", name="visible")
-        hidden = TfShadowTarget.objects.create(code="hx", name="hidden")
-        TfShadowParent.objects.create(name="keeps", target=visible)
-        TfShadowParent.objects.create(name="attack", target=hidden)
-
-        _make_type(
-            "TfShadowTargetType",
-            TfShadowTarget,
-            get_queryset=lambda cls, qs, info: qs.values("name").annotate(
-                code=models.Value(hidden.code),
-            ),
-        )
-        parent_type = _make_type("TfShadowParentType", TfShadowParent, primary=False)
-        finalize_django_types()
-
-        with pytest.raises(ConfigurationError, match="'code'"):
-            apply_cascade_permissions(parent_type, TfShadowParent.objects.all(), _INFO)
-        assert _cascade_state.get() is None
+    with pytest.raises(ConfigurationError, match="'name'"):
+        apply_cascade_permissions(profile_type, PatronProfile.objects.all(), _INFO)
+    assert _cascade_state.get() is None
 
 
 def test_nested_application_off_root_alias_fails_closed():
@@ -2030,48 +1672,46 @@ async def test_aapply_async_target_hook_still_raises():
     assert _cascade_state.get() is None
 
 
-class _SelfNode(models.Model):
-    """Self-referential FK fixture shared by the fail-closed / fields= pins."""
-
-    name = models.TextField()
-    parent = models.ForeignKey(
-        "self",
-        null=True,
-        on_delete=models.CASCADE,
-        related_name="children",
+def _specimen(label, **fields):
+    """Create a ``ScalarSpecimen`` row carrying only the columns a cascade pin reads."""
+    return ScalarSpecimen.objects.create(
+        label=label,
+        occurred_on=datetime.date(2024, 1, 1),
+        occurred_at=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+        occurred_time=datetime.time(9, 0),
+        external_id=uuid.uuid4(),
+        **fields,
     )
-
-    class Meta:
-        app_label = "products"
-        managed = False
 
 
 def test_self_referential_cascading_hook_fails_closed():
     """A ``parent = FK('self')`` edge whose own hook cascades is a genuine recursion.
 
-    The walk invokes the target type's hook (the same type), which re-enters the
-    cascade while active - the path-rich cycle error raises instead of the old
-    silent depth-1 break (which skipped the parent's OWN parent-edge constraint:
-    a chain whose grandparent was hidden stayed visible).
+    ``apps/scalars/models.py::ScalarSpecimen.parent`` points back at its own
+    model. The walk invokes the target type's hook (the same type), which
+    re-enters the cascade while active - the path-rich cycle error raises
+    instead of the old silent depth-1 break (which skipped the parent's OWN
+    parent-edge constraint: a chain whose grandparent was hidden stayed
+    visible).
     """
     node_type = _make_type(
         "SelfNodeType",
-        _SelfNode,
+        ScalarSpecimen,
         get_queryset=lambda cls, qs, info: apply_cascade_permissions(
             cls,
-            qs.exclude(name="hidden"),
+            qs.exclude(label="hidden"),
             info,
         ),
     )
     finalize_django_types()
 
     with pytest.raises(ConfigurationError) as excinfo:
-        apply_cascade_permissions(node_type, _SelfNode.objects.all(), _INFO)
+        apply_cascade_permissions(node_type, ScalarSpecimen.objects.all(), _INFO)
     assert "SelfNodeType.parent -> SelfNodeType" in str(excinfo.value)
     assert _cascade_state.get() is None
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_self_referential_fields_scoping_breaks_recursion():
     """``fields=[]`` inside the self-hook is the documented cycle-breaking recourse.
 
@@ -2080,99 +1720,30 @@ def test_self_referential_fields_scoping_breaks_recursion():
     without re-entering - a row whose parent is hidden drops, and the walk
     terminates cleanly.
     """
-    with _tables(_SelfNode):
-        node_type = _make_type(
-            "ScopedSelfNodeType",
-            _SelfNode,
-            get_queryset=lambda cls, qs, info: apply_cascade_permissions(
-                cls,
-                qs.exclude(name="hidden"),
-                info,
-                fields=[],
-            ),
-        )
-        finalize_django_types()
+    node_type = _make_type(
+        "ScopedSelfNodeType",
+        ScalarSpecimen,
+        get_queryset=lambda cls, qs, info: apply_cascade_permissions(
+            cls,
+            qs.exclude(label="hidden"),
+            info,
+            fields=[],
+        ),
+    )
+    finalize_django_types()
 
-        hidden_parent = _SelfNode.objects.create(name="hidden")
-        visible_parent = _SelfNode.objects.create(name="visible_parent")
-        keeps = _SelfNode.objects.create(name="keeps", parent=visible_parent)
-        _SelfNode.objects.create(name="drops", parent=hidden_parent)
+    hidden_parent = _specimen("hidden")
+    visible_parent = _specimen("visible_parent")
+    keeps = _specimen("keeps", parent=visible_parent)
+    _specimen("drops", parent=hidden_parent)
 
-        # NOTE the root call walks the ``parent`` edge (its ``fields=None``); only
-        # the NESTED application inside the hook is scoped to nothing.
-        result = apply_cascade_permissions(node_type, _SelfNode.objects.all(), _INFO)
-        names = set(result.values_list("name", flat=True))
-        assert "drops" not in names
-        assert keeps in result
-        assert _cascade_state.get() is None
-
-
-@pytest.mark.django_db(transaction=True)
-def test_nullable_chain_preserves_null_links_and_drops_hidden_tails():
-    """A nullable two-edge chain keeps NULL links and drops hidden-tail rows.
-
-    ``ChTop -> ChMid (nullable) -> ChTail``: the tail type hides a row, both
-    upstream hooks cascade. A top row whose mid is NULL survives (the
-    ``__isnull`` disjunct), a top row whose mid points at a hidden tail drops
-    transitively, and a top row whose mid's tail is NULL survives (the nested
-    disjunct).
-    """
-
-    class ChTail(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class ChMid(models.Model):
-        name = models.TextField()
-        tail = models.ForeignKey(
-            ChTail,
-            null=True,
-            on_delete=models.CASCADE,
-            related_name="mids",
-        )
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class ChTop(models.Model):
-        name = models.TextField()
-        mid = models.ForeignKey(ChMid, null=True, on_delete=models.CASCADE, related_name="tops")
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    with _tables(ChTail, ChMid, ChTop):
-        _make_type(
-            "ChTailType",
-            ChTail,
-            get_queryset=lambda cls, qs, info: qs.exclude(name="hidden_tail"),
-        )
-        _make_type("ChMidType", ChMid, get_queryset=_cascade_only)
-        top_type = _make_type("ChTopType", ChTop, primary=False)
-        finalize_django_types()
-
-        hidden_tail = ChTail.objects.create(name="hidden_tail")
-        ok_tail = ChTail.objects.create(name="ok_tail")
-        mid_hidden = ChMid.objects.create(name="mid_hidden", tail=hidden_tail)
-        mid_ok = ChMid.objects.create(name="mid_ok", tail=ok_tail)
-        mid_null = ChMid.objects.create(name="mid_null", tail=None)
-
-        ChTop.objects.create(name="drops_hidden_tail", mid=mid_hidden)
-        ChTop.objects.create(name="keeps_ok_tail", mid=mid_ok)
-        ChTop.objects.create(name="keeps_null_tail", mid=mid_null)
-        ChTop.objects.create(name="keeps_null_mid", mid=None)
-
-        result = apply_cascade_permissions(top_type, ChTop.objects.all(), _INFO)
-        assert sorted(result.values_list("name", flat=True)) == [
-            "keeps_null_mid",
-            "keeps_null_tail",
-            "keeps_ok_tail",
-        ]
+    # NOTE the root call walks the ``parent`` edge (its ``fields=None``); only
+    # the NESTED application inside the hook is scoped to nothing.
+    result = apply_cascade_permissions(node_type, ScalarSpecimen.objects.all(), _INFO)
+    names = set(result.values_list("label", flat=True))
+    assert "drops" not in names
+    assert keeps in result
+    assert _cascade_state.get() is None
 
 
 @pytest.mark.django_db
@@ -2181,8 +1752,9 @@ def test_isnull_disjunct_only_on_nullable_edges():
 
     ``Entry.item`` / ``Entry.property`` are non-nullable: the composed SQL
     carries the bare membership tests with no vacuous ``IS NULL`` branch. The
-    nullable twins (``test_nullable_fk_rows_preserved`` and the chain test
-    above) pin the disjunct's row-level effect; this pins its absence.
+    nullable twin
+    ``test_library_inheritance_api.py::test_nullable_lead_ticket_cycle_cascades_one_way``
+    pins the disjunct's row-level effect; this pins its absence.
     """
     _make_type(
         "NnItemType",

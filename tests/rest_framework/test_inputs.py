@@ -21,19 +21,18 @@ substrate):
 - module-global materialization.
 
 System-under-test runs against the products ``Item`` / ``Category`` fixtures per
-``AGENTS.md`` plus package-local Relay / non-Relay target ``DjangoType``s.
+``AGENTS.md``, a package-local Relay ``DjangoType`` over library ``Genre``, and
+``Book.circulation_status`` as the choices column.
 Consumer round-trips live in ``examples/fakeshop/test_query/test_library_api.py``
 and ``examples/fakeshop/test_query/test_products_api.py`` (serializer mutations).
 """
 
 from __future__ import annotations
 
-import itertools
 import sys
 
 import pytest
 from apps.products import models as product_models
-from django.db import models
 from rest_framework import serializers
 from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryOptional
@@ -85,14 +84,6 @@ def _isolate_registry_and_ledger():
     clear_serializer_input_namespace()
 
 
-_app_label_counter = itertools.count(1)
-
-
-def _unique_app_label() -> str:
-    """Return a unique ``app_label`` per call to avoid Django's re-register warning."""
-    return f"test_serializer_inputs__{next(_app_label_counter)}"
-
-
 def _field_map(input_cls: type) -> dict[str, object]:
     """Return ``python_name -> StrawberryField`` for a built input class."""
     return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
@@ -123,20 +114,15 @@ def _register_products_types() -> None:
 
 
 def _make_relay_target():
-    """A registered Relay-Node-shaped ``DjangoType`` over a fresh model."""
+    """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
+    from apps.library.models import Genre
 
-    class RelayTarget(models.Model):
-        name = models.TextField()
-
+    class GenreNode(DjangoType, relay.Node):
         class Meta:
-            app_label = _unique_app_label()
-
-    class RelayTargetType(DjangoType, relay.Node):
-        class Meta:
-            model = RelayTarget
+            model = Genre
             fields = ("id", "name")
 
-    return RelayTarget, RelayTargetType
+    return Genre, GenreNode
 
 
 def _item_serializer():
@@ -360,28 +346,27 @@ def test_choices_modelserializer_field_resolves_to_read_side_enum():
     ``convert_choices_to_enum`` (the symmetric wire contract), not a parallel
     serializer-field table.
     """
+    from apps.library.models import Book
+
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
-    class Widget(models.Model):
-        status = models.TextField(choices=[("a", "A"), ("b", "B")])
-
+    class BookType(DjangoType):
         class Meta:
-            app_label = _unique_app_label()
+            model = Book
+            fields = ("id", "circulation_status")
 
-    class WidgetType(DjangoType):
+    class BookStatusSer(serializers.ModelSerializer):
         class Meta:
-            model = Widget
-            fields = ("id", "status")
+            model = Book
+            fields = ("circulation_status",)
 
-    class WidgetSer(serializers.ModelSerializer):
-        class Meta:
-            model = Widget
-            fields = ("status",)
-
-    cre, _, _, _ = build_serializer_inputs(WidgetSer)
+    cre, _, _, _ = build_serializer_inputs(BookStatusSer)
     fields = _field_map(cre)
-    read_enum = convert_choices_to_enum(Widget._meta.get_field("status"), "WidgetSerInput")
-    assert _inner_type(fields["status"]).wrapped_cls is read_enum
+    read_enum = convert_choices_to_enum(
+        Book._meta.get_field("circulation_status"),
+        "BookStatusSerInput",
+    )
+    assert _inner_type(fields["circulation_status"]).wrapped_cls is read_enum
 
 
 # ---------------------------------------------------------------------------

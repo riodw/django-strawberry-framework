@@ -1705,7 +1705,7 @@ class FilterSet(
         # ``base.py::_relation_uses_non_pk_to_field`` / ``_GLOBALID_RELATION_PK_ATTR``).
         # A boolean (not a frozen absolute path) survives ``_expand_related_filter``'s
         # deepcopy + ``field_name`` rebase, so an expanded leaf compiles against the
-        # rebased relation path instead of a stale ``"target__pk"``. The
+        # rebased relation path instead of a stale absolute ``"<relation>__pk"``. The
         # common FK-to-pk / M2M / reverse case is not marked and keeps the raw
         # ``{field_name__lookup_expr: node_id}`` predicate byte-identical.
         if _relation_uses_non_pk_to_field(field):

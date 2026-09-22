@@ -19,15 +19,28 @@ Covers the spec-036 generation substrate
   slot;
 - the ``FieldError`` public export.
 
-System-under-test is the generator itself, run against the realistic products
-``Item`` / ``Category`` FK fixtures plus minimal package-local fixture models for
-the M2M, non-Relay-target, and ``FileField`` / ``ImageField`` shapes products does
-not carry (spec-036 test plan; products is every-Relay and has no M2M /
-file field). Generated ``ItemInput`` / ``BookInput`` wire shapes live in
-``examples/fakeshop/test_query/test_products_api.py`` and
-``examples/fakeshop/test_query/test_library_api.py``; this module keeps
+System-under-test is the generator itself, run against real fakeshop columns:
+products ``Item`` / ``Category``, library ``Book`` (``shelf``, ``genres``, the
+``editable=False`` ``archive_genres``), ``MembershipCard.patron``, ``Genre`` /
+``Branch`` as Relay / plain relation targets, and ``scalars.MediaSpecimen`` for
+the file columns. Generated wire shapes live in
+``examples/fakeshop/test_query/test_products_api.py``,
+``examples/fakeshop/test_query/test_library_api.py``,
+``examples/fakeshop/test_query/test_library_inheritance_api.py`` and
+``examples/fakeshop/test_query/test_input_shapes_api.py``; this module keeps
 class-creation selection, naming collisions, and payload-slot construction a
 request cannot observe.
+
+The synthetic models that remain are shapes whose generated input the package
+refuses to build (or builds only to prove a collision), so no fakeshop mutation
+could expose them: ``CamelCollide`` (``foo_bar`` beside ``fooBar``) pins the
+graphql-name arm and the ``category`` FK beside a ``category_id`` M2M pins the
+input-attr arm of
+``django_strawberry_framework/mutations/inputs.py::build_mutation_input``'s
+collision guard; the two ``DigitBoundary`` models (``field_2`` beside ``field2``)
+pin the always-pinned wire name
+(``django_strawberry_framework/utils/inputs.py::build_strawberry_input_class``) and the
+injective narrowed type name (``django_strawberry_framework/utils/inputs.py::pascalize_token``).
 """
 
 from __future__ import annotations
@@ -36,8 +49,10 @@ import itertools
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.products.schema import CategoryType, ItemType
+from apps.scalars.models import MediaSpecimen
 from django.db import models
 from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryList, StrawberryOptional
@@ -65,7 +80,6 @@ from django_strawberry_framework.mutations.inputs import (
     model_column_write_kind,
     mutation_input_field_specs,
     mutation_input_type_name,
-    payload_object_slot,
     related_model_of_queryset,
     relation_id_annotation,
     relation_id_scalar,
@@ -202,38 +216,18 @@ def test_editable_fields_rejects_unknown_exclude_name():
         editable_input_fields(product_models.Item, exclude=("nope",))
 
 
-def test_editable_fields_excludes_non_editable_many_to_many():
-    """A ManyToManyField declared with ``editable=False`` is excluded from editable_input_fields."""
+def test_editable_fields_reject_naming_a_non_editable_many_to_many():
+    """Naming ``Book.archive_genres`` (``editable=False``) in ``fields`` or ``exclude`` raises.
 
-    class Tag(models.Model):
-        name = models.CharField(max_length=50)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class Article(models.Model):
-        title = models.CharField(max_length=100)
-        editable_tags = models.ManyToManyField(Tag, related_name="editable_articles")
-        non_editable_tags = models.ManyToManyField(
-            Tag,
-            related_name="non_editable_articles",
-            editable=False,
-        )
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    fields = editable_input_fields(Article)
-    field_names = [f.name for f in fields]
-    assert "title" in field_names
-    assert "editable_tags" in field_names
-    assert "non_editable_tags" not in field_names
+    Its absence from the generated ``Book`` inputs is live in
+    ``examples/fakeshop/test_query/test_library_inheritance_api.py``; a request
+    cannot observe the class-creation refusal of a narrowing that names it.
+    """
+    with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
+        editable_input_fields(library_models.Book, fields=("title", "archive_genres"))
 
     with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
-        editable_input_fields(Article, fields=("title", "non_editable_tags"))
-
-    with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
-        editable_input_fields(Article, exclude=("non_editable_tags",))
+        editable_input_fields(library_models.Book, exclude=("archive_genres",))
 
 
 # ---------------------------------------------------------------------------
@@ -318,13 +312,14 @@ def test_partial_input_name_is_canonical_model_partial_input():
 # ---------------------------------------------------------------------------
 
 
-def test_relation_id_scalar_is_globalid_iff_primary_is_relay():
-    """Relay primary -> GlobalID; non-Relay or missing primary -> raw pk scalar."""
-    relay_model, relay_type = _make_relay_target()
-    assert relation_id_scalar(relay_model, relay_type) is relay.GlobalID
-    plain_model, plain_type = _make_non_relay_target()
-    assert relation_id_scalar(plain_model, plain_type) is int
-    assert relation_id_scalar(plain_model, None) is int
+def test_relation_id_scalar_without_a_primary_is_the_raw_pk_scalar():
+    """A related model with no registered primary type takes its raw pk scalar.
+
+    The Relay and plain-primary arms are live in
+    ``examples/fakeshop/test_query/test_input_shapes_api.py``; every shipped
+    relation target has a primary, so the ``None`` arm has no wire shape.
+    """
+    assert relation_id_scalar(library_models.Branch, None) is int
 
 
 def test_relation_id_annotation_wraps_multi_as_list_of_the_same_scalar():
@@ -410,31 +405,24 @@ def test_model_column_input_annotation_maps_file_and_scalar_columns():
     """A non-relation column types as ``Upload`` when it is a file, else ``convert_scalar``."""
     from django_strawberry_framework.types.converters import convert_scalar
 
-    class Probe(models.Model):
-        name = models.TextField()
-        attachment = models.FileField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
     python_attr, graphql_name, annotation = model_column_input_annotation(
-        Probe._meta.get_field("attachment"),
-        "ProbeInput",
+        MediaSpecimen._meta.get_field("attachment"),
+        "MediaSpecimenInput",
         primary_of=lambda _model: None,
     )
     assert python_attr == "attachment"
     assert graphql_name == "attachment"
     assert annotation is Upload
 
-    name_field = Probe._meta.get_field("name")
+    label_field = MediaSpecimen._meta.get_field("label")
     python_attr, graphql_name, annotation = model_column_input_annotation(
-        name_field,
-        "ProbeInput",
+        label_field,
+        "MediaSpecimenInput",
         primary_of=lambda _model: None,
     )
-    assert python_attr == "name"
-    assert graphql_name == "name"
-    assert annotation == convert_scalar(name_field, "ProbeInput", force_nullable=False)
+    assert python_attr == "label"
+    assert graphql_name == "label"
+    assert annotation == convert_scalar(label_field, "MediaSpecimenInput", force_nullable=False)
 
 
 def test_model_column_write_kind_classifies_relation_file_and_scalar():
@@ -446,47 +434,32 @@ def test_model_column_write_kind_classifies_relation_file_and_scalar():
         SCALAR,
     )
 
-    class Probe(models.Model):
-        name = models.TextField()
-        attachment = models.FileField()
-        parent = models.ForeignKey("self", on_delete=models.CASCADE)
-        peers = models.ManyToManyField("self")
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    assert model_column_write_kind(Probe._meta.get_field("name")) == SCALAR
-    assert model_column_write_kind(Probe._meta.get_field("attachment")) == FILE
-    assert model_column_write_kind(Probe._meta.get_field("parent")) == RELATION_SINGLE
-    assert model_column_write_kind(Probe._meta.get_field("peers")) == RELATION_MULTI
+    book = library_models.Book
+    assert model_column_write_kind(book._meta.get_field("title")) == SCALAR
+    assert model_column_write_kind(MediaSpecimen._meta.get_field("attachment")) == FILE
+    assert model_column_write_kind(book._meta.get_field("shelf")) == RELATION_SINGLE
+    assert model_column_write_kind(book._meta.get_field("genres")) == RELATION_MULTI
 
 
 def test_model_column_write_annotation_maps_file_and_scalar():
     """Annotation-only mapping is Upload for a file column, else convert_scalar."""
     from django_strawberry_framework.types.converters import convert_scalar
 
-    class Probe(models.Model):
-        name = models.TextField()
-        attachment = models.FileField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    attachment = Probe._meta.get_field("attachment")
+    attachment = MediaSpecimen._meta.get_field("attachment")
     assert (
         model_column_write_annotation(
             attachment,
-            "ProbeInput",
+            "MediaSpecimenInput",
             primary_of=lambda _model: None,
         )
         is Upload
     )
-    name_field = Probe._meta.get_field("name")
+    label_field = MediaSpecimen._meta.get_field("label")
     assert model_column_write_annotation(
-        name_field,
-        "ProbeInput",
+        label_field,
+        "MediaSpecimenInput",
         primary_of=lambda _model: None,
-    ) == convert_scalar(name_field, "ProbeInput", force_nullable=False)
+    ) == convert_scalar(label_field, "MediaSpecimenInput", force_nullable=False)
 
 
 def test_form_and_serializer_column_kind_share_model_column_owner():
@@ -503,248 +476,58 @@ def test_form_and_serializer_column_kind_share_model_column_owner():
 
 # ---------------------------------------------------------------------------
 # build_mutation_input - relation id mapping (FK + M2M, Relay vs non-Relay)
+#
+# The FK / M2M rows, Relay and plain, and the ``Meta.interfaces`` ordering they
+# depend on are live in ``examples/fakeshop/test_query/test_input_shapes_api.py``.
 # ---------------------------------------------------------------------------
 
 
 def _make_relay_target():
-    """A registered Relay-Node-shaped ``DjangoType`` over a fresh model."""
+    """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
 
-    class RelayTarget(models.Model):
-        name = models.TextField()
-
+    class GenreNode(DjangoType, relay.Node):
         class Meta:
-            app_label = _unique_app_label()
-
-    class RelayTargetType(DjangoType, relay.Node):
-        class Meta:
-            model = RelayTarget
+            model = library_models.Genre
             fields = ("id", "name")
 
-    return RelayTarget, RelayTargetType
+    return library_models.Genre, GenreNode
 
 
 def _make_non_relay_target():
-    """A registered non-Relay ``DjangoType`` over a fresh model (raw int pk)."""
+    """Register a non-Relay ``DjangoType`` over ``library.Branch`` (raw int pk) and return both."""
 
-    class PlainTarget(models.Model):
-        name = models.TextField()
-
+    class BranchPlainType(DjangoType):
         class Meta:
-            app_label = _unique_app_label()
-
-    class PlainTargetType(DjangoType):
-        class Meta:
-            model = PlainTarget
+            model = library_models.Branch
             fields = ("id", "name")
 
-    return PlainTarget, PlainTargetType
-
-
-def test_fk_to_relay_target_uses_globalid_id():
-    """A forward FK to a Relay-Node primary becomes ``<field>_id: GlobalID``."""
-    relay_target, _ = _make_relay_target()
-
-    class Owner(models.Model):
-        rel = models.ForeignKey(relay_target, on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class OwnerType(DjangoType, relay.Node):
-        class Meta:
-            model = Owner
-            fields = ("id",)
-
-    cls = build_mutation_input(Owner, operation_kind=CREATE, primary_type=OwnerType)
-    fields = _field_map(cls)
-    assert "rel_id" in fields
-    assert _inner_type(fields["rel_id"]) is relay.GlobalID
-    assert fields["rel_id"].graphql_name == "relId"
-
-
-# ---------------------------------------------------------------------------
-# ``Meta.interfaces``-declared Relay targets: the phase-2.5 ordering dependency
-#
-# ``Meta.interfaces = (relay.Node,)`` is the documented consumer surface and the
-# route every fakeshop type uses, but ``relay.Node`` reaches the declaring type's
-# MRO only when ``finalize_django_types`` runs ``apply_interfaces``. Both the
-# relation-id scalar (``relation_id_scalar``) and the payload object slot
-# (``payload_object_slot``) gate on ``implements_relay_node``, which READS that MRO,
-# and the mutation bind that consumes both is a LATER phase-2.5 step. Hoist the bind
-# above ``apply_interfaces`` and every ``Meta.interfaces``-declared type silently
-# degrades - a relation input to a raw pk (defeating the ``GlobalID``-shaped
-# visibility check in ``decode_visible_relation_ids``) and a payload to the
-# ``result`` slot. The other Relay rows in this module inherit ``relay.Node``
-# directly, for which the predicate is true from class creation, so the ordering is
-# unobservable there; these two rows are the only package-tier witnesses.
-# ---------------------------------------------------------------------------
-
-
-def _declare_meta_interfaces_mutation():
-    """Declare an FK-to-``Meta.interfaces``-target create mutation and finalize.
-
-    Returns ``(CreateOwner, InterfacesTargetType, OwnerType)`` after
-    ``finalize_django_types()``, asserting on the way through that the declared
-    interface was NOT in the MRO beforehand - the injection is what phase 2.5
-    performs and what the bind must see.
-    """
-    from django_strawberry_framework import DjangoMutation, finalize_django_types
-
-    class InterfacesTarget(models.Model):
-        name = models.TextField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class InterfacesTargetType(DjangoType):
-        class Meta:
-            model = InterfacesTarget
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    class Owner(models.Model):
-        rel = models.ForeignKey(InterfacesTarget, on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class OwnerType(DjangoType):
-        class Meta:
-            model = Owner
-            fields = ("id",)
-            interfaces = (relay.Node,)
-
-    class CreateOwner(DjangoMutation):
-        class Meta:
-            model = Owner
-            operation = "create"
-
-    assert not issubclass(InterfacesTargetType, relay.Node)
-    assert not issubclass(OwnerType, relay.Node)
-
-    finalize_django_types()
-
-    return CreateOwner, InterfacesTargetType, OwnerType
-
-
-def test_fk_to_meta_interfaces_relay_target_uses_globalid_id():
-    """A target declaring Relay through ``Meta.interfaces`` gets a ``GlobalID`` relation id."""
-    create_owner, target_type, owner_type = _declare_meta_interfaces_mutation()
-
-    assert issubclass(target_type, relay.Node)
-    assert issubclass(owner_type, relay.Node)
-    fields = _field_map(create_owner._input_class)
-    assert "rel_id" in fields
-    assert _inner_type(fields["rel_id"]) is relay.GlobalID
-
-
-def test_meta_interfaces_primary_binds_a_node_slot_payload():
-    """A primary declaring Relay through ``Meta.interfaces`` binds a ``node``-slot payload.
-
-    The second, independent consequence of the same injection reaching the bind:
-    ``payload_object_slot`` returns ``"node"`` only for a Relay-Node target, so a
-    payload materialized before ``apply_interfaces`` carries ``result`` instead -
-    a breaking wire change on every ``Meta.interfaces``-declared mutation target.
-    Pinned separately from the relation-id row above because the two read the
-    predicate at different call sites.
-    """
-    from django_strawberry_framework.mutations.inputs import _materialized_names
-
-    create_owner, _target_type, owner_type = _declare_meta_interfaces_mutation()
-
-    assert payload_object_slot(owner_type) == "node"
-    payload = _materialized_names[create_owner._payload_type_name]
-    payload_fields = {f.python_name for f in payload.__strawberry_definition__.fields}
-    assert "node" in payload_fields
-    assert "result" not in payload_fields
-
-
-def test_fk_to_non_relay_target_uses_raw_pk_scalar():
-    """A forward FK to a non-Relay primary becomes ``<field>_id`` of the raw pk scalar."""
-    plain_target, _ = _make_non_relay_target()
-
-    class Owner(models.Model):
-        rel = models.ForeignKey(plain_target, on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class OwnerType(DjangoType, relay.Node):
-        class Meta:
-            model = Owner
-            fields = ("id",)
-
-    cls = build_mutation_input(Owner, operation_kind=CREATE, primary_type=OwnerType)
-    fields = _field_map(cls)
-    # AutoField pk -> int raw scalar (NOT GlobalID).
-    assert _inner_type(fields["rel_id"]) is int
+    return library_models.Branch, BranchPlainType
 
 
 def test_o2o_to_relay_target_uses_globalid_id():
-    """A forward OneToOne to a Relay-Node primary also becomes ``<field>_id: GlobalID``."""
-    relay_target, _ = _make_relay_target()
+    """A forward OneToOne to a Relay-Node primary also becomes ``<field>_id: GlobalID``.
 
-    class Profile(models.Model):
-        owner = models.OneToOneField(relay_target, on_delete=models.CASCADE)
+    ``MembershipCard.patron`` carries the shape; no fakeshop mutation writes a
+    membership card, so no generated input publishes it over HTTP.
+    """
 
+    class PatronNode(DjangoType, relay.Node):
         class Meta:
-            app_label = _unique_app_label()
+            model = library_models.Patron
+            fields = ("id", "name")
 
-    class ProfileType(DjangoType, relay.Node):
+    class MembershipCardNode(DjangoType, relay.Node):
         class Meta:
-            model = Profile
+            model = library_models.MembershipCard
             fields = ("id",)
 
-    cls = build_mutation_input(Profile, operation_kind=CREATE, primary_type=ProfileType)
+    cls = build_mutation_input(
+        library_models.MembershipCard,
+        operation_kind=CREATE,
+        primary_type=MembershipCardNode,
+    )
     fields = _field_map(cls)
-    assert _inner_type(fields["owner_id"]) is relay.GlobalID
-
-
-def test_m2m_to_relay_target_becomes_list_of_globalid():
-    """A forward M2M to a Relay-Node primary becomes ``list[GlobalID]`` (and is optional)."""
-    relay_target, _ = _make_relay_target()
-
-    class Owner(models.Model):
-        tags = models.ManyToManyField(relay_target)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class OwnerType(DjangoType, relay.Node):
-        class Meta:
-            model = Owner
-            fields = ("id",)
-
-    cls = build_mutation_input(Owner, operation_kind=CREATE, primary_type=OwnerType)
-    fields = _field_map(cls)
-    assert "tags" in fields
-    # M2M is always optional (resolver replace/clear/omit contract).
-    assert _is_optional(fields["tags"])
-    list_part = fields["tags"].type.of_type
-    assert isinstance(list_part, StrawberryList)
-    assert list_part.of_type is relay.GlobalID
-
-
-def test_m2m_to_non_relay_target_becomes_list_of_raw_pk():
-    """A forward M2M to a non-Relay primary becomes ``list[<pk scalar>]``."""
-    plain_target, _ = _make_non_relay_target()
-
-    class Owner(models.Model):
-        tags = models.ManyToManyField(plain_target)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class OwnerType(DjangoType, relay.Node):
-        class Meta:
-            model = Owner
-            fields = ("id",)
-
-    cls = build_mutation_input(Owner, operation_kind=CREATE, primary_type=OwnerType)
-    fields = _field_map(cls)
-    list_part = fields["tags"].type.of_type
-    assert isinstance(list_part, StrawberryList)
-    assert list_part.of_type is int
+    assert _inner_type(fields["patron_id"]) is relay.GlobalID
 
 
 # ---------------------------------------------------------------------------
@@ -795,7 +578,10 @@ def test_fk_id_attr_collision_with_m2m_is_fail_loud():
     Django-legal, snake-case pair: an M2M has no local column, so Django's own field-name
     clash check (``models.E006``) does NOT fire against the FK's ``category_id`` attname -
     the framework must catch and name the collision itself, mirroring the form / serializer
-    generated-input guards (``iter_input_field_collisions``).
+    generated-input guards (``iter_input_field_collisions``). ``Owner`` stays synthetic: an M2M
+    literally named ``category_id`` beside a ``category`` FK is a naming clash no fakeshop model
+    carries, and it alone drives the input-attr arm of
+    ``django_strawberry_framework/mutations/inputs.py::_reject_generated_input_collisions``.
     """
     relay_target, _ = _make_relay_target()
 
@@ -837,6 +623,10 @@ def test_camel_case_graphql_name_collision_is_fail_loud():
     the SAME ``graphql_name`` ``fooBar``; Strawberry would collapse the two onto one schema
     field with no error. The graphql-name arm catches and names them, at parity with the
     form / serializer flavors and the read-type guard ``types/finalizer.py::_audit_field_surface``.
+    ``CamelCollide`` stays synthetic: two columns camel-casing to one name is a clash the
+    package refuses to build, so no fakeshop mutation can expose it, and it alone drives the
+    graphql-name arm of
+    ``django_strawberry_framework/mutations/inputs.py::_reject_generated_input_collisions``.
     """
 
     class CamelCollide(models.Model):
@@ -902,7 +692,10 @@ def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
     to ``field2`` via ``to_camel_case`` and silently overwrote the sibling
     ``field2`` -- dropping one consumer-declared column from the generated
     ``<Model>Input`` SDL with no error. The shared generated-input builder now
-    pins every package-derived wire name, so both survive.
+    pins every package-derived wire name, so both survive. ``DigitBoundary`` stays
+    synthetic: ``field_2`` beside ``field2`` is legal Django but a naming no fakeshop
+    domain model would carry, and it alone pins the always-set wire alias in
+    ``django_strawberry_framework/utils/inputs.py::build_strawberry_input_class``.
     """
 
     class DigitBoundary(models.Model):
@@ -1015,7 +808,13 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
     -> ``Field2``), so two legitimate narrowed shapes claimed one GraphQL input type
     name and the second materialize raised a distinct-shape collision. Retaining
     underscore-before-digit keeps the tokens injective; the shared builder pins
-    ``strawberry.input(name=)`` so the underscore survives on the wire.
+    ``strawberry.input(name=)`` so the underscore survives on the wire. This
+    ``DigitBoundary`` stays synthetic because the row builds and materializes both
+    narrowed inputs, which needs the two real columns, and ``field_2`` beside
+    ``field2`` is legal Django but a naming no fakeshop domain model would carry; it
+    alone pins the underscore-before-digit token of
+    ``django_strawberry_framework/utils/inputs.py::pascalize_token`` through a
+    materialized schema.
     """
     full = ("not_the_narrowed_set",)
 
@@ -1167,181 +966,65 @@ def test_materializer_rejects_consumer_alias_colliding_with_generated_remainder(
 # ---------------------------------------------------------------------------
 
 
-def test_required_file_field_maps_to_upload():
-    """A plain required ``FileField`` create input maps to ``Upload`` and is NOT optional.
+def _media_specimen_node():
+    """Register a Relay-Node ``DjangoType`` over ``scalars.MediaSpecimen`` and return it."""
 
-    The python attr is the model field name (``attachment``), never
-    ``attachment_id`` (that is the FK relation scheme); a file/image column is a
-    SCALAR input.
+    class MediaSpecimenNode(DjangoType, relay.Node):
+        class Meta:
+            model = MediaSpecimen
+            fields = ("id",)
+
+    return MediaSpecimenNode
+
+
+@pytest.mark.parametrize(
+    "column",
+    ["optional_attachment", "spare_image"],
+    ids=["blank", "null"],
+)
+def test_optional_file_column_defaults_to_unset(column):
+    """An optional file column on the create input defaults to ``UNSET``, not ``None``.
+
+    ``optional_attachment`` is optional through ``blank=True`` and
+    ``spare_image`` through ``null=True``; that each is a nullable ``Upload``
+    is live in ``examples/fakeshop/test_query/test_library_inheritance_api.py``,
+    but introspection cannot tell an omitted argument's ``UNSET`` from ``None``.
     """
-
-    class HasFile(models.Model):
-        attachment = models.FileField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasFileType(DjangoType, relay.Node):
-        class Meta:
-            model = HasFile
-            fields = ("id",)
-
-    cls = build_mutation_input(HasFile, operation_kind=CREATE, primary_type=HasFileType)
-    fields = _field_map(cls)
-    assert "attachment" in fields
-    assert "attachment_id" not in fields
-    assert not _is_optional(fields["attachment"])
-    assert _inner_type(fields["attachment"]) is Upload
-
-
-def test_required_image_field_maps_to_upload():
-    """A plain required ``ImageField`` create input maps to ``Upload`` and is required."""
-
-    class HasImage(models.Model):
-        avatar = models.ImageField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasImageType(DjangoType, relay.Node):
-        class Meta:
-            model = HasImage
-            fields = ("id",)
-
-    cls = build_mutation_input(HasImage, operation_kind=CREATE, primary_type=HasImageType)
-    fields = _field_map(cls)
-    assert not _is_optional(fields["avatar"])
-    assert _inner_type(fields["avatar"]) is Upload
-
-
-def test_file_field_camel_cases_graphql_name():
-    """A multi-word file column camel-cases its GraphQL alias like any scalar input."""
-
-    class HasArt(models.Model):
-        cover_art = models.FileField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasArtType(DjangoType, relay.Node):
-        class Meta:
-            model = HasArt
-            fields = ("id",)
-
-    cls = build_mutation_input(HasArt, operation_kind=CREATE, primary_type=HasArtType)
-    fields = _field_map(cls)
-    assert _inner_type(fields["cover_art"]) is Upload
-    assert fields["cover_art"].graphql_name == "coverArt"
-
-
-def test_blank_file_field_widens_to_upload_optional():
-    """A ``blank=True`` file column is optional + ``UNSET``-defaulted with inner ``Upload``.
-
-    ``blank`` is the ``input_field_required`` ``not field.blank`` branch.
-    """
-
-    class HasBlankFile(models.Model):
-        attachment = models.FileField(blank=True)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasBlankFileType(DjangoType, relay.Node):
-        class Meta:
-            model = HasBlankFile
-            fields = ("id",)
-
-    cls = build_mutation_input(HasBlankFile, operation_kind=CREATE, primary_type=HasBlankFileType)
-    fields = _field_map(cls)
-    assert _is_optional(fields["attachment"])
-    assert fields["attachment"].default is UNSET
-    assert _inner_type(fields["attachment"]) is Upload
-
-
-def test_null_file_field_widens_to_upload_optional():
-    """A ``null=True`` file column is optional + ``UNSET``-defaulted with inner ``Upload``.
-
-    ``null`` is the ``input_field_required`` ``field.null`` branch (distinct from
-    the ``blank`` branch above), so both requiredness paths are pinned.
-    """
-
-    class HasNullFile(models.Model):
-        attachment = models.FileField(null=True)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasNullFileType(DjangoType, relay.Node):
-        class Meta:
-            model = HasNullFile
-            fields = ("id",)
-
-    cls = build_mutation_input(HasNullFile, operation_kind=CREATE, primary_type=HasNullFileType)
-    fields = _field_map(cls)
-    assert _is_optional(fields["attachment"])
-    assert fields["attachment"].default is UNSET
-    assert _inner_type(fields["attachment"]) is Upload
-
-
-def test_partial_input_file_field_always_optional_upload():
-    """Every partial input file column is optional + ``UNSET``-defaulted, even when required-on-create."""
-
-    class HasFile(models.Model):
-        attachment = models.FileField()  # required on create
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasFileType(DjangoType, relay.Node):
-        class Meta:
-            model = HasFile
-            fields = ("id",)
-
-    cls = build_mutation_input(HasFile, operation_kind=PARTIAL, primary_type=HasFileType)
-    fields = _field_map(cls)
-    assert _is_optional(fields["attachment"])
-    assert fields["attachment"].default is UNSET
-    assert _inner_type(fields["attachment"]) is Upload
+    cls = build_mutation_input(
+        MediaSpecimen,
+        operation_kind=CREATE,
+        primary_type=_media_specimen_node(),
+    )
+    assert _field_map(cls)[column].default is UNSET
 
 
 def test_file_field_narrowed_by_meta_fields_and_exclude():
     """A file column is included / excluded by model field name via ``fields`` / ``exclude``."""
-
-    class HasFileAndName(models.Model):
-        name = models.TextField()
-        attachment = models.FileField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasFileAndNameType(DjangoType, relay.Node):
-        class Meta:
-            model = HasFileAndName
-            fields = ("id",)
+    primary_type = _media_specimen_node()
 
     # ``fields`` dropping the file column drops it from the input.
-    only_name = build_mutation_input(
-        HasFileAndName,
+    only_label = build_mutation_input(
+        MediaSpecimen,
         operation_kind=CREATE,
-        primary_type=HasFileAndNameType,
-        fields=("name",),
+        primary_type=primary_type,
+        fields=("label",),
     )
-    assert "attachment" not in _field_map(only_name)
+    assert "attachment" not in _field_map(only_label)
 
     # ``fields`` naming the file column keeps it as ``Upload``.
     with_file = build_mutation_input(
-        HasFileAndName,
+        MediaSpecimen,
         operation_kind=CREATE,
-        primary_type=HasFileAndNameType,
-        fields=("name", "attachment"),
+        primary_type=primary_type,
+        fields=("label", "attachment"),
     )
     assert _inner_type(_field_map(with_file)["attachment"]) is Upload
 
     # ``exclude`` of the file column drops it too.
     excluded = build_mutation_input(
-        HasFileAndName,
+        MediaSpecimen,
         operation_kind=CREATE,
-        primary_type=HasFileAndNameType,
+        primary_type=primary_type,
         exclude=("attachment",),
     )
     assert "attachment" not in _field_map(excluded)
@@ -1355,27 +1038,15 @@ def test_file_field_consumer_override_skips_generated_upload_field():
     does, exactly like a scalar - this is the load-bearing carve-out-lift assertion.
     """
 
-    class HasFileAndName(models.Model):
-        name = models.TextField()
-        attachment = models.FileField()
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class HasFileAndNameType(DjangoType, relay.Node):
-        class Meta:
-            model = HasFileAndName
-            fields = ("id",)
-
     cls = build_mutation_input(
-        HasFileAndName,
+        MediaSpecimen,
         operation_kind=CREATE,
-        primary_type=HasFileAndNameType,
+        primary_type=_media_specimen_node(),
         overrides=frozenset({"attachment"}),
     )
     fields = _field_map(cls)
     assert "attachment" not in fields  # overridden -> skipped, not clobbered
-    assert "name" in fields  # the non-overridden column still generates
+    assert "label" in fields  # the non-overridden column still generates
 
 
 # ---------------------------------------------------------------------------
@@ -1441,35 +1112,6 @@ def test_field_error_wire_name_set_on_a_generated_payload_is_frozen():
         "codes",
         "path",
     }
-
-
-def test_payload_node_slot_for_relay_target():
-    """A Relay-Node primary yields a ``node`` slot + a nullable object + ``errors``.
-
-    Uses a local Relay-shaped type (inherits ``relay.Node`` directly) so
-    ``implements_relay_node`` is True without depending on ``finalize_django_types``
-    injecting ``relay.Node`` into the products types' ``__bases__``.
-    """
-    _, relay_type = _make_relay_target()
-    assert payload_object_slot(relay_type) == "node"
-    payload = build_payload_type("CreateThing", object_type=relay_type, object_slot="node")
-    assert payload.__name__ == "CreateThingPayload"
-    fields = {f.python_name: f for f in payload.__strawberry_definition__.fields}
-    assert "node" in fields
-    assert isinstance(fields["node"].type, StrawberryOptional)
-    assert fields["node"].type.of_type is relay_type
-    assert isinstance(fields["errors"].type, StrawberryList)
-    assert fields["errors"].type.of_type is FieldError
-
-
-def test_payload_result_slot_for_non_relay_target():
-    """A non-Relay primary yields a ``result`` slot, never a model-derived name."""
-    _, plain_type = _make_non_relay_target()
-    assert payload_object_slot(plain_type) == "result"
-    payload = build_payload_type("CreatePlain", object_type=plain_type, object_slot="result")
-    fields = {f.python_name: f for f in payload.__strawberry_definition__.fields}
-    assert "result" in fields
-    assert isinstance(fields["result"].type, StrawberryOptional)
 
 
 def test_payload_slot_never_model_derived_for_property_like_model():
@@ -1661,37 +1303,6 @@ def test_build_mutation_input_rejects_bare_string_overrides():
             operation_kind=CREATE,
             primary_type=ItemType,
             overrides=b"name",
-        )
-
-
-def test_bare_string_overrides_cannot_bypass_the_empty_input_guard():
-    """No zero-field input class escapes via a garbage ``overrides`` string.
-
-    A model with no editable columns + ``overrides="x"`` used to return an empty
-    input class (the char-split set satisfied the guard's ``not overrides``);
-    Strawberry only rejected it later at ``Schema(...)`` build with a raw
-    ``ValueError``. The generator's fail-loud boundary now holds either way: the
-    bare string is rejected before the guard can be satisfied by it.
-    """
-
-    class NoEditable(models.Model):
-        created_date = models.DateTimeField(auto_now_add=True)
-        updated_date = models.DateTimeField(auto_now=True)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class NoEditableType(DjangoType, relay.Node):
-        class Meta:
-            model = NoEditable
-            fields = ("id",)
-
-    with pytest.raises(ConfigurationError, match="(overrides|has no fields)"):
-        build_mutation_input(
-            NoEditable,
-            operation_kind=CREATE,
-            primary_type=NoEditableType,
-            overrides="x",
         )
 
 

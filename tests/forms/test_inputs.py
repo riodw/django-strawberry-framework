@@ -20,8 +20,9 @@ substrate):
   via ``materialize_form_input_class``, and module-global materialization.
 
 System-under-test is the generator run against the products ``Item`` / ``Category``
-FK fixtures plus package-local fixture models / forms for the M2M, Relay-target,
-choices-enum, ``Upload``, and plain-``Form``-only shapes. Mirrors the
+FK fixtures, library ``Genre`` / ``Branch`` as Relay / plain relation targets,
+``Book.circulation_status`` for the choices enum, and package-local forms for the
+``Upload`` and plain-``Form``-only shapes. Mirrors the
 ``tests/mutations/test_inputs.py`` fixture posture. Shipped form SDL and writes
 live in ``examples/fakeshop/test_query/test_products_api.py`` /
 ``test_library_api.py`` / ``test_uploads_api.py``; this file keeps generator
@@ -30,16 +31,16 @@ fail-loud, shape identity, and throwaway-type id mapping.
 
 from __future__ import annotations
 
-import itertools
 import sys
 from types import SimpleNamespace
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import models as product_models
+from apps.scalars import models as scalar_models
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
-from django.db import models
 from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryOptional
 
@@ -89,14 +90,6 @@ def _isolate_registry_and_ledger():
     clear_form_input_namespace()
 
 
-_app_label_counter = itertools.count(1)
-
-
-def _unique_app_label() -> str:
-    """Return a unique ``app_label`` per call to avoid Django's re-register warning."""
-    return f"test_form_inputs__{next(_app_label_counter)}"
-
-
 def _field_map(input_cls: type) -> dict[str, object]:
     """Return ``python_name -> StrawberryField`` for a built input class."""
     return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
@@ -113,37 +106,27 @@ def _inner_type(field):
 
 
 def _make_relay_target():
-    """A registered Relay-Node-shaped ``DjangoType`` over a fresh model."""
+    """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
+    from apps.library.models import Genre
 
-    class RelayTarget(models.Model):
-        name = models.TextField()
-
+    class GenreNode(DjangoType, relay.Node):
         class Meta:
-            app_label = _unique_app_label()
-
-    class RelayTargetType(DjangoType, relay.Node):
-        class Meta:
-            model = RelayTarget
+            model = Genre
             fields = ("id", "name")
 
-    return RelayTarget, RelayTargetType
+    return Genre, GenreNode
 
 
 def _make_non_relay_target():
-    """A registered non-Relay ``DjangoType`` over a fresh model (raw int pk)."""
+    """Register a non-Relay ``DjangoType`` over ``library.Branch`` (raw int pk) and return both."""
+    from apps.library.models import Branch
 
-    class PlainTarget(models.Model):
-        name = models.TextField()
-
+    class BranchPlainType(DjangoType):
         class Meta:
-            app_label = _unique_app_label()
-
-    class PlainTargetType(DjangoType):
-        class Meta:
-            model = PlainTarget
+            model = Branch
             fields = ("id", "name")
 
-    return PlainTarget, PlainTargetType
+    return Branch, BranchPlainType
 
 
 # ---------------------------------------------------------------------------
@@ -420,30 +403,26 @@ def test_null_boolean_field_is_optional_even_when_django_required():
 
 
 def test_non_null_column_backed_null_boolean_stays_required():
-    """Model validation makes a required NullBooleanField over ``null=False`` non-null."""
+    """Model validation makes a required NullBooleanField over ``null=False`` non-null.
 
-    class Flags(models.Model):
-        flag = models.BooleanField(null=False)
-        name = models.CharField(max_length=20)
+    ``library.Issue.embargoed`` is the non-null ``BooleanField`` carrier.
+    """
 
-        class Meta:
-            app_label = _unique_app_label()
-
-    class FlagsForm(forms.ModelForm):
-        flag = forms.NullBooleanField(required=True)
+    class IssueForm(forms.ModelForm):
+        embargoed = forms.NullBooleanField(required=True)
 
         class Meta:
-            model = Flags
-            fields = ("flag", "name")
+            model = library_models.Issue
+            fields = ("embargoed", "title")
 
-    cre, _, _, _ = build_form_inputs(FlagsForm, operation_kind=CREATE)
+    cre, _, _, _ = build_form_inputs(IssueForm, operation_kind=CREATE)
     fields = _field_map(cre)
-    assert not _is_optional(fields["flag"])
-    with pytest.raises(ConfigurationError, match=r"drops required form field.*flag"):
+    assert not _is_optional(fields["embargoed"])
+    with pytest.raises(ConfigurationError, match=r"drops required form field.*embargoed"):
         build_form_inputs(
-            FlagsForm,
+            IssueForm,
             operation_kind=CREATE,
-            fields=("name",),
+            fields=("title",),
         )
 
 
@@ -456,22 +435,17 @@ def test_column_backed_null_boolean_is_optional():
     ``required=True`` ``NullBooleanField`` over a column widens to ``| None`` +
     ``UNSET`` rather than compiling a required field (the pre-fix column-backed
     path used raw ``field.required`` and emitted it required).
+    ``scalars.NullableScalarSpecimen.flag`` is the nullable carrier.
     """
 
-    class Flags(models.Model):
-        flag = models.BooleanField(null=True)
-
-        class Meta:
-            app_label = _unique_app_label()
-
-    class FlagsForm(forms.ModelForm):
+    class NullableSpecimenForm(forms.ModelForm):
         flag = forms.NullBooleanField()  # Django default required=True
 
         class Meta:
-            model = Flags
+            model = scalar_models.NullableScalarSpecimen
             fields = ("flag",)
 
-    cre, _, _, _ = build_form_inputs(FlagsForm, operation_kind=CREATE)
+    cre, _, _, _ = build_form_inputs(NullableSpecimenForm, operation_kind=CREATE)
     fields = _field_map(cre)
     assert _is_optional(fields["flag"])
     assert fields["flag"].default is UNSET
@@ -612,33 +586,29 @@ def test_choices_modelform_field_resolves_to_read_side_enum():
     ``convert_choices_to_enum`` (the symmetric wire contract), not a parallel
     form-field table (spec-038 Decision 7 - the shared-table drift guard).
     """
+    from apps.library.models import Book
+
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
-    class Widget(models.Model):
-        status = models.TextField(choices=[("a", "A"), ("b", "B")])
-
+    class BookType(DjangoType):
         class Meta:
-            app_label = _unique_app_label()
+            model = Book
+            fields = ("id", "circulation_status")
 
-    class WidgetType(DjangoType):
+    class BookStatusForm(forms.ModelForm):
         class Meta:
-            model = Widget
-            fields = ("id", "status")
+            model = Book
+            fields = ("circulation_status",)
 
-    class WidgetForm(forms.ModelForm):
-        class Meta:
-            model = Widget
-            fields = ("status",)
-
-    cre, _, _, _ = build_form_inputs(WidgetForm, operation_kind=CREATE)
+    cre, _, _, _ = build_form_inputs(BookStatusForm, operation_kind=CREATE)
     fields = _field_map(cre)
-    read_enum = convert_choices_to_enum(Widget._meta.get_field("status"), "WidgetType")
+    read_enum = convert_choices_to_enum(Book._meta.get_field("circulation_status"), "BookType")
     # The generated input field uses the IDENTICAL enum object the read DjangoType
     # synthesizes (cached per column on the model field), not a parallel ``str``
     # mapping. Strawberry wraps the enum class in a ``StrawberryEnumDefinition`` on
     # the resolved field type, so compare its ``wrapped_cls`` against the raw enum
     # ``convert_choices_to_enum`` returns - same object proves the symmetric reuse.
-    assert _inner_type(fields["status"]).wrapped_cls is read_enum
+    assert _inner_type(fields["circulation_status"]).wrapped_cls is read_enum
 
 
 # ---------------------------------------------------------------------------

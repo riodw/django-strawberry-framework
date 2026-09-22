@@ -1,9 +1,25 @@
 """Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
 
-Fakeshop has no choice columns, so the test surface is built around a
-session-scoped ``ChoiceFixture`` Django model that lives under a synthetic
-``app_label``. Every test in this file uses that fixture as the source of
-truth so the behaviour is exercised without polluting the example schema.
+Legal column shapes read real fakeshop fields: ``scalars.MediaSpecimen`` for
+the file/image rows (``attachment``, ``image``, the ``blank``-only
+``optional_attachment`` and the ``null``-only ``spare_image``),
+``ScalarSpecimen`` / ``NullableScalarSpecimen`` for the text and scalar
+delegation rows, and ``library.Periodical`` for the ``BigAutoField`` pk.
+
+The synthetic models that remain carry column shapes no fakeshop model can
+declare, because *exposing* each column on a ``DjangoType`` is what cannot be
+built. The unsupported-field, ``DurationField`` and ``BinaryField`` owners pin
+the ``Unsupported Django field type`` raise in
+``django_strawberry_framework/types/converters.py::scalar_for_field``; the
+``_FakeArrayField`` / ``_FakeHStoreField`` owners pin, on SQLite, the
+PostgreSQL container branches of
+``django_strawberry_framework/types/converters.py::convert_scalar``; and
+``ChoiceFixture``'s hyphenated, digit-led and keyword choice values pin
+``django_strawberry_framework/types/converters.py::_sanitize_member_name``,
+which ``Book.circulation_status`` never reaches. The ``CharField`` /
+``ImageField`` subclass owners model a legal consumer shape no fakeshop model
+carries; they pin the MRO walks in ``scalar_for_field`` and
+``django_strawberry_framework/types/converters.py::_field_output_type_for``.
 
 Covered behavior:
 
@@ -24,6 +40,7 @@ import re
 
 import pytest
 import strawberry
+from apps.scalars.models import MediaSpecimen, NullableScalarSpecimen, ScalarSpecimen
 from django.db import models
 
 from django_strawberry_framework import (
@@ -67,8 +84,9 @@ def _unique_app_label(base: str) -> str:
     ``(app_label, model_name)`` key collides. Routing the ``app_label``
     through this helper namespaces each test's synthetic model with a
     monotonically increasing suffix so the registry sees a fresh key per
-    call. The choice fixture itself (``ChoiceFixture``) is session-scoped
-    and registers exactly once, so it does not use this helper.
+    call. The choice fixture itself (``ChoiceFixture``) is function-scoped
+    and does not use this helper: ``tests/conftest.py::_restore_app_registry``
+    retires its ``test_choice_enums`` label after each test.
     """
     return f"{base}__{next(_app_label_counter)}"
 
@@ -79,14 +97,21 @@ def _isolate_registry(isolate_global_registry):
     into the shared registry/connection-cache isolation (``tests/conftest.py``).
 
     The clears cover the type + enum dicts and the connection-type cache but
-    not Django's app registry: the ``ChoiceFixture`` model lives under a
-    synthetic ``app_label`` and is created once for the test session.
+    not Django's app registry: the ``ChoiceFixture`` model is declared per
+    test under a synthetic ``app_label`` that
+    ``tests/conftest.py::_restore_app_registry`` retires afterwards.
     """
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def choice_fixture_model():
-    """Session-scoped Django model with two choice columns.
+    """Build a fresh Django model with two choice columns for each test.
+
+    Function scope keeps the shared-enum assertions order-independent: every test
+    gets its own ``ChoiceFixture`` class, so no enum cached against one test's class
+    can satisfy (or poison) another's, and ``tests/conftest.py::_restore_app_registry``
+    retires the ``test_choice_enums`` label after each test so the re-declaration
+    never warns.
 
     The choice values are deliberately diverse to exercise sanitization:
 
@@ -256,7 +281,14 @@ def test_build_enum_diagnostics_survive_hostile_choice_values():
 
 
 def test_scalar_for_field_diagnostics_survive_hostile_metadata():
-    """Unsupported fields with broken metadata still raise ConfigurationError."""
+    """Unsupported fields with broken metadata still raise ConfigurationError.
+
+    A field of an unsupported class whose ``name`` raises from ``__str__`` and
+    ``__repr__`` is malformed metadata no fakeshop model can declare, and exposing it is
+    unbuildable; it alone drives the tolerant label fallbacks in
+    ``django_strawberry_framework/types/converters.py::_field_label`` inside the
+    ``django_strawberry_framework/types/converters.py::scalar_for_field`` raise.
+    """
 
     class HostileMetadata:
         def __str__(self):
@@ -727,6 +759,11 @@ def test_convert_scalar_unknown_field_type_still_raises():
 
     Guard against the MRO walk accidentally swallowing the unsupported
     case: ``object`` is on every MRO but is not in ``SCALAR_MAP``.
+
+    Exposing this column is what the package refuses to build (the package raises), so
+    no fakeshop model carries it; this owner alone reaches the ``Unsupported Django
+    field type`` raise in
+    ``django_strawberry_framework/types/converters.py::scalar_for_field``.
     """
 
     class _UnsupportedField(models.Field):
@@ -753,6 +790,11 @@ def test_convert_scalar_duration_field_raises_unsupported():
     standard ``Unsupported Django field type`` raise keeps the failure
     grep-stable for the consumer. A custom scalar is the supported
     extension path (``SCALAR_MAP[DurationField] = MyDurationScalar``).
+
+    The ``DurationField`` column itself is legal Django; *exposing* it is what the
+    package refuses to build, so no fakeshop type can carry it, and this owner alone
+    pins its absence from ``SCALAR_MAP`` at the
+    ``django_strawberry_framework/types/converters.py::scalar_for_field`` raise.
     """
 
     class _Owner(models.Model):
@@ -773,6 +815,11 @@ def test_convert_scalar_binary_field_raises_unsupported():
     ``bytes`` scalar so the prior mapping crashed at schema build. The
     documented extension hook is
     ``SCALAR_MAP[BinaryField] = strawberry.scalars.Base64``.
+
+    The ``BinaryField`` column itself is legal Django; *exposing* it is what the package
+    refuses to build, so no fakeshop type can carry it, and this owner alone pins its
+    absence from ``SCALAR_MAP`` at the
+    ``django_strawberry_framework/types/converters.py::scalar_for_field`` raise.
     """
 
     class _Owner(models.Model):
@@ -876,17 +923,14 @@ class _FakeHStoreField(models.Field):
 def test_big_auto_field_still_maps_to_int():
     """``BigAutoField`` stays mapped to ``Int`` (no current-day recourse for 2**31)."""
 
-    class BigAutoOwner(models.Model):
-        # An explicit BigAutoField PK keeps the row's wire shape as Int.
-        id = models.BigAutoField(primary_key=True)
+    from apps.library.models import Periodical
 
-        class Meta:
-            managed = False
-            app_label = "test_bigint"
+    # The library app's ``default_auto_field`` gives every model a BigAutoField pk.
+    assert isinstance(Periodical._meta.pk, models.BigAutoField)
 
-    class BigAutoOwnerType(DjangoType):
+    class PeriodicalType(DjangoType):
         class Meta:
-            model = BigAutoOwner
+            model = Periodical
             fields = ("id",)
 
     finalize_django_types()
@@ -894,11 +938,11 @@ def test_big_auto_field_still_maps_to_int():
     @strawberry.type
     class Query:
         @strawberry.field
-        def owner(self) -> BigAutoOwnerType:
-            return BigAutoOwner(id=1)
+        def owner(self) -> PeriodicalType:
+            return Periodical(id=1)
 
     schema = strawberry.Schema(query=Query)
-    type_payload = _introspect_field_type(schema, "BigAutoOwnerType", "id")
+    type_payload = _introspect_field_type(schema, "PeriodicalType", "id")
     assert type_payload["kind"] == "NON_NULL"
     terminal = _walk_introspected_type(type_payload)
     assert terminal["kind"] == "SCALAR"
@@ -964,7 +1008,12 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 
 
 def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(monkeypatch):
-    """``ArrayField(IntegerField())`` maps to ``list[int]`` (non-null outer + inner)."""
+    """``ArrayField(IntegerField())`` maps to ``list[int]`` (non-null outer + inner).
+
+    ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
+    ``_FakeArrayField`` owner is the only route on SQLite into the ``ArrayField`` branch of
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
+    """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
     class ArrayIntOwner(models.Model):
@@ -1001,7 +1050,12 @@ def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(monkeypatch):
 
 
 def test_array_field_of_char_maps_to_list_str_via_fake_sentinel(monkeypatch):
-    """``ArrayField(CharField())`` maps to ``list[str]`` (terminal SCALAR name "String")."""
+    """``ArrayField(CharField())`` maps to ``list[str]`` (terminal SCALAR name "String").
+
+    ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
+    ``_FakeArrayField`` owner is the only route on SQLite into the ``ArrayField`` branch of
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
+    """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
     class ArrayCharOwner(models.Model):
@@ -1039,6 +1093,10 @@ def test_array_field_nullable_inner_via_fake_sentinel(monkeypatch):
 
     Inner ``null=True`` drops the inner ``NON_NULL`` wrapper; outer stays
     non-null. Introspection chain: ``NON_NULL -> LIST -> SCALAR``.
+
+    ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
+    ``_FakeArrayField`` owner is the only route on SQLite into the ``ArrayField`` branch of
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
@@ -1078,6 +1136,10 @@ def test_array_field_outer_nullable_via_fake_sentinel(monkeypatch):
 
     Outer ``null=True`` drops the outer ``NON_NULL`` wrapper; inner stays
     non-null. Introspection chain: ``LIST -> NON_NULL -> SCALAR``.
+
+    ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
+    ``_FakeArrayField`` owner is the only route on SQLite into the ``ArrayField`` branch of
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
@@ -1111,7 +1173,13 @@ def test_array_field_outer_nullable_via_fake_sentinel(monkeypatch):
 
 
 def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch):
-    """Nested ``ArrayField`` raises ``ConfigurationError`` at type creation."""
+    """Nested ``ArrayField`` raises ``ConfigurationError`` at type creation.
+
+    Exposing this column is what the package refuses to build (the package raises) and
+    the column type is PostgreSQL-only besides, so no fakeshop model carries it; this
+    owner alone reaches the ``Nested ArrayField`` raise in
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
+    """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
     class ArrayMultidimOwner(models.Model):
@@ -1130,7 +1198,12 @@ def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch):
 
 
 def test_annotation_override_of_arrayfield_with_nested_array_is_allowed(monkeypatch):
-    """Consumer ``arr: list[list[int]]`` annotation bypasses nested-ArrayField rejection."""
+    """Consumer ``arr: list[list[int]]`` annotation bypasses nested-ArrayField rejection.
+
+    ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
+    ``_FakeArrayField`` owner is the only route on SQLite into the ``ArrayField`` branch of
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
+    """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
     class NestedArrayOverrideOwner(models.Model):
@@ -1157,6 +1230,10 @@ def test_array_field_choices_inner_via_fake_sentinel(monkeypatch):
     The recursive ``convert_scalar(field.base_field, type_name)`` call hits
     the existing choice-enum branch on ``base_field``, so the inner type is
     an enum scalar.
+
+    ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
+    ``_FakeArrayField`` owner is the only route on SQLite into the ``ArrayField`` branch of
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
@@ -1195,6 +1272,11 @@ def test_array_field_outer_choices_rejected_via_fake_sentinel(monkeypatch):
 
     Spec-pinned error message mentions ``base_field`` and ``FilterSet`` as
     the consumer recourse.
+
+    Exposing this column is what the package refuses to build (the package raises) and
+    the column type is PostgreSQL-only besides, so no fakeshop model carries it; this
+    owner alone reaches the outer-``choices`` raise in
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
@@ -1219,6 +1301,11 @@ def test_array_field_outer_choices_rejected_via_fake_sentinel(monkeypatch):
 def test_array_field_base_field_unsupported_type_raises(monkeypatch):
     """An unsupported ``base_field`` type surfaces the existing
     ``Unsupported Django field type`` error via the recursive call.
+
+    Exposing this column is what the package refuses to build (the package raises) and
+    the column type is PostgreSQL-only besides, so no fakeshop model carries it; this
+    owner alone reaches the recursive ``Unsupported Django field type`` raise in
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
@@ -1246,6 +1333,11 @@ def test_array_field_sentinel_none_path(monkeypatch):
 
     Pins the short-circuit guard: without ``_ARRAY_FIELD_CLS is not None``,
     the ``isinstance(field, _ARRAY_FIELD_CLS)`` call would ``TypeError``.
+
+    A ``_FakeArrayField`` column exposed with ``_ARRAY_FIELD_CLS`` unset is unbuildable
+    by design (the package raises), so this unmanaged owner alone reaches the
+    ``_ARRAY_FIELD_CLS is not None`` guard in
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", None)
 
@@ -1267,6 +1359,11 @@ def test_array_field_sentinel_none_path(monkeypatch):
 def test_real_array_field_compatible_with_strawberry():
     """Optional gated test: real ``django.contrib.postgres.fields.ArrayField``
     flows through the sentinel branch end-to-end on a postgres-equipped env.
+
+    The real ``ArrayField`` owner is unmanaged and never migrated, because fakeshop runs
+    on SQLite; it proves the sentinel dispatch in
+    ``django_strawberry_framework/types/converters.py::convert_scalar`` matches Django's
+    own class, and skips where ``django.contrib.postgres`` is unimportable.
     """
     postgres_fields = pytest.importorskip("django.contrib.postgres.fields")
 
@@ -1321,7 +1418,12 @@ def test_real_array_field_compatible_with_strawberry():
 
 
 def test_hstore_field_maps_to_json_scalar_via_fake_sentinel(monkeypatch):
-    """``HStoreField`` (non-null) appears as ``JSON!`` in the schema."""
+    """``HStoreField`` (non-null) appears as ``JSON!`` in the schema.
+
+    ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
+    unmanaged ``_FakeHStoreField`` owner is the only route on SQLite into the ``HStoreField``
+    branch of ``django_strawberry_framework/types/converters.py::convert_scalar``.
+    """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
 
     class HStoreOwner(models.Model):
@@ -1354,7 +1456,12 @@ def test_hstore_field_maps_to_json_scalar_via_fake_sentinel(monkeypatch):
 
 
 def test_hstore_field_nullable_via_fake_sentinel(monkeypatch):
-    """``HStoreField(null=True)`` appears as ``JSON`` (nullable)."""
+    """``HStoreField(null=True)`` appears as ``JSON`` (nullable).
+
+    ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
+    unmanaged ``_FakeHStoreField`` owner is the only route on SQLite into the ``HStoreField``
+    branch of ``django_strawberry_framework/types/converters.py::convert_scalar``.
+    """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
 
     class HStoreNullableOwner(models.Model):
@@ -1389,6 +1496,10 @@ def test_hstore_field_resolver_dict_serializes_via_schema_execution(monkeypatch)
 
     No DB persistence - SQLite cannot store HStore values; the test exercises
     only the scalar's wire-level serialization through Strawberry.
+
+    ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
+    unmanaged ``_FakeHStoreField`` owner is the only route on SQLite into the ``HStoreField``
+    branch of ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
 
@@ -1424,6 +1535,10 @@ def test_hstore_field_resolver_dict_with_none_value_via_schema_execution(monkeyp
     """A resolver returning ``{"k1": "v", "k2": None}`` round-trips with the
     ``None`` value preserved inside the dict - mirrors ``HStoreField``'s native
     ``dict[str, str | None]`` shape.
+
+    ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
+    unmanaged ``_FakeHStoreField`` owner is the only route on SQLite into the ``HStoreField``
+    branch of ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
 
@@ -1460,6 +1575,11 @@ def test_hstore_field_outer_choices_rejected_via_fake_sentinel(monkeypatch):
 
     HStore stores ``dict[str, str | None]`` with no enum-able shape at the
     GraphQL boundary; the rejection message names that rationale.
+
+    Exposing this column is what the package refuses to build (the package raises) and
+    the column type is PostgreSQL-only besides, so no fakeshop model carries it; this
+    owner alone reaches the ``HStoreField ... declares choices`` raise in
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
 
@@ -1484,6 +1604,11 @@ def test_hstore_field_sentinel_none_path(monkeypatch):
 
     Pins the short-circuit guard: without ``_HSTORE_FIELD_CLS is not None``,
     the ``isinstance(field, _HSTORE_FIELD_CLS)`` call would ``TypeError``.
+
+    A ``_FakeHStoreField`` column exposed with ``_HSTORE_FIELD_CLS`` unset is
+    unbuildable by design (the package raises), so this unmanaged owner alone reaches
+    the ``_HSTORE_FIELD_CLS is not None`` guard in
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", None)
 
@@ -1508,6 +1633,11 @@ def test_real_hstore_field_compatible_with_strawberry():
 
     Asserts both the introspection chain (``NON_NULL -> SCALAR { name: "JSON" }``)
     and resolver round-tripping (``{"k1": "v", "k2": None}`` preserved).
+
+    The real ``HStoreField`` owner is unmanaged and never migrated, because fakeshop
+    runs on SQLite; it proves the sentinel dispatch in
+    ``django_strawberry_framework/types/converters.py::convert_scalar`` matches Django's
+    own class, and skips where ``django.contrib.postgres`` is unimportable.
     """
     postgres_fields = pytest.importorskip("django.contrib.postgres.fields")
 
@@ -1780,16 +1910,12 @@ def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finali
 
 
 def _text_field(*, null: bool) -> models.Field:
-    """Return a bound ``TextField`` on a synthetic model with the given ``null``."""
-
-    class _Owner(models.Model):
-        value = models.TextField(null=null)
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_force_nullable")
-
-    return _Owner._meta.get_field("value")
+    """Return a scalars-app ``label`` ``TextField`` with the given ``null``."""
+    model = NullableScalarSpecimen if null else ScalarSpecimen
+    field = model._meta.get_field("label")
+    assert isinstance(field, models.TextField)
+    assert field.null is null
+    return field
 
 
 def test_convert_scalar_force_nullable_true_widens_non_null_column():
@@ -1854,6 +1980,10 @@ def test_convert_scalar_force_nullable_on_array_field(monkeypatch):
     ``base_field.null`` and is NOT affected by the outer override (Edge cases).
     A nullable-outer ``ArrayField(..., null=True)`` with ``force_nullable=False``
     narrows back to bare ``list[int]``.
+
+    ``ArrayField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this unmanaged
+    ``_FakeArrayField`` owner is the only route on SQLite into the ``ArrayField`` branch of
+    ``django_strawberry_framework/types/converters.py::convert_scalar``.
     """
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
 
@@ -1878,7 +2008,12 @@ def test_convert_scalar_force_nullable_on_array_field(monkeypatch):
 
 
 def test_convert_scalar_force_nullable_on_hstore_field(monkeypatch):
-    """The override flips ``HStoreField`` between ``JSON | None`` and ``JSON``."""
+    """The override flips ``HStoreField`` between ``JSON | None`` and ``JSON``.
+
+    ``HStoreField`` is PostgreSQL-only and fakeshop migrates on SQLite, so this
+    unmanaged ``_FakeHStoreField`` owner is the only route on SQLite into the ``HStoreField``
+    branch of ``django_strawberry_framework/types/converters.py::convert_scalar``.
+    """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
 
     class _HStoreOwner(models.Model):
@@ -1914,14 +2049,7 @@ def test_convert_field_output_filefield_to_djangofiletype():
     the default-nullable ``DjangoFileType | None`` (spec-037 Decision 4).
     """
 
-    class _FileOwner(models.Model):
-        attachment = models.FileField()
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_filefield_output")
-
-    field = _FileOwner._meta.get_field("attachment")
+    field = MediaSpecimen._meta.get_field("attachment")
     assert convert_field_output(field, "OwnerType") == (DjangoFileType | None)
     assert _field_output_type_for(field) is DjangoFileType
 
@@ -1932,14 +2060,7 @@ def test_convert_field_output_imagefield_to_djangoimagetype():
     Widened to the default-nullable ``DjangoImageType | None`` (spec-037 Decision 4).
     """
 
-    class _ImageOwner(models.Model):
-        preview = models.ImageField()
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_imagefield_output")
-
-    field = _ImageOwner._meta.get_field("preview")
+    field = MediaSpecimen._meta.get_field("image")
     assert convert_field_output(field, "OwnerType") == (DjangoImageType | None)
 
 
@@ -1972,24 +2093,21 @@ def test_convert_field_output_file_image_nullable_by_default():
     nullable to match what the resolver can return (spec-037 Decision 4). A
     stronger non-empty invariant is opt-in via ``required_overrides``
     (``force_nullable=False``), covered in the force_nullable test below.
+
+    ``MediaSpecimen`` carries the three arms: ``attachment`` (neither),
+    ``optional_attachment`` (``blank=True`` only) and ``spare_image``
+    (``null=True`` only, an ``ImageField``).
     """
-
-    class _NullabilityOwner(models.Model):
-        required = models.FileField()
-        blank_file = models.FileField(blank=True)
-        null_file = models.FileField(null=True)
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_file_nullability")
-
-    required = _NullabilityOwner._meta.get_field("required")
-    blank_file = _NullabilityOwner._meta.get_field("blank_file")
-    null_file = _NullabilityOwner._meta.get_field("null_file")
+    required = MediaSpecimen._meta.get_field("attachment")
+    blank_file = MediaSpecimen._meta.get_field("optional_attachment")
+    null_image = MediaSpecimen._meta.get_field("spare_image")
+    assert (required.blank, required.null) == (False, False)
+    assert (blank_file.blank, blank_file.null) == (True, False)
+    assert (null_image.blank, null_image.null) == (False, True)
 
     assert convert_field_output(required, "OwnerType") == (DjangoFileType | None)
     assert convert_field_output(blank_file, "OwnerType") == (DjangoFileType | None)
-    assert convert_field_output(null_file, "OwnerType") == (DjangoFileType | None)
+    assert convert_field_output(null_image, "OwnerType") == (DjangoImageType | None)
 
 
 def test_convert_field_output_force_nullable_overrides_default():
@@ -2001,16 +2119,8 @@ def test_convert_field_output_force_nullable_overrides_default():
     ``DjangoFileType | None`` (the default) on a plain required column.
     """
 
-    class _OverrideOwner(models.Model):
-        required = models.FileField()
-        blank_file = models.FileField(blank=True)
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_file_force_nullable")
-
-    required = _OverrideOwner._meta.get_field("required")
-    blank_file = _OverrideOwner._meta.get_field("blank_file")
+    required = MediaSpecimen._meta.get_field("attachment")
+    blank_file = MediaSpecimen._meta.get_field("optional_attachment")
 
     assert convert_field_output(required, "OwnerType", force_nullable=True) == (
         DjangoFileType | None
@@ -2021,18 +2131,10 @@ def test_convert_field_output_force_nullable_overrides_default():
 def test_convert_field_output_delegates_scalar_columns():
     """A non-file column delegates to ``convert_scalar`` unchanged."""
 
-    class _ScalarOwner(models.Model):
-        title = models.TextField()
-        count = models.IntegerField(null=True)
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_scalar_delegation")
-
-    title = _ScalarOwner._meta.get_field("title")
-    count = _ScalarOwner._meta.get_field("count")
+    title = ScalarSpecimen._meta.get_field("label")
+    score = NullableScalarSpecimen._meta.get_field("score")
     assert convert_field_output(title, "OwnerType") is str
-    assert convert_field_output(count, "OwnerType") == (int | None)
+    assert convert_field_output(score, "OwnerType") == (float | None)
     # The force_nullable tri-state still threads through to the scalar path.
     assert convert_field_output(title, "OwnerType", force_nullable=True) == (str | None)
 
@@ -2048,22 +2150,14 @@ def test_file_columns_stay_scalar_on_the_filter_input_path():
     """
     from django_strawberry_framework.filters.inputs import _scalar_from_model_field
 
-    class _FilterOwner(models.Model):
-        attachment = models.FileField()
-        preview = models.ImageField()
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_file_filter_scalar")
-
-    attachment = _FilterOwner._meta.get_field("attachment")
-    preview = _FilterOwner._meta.get_field("preview")
+    attachment = MediaSpecimen._meta.get_field("attachment")
+    image = MediaSpecimen._meta.get_field("image")
 
     # The package's filter-input scalar lookup keeps file/image columns scalar.
     assert scalar_for_field(attachment) is str
-    assert scalar_for_field(preview) is str
+    assert scalar_for_field(image) is str
     assert _scalar_from_model_field(attachment) is str
-    assert _scalar_from_model_field(preview) is str
+    assert _scalar_from_model_field(image) is str
     # The shared SCALAR_MAP rows are untouched by the new output map.
     assert SCALAR_MAP[models.FileField] is str
     assert SCALAR_MAP[models.ImageField] is str
@@ -2129,21 +2223,13 @@ def test_convert_field_output_swaps_in_the_path_bearing_sibling():
     is (spec-037 Decision 4), and ``force_nullable=False`` still narrows it.
     """
 
-    class _PathOwner(models.Model):
-        attachment = models.FileField()
-        preview = models.ImageField()
-
-        class Meta:
-            managed = False
-            app_label = _unique_app_label("test_filesystem_path_optin")
-
-    attachment = _PathOwner._meta.get_field("attachment")
-    preview = _PathOwner._meta.get_field("preview")
+    attachment = MediaSpecimen._meta.get_field("attachment")
+    image = MediaSpecimen._meta.get_field("image")
     assert convert_field_output(attachment, "OwnerType") == (DjangoFileType | None)
     assert convert_field_output(attachment, "OwnerType", expose_filesystem_path=True) == (
         DjangoFilePathType | None
     )
-    assert convert_field_output(preview, "OwnerType", expose_filesystem_path=True) == (
+    assert convert_field_output(image, "OwnerType", expose_filesystem_path=True) == (
         DjangoImagePathType | None
     )
     assert (

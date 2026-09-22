@@ -986,7 +986,15 @@ def test_keyset_json_seek_uses_field_adapter_on_postgres(
 
 @pytest.mark.django_db(transaction=True)
 def test_lateral_custom_through_joins_the_foreign_key_target_column():
-    """A through FK targeting a unique non-PK child column must not join the child PK."""
+    """A through FK targeting a unique non-PK child column must not join the child PK.
+
+    ``Natural*`` stays test-local: a custom-through many-to-many whose through key
+    uses ``to_field`` on the child is a legal shape fakeshop does not carry today
+    (its to_field key is the forward ``PatronProfile.favorite_genre``, not a
+    through), so it alone pins the through-target column check in
+    ``django_strawberry_framework/optimizer/lateral_fetch.py::_build_lateral_spec``
+    on the pg tier.
+    """
     from django.db import models
 
     from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join

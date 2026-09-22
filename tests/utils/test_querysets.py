@@ -22,6 +22,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
+from apps.library.models import LendingDesk, OpenVenue, Venue, VenueBadge, VenueSponsor
 from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import seed_data
 from django.apps.registry import Apps
@@ -108,34 +109,6 @@ def test_safe_class_name_falls_back_for_non_string_metaclass_name_metadata():
         pass
 
     assert _safe_class_name(_MalformedName) == "_NonStringNameMeta"
-
-
-class _QsBoundaryBase(models.Model):
-    """Boundary-contract fixture base (proxy / MTI table checks; no table needed)."""
-
-    name = models.TextField()
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class _QsBoundaryChild(_QsBoundaryBase):
-    """MTI child of the fixture base - an INCOMPATIBLE concrete table."""
-
-    extra = models.TextField()
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class _QsBoundaryProxy(_QsBoundaryBase):
-    """Proxy sibling of the fixture base - a COMPATIBLE concrete table."""
-
-    class Meta:
-        app_label = "products"
-        proxy = True
 
 
 def _stub_type(model, hook):
@@ -538,10 +511,14 @@ def test_wrong_model_hook_result_fails_closed():
 
 
 def test_mti_child_hook_result_fails_closed():
-    """An MTI-child queryset lives on ITS OWN concrete table - incompatible."""
-    hook = _stub_type(_QsBoundaryBase, lambda cls, qs, info: _QsBoundaryChild.objects.all())
+    """An MTI-child queryset lives on ITS OWN concrete table - incompatible.
+
+    ``apps/library/models.py::LendingDesk`` extends ``Venue`` with a table of
+    its own, so a ``Venue`` hook answering with desk rows reads the wrong table.
+    """
+    hook = _stub_type(Venue, lambda cls, qs, info: LendingDesk.objects.all())
     with pytest.raises(ConfigurationError, match="concrete table"):
-        apply_type_visibility_sync(hook, _QsBoundaryBase.objects.all(), info=None)
+        apply_type_visibility_sync(hook, Venue.objects.all(), info=None)
 
 
 def test_combined_query_branch_over_another_model_fails_closed():
@@ -574,10 +551,14 @@ def test_mutable_public_model_disagreeing_with_query_model_fails_closed():
 
 
 def test_proxy_hook_result_is_accepted():
-    """A proxy-sibling queryset shares the concrete table and passes the boundary."""
-    hook = _stub_type(_QsBoundaryBase, lambda cls, qs, info: _QsBoundaryProxy.objects.all())
-    result = apply_type_visibility_sync(hook, _QsBoundaryBase.objects.all(), info=None)
-    assert result.model is _QsBoundaryProxy
+    """A proxy-sibling queryset shares the concrete table and passes the boundary.
+
+    ``apps/library/models.py::OpenVenue`` is a proxy of ``Venue``, the same base
+    whose concrete ``LendingDesk`` child the test above refuses.
+    """
+    hook = _stub_type(Venue, lambda cls, qs, info: OpenVenue.objects.all())
+    result = apply_type_visibility_sync(hook, Venue.objects.all(), info=None)
+    assert result.model is OpenVenue
 
 
 def test_unpinned_result_is_repinned_to_explicit_source_alias():
@@ -4445,7 +4426,13 @@ def test_manager_coercion_rejects_unreadable_routing_state():
 
 
 def test_concrete_model_probe_fails_closed_for_unreadable_model_metadata(monkeypatch):
-    """A model whose ``_meta`` cannot be read resolves to no concrete model."""
+    """A model whose ``_meta`` cannot be read resolves to no concrete model.
+
+    A model class whose metaclass raises on ``_meta`` is malformed by
+    construction, so no fakeshop model can carry it; ``_HostileModel`` alone
+    covers the metadata-read failure branch of
+    ``django_strawberry_framework/utils/querysets.py::_concrete_or_none``.
+    """
     model_base = type(models.Model)
 
     class _HostileModelBase(model_base):
@@ -4678,7 +4665,14 @@ def test_prefetch_child_over_relation_target_seals_and_fetches_model_rows():
 
 
 def test_prefetch_child_over_target_subclass_seals():
-    """A proxy of the relation target is directionally compatible (Django #36432)."""
+    """A proxy of the relation target is directionally compatible (Django #36432).
+
+    ``_ItemProxy`` is a legal proxy of the reverse target ``Item``; fakeshop's
+    proxies (``ProxyBranch``, ``VisibleBranch``, ``OpenVenue``) are not reverse
+    targets of a prefetched relation, so conversion is deferred and this row
+    alone pins the subclass admission in
+    ``django_strawberry_framework/utils/querysets.py::_sealed_prefetch_related_lookups``.
+    """
 
     class _ItemProxy(Item):
         class Meta:
@@ -4705,12 +4699,13 @@ class _ProxyTargetCategory(Category):
 class _ProxyTargetHolder(models.Model):
     """A model whose foreign key is declared to a PROXY model.
 
-    Only the FORWARD relation is under test, and this model has no table. It has
-    to live in an installed app to be registered at all, so ``related_name="+"``
-    and ``on_delete=DO_NOTHING`` keep it out of what Django walks on the way to
-    deleting a ``Category``: the deletion collector skips ``DO_NOTHING``
-    relations, and without that it would query a table that was never created,
-    failing anything that deletes a ``Category`` in a worker this module ran in.
+    Registered in the private ``_proxy_target_apps`` registry, so no installed model gains a
+    reverse relation to it, it never enters ``django.apps.apps.get_models()``, and deleting a
+    ``Category`` never queries its table (which is never created). Only the FORWARD relation is
+    under test. A key to a proxy is a legal shape fakeshop carries (``BranchNote.branch``,
+    ``BranchSignage.branch``); conversion onto those is deferred, and with
+    ``_ProxyTargetCategory`` this pair pins the proxy-target arm of
+    ``django_strawberry_framework/utils/querysets.py::_sealed_prefetch_related_lookups``.
     """
 
     cat = models.ForeignKey(
@@ -4817,7 +4812,13 @@ def test_prefetch_relation_target_unresolvable_paths_fail_open():
     """
 
     class _BrokenFkHolder(models.Model):
-        """A model whose only relation is an unresolvable lazy FK string."""
+        """A model whose only relation is an unresolvable lazy FK string.
+
+        A key to an app that is not installed is malformed by construction and
+        fails Django's system checks, so no fakeshop model can carry it; it
+        alone covers the non-model ``related_model`` return of
+        ``django_strawberry_framework/utils/querysets.py::_prefetch_relation_target_or_none``.
+        """
 
         name = models.TextField(default="")
         rel = models.ForeignKey("missing_app.Missing", on_delete=models.CASCADE)
@@ -4861,6 +4862,14 @@ def test_prefetch_child_unresolvable_relation_paths_fail_open():
     """
 
     class _LazyRefHolder(models.Model):
+        """A holder whose key names an app that is not installed, so its target stays a string.
+
+        Malformed by construction for the same reason as ``_BrokenFkHolder``; it alone drives an
+        unprovable prefetch target through
+        ``django_strawberry_framework/utils/querysets.py::_sealed_prefetch_related_lookups`` to
+        Django.
+        """
+
         name = models.TextField(default="")
         rel = models.ForeignKey("missing_app.Missing", on_delete=models.CASCADE)
 
@@ -4956,39 +4965,12 @@ def test_prefetch_relation_target_default_accessors_resolve():
         is ContentType
     )
 
-    class _AccessorParent(models.Model):
-        name = models.TextField(default="")
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class _AccessorO2oChild(models.Model):
-        parent = models.OneToOneField(_AccessorParent, on_delete=models.CASCADE)
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    # Reverse OneToOne accessors are the BARE child model name (no ``_set``).
-    assert (
-        _prefetch_relation_target_or_none(_AccessorParent, "_accessoro2ochild")
-        is _AccessorO2oChild
-    )
-
-    class _AccessorM2mChild(models.Model):
-        name = models.TextField(default="")
-        parents = models.ManyToManyField(_AccessorParent, blank=True)
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
+    # ``apps/library/models.py::Venue`` is the target of a one-to-one and a
+    # many-to-many that declare no ``related_name``. Reverse OneToOne accessors
+    # are the BARE child model name (no ``_set``).
+    assert _prefetch_relation_target_or_none(Venue, "venuebadge") is VenueBadge
     # A reverse M2M without a related_name uses the same ``<model>_set`` spelling.
-    assert (
-        _prefetch_relation_target_or_none(_AccessorParent, "_accessorm2mchild_set")
-        is _AccessorM2mChild
-    )
+    assert _prefetch_relation_target_or_none(Venue, "venuesponsor_set") is VenueSponsor
 
 
 @pytest.mark.django_db

@@ -23,14 +23,15 @@ Live input shapes: ``examples/fakeshop/test_query/test_library_api.py`` serializ
 introspection rows.
 
 System-under-test runs against the products ``Item`` / ``Category`` fixtures per
-``AGENTS.md`` (and package-local Relay / non-Relay target ``DjangoType``s).
+``AGENTS.md``, a package-local Relay ``DjangoType`` over library ``Genre``,
+``Book.circulation_status`` as the choices column and ``scalars.MediaSpecimen``
+as the file column.
 """
 
 from __future__ import annotations
 
 import datetime
 import decimal
-import itertools
 import uuid
 from enum import Enum
 from typing import get_args, get_origin
@@ -86,14 +87,6 @@ def _isolate_registry():
     registry.clear()
 
 
-_app_label_counter = itertools.count(1)
-
-
-def _unique_app_label() -> str:
-    """Return a unique ``app_label`` per call to avoid Django's re-register warning."""
-    return f"test_serializer_converter__{next(_app_label_counter)}"
-
-
 def _bind(field: serializers.Field, name: str) -> serializers.Field:
     """Bind a serializer field (DRF populates ``field_name`` / ``source`` / ``source_attrs``).
 
@@ -120,20 +113,15 @@ def _register_products_types() -> None:
 
 
 def _make_relay_target():
-    """A registered Relay-Node-shaped ``DjangoType`` over a fresh model."""
+    """Register a Relay-Node ``DjangoType`` over ``library.Genre`` and return both."""
+    from apps.library.models import Genre
 
-    class RelayTarget(models.Model):
-        name = models.TextField()
-
+    class GenreNode(DjangoType, relay.Node):
         class Meta:
-            app_label = _unique_app_label()
-
-    class RelayTargetType(DjangoType, relay.Node):
-        class Meta:
-            model = RelayTarget
+            model = Genre
             fields = ("id", "name")
 
-    return RelayTarget, RelayTargetType
+    return Genre, GenreNode
 
 
 # ---------------------------------------------------------------------------
@@ -1281,23 +1269,18 @@ def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
     """A consumer-declared field whose scalar disagrees with a choices column fails loud."""
     _register_products_types()
 
-    # Dynamic model with choices
-    class ChoiceItem(models.Model):
-        status = models.CharField(max_length=20, choices=[("open", "Open"), ("closed", "Closed")])
+    from apps.library.models import Book
+
+    class BookStatusSer(serializers.ModelSerializer):
+        circulation_status = serializers.IntegerField()
 
         class Meta:
-            app_label = _unique_app_label()
+            model = Book
+            fields = ("circulation_status",)
 
-    class ChoiceItemSer(serializers.ModelSerializer):
-        status = serializers.IntegerField()
-
-        class Meta:
-            model = ChoiceItem
-            fields = ("status",)
-
-    field = ChoiceItemSer().fields["status"]
+    field = BookStatusSer().fields["circulation_status"]
     with pytest.raises(ConfigurationError, match="disagrees with the backing model column"):
-        resolve_serializer_field(field, ChoiceItem, "ChoiceItemInput")
+        resolve_serializer_field(field, Book, "BookStatusSerInput")
 
 
 def test_list_field_with_no_child_raises_configuration_error():
@@ -1358,23 +1341,23 @@ def test_backing_model_field_nonexistent_column_returns_none():
 def test_resolve_serializer_field_model_backed_file_field():
     """A FileField backed by a models.FileField resolves to Upload annotation and kind FILE."""
 
-    class FileItem(models.Model):
-        doc = models.FileField()
+    from apps.scalars.models import MediaSpecimen
 
+    class MediaSpecimenSer(serializers.ModelSerializer):
         class Meta:
-            app_label = _unique_app_label()
+            model = MediaSpecimen
+            fields = ("attachment",)
 
-    class FileItemSer(serializers.ModelSerializer):
-        class Meta:
-            model = FileItem
-            fields = ("doc",)
-
-    field = FileItemSer().fields["doc"]
-    python_attr, annotation, spec = resolve_serializer_field(field, FileItem, "FileItemInput")
-    assert python_attr == "doc"
+    field = MediaSpecimenSer().fields["attachment"]
+    python_attr, annotation, spec = resolve_serializer_field(
+        field,
+        MediaSpecimen,
+        "MediaSpecimenSerInput",
+    )
+    assert python_attr == "attachment"
     assert annotation is Upload
     assert spec.kind == FILE
-    assert spec.graphql_name == "doc"
+    assert spec.graphql_name == "attachment"
 
 
 def test_resolve_serializer_field_column_less_file_field():

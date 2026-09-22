@@ -7,23 +7,22 @@ mocked ``IntegrityError`` race, ``async def get_queryset`` ``SyncMisuseError``,
 async-row leak isolation, Relay M2M hide on a second ``Genre`` primary
 (shipped ``GenreType`` has no hide hook; a second primary cannot coexist in the
 live process), raw-pk M2M *update* (no shipped ``updateShelf``), unregistered
-primary existence-only decode, ``TaggedItem.object_id`` GFK indexing, synthetic
-file-column update (no ``UpdateMediaSpecimen``), relation-override visibility
-(no shipped override declares a relation field, so the composite is
-package-only), ``PROTECT`` / ``RESTRICT``
-delete, pipeline pk-drift, and ``ScalarSpecimen`` writes (scalars app exposes
-no mutation). Consumer-visible create/update/delete, empty-name ``full_clean``,
-unresolvable relation ids, M2M replace/clear/omit, choice-enum unwrap, and
-raw-pk create visibility live in
-``examples/fakeshop/test_query/test_products_api.py`` and
-``examples/fakeshop/test_query/test_library_api.py``. Atomicity live in
+primary existence-only decode, ``TaggedItem.object_id`` GFK indexing,
+relation-override visibility (no shipped override declares a relation field, so
+the composite is package-only), pipeline pk-drift, and ``ScalarSpecimen`` writes
+(the scalars app exposes no ``ScalarSpecimen`` mutation). Consumer-visible
+create/update/delete, empty-name ``full_clean``, unresolvable relation ids, M2M
+replace/clear/omit, choice-enum unwrap, raw-pk create visibility, the
+``PROTECT`` / ``RESTRICT`` refused delete and the ``blank=True, null=False`` FK
+null guard live in ``examples/fakeshop/test_query/test_products_api.py`` and
+``examples/fakeshop/test_query/test_library_api.py``; file-column update omit /
+replace / explicit null live in ``examples/fakeshop/test_query/test_uploads_api.py``. Atomicity live in
 ``examples/fakeshop/test_query/test_mutation_atomicity.py``.
 """
 
 from __future__ import annotations
 
 import itertools
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest import mock
 
@@ -34,11 +33,7 @@ from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from asgiref.sync import sync_to_async
 from django.core.exceptions import ValidationError
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
-from django.db import connection as db_connection
-from django.db import models as djmodels
-from django.test import override_settings
 from django.utils import timezone
 from strawberry import relay
 
@@ -1172,282 +1167,12 @@ def test_relation_field_index_excludes_generic_foreign_key():
     assert "content_type_id" in fk_by_attr
 
 
-# ---------------------------------------------------------------------------
-# File upload assignment (spec-037) - update omit/replace/null
-# ---------------------------------------------------------------------------
-#
-# Create through a FileField is live (``test_uploads_api.py`` /
-# ``createMediaSpecimen``). These rows keep UPDATE omit / replace / explicit
-# null on a synthetic required file column: fakeshop ships no
-# ``UpdateMediaSpecimen``.
-# ---------------------------------------------------------------------------
-
-_asset_model_counter = itertools.count(1)
-
-
-def _make_asset_model():
-    """Return a synthetic ``managed=False`` model with a required ``FileField`` + a name.
-
-    ``app_label="products"`` (an INSTALLED app) so the table can be created with
-    ``schema_editor``; ``attachment`` is required (no blank / no null) so the
-    create input is ``Upload!`` and the explicit-``null`` guard fires on update.
-    The model NAME is uniquified per call so Django's app registry does not warn on
-    re-register.
-    """
-    suffix = next(_asset_model_counter)
-    meta = type("Meta", (), {"app_label": "products", "managed": False})
-    return type(
-        f"MutAsset{suffix}",
-        (djmodels.Model,),
-        {
-            "__module__": __name__,
-            "name": djmodels.TextField(),
-            "attachment": djmodels.FileField(upload_to="files/"),
-            "Meta": meta,
-        },
-    )
-
-
-def _build_asset_schema(model):
-    """Declare an Asset primary (Relay-Node) + create/update mutations; return (schema, AssetT, queries).
-
-    Mirrors ``_build_item_schema`` but over the synthetic file model. The primary
-    type inherits ``relay.Node`` so the update ``id:`` GlobalID path works. The
-    create / update query strings are built from the model's generated input type
-    names (``<Model>Input`` / ``<Model>PartialInput``), since the model name is
-    uniquified per call.
-    """
-    asset_meta = {"model": model, "fields": ("id", "name", "attachment"), "primary": True}
-    AssetT = type("AssetT", (DjangoType, relay.Node), {"Meta": type("Meta", (), asset_meta)})
-
-    create_meta = {"model": model, "operation": "create", "permission_classes": [_AllowAll]}
-    update_meta = {"model": model, "operation": "update", "permission_classes": [_AllowAll]}
-    CreateAsset = type("CreateAsset", (DjangoMutation,), {"Meta": type("Meta", (), create_meta)})
-    UpdateAsset = type("UpdateAsset", (DjangoMutation,), {"Meta": type("Meta", (), update_meta)})
-
-    @strawberry.type
-    class Mutation:
-        create_asset = DjangoMutationField(CreateAsset)
-        update_asset = DjangoMutationField(UpdateAsset)
-
-    finalize_django_types()
-    create_query = (
-        f"mutation($d: {model.__name__}Input!){{ createAsset(data:$d){{ "
-        "node{ id name } errors{ field messages } } }"
-    )
-    update_query = (
-        f"mutation($id: ID!, $d: {model.__name__}PartialInput!){{ "
-        "updateAsset(id:$id, data:$d){ node{ id name } errors{ field messages } } }"
-    )
-    return _schema(Mutation), AssetT, create_query, update_query
-
-
-@pytest.mark.django_db(transaction=True)
-def test_partial_update_omitting_file_leaves_stored_file_unchanged(tmp_path):
-    """A partial update that omits the file field leaves the stored ``FieldFile`` byte-identical.
-
-    ``UNSET`` is stripped in ``decode_provided_fields`` before the ``setattr`` loop, so
-    the stored file never reaches a re-assignment.
-    """
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            schema, AssetT, _create_query, update_query = _build_asset_schema(model)
-            row = model()
-            row.name = "Old"
-            row.attachment.save(
-                "orig.txt",
-                SimpleUploadedFile("orig.txt", b"original"),
-                save=False,
-            )
-            row.save()
-            original_name = row.attachment.name
-
-            res = schema.execute_sync(
-                update_query,
-                variable_values={"id": global_id_for(AssetT, row.pk), "d": {"name": "New"}},
-            )
-            assert res.errors is None, res.errors
-            assert res.data["updateAsset"]["node"]["name"] == "New"
-            row.refresh_from_db()
-            assert row.name == "New"
-            assert row.attachment.name == original_name  # unprovided -> unchanged
-            with row.attachment.open("rb") as fh:
-                assert fh.read() == b"original"
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_partial_update_with_new_upload_replaces_file_through_setattr_path(tmp_path):
-    """A partial update providing a new ``SimpleUploadedFile`` replaces the stored file.
-
-    PROVES the generic ``setattr(instance, attr, value)`` update loop carries the
-    upload - again with no file-specific branch.
-    """
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            schema, AssetT, _create_query, update_query = _build_asset_schema(model)
-            row = model()
-            row.name = "Old"
-            row.attachment.save(
-                "orig.txt",
-                SimpleUploadedFile("orig.txt", b"original"),
-                save=False,
-            )
-            row.save()
-
-            new_upload = SimpleUploadedFile("replacement.txt", b"replaced bytes")
-            res = schema.execute_sync(
-                update_query,
-                variable_values={
-                    "id": global_id_for(AssetT, row.pk),
-                    "d": {"attachment": new_upload},
-                },
-            )
-            assert res.errors is None, res.errors
-            assert res.data["updateAsset"]["errors"] == []
-            row.refresh_from_db()
-            assert row.attachment.name.endswith("replacement.txt")
-            with row.attachment.open("rb") as fh:
-                assert fh.read() == b"replaced bytes"
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-@pytest.mark.django_db(transaction=True)
-def test_explicit_null_on_non_nullable_file_column_is_field_error(tmp_path):
-    """Explicit ``null`` for a ``null=False`` file column -> field-keyed ``FieldError``.
-
-    The shipped ``_explicit_null_error`` guard rejects a provided ``None`` on a
-    ``null=False`` scalar column before any DB work; a file column is a scalar
-    input, so it reaches the guard for free (no file-specific code). Omittable is
-    not nullable - this is NOT a silent clear (clearing stays a Risks item).
-    """
-    model = _make_asset_model()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        with override_settings(MEDIA_ROOT=str(tmp_path)):
-            schema, AssetT, _create_query, update_query = _build_asset_schema(model)
-            row = model()
-            row.name = "Keep"
-            row.attachment.save(
-                "orig.txt",
-                SimpleUploadedFile("orig.txt", b"original"),
-                save=False,
-            )
-            row.save()
-
-            res = schema.execute_sync(
-                update_query,
-                variable_values={"id": global_id_for(AssetT, row.pk), "d": {"attachment": None}},
-            )
-            assert_mutation_field_error(res, "updateAsset", "attachment")
-            # The stored file is untouched (the error fired before any write).
-            row.refresh_from_db()
-            with row.attachment.open("rb") as fh:
-                assert fh.read() == b"original"
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-
-
-_fk_null_model_counter = itertools.count(1)
-
-
-def _make_blank_true_required_fk_models():
-    """Synthetic ``blank=True, null=False`` FK pair (the IntegrityError slip case)."""
-    suffix = next(_fk_null_model_counter)
-    target_meta = type("Meta", (), {"app_label": "products", "managed": False})
-    target = type(
-        f"MutFkTarget{suffix}",
-        (djmodels.Model,),
-        {"__module__": __name__, "name": djmodels.TextField(), "Meta": target_meta},
-    )
-    source_meta = type("Meta", (), {"app_label": "products", "managed": False})
-    source = type(
-        f"MutFkSource{suffix}",
-        (djmodels.Model,),
-        {
-            "__module__": __name__,
-            "target": djmodels.ForeignKey(
-                target,
-                on_delete=djmodels.CASCADE,
-                blank=True,
-                null=False,
-            ),
-            "Meta": source_meta,
-        },
-    )
-    return target, source
-
-
-@pytest.mark.django_db(transaction=True)
-def test_create_blank_true_null_false_fk_explicit_null_is_field_error():
-    """Explicit ``null`` on a ``blank=True, null=False`` FK is field-keyed, not ``__all__``.
-
-    Django ``full_clean`` skips ``blank=True`` empty values, so without the
-    decode-time FK null guard the write reaches a NOT NULL ``IntegrityError`` and
-    the generic constraint envelope. The client must learn WHICH field failed.
-    """
-    target_model, source_model = _make_blank_true_required_fk_models()
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(target_model)
-        schema_editor.create_model(source_model)
-    try:
-
-        class TargetT(DjangoType, relay.Node):
-            class Meta:
-                model = target_model
-                fields = ("id", "name")
-                primary = True
-
-        class SourceT(DjangoType, relay.Node):
-            class Meta:
-                model = source_model
-                fields = ("id", "target")
-                primary = True
-
-        class CreateSource(DjangoMutation):
-            class Meta:
-                model = source_model
-                operation = "create"
-                permission_classes = [_AllowAll]
-
-        @strawberry.type
-        class Mutation:
-            create_source = DjangoMutationField(CreateSource)
-
-        finalize_django_types()
-        schema = _schema(Mutation)
-        input_name = CreateSource._input_class.__name__
-        res = schema.execute_sync(
-            f"mutation($d: {input_name}!){{ createSource(data:$d){{ "
-            f"node{{ id }} errors{{ field messages codes }} }} }}",
-            variable_values={"d": {"targetId": None}},
-        )
-        payload = assert_mutation_field_error(res, "createSource", "targetId")
-        assert payload["errors"][0]["codes"] == ["null"]
-        assert source_model.objects.count() == 0
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(source_model)
-            schema_editor.delete_model(target_model)
-
-
 def test_explicit_null_error_allows_null_on_nullable_column():
     """``_explicit_null_error`` yields no error for ``null`` on a ``null=True`` column.
 
-    The complement of ``test_explicit_null_on_non_nullable_file_column_is_field_error``:
-    an explicit ``None`` on a nullable scalar column is a valid clear, so the guard
+    The complement of the live
+    ``test_uploads_api.py::test_update_explicit_null_on_the_required_file_is_a_field_error_over_http``
+    row: an explicit ``None`` on a nullable scalar column is a valid clear, so the guard
     returns ``None`` (no ``FieldError``). ``NullableScalarSpecimen.score`` is
     ``null=True``. No live products mutation exposes a nullable scalar column, so this
     branch is earned against a real nullable example model rather than a live query.
@@ -1917,89 +1642,6 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch):
     assert seen["data"] is None
     assert seen["id"] == "gid"
     assert callable(seen["tail_step"])
-
-
-# ---------------------------------------------------------------------------
-# Delete refused by a PROTECT / RESTRICT reference (the protected-delete envelope)
-# ---------------------------------------------------------------------------
-
-_protector_model_counter = itertools.count(1)
-
-
-@contextmanager
-def _protector_model(on_delete):
-    """One stable protector-model fixture: create, yield, then FULLY retire the model.
-
-    Yields a synthetic ``managed=False`` model holding an ``on_delete``-guarded FK
-    to ``Item`` (``app_label="products"`` - an INSTALLED app - so the table can be
-    created with ``schema_editor``; ``related_name="+"`` skips the reverse
-    accessor; the NAME is uniquified per call so re-register never warns).
-
-    The load-bearing part is the TEARDOWN: dropping only the TABLE used to leave
-    the model class registered in Django's app registry, so every later
-    ``Item.delete()`` anywhere in the process - including the sibling
-    parametrized run - had its deletion collector query the now-missing table
-    ("no such table", order-/worker-sensitive). Retiring the model means popping
-    it from ``apps.all_models`` AND clearing the registry's caches (which rebuilds
-    ``Item._meta.related_objects``), so each run is self-contained regardless of
-    ordering.
-    """
-    suffix = next(_protector_model_counter)
-    meta = type("Meta", (), {"app_label": "products", "managed": False})
-    model = type(
-        f"MutProtector{suffix}",
-        (djmodels.Model,),
-        {
-            "__module__": __name__,
-            "item": djmodels.ForeignKey(
-                product_models.Item,
-                related_name="+",
-                on_delete=on_delete,
-            ),
-            "Meta": meta,
-        },
-    )
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
-        yield model
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
-        apps_registry = model._meta.apps
-        apps_registry.all_models["products"].pop(model._meta.model_name, None)
-        apps_registry.clear_cache()
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "on_delete",
-    [djmodels.PROTECT, djmodels.RESTRICT],
-    ids=["protect", "restrict"],
-)
-def test_delete_refused_by_protected_reference_is_envelope_not_graphql_error(on_delete):
-    """A PROTECT / RESTRICT-referenced row's delete returns the envelope; the row survives.
-
-    Fakeshop has no ``on_delete=PROTECT`` FK on a writable model, so this stays on
-    a synthetic protector. Live delete happy path is
-    ``test_products_api.py::test_delete_item_happy_path``. Without the
-    ``_delete_or_field_errors`` guard the collector's ``ProtectedError`` /
-    ``RestrictedError`` escaped as a top-level ``GraphQLError`` naming the
-    referencing model. Both subclass ``IntegrityError``; the delete-specific
-    catch must not collapse to the generic constraint envelope.
-    """
-    with _protector_model(on_delete) as model:
-        schema, (_CategoryT, ItemT) = _build_item_schema()
-        cat = product_models.Category.objects.create(name=_category_name())
-        item = product_models.Item.objects.create(name="Guarded", category=cat)
-        model.objects.create(item=item)
-        res = schema.execute_sync(_DELETE, variable_values={"id": _item_gid(ItemT, item.pk)})
-        payload = assert_mutation_field_error(res, "deleteItem", NON_FIELD_ERROR_KEY)
-        assert payload["errors"][0]["messages"] == [
-            "Cannot delete: other rows reference this one and are protected.",
-        ]
-        assert model.__name__ not in str(payload["errors"])  # no internal-name leak
-        assert product_models.Item.objects.filter(pk=item.pk).exists()  # refused, not deleted
 
 
 def test_write_flavors_share_resolver_entry_factory():

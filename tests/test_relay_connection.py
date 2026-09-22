@@ -9,8 +9,9 @@ because they assert what a live query cannot: finalization
 ``"connection"`` / ``"both"`` over a non-Node target, generated-name collisions),
 registry teardown / partial-finalize re-entrancy, ``relation_shapes`` variants
 fakeshop does not declare (default connection-only on both M2M directions,
-explicit ``"list"``, a Node-shaped consumer-authored many-relation), reverse FK
-without ``related_name`` (every fakeshop fixture sets one), windowed-prefetch
+explicit ``"list"``, a Node-shaped consumer-authored many-relation), a
+connection over ``Venue``'s reverse ``RepairTicket`` FK declared without
+``related_name`` (the shipped ``VenueType`` publishes it as a list only), windowed-prefetch
 SQL shape and query counts, optimizer-on vs optimizer-off wire parity, planted
 ``to_attr`` routing, strictness logs, and direct ``_resolve_from_window`` /
 ``_consume_window`` guards. Wire pagination, sidecar args, ``totalCount``,
@@ -25,7 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
-from apps.library.models import Book, Branch, Genre, Loan, Shelf
+from apps.library.models import Book, Branch, Genre, Loan, RepairTicket, Shelf, Venue
 from apps.products.models import Category, Item, Property
 from django.db import connection as db_connection
 from django.db import models as djmodels
@@ -149,77 +150,52 @@ def test_default_connection_only_covers_both_m2m_directions():
     assert "genresConnection(" in sdl
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_reverse_fk_without_related_name_resolves_list_and_connection():
     """A reverse FK with NO ``related_name`` resolves on both relation surfaces.
 
-    For such a relation, Django's ``ForeignObjectRel.name``
-    is the related QUERY name (``"plainbook"``) while the instance attribute
-    is ``get_accessor_name()`` (``"plainbook_set"``). Both the Phase-2 list
-    resolver and the synthesized connection resolver used to
-    ``getattr(root, field.name)`` and raised ``AttributeError`` - invisible to
-    CI because every fakeshop fixture sets ``related_name``. Instance access
-    now goes through ``utils.relations.instance_accessor``; the GraphQL field
-    names stay query-name-derived (``plainbook`` / ``plainbookConnection``).
-    Stays package-side (rung 5): reaching it live would add a model whose only
-    job is the missing ``related_name``, which no fakeshop app would ship.
-
-    Uses the ``managed=False`` + manual ``schema_editor`` pattern from
-    ``tests/optimizer/test_relay_id_projection.py``; the app label must be an
-    INSTALLED app (here ``products``) because Django only wires reverse
-    relations into ``_meta.get_fields()`` for installed apps.
+    ``apps/library/models.py::RepairTicket.venue`` declares no
+    ``related_name``, so Django's ``ForeignObjectRel.name`` on ``Venue`` is the
+    related QUERY name (``"repairticket"``) while the instance attribute is
+    ``get_accessor_name()`` (``"repairticket_set"``). Both the Phase-2 list
+    resolver and the synthesized connection resolver reach rows through
+    ``utils.relations.instance_accessor``, never ``getattr(root, field.name)``,
+    which raises ``AttributeError``; the GraphQL field names stay
+    query-name-derived (``repairticket`` / ``repairticketConnection``). This
+    schema installs no optimizer, so the list half reads the relation manager
+    here; the optimized list half is live in
+    ``examples/fakeshop/test_query/test_library_inheritance_api.py``. The
+    connection half stays package-side because the shipped ``VenueType``
+    declares no ``relation_shapes`` and ``RepairTicketType`` is not a
+    ``relay.Node``.
     """
+    rel = Venue._meta.get_field("repairticket")
+    assert rel.get_accessor_name() == "repairticket_set"  # the split this test pins
 
-    class PlainAuthor(djmodels.Model):
-        name = djmodels.CharField(max_length=32)
+    _make_type("RepairTicketNode", RepairTicket, ("id", "code"))
+    venue_type = _make_type(
+        "VenueNode",
+        Venue,
+        ("id", "name", "repairticket"),
+        meta_extra={"relation_shapes": {"repairticket": "both"}},
+    )
+    schema = _schema_with_root(venue_type)
 
-        class Meta:
-            app_label = "products"
-            managed = False
+    venue = Venue.objects.create(name="a1")
+    RepairTicket.objects.create(code="b1", venue=venue)
 
-    class PlainBook(djmodels.Model):
-        title = djmodels.CharField(max_length=32)
-        author = djmodels.ForeignKey(PlainAuthor, on_delete=djmodels.CASCADE)  # no related_name
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    rel = PlainAuthor._meta.get_field("plainbook")
-    assert rel.get_accessor_name() == "plainbook_set"  # the S3 split this test pins
-
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(PlainAuthor)
-        schema_editor.create_model(PlainBook)
-    try:
-        _make_type("PlainBookType", PlainBook, ("id", "title"))
-        author_type = _make_type(
-            "PlainAuthorType",
-            PlainAuthor,
-            ("id", "name", "plainbook"),
-            meta_extra={"relation_shapes": {"plainbook": "both"}},
-        )
-        schema = _schema_with_root(author_type)
-
-        author = PlainAuthor.objects.create(name="a1")
-        PlainBook.objects.create(title="b1", author=author)
-
-        result = schema.execute_sync(
-            "{ objs { name plainbook { title } "
-            "plainbookConnection { edges { node { title } } } } }",
-        )
-        assert result.errors is None
-        assert result.data["objs"] == [
-            {
-                "name": "a1",
-                "plainbook": [{"title": "b1"}],
-                "plainbookConnection": {"edges": [{"node": {"title": "b1"}}]},
-            },
-        ]
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(PlainBook)
-            schema_editor.delete_model(PlainAuthor)
+    result = schema.execute_sync(
+        "{ objs { name repairticket { code } "
+        "repairticketConnection { edges { node { code } } } } }",
+    )
+    assert result.errors is None
+    assert result.data["objs"] == [
+        {
+            "name": "a1",
+            "repairticket": [{"code": "b1"}],
+            "repairticketConnection": {"edges": [{"node": {"code": "b1"}}]},
+        },
+    ]
 
 
 # =============================================================================
@@ -1303,18 +1279,29 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
     rows that tie on ``title``. This asserts that two-column outer order directly
     on the prefetch SQL (the deterministic-order regression) and pins
     optimizer-on vs optimizer-off wire parity for the distinct-title case.
+
+    ``OConnTag`` / ``OConnPost`` stay test-local models: the example child with a
+    non-pk ``Meta.ordering`` (kanban ``Decision``) reads the same outer
+    ``ORDER BY <order column>, pk`` live in
+    ``examples/fakeshop/test_query/test_kanban_api.py``, and the clause only this
+    row carries is the optimizer-off parity, which needs a second schema built
+    without ``DjangoOptimizerExtension`` over one declared child type. The pair is a
+    legal shape whose conversion onto a fakeshop parent of kanban ``Decision`` is
+    deferred; until then it alone pins that optimizer-off parity of the
+    deterministic order ``django_strawberry_framework/connection.py::DjangoConnectionField``
+    appends.
     """
     from django.test.utils import CaptureQueriesContext
 
     class OConnTag(djmodels.Model):
-        name = djmodels.CharField(max_length=32)
+        name = djmodels.TextField()
 
         class Meta:
             app_label = "products"
             managed = False
 
     class OConnPost(djmodels.Model):
-        title = djmodels.CharField(max_length=32)
+        title = djmodels.TextField()
         tag = djmodels.ForeignKey(OConnTag, related_name="posts", on_delete=djmodels.CASCADE)
 
         class Meta:
@@ -1448,91 +1435,62 @@ def test_fast_path_cursor_round_trips_to_fallback_after():
     assert titles == ["c", "d"]
 
 
-@pytest.mark.django_db(transaction=True)
+@pytest.mark.django_db
 def test_fast_path_fires_for_reverse_fk_without_related_name(django_assert_num_queries):
     """The fast path fires for a reverse FK without ``related_name``.
 
-    Decision 5: the resolver receives the relation FIELD NAME (``windowbook``),
-    not the accessor (``windowbook_set``), so its ``_dst_<field>_connection`` probe
-    matches the ``to_attr`` the walker keyed on the field name. The fixed query
-    count (parent + one window) proves the fast path fired rather than silently
-    falling back because the probe missed.
-
-    Uses its own ``WindowAuthor`` / ``WindowBook`` ``managed=False`` models (not
-    the ``PlainAuthor`` / ``PlainBook`` of the behavior-only test above) so the
-    two reverse-FK fixtures never collide in Django's app registry when both run.
+    Decision 5: the resolver receives the relation FIELD NAME
+    (``repairticket``), not the accessor (``repairticket_set``), so its
+    ``_dst_<field>_connection`` probe matches the ``to_attr`` the walker keyed
+    on the field name. The fixed query count (parent + one window) proves the
+    fast path fired rather than silently falling back because the probe missed.
+    The shipped ``VenueType`` publishes no ``repairticketConnection``, so the
+    window is planned here over test-local types on ``Venue`` / ``RepairTicket``.
     """
+    assert Venue._meta.get_field("repairticket").get_accessor_name() == "repairticket_set"
 
-    class WindowAuthor(djmodels.Model):
-        name = djmodels.CharField(max_length=32)
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    class WindowBook(djmodels.Model):
-        title = djmodels.CharField(max_length=32)
-        author = djmodels.ForeignKey(WindowAuthor, on_delete=djmodels.CASCADE)  # no related_name
-
-        class Meta:
-            app_label = "products"
-            managed = False
-
-    assert WindowAuthor._meta.get_field("windowbook").get_accessor_name() == "windowbook_set"
-
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(WindowAuthor)
-        schema_editor.create_model(WindowBook)
-    try:
-        type(
-            "WindowBookType",
-            (DjangoType,),
-            {
-                "Meta": type(
-                    "Meta",
-                    (),
-                    {
-                        "model": WindowBook,
-                        "fields": ("id", "title"),
-                        "interfaces": (relay.Node,),
-                    },
-                ),
-            },
-        )
-        author_type = _make_type("WindowAuthorType", WindowAuthor, ("id", "name", "windowbook"))
-        finalize_django_types()
-        query_cls = strawberry.type(
-            type(
-                "Query",
+    type(
+        "RepairTicketNode",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
                 (),
                 {
-                    "__annotations__": {"objs": list[author_type]},
-                    "objs": DjangoListField(author_type),
+                    "model": RepairTicket,
+                    "fields": ("id", "code"),
+                    "interfaces": (relay.Node,),
                 },
             ),
-        )
-        optimizer = DjangoOptimizerExtension()
-        schema = strawberry.Schema(
-            query=query_cls,
-            config=strawberry_config(),
-            extensions=[lambda: optimizer],
-        )
-        for ai in range(3):
-            author = WindowAuthor.objects.create(name=f"a{ai}")
-            for ti in range(3):
-                WindowBook.objects.create(title=f"a{ai}-b{ti}", author=author)
+        },
+    )
+    venue_type = _make_type("VenueNode", Venue, ("id", "name", "repairticket"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": list[venue_type]}, "objs": DjangoListField(venue_type)},
+        ),
+    )
+    optimizer = DjangoOptimizerExtension()
+    schema = strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+    for vi in range(3):
+        venue = Venue.objects.create(name=f"v{vi}")
+        for ti in range(3):
+            RepairTicket.objects.create(code=f"v{vi}-t{ti}", venue=venue)
 
-        with django_assert_num_queries(2):
-            result = _exec(
-                schema,
-                "{ objs { name windowbookConnection(first: 2) { edges { node { title } } } } }",
-            )
-        assert len(result.data["objs"]) == 3
-        assert all(len(a["windowbookConnection"]["edges"]) == 2 for a in result.data["objs"])
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(WindowBook)
-            schema_editor.delete_model(WindowAuthor)
+    with django_assert_num_queries(2):
+        result = _exec(
+            schema,
+            "{ objs { name repairticketConnection(first: 2) { edges { node { code } } } } }",
+        )
+    assert len(result.data["objs"]) == 3
+    assert all(len(v["repairticketConnection"]["edges"]) == 2 for v in result.data["objs"])
 
 
 @pytest.mark.django_db

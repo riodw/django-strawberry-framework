@@ -463,7 +463,7 @@ Source: `tests/`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
-├── _relation_fixtures.py         # Shared TEST-ONLY relation fixture models for row-preserving-predicate work.
+├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
@@ -540,7 +540,6 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_write_transaction.py # The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
-│   ├── conftest.py               # Package-wide app-registry isolation for the optimizer test modules.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
@@ -634,7 +633,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │   └── tests/    # Non-live app tests for library models, schema exposure, and declaration-order invariants.
 │       ├── test_generic_connection.py  # In-process windowed GenericRelation connection acceptance tests.
 │       ├── test_generic_connection_sharded.py  # Sharded (``FAKESHOP_SHARDED=1``) GenericRelation connection alias-late morph test.
-│       ├── test_models.py        # Library model tests for string rendering, relation traversal, and per-shelf title uniqueness.
+│       ├── test_models.py        # Library model tests for string rendering, relation traversal, inheritance, and per-shelf title uniqueness.
 │       └── test_schema.py        # Library schema test for the declaration-order invariant the app deliberately carries.
 ├── products/
 │   └── tests/    # Non-live app tests for products admin, commands, models, and services.
@@ -673,10 +672,12 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_error_policy_api.py      # Live ``/graphql/`` production-error-policy acceptance tests (spec-048).
 ├── test_extension_isolation_api.py  # Live GraphQL HTTP tests for what one operation's extensions may be answered from.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
+├── test_input_shapes_api.py      # Live GraphQL HTTP tests for the relation-id and payload-slot shapes of generated write inputs.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
 ├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface.
 ├── test_keyset_api.py            # Live GraphQL HTTP tests for keyset (``Meta.cursor_field``) cursor pagination.
 ├── test_library_api.py           # Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface.
+├── test_library_inheritance_api.py  # Live GraphQL HTTP tests for the library inheritance, proxy, and relation-shape surface.
 ├── test_library_shapes_api.py    # Live GraphQL HTTP tests for the library relation shapes the optimizer plans specially.
 ├── test_list_field_api.py        # Live sync-HTTP contract for ``DjangoListField`` arguments.
 ├── test_list_field_async_api.py  # Live async-HTTP contract for ``DjangoListField`` arguments.
@@ -704,7 +705,7 @@ Source: `tests/ (+ planned card paths)`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
-├── _relation_fixtures.py         # Shared TEST-ONLY relation fixture models for row-preserving-predicate work.
+├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
@@ -786,7 +787,6 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_write_transaction.py # The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
-│   ├── conftest.py               # Package-wide app-registry isolation for the optimizer test modules.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.

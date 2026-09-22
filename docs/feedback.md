@@ -1,170 +1,134 @@
-# Adversarial review: spec-050 candidate after the sidecar-seal follow-up
+# Adversarial review: spec-050 candidate after the async-matrix remediation
 
 Date: 2026-09-21
 
-Reviewed the current implementation against `docs/spec-050-list_field_arguments-0_0_15.md`,
-its rationale, `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md`, `GOAL.md`,
-`START.md`, `AGENTS.md`, the live-suite rules, and the Strawberry/Django integration. The
-repository was already dirty when this pass began; unrelated optimizer/kanban edits were left
-untouched. Ruff and `git diff --check` pass for the touched Python and documentation paths. No
-pytest run was performed, as required by the repository instructions.
+I reviewed the current candidate at `HEAD` (`29ddc0a8`) against
+[`spec-050`][spec-050], its rationale, the builder record, [`GOAL.md`][goal],
+[`START.md`][start], [`AGENTS.md`][agents], the live-suite rules, and the
+production seams in `list_field.py`, `connection.py`, `utils/querysets.py`,
+`resource_policy.py`, and `orders/sets.py`. At the start of the pass the only
+dirty path was the unrelated Kanban constants file. Additional library-app
+files appeared while the review was in progress; those concurrent changes were
+also left untouched and excluded from the candidate assessment. No pytest run
+was performed.
 
 ## Verdict
 
-The production corrections from the last review are present. The shared post-sidecar seal now
-covers `FilterSet.apply_*` and `OrderSet.apply_*` in both connection pipelines, the async live
-mount really selects `connection.py::_pipeline_async`, its schema is rebuilt per request, and
-`FilterSet.apply_sync` now documents a lazy return.
+The production fixes from the prior rounds are present. The post-sidecar seal is
+shared by OrderSet and FilterSet, in both sync and async connection pipelines;
+the async test mount really selects `_pipeline_async`; the async matrices now
+include the added materialized/none/projection/malformed-deferred/residual-
+awaitable shapes; and the positive tests use named seed helpers.
 
-Spec-050 is still not ready to close. The exact-tree Decision-22 gate and evidence-only
-follow-up do not exist, and the working tree contains additional intended test/documentation
-changes that are not in an identified candidate commit. The async connection evidence also
-claims a mirrored malformed matrix while omitting several executable async branches.
+I found no new Decision-20 production security defect in this pass. Spec-050 is
+still not closable because its exact-tree Decision-22 gate has not been run or
+recorded. I also found a remaining live-suite style violation in the newest
+connection evidence.
 
-## Verified corrections
+## P1 — the exact-tree closure gate is still outstanding
 
-- `examples/fakeshop/test_query/test_connection_pagination_api.py` builds a local
-  `DjangoConnectionField` with a genuine `async def` consumer resolver. That is the supported
-  construction shape that selects `connection.py::_pipeline_async`; the previous no-resolver
-  false positive is closed.
-- The async OrderSet matrix records an entry sentinel, so a passing rejection proves
-  `GenreOrder.apply_async` was entered rather than the request failing on an earlier path.
-- The new async FilterSet matrix supplies a real `filter:` argument, records the same sentinel,
-  and has an accepted `super()` control that verifies the filtered page.
-- `connection.py::_pipeline_sync` and `connection.py::_pipeline_async` route both public
-  sidecars through `utils/querysets.py::_apply_sidecar_sync` / `::_apply_sidecar_async` and the
-  one `_SIDECAR_RESULT_POLICY`.
-- The old one-shot async schema cache was replaced by a request-scoped holder that is cleared
-  in `finally`, and `FilterSet.apply_sync` now says it returns a lazy queryset.
-- The stale builder claim that connection FilterSet results were still unsealed has been replaced
-  by a discharged entry naming the shared helpers and both pipeline call sites.
+### Contract
 
-## P1 — there is still no exact candidate gate or closure evidence
-
-### Broken contract
-
-Decision 22 requires one immutable candidate implementation tree, the complete default/sharded/
-floor/structural/documentation gate on that exact tree, one adversarial review of the gated tree,
-and an evidence-only follow-up whose parent is that candidate. Only then may the card's DONE
-state be treated as closure.
+Decision 22 requires one identified candidate tree, the complete default,
+sharded, supported-floor, structural, documentation, link, citation, tracked-
+path, `manage.py check`, and migration checks on that exact tree, one review of
+that gated tree under Decision 20, and an evidence-only follow-up whose parent
+is the gated candidate. The card is not closed before that sequence.
 
 ### Evidence
 
-`docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` remains `Status: Candidate`, leaves
-the final gate unchecked, says `No gate is recorded`, and has no closing gate table or
-evidence-only follow-up. The current checkout is not an immutable candidate: `HEAD` is
-`24e6b4d3`, while the prior review discussed `3c53842f`, and the working tree currently carries
-additional sidecar live-test, documentation, and builder changes. Earlier suite figures cannot
-certify either the current `HEAD` or those uncommitted bytes.
+[`build-050`][build-050] still says `Status: Candidate`, leaves **Final exact-
+commit gate** unchecked, says `No gate is recorded`, and has no closing gate
+table or evidence-only follow-up. The spec's opening status correctly says that
+the required work must run against the exact tree and that none of it is yet
+evidence; this is now internally consistent, but it also confirms the release
+condition is unmet.
 
-### Required fix
+The current candidate contains the implementation and the test/documentation
+reconciliation, but earlier suite figures cannot certify it. A dirty-tree run or
+a run against an ancestor is not a Decision-22 result.
 
-Create the intended candidate commit without absorbing unrelated dirty files. Record its exact
-SHA and complete parent chain. In a clean checkout of that SHA, run and record every Decision-22
-gate: default coverage at `fail_under = 100`, sharded mode, the declared supported-floor scope,
-format/lint and structural checks, citations, tracked-path constants, generated documentation,
-`manage.py check`, and `makemigrations --check --dry-run`. Then perform the adversarial review
-against that same SHA and make a follow-up commit whose only change is the gate/evidence record
-and whose parent is the gated candidate. Do not mark the card closed from the current dirty-tree
-state.
+### Required disposition
 
-## P1 — the spec's lifecycle prose can be read as completed evidence while the builder says none exists
+Produce the intended candidate commit without absorbing the unrelated Kanban or
+library-app changes. In a clean checkout of that exact SHA, run and record every declared
+gate, including `fail_under = 100`, the sharded mode, the supported-floor scope,
+all structural/link/citation/tracked-path checks, `manage.py check`, and
+`makemigrations --check --dry-run`. Review that same SHA, then make the
+evidence-only follow-up whose sole change is the builder record and whose parent
+is the gated candidate. Do not mark the card closed from the current record.
 
-The opening status paragraph of `docs/spec-050-list_field_arguments-0_0_15.md` says that the
-candidate carries the default, sharded, floor, structural, link, citation, tracked-path, review,
-and evidence-only results, and says “What follows runs against this exact tree.” The builder
-record explicitly says that no gate, review, or evidence-only follow-up has run against the
-candidate. Those statements cannot both be the current release record: a maintainer or release
-script following the spec could treat the prose as proof that the gate already ran.
+This is a release-process blocker, not a new wire-reachable implementation
+vulnerability; it remains mandatory because the spec explicitly made the exact
+tree gate its closure contract.
 
-Until the gate exists, rewrite the status paragraph in requirement/future tense (for example,
-“must run against this exact tree and be recorded in the follow-up”), or leave the status as
-candidate but remove language that sounds like completed evidence. After the exact gate and
-follow-up, replace it with the actual candidate SHA, results, and parent relationship. Keep the
-builder and spec as one source of truth; do not solve this by copying old figures into either
-file.
+## P3 — three test-body loops still violate the live-suite rule
 
-## P2 — the async connection matrix is not actually mirrored across the shared seal
+[`test_query/README.md`][test-query-readme] requires “No loop in a test body;
+every case own node id with `ids=`.” The current connection evidence still has
+these statement-level loops:
 
-### Broken claim
+- `examples/fakeshop/test_query/test_connection_pagination_api.py::test_connection_branches_a_malformed_apply_sync_result_names_its_own_defect`
+- `examples/fakeshop/test_query/test_connection_pagination_api.py::test_connection_async_branches_a_malformed_apply_async_result_names_its_own_defect`
+- `examples/fakeshop/test_query/test_connection_pagination_api.py::test_connection_async_branches_a_malformed_filter_apply_async_result_names_its_defect`
 
-The live module docstring and the suite-map entry say the async matrix is mirrored from the sync
-matrix and that it covers the same defect shapes. The async rows do not do that.
+Each contains `for substring in substrings` in the parametrized test body. The
+loop is not the matrix itself, but it still violates the same structural rule:
+the assertion work is hidden inside one node body instead of being owned by a
+named helper. The third loop was added by the latest FilterSet matrix
+remediation; the first two remain in the candidate and therefore still fail the
+current suite contract.
 
-### Evidence
+Move the repeated message assertion into one module helper (the helper may own
+the loop), and have each test body call that helper. Keep the `ids=` matrix and
+the exact per-row message prefixes. Then rerun the structural/live-test gate as
+part of the exact-tree closure run.
 
-The sync `GenreOrder.apply_sync` matrix covers materialized-list and `None` type defects,
-projection, an awaitable returned from the sync seam, malformed deferred-filter state, and the
-shape/routing defects. The async `GenreOrder.apply_async` matrix covers evaluated, sliced,
-combined, wrong-model, routing mutation, and non-awaitable returns only. It has no residual
-awaitable row even though `utils/querysets.py::_apply_sidecar_async` has a distinct
-“residual awaitable value” branch. The new async `GenreFilter.apply_async` matrix repeats the
-same six-row omission. The spec's live test plan explicitly requires residual-async-awaitable
-disposal, and the package's own sidecar contract treats that branch as different from a
-non-awaitable return.
+This is governance/test-quality debt, not a production security defect, but it
+means the new release evidence does not currently satisfy the repository's
+acceptance-test contract.
 
-This is a supported wire path: a consumer can publish a `DjangoConnectionField` with an async
-resolver, send `orderBy:` or `filter:`, and return a second awaitable from the corresponding
-sidecar method. The current rows do not prove the typed wire error, disposal, or masking for that
-case on the connection surface. They also do not justify the module's “mirrored” wording.
+## Verified corrections and non-findings
 
-### Required fix
-
-Add independent async live rows for at least residual awaitable, projection/materialized-list or
-`None` type defects, and malformed deferred-filter state wherever the shared helper can reach
-them. At minimum, the residual-awaitable row must use an awaitable whose disposal can be counted,
-assert the stable `ConfigurationError` wording, `data is None`, no raw exception text, and no
-second await. Mirror the FilterSet arm or narrow the module and README claims to the exact rows
-actually covered. Keep the package-tier rows for exact helper mechanics, but do not present them
-as live connection evidence.
-
-## P2 — the async HTTP helper masks the original failure when request setup or execution raises
-
-`examples/fakeshop/test_query/test_connection_pagination_api.py::_post_async_genres` assigns
-`result` inside `try`, clears the schema holder in `finally`, and only then reads
-`result.response`. If schema construction, URL resolution, or the request itself raises before
-assignment, the helper raises `UnboundLocalError` after cleanup instead of preserving the original
-failure. A broken async mount can therefore report a misleading local-variable error, hiding the
-actual regression and making the new evidence harder to trust.
-
-Move the status/payload assertions into an `else` block paired with the `try`, or initialize and
-re-raise while preserving the original exception. The holder must still be cleared in `finally`.
-Apply the same pattern to any sibling helper introduced for this mount.
-
-## P3 — the new positive async FilterSet test violates the live-suite test-style contract
-
-`test_connection_async_healthy_filter_apply_async_override_still_filters` seeds `Alpha`, `Bravo`,
-and `Charlie` with a loop in the test body. The live-suite checklist in
-`examples/fakeshop/test_query/README.md` explicitly requires no loop in a test body and one
-case/node id per case. This is not a runtime vulnerability, but it creates a governance failure
-in the exact file whose new rows are being used as release evidence.
-
-Use explicit model creates or a named seeding helper that owns the repeated setup, then keep the
-test body to one observable case and its assertions. Re-run the structural/checklist gate after
-the change.
-
-## Scope disposition
-
-- The previous async false-positive is closed; the test-local async resolver and sentinel make
-  the branch selection observable.
-- The previous 25-versus-27 scope mismatch is corrected in the builder's current text.
-- The previous stale “FilterSet is not sealed” builder entry is corrected; the production seal is
-  present in both connection pipelines.
-- The previous schema-cache and FilterSet lazy-contract findings are corrected.
-- The dirty optimizer/kanban files were not treated as spec-050 fixes or reverted. The candidate
-  gate must exclude them unless their owner deliberately incorporates them.
+- The async OrderSet and FilterSet matrices now carry the eleven intended rows,
+  including residual-awaitable disposal. The residual coroutine is closed and
+  its body sentinel remains untouched.
+- The async connection field is constructed with a genuine `async def` consumer
+  resolver, so the rows reach `connection.py::_pipeline_async` rather than the
+  sync path.
+- The shared `_apply_sidecar_sync` / `_apply_sidecar_async` seal validates the
+  captured model, lazy state, routing intent, slice state, combinators, and
+  projection before the Relay window.
+- The positive async FilterSet control proves a real `filter:` argument invokes
+  `GenreFilter.apply_async` and still returns the filtered page.
+- The prior `UnboundLocalError` theory for `_post_async_genres` is not admitted:
+  an exception raised inside its `try` re-raises through `finally`, so Python
+  does not continue to the post-`finally` `result` read. The helper can still be
+  made clearer with an `else` block, but that is not a reproduced defect.
+- No new relation-ordering, predicate-classification, resource-budget, or
+  extension-isolation bypass was found in this pass under the project's
+  Decision-20 reachability standard.
 
 ## Required disposition summary
 
-1. Produce one clean candidate containing the intended sidecar-live and documentation changes.
-2. Run and record the complete Decision-22 gate on that exact candidate.
-3. Align the async connection matrices with their claims, especially residual-awaitable
-   disposal, and fix the helper's exception preservation.
-4. Correct the loop-style violation and rerun the structural/documentation checks.
+1. Remove the three test-body assertion loops through a shared helper.
+2. Create one immutable candidate SHA that excludes unrelated dirty work.
+3. Run and record the complete Decision-22 gate against that SHA.
+4. Review that same gated SHA and add the evidence-only follow-up.
 
-Spec-050 remains a candidate until item 2 is recorded and the async evidence claims are truthful.
+Until item 3 and item 4 exist, spec-050 remains a candidate even though the
+implementation-side remediation reviewed here is in place.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [goal]: ../GOAL.md
+[start]: ../START.md
+[agents]: ../AGENTS.md
+
+<!-- docs/ -->
+[spec-050]: spec-050-list_field_arguments-0_0_15.md
+[build-050]: builder/DONE/build-050-list_field_arguments-0_0_15.md
+
+<!-- examples/fakeshop/test_query/ -->
+[test-query-readme]: ../examples/fakeshop/test_query/README.md

@@ -472,6 +472,36 @@ def _override_passthrough(
     return super(GenreOrder, cls).apply_sync(order_input, queryset, info)
 
 
+def _assert_rejection_message(message, message_start, substrings):
+    """Assert one rejection message opens with ``message_start`` and names each fragment.
+
+    A row's claim is the whole message, not its opening: the prefix says which
+    seal spoke and which defect it named, and the fragments are the operand
+    detail that separates a real diagnosis from a generic rejection. The two
+    are one claim about one message, so they are asserted together here rather
+    than spelled out in every parametrized body.
+    """
+    assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
+
+
+def _assert_async_rejection_message(message, message_start, substrings):
+    """The async arms' rejection assertion: the typed message and nothing raw behind it.
+
+    The async rows run under the error-policy pass-through, so a masked
+    envelope cannot hide a leak: whatever the seal raised is what the reader
+    gets. That makes the absence of a traceback and of the raising exception's
+    own class name part of the claim - a rejection that names its defect but
+    ships the interpreter's wording with it has not contained anything.
+    """
+    _assert_rejection_message(message, message_start, substrings)
+    assert "Traceback" not in message, message
+    assert not any(
+        token in message for token in ("ValueError", "TypeError", "SynchronousOnlyOperation")
+    ), message
+
+
 #: One row per defect shape the post-``OrderSet`` seal can name on the shipped
 #: connection; ``materialized-list`` and ``none`` share the ``type`` branch.
 #: ``(id, override, expected message start, required substrings, genre
@@ -593,9 +623,7 @@ def test_connection_branches_a_malformed_apply_sync_result_names_its_own_defect(
 
     assert payload["data"] is None
     message = payload["errors"][0]["message"]
-    assert message.startswith(message_start), message
-    for substring in substrings:
-        assert substring in message, message
+    _assert_rejection_message(message, message_start, substrings)
     genre_sql = [q["sql"] for q in ctx.captured_queries if "library_genre" in q["sql"].lower()]
     assert len(genre_sql) == genre_queries, genre_sql
 
@@ -998,13 +1026,7 @@ async def test_connection_async_branches_a_malformed_apply_async_result_names_it
     assert _ASYNC_APPLY_CALLS, payload
     assert payload["data"] is None, payload
     message = payload["errors"][0]["message"]
-    assert message.startswith(message_start), message
-    for substring in substrings:
-        assert substring in message, message
-    assert "Traceback" not in message, message
-    assert not any(
-        token in message for token in ("ValueError", "TypeError", "SynchronousOnlyOperation")
-    ), message
+    _assert_async_rejection_message(message, message_start, substrings)
     if residual is not None:
         _assert_residual_awaitable_disposed(*residual)
 
@@ -1307,13 +1329,7 @@ async def test_connection_async_branches_a_malformed_filter_apply_async_result_n
     assert _ASYNC_APPLY_CALLS, payload
     assert payload["data"] is None, payload
     message = payload["errors"][0]["message"]
-    assert message.startswith(message_start), message
-    for substring in substrings:
-        assert substring in message, message
-    assert "Traceback" not in message, message
-    assert not any(
-        token in message for token in ("ValueError", "TypeError", "SynchronousOnlyOperation")
-    ), message
+    _assert_async_rejection_message(message, message_start, substrings)
     if residual is not None:
         _assert_residual_awaitable_disposed(*residual)
 

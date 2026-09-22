@@ -7,19 +7,34 @@ Status: Candidate. This tree is the candidate implementation commit of spec Deci
 production and test changes, the shipped docs, the board's DONE transition, the spec status and
 every generated output are in it, and it is the tree every gate result and review conclusion
 must name. The candidate is no longer a single commit: it is the commit carrying this
-reconciliation on top of six that landed after the first candidate tree was written - the one
+reconciliation on top of nine that landed after the first candidate tree was written - the one
 that canonicalized the default policy path, so a policy taken without a consumer override is
 the same object a declared one resolves to, and closed `ErrorPolicy` to exact-type strings; the
 one that moved the post-`OrderSet` seal into `utils/querysets.py` and routed the connection
 field's order arm through it; the one that refused a sliced child on a plain list relation with
 the typed defect under the walker's own child policy; the one that added the `FilterSet` return
 seal to card `TODO-ALPHA-053-0.0.15`; the one that stopped the list-field async adapter
-test committing its seed rows; and the one that sealed the `FilterSet.apply_*` return itself at
+test committing its seed rows; the one that sealed the `FilterSet.apply_*` return itself at
 both connection pipelines through the same shared post-sidecar seal the `OrderSet` return
 answers to, selecting the list field's argument-path visibility policy whenever a sidecar input
-is present. They are named by content here because a tracked record cannot
-name the commit that contains it; the evidence-only follow-up writes the commit ids, naming the
-complete parent chain from the first candidate tree to the gated commit. No
+is present; the one that carried every sync defect shape across both async sidecar arms,
+answering the sync-only awaitable-in-sync row with the two shapes only an async seam can
+produce and reading the disposal the seal performs on a residual awaitable rather than
+following it; the one that moved the repeated message-fragment assertion loops out of the
+parametrized connection malformed-result bodies into two named helpers, one owning the prefix
+and fragment checks and one adding the containment clauses the async arms carry under the
+error-policy pass-through, leaving the `ids=` matrices and the per-row message prefixes
+unchanged; and the one that covered the forward resolver's slow-path visibility re-check with
+three live rows - the arm reached when strictness is armed on the execution frame but the walker
+planned nothing, so the relation is outside the optimizer's scoped set and a consumer
+`select_related` has already loaded the target. They are named by content here because a tracked
+record cannot name the commit that contains it; the evidence-only follow-up writes the commit
+ids, naming the complete parent chain from the first candidate tree to the gated commit. That
+chain also carries another session's concurrent work on this checkout - the optimizer test
+tier's app-registry isolation and its relation planning over real board and library models -
+named by content under the same convention, although those commits are ancestors this record
+could name by id. It is present in whatever tree gets gated, it is not this card's deliverable,
+and it is not what a gate result certifies about spec-050. No
 gate, review or evidence-only follow-up has run against that tree yet, so no result recorded
 anywhere is evidence for it, and the card is not closed. What the gate covers, beyond the five
 slices:
@@ -178,12 +193,18 @@ of an approved function is for the SQL it substitutes ([`spec-050`][spec-050] De
 No gate is recorded. The candidate tree now exists - this commit, standing on the default-policy
 canonicalization with its exact-type `ErrorPolicy` strings, the connection `OrderSet` seal, the
 plain-list-relation sliced-child refusal, the card-053 `FilterSet` seal row, the list-field
-async adapter test that no longer commits its seed rows and the `FilterSet.apply_*` return
+async adapter test that no longer commits its seed rows, the `FilterSet.apply_*` return
 sealed at both connection pipelines by the shared post-sidecar seal, with the list field's
-argument-path visibility policy selected whenever a sidecar input is present - and a tracked record cannot name the
-commit that contains the record itself, so the figures, and the commit ids of the six it stands
-on, belong in the follow-up described below and nowhere else; the follow-up names the complete
-parent chain from the first candidate tree to the gated commit. The prior close evidence stays superseded because it did not identify the
+argument-path visibility policy selected whenever a sidecar input is present, both async
+sidecar arms carrying every sync defect shape with the residual awaitable's disposal read, the
+two named helpers the connection rejection assertions now state their claim through, and the
+three live
+rows over the forward resolver's slow-path visibility re-check - and a tracked record cannot
+name the commit that contains the record itself, so the figures, and the commit ids of the nine
+it stands on, belong in the follow-up described below and nowhere else; the follow-up names the
+complete parent chain from the first candidate tree to the gated commit, including the two
+concurrent optimizer commits the chain carries and this card does not own. The prior close
+evidence stays superseded because it did not identify the
 tree that the full suites and review actually covered.
 
 The close uses two commits:

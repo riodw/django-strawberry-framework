@@ -1,9 +1,11 @@
 """Live GraphQL proof that generated relations enforce target visibility themselves.
 
 Which half of the framework enforces it depends on whether the optimizer PLANNED
-the relation. Unplanned - no optimizer mounted, a consumer-populated prefetch
-cache, a selection the walker declined - and the generated resolver applies the
-hook per parent. Planned, and the resolver stands down
+the relation - which is NOT the same question as whether the optimizer ran, nor
+as whether it armed strictness. Unplanned - no optimizer mounted, a
+consumer-populated prefetch cache, a selection the walker declined, a root handed
+back as a plain list under armed ``strictness`` - and the generated resolver
+applies the hook per parent. Planned, and the resolver stands down
 (``django_strawberry_framework/types/resolvers.py::_optimizer_scoped_relation``)
 because the plan already applied it to the child queryset, which makes the plan
 the sole authority for those rows. Both halves are covered here, each against the
@@ -136,13 +138,17 @@ async def test_async_unoptimized_relation_hides_private_child_over_http():
     assert payload["data"] == {"categories": [{"items": []}]}
 
 
-def _post_visibility_query(schema, query):
-    """POST ``query`` against ``schema`` over live HTTP and return the JSON payload."""
+def _post_visibility_query(schema, query, *, client=None):
+    """POST ``query`` against ``schema`` over live HTTP and return the JSON payload.
+
+    ``client`` carries a logged-in session when the row's subject is which viewer
+    the target hook answers for; omitting it posts anonymously.
+    """
     _CURRENT["schema"] = schema
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            response = post_graphql(query, url="/graphql/")
+            response = post_graphql(query, client=client, url="/graphql/")
         assert response.status_code == 200
         return response.json()
     finally:
@@ -276,6 +282,186 @@ async def test_async_forward_fk_target_visibility_hides_a_private_target_over_ht
     assert [error["message"] for error in payload["errors"]] == [
         "Cannot return null for non-nullable field ItemType.category.",
     ]
+
+
+#: Forward-FK document posted against the strictness-armed holder below.
+_STRICT_LOADED_FK_QUERY = "{ items { name category { name } } }"
+
+
+def _strictness_armed_loaded_fk_schema(item_pk):
+    """Holder arming ``strictness="raise"`` over a root the walker cannot plan.
+
+    Three things have to hold at once for the forward resolver's SLOW-path sync
+    arm to reach the visibility re-check, and this schema is what makes them
+    coincide. ``DjangoOptimizerExtension(strictness="raise")`` arms strictness on
+    the execution frame before any planning runs, so the resolver leaves its
+    sentinel-free fast path even though the plain-list root leaves the walker
+    with nothing to plan. Nothing planned means nothing published to the
+    optimizer's scoped-relation set, so the relation is NOT optimizer-scoped -
+    "planned" and "scoped" are separate predicates and this is the gap between
+    them. And the consumer's own ``select_related`` loads the FK, which is what
+    keeps the armed N+1 guard silent: a lazy load here would be refused by
+    ``strictness="raise"`` before any row was served.
+
+    What arrives at the resolver is therefore a related object a consumer JOIN
+    pulled in, which never passed through ``CategoryType.get_queryset``, on an
+    execution that carries the optimizer's sentinels. The resolver owns the
+    permission decision on it.
+    """
+    from apps.products.schema import ItemType
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def items(self) -> list[ItemType]:
+            return list(Item.objects.filter(pk=item_pk).select_related("category"))
+
+    optimizer = DjangoOptimizerExtension(strictness="raise")
+    return strawberry.Schema(query=Query, extensions=[lambda: optimizer])
+
+
+def _hide_the_seeded_items_category():
+    """Hide the seeded item's FK target; return the item's pk and the hidden name."""
+    item = Item.objects.first()
+    assert item is not None
+    Category.objects.filter(pk=item.category_id).update(is_private=True)
+    return item.pk, Category.objects.get(pk=item.category_id).name
+
+
+def test_anonymous_is_refused_a_joined_forward_fk_target_the_hook_hides(db):
+    """A JOINed hidden target is hidden from an anonymous viewer under armed strictness.
+
+    Neither sibling row reaches this arm. The sync
+    ``..._holds_with_the_optimizer_installed`` row mounts the DEFAULT strictness,
+    so the resolver answers on its fast path; the async row mounts no optimizer at
+    all and answers in the coroutine. This one is the sync slow-path arm: armed
+    strictness, an unplanned relation, and an already-loaded target.
+
+    ``ItemType.category`` is non-null, so hiding the row is a loud failure rather
+    than a silent null: ``data`` is null outright, and the excluded category's
+    name reaches the wire nowhere.
+    """
+    services.seed_data(1)
+    item_pk, _hidden_name = _hide_the_seeded_items_category()
+
+    payload = _post_visibility_query(
+        _strictness_armed_loaded_fk_schema(item_pk),
+        _STRICT_LOADED_FK_QUERY,
+    )
+
+    assert payload["data"] is None
+    assert [error["message"] for error in payload["errors"]] == [
+        "Cannot return null for non-nullable field ItemType.category.",
+    ]
+
+
+def test_staff_is_served_the_same_joined_forward_fk_target(db):
+    """The control: the same row is served once the viewer is one the hook admits.
+
+    Without it the row above would be satisfied by a resolver that hid every
+    target, which is not the claim - the re-check is a permission decision, and
+    ``CategoryType.get_queryset`` returns everything to staff.
+    """
+    services.seed_data(1)
+    item_pk, hidden_name = _hide_the_seeded_items_category()
+    services.create_users(1)
+    client = Client()
+    client.force_login(get_user_model().objects.get(username="staff_1"))
+
+    payload = _post_visibility_query(
+        _strictness_armed_loaded_fk_schema(item_pk),
+        _STRICT_LOADED_FK_QUERY,
+        client=client,
+    )
+
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == {
+        "items": [
+            {"name": Item.objects.get(pk=item_pk).name, "category": {"name": hidden_name}},
+        ],
+    }
+
+
+def _strictness_armed_nullable_fk_schema():
+    """The same armed-but-unplanned mount over a NULLABLE forward key.
+
+    ``ItemType.category`` is non-null, so a hidden target there is a loud
+    refusal. The other wire outcome of the same decision is a field that
+    collapses to ``null`` while its siblings are served, and no shipped type
+    pairs a nullable forward key with a custom-visibility target - the example's
+    one nullable forward key (``PatronProfile.favorite_genre``) points at
+    ``GenreType``, which declares no hook, and adding one there would change
+    every genre traversal in the library suite. Rung 3 holder.
+    """
+    from apps.library.models import Genre, PatronProfile
+
+    registry.clear()
+    make_django_type(
+        "HolderFavoriteGenreType",
+        Genre,
+        ("id", "name"),
+        node=False,
+        namespace_extra={
+            "get_queryset": classmethod(
+                lambda cls, queryset, info: queryset.exclude(name__startswith="HIDDEN"),
+            ),
+        },
+    )
+    profile_type = make_django_type(
+        "HolderProfileType",
+        PatronProfile,
+        ("postal_code", "favorite_genre"),
+        node=False,
+    )
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def profiles(self) -> list[profile_type]:
+            return list(
+                PatronProfile.objects.select_related("favorite_genre").order_by("postal_code"),
+            )
+
+    optimizer = DjangoOptimizerExtension(strictness="raise")
+    return strawberry.Schema(query=Query, extensions=[lambda: optimizer])
+
+
+def test_a_nullable_joined_forward_fk_collapses_to_null_only_for_the_hidden_target(db):
+    """The hidden target nulls its own field; the admitted one on the next row is served.
+
+    Same armed-but-unplanned slow path as the two rows above, over a nullable
+    key, so the re-check's verdict is readable as data rather than as a
+    non-null failure - and both verdicts sit in one payload, which is what
+    stops "hides everything" from satisfying the claim.
+    """
+    from apps.library.models import Genre, Patron, PatronProfile
+
+    hidden_genre = Genre.objects.create(name="HIDDEN-Noir")
+    open_genre = Genre.objects.create(name="OPEN-Verse")
+    PatronProfile.objects.create(
+        patron=Patron.objects.create(name="Profile Holder A"),
+        postal_code="AA-1",
+        favorite_genre=hidden_genre,
+    )
+    PatronProfile.objects.create(
+        patron=Patron.objects.create(name="Profile Holder B"),
+        postal_code="BB-2",
+        favorite_genre=open_genre,
+    )
+
+    payload = _post_visibility_query(
+        _strictness_armed_nullable_fk_schema(),
+        "{ profiles { postalCode favoriteGenre { name } } }",
+    )
+
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == {
+        "profiles": [
+            {"postalCode": "AA-1", "favoriteGenre": None},
+            {"postalCode": "BB-2", "favoriteGenre": {"name": "OPEN-Verse"}},
+        ],
+    }
 
 
 #: One nested-connection document, posted against holder schemas that differ only

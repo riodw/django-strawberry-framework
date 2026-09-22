@@ -264,7 +264,7 @@ def _sync_only_optimizer_frames(error):
     return original, optimizer_frames
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_generic_connection_planning_does_no_sync_orm_work_under_async():
     """Async ``schema.execute`` of a generic connection plans without touching the DB.
 

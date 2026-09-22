@@ -28,6 +28,7 @@ from django_strawberry_framework import (
     NestedSerializerConfig,
     OptimizerHint,
     SerializerMutation,
+    apply_cascade_permissions,
 )
 from django_strawberry_framework.filters import filter_input_type
 from django_strawberry_framework.orders import order_input_type
@@ -51,7 +52,7 @@ def _branches_manager_resolver(root: Any, info: Info) -> Any:
     return models.Branch.objects
 
 
-# Consumer ``Prefetch`` children over the example's one proxy-targeted relation
+# Consumer ``Prefetch`` children over a proxy-targeted relation
 # (``models.BranchNote.branch``, declared to ``models.ProxyBranch``). A source
 # queryset a ``DjangoListField`` receives is sealed before the visibility hook
 # runs, and that seal proves each ``Prefetch`` child belongs to the relation the
@@ -571,6 +572,216 @@ class AnnotationType(DjangoType):
         orderset_class = orders.AnnotationOrder
 
 
+class VenueType(DjangoType):
+    """A venue, the parent of the multi-table inheritance chain.
+
+    ``repairticket``, ``venuebadge`` and ``venuesponsor`` are the three reverse
+    relations declared without ``related_name``: each is published under its
+    query name while rows are read through Django's default accessor
+    (``repairticket_set``, ``venuebadge``, ``venuesponsor_set``).
+
+    ``lead_ticket`` is the nullable half of the ``Venue`` <-> ``RepairTicket``
+    cycle. The hook below cascades over it, so a venue whose lead ticket is
+    hidden is hidden too while a venue with no lead ticket stays visible;
+    ``RepairTicketType`` does not cascade back, so the walk never re-enters.
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Hide closed venues, then cascade the lead ticket's visibility."""
+        return apply_cascade_permissions(cls, queryset.exclude(name__startswith="Closed"), info)
+
+    class Meta:
+        model = models.Venue
+        fields = (
+            "id",
+            "name",
+            "opened_on",
+            "lead_ticket",
+            "repairticket",
+            "venuebadge",
+            "venuesponsor",
+        )
+        filterset_class = filters.VenueFilter
+        orderset_class = orders.VenueOrder
+
+
+class LendingDeskType(DjangoType):
+    """A lending desk, whose inherited columns are read through the ``venue_ptr`` join.
+
+    The hook cascades over the parent link, so a desk whose ``Venue`` row is
+    hidden by ``VenueType`` is hidden with it.
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Cascade the parent venue's visibility onto the desk."""
+        return apply_cascade_permissions(cls, queryset, info)
+
+    class Meta:
+        model = models.LendingDesk
+        fields = (
+            "id",
+            "name",
+            "opened_on",
+            "window_count",
+        )
+        filterset_class = filters.LendingDeskFilter
+        orderset_class = orders.LendingDeskOrder
+
+
+class SelfServeDeskType(DjangoType):
+    """A self-serve desk, two parent links below ``Venue``.
+
+    The hook cascades over ``lendingdesk_ptr`` into ``LendingDeskType``, whose
+    own hook cascades over ``venue_ptr``, so the ``Venue`` visibility reaches
+    this type transitively.
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Cascade the parent desk's visibility onto the kiosk."""
+        return apply_cascade_permissions(cls, queryset, info)
+
+    class Meta:
+        model = models.SelfServeDesk
+        fields = (
+            "id",
+            "name",
+            "opened_on",
+            "window_count",
+            "kiosk_code",
+        )
+        filterset_class = filters.SelfServeDeskFilter
+        orderset_class = orders.SelfServeDeskOrder
+
+
+class OpenVenueType(DjangoType):
+    """The ``OpenVenue`` proxy, whose rows come from its filtering default manager."""
+
+    class Meta:
+        model = models.OpenVenue
+        fields = ("id", "name", "opened_on")
+        filterset_class = filters.OpenVenueFilter
+        orderset_class = orders.OpenVenueOrder
+
+
+class RepairTicketType(DjangoType):
+    """A repair ticket; ``VOID-`` tickets are withdrawn and hidden from every viewer."""
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Hide withdrawn tickets."""
+        return queryset.exclude(code__startswith="VOID-")
+
+    class Meta:
+        model = models.RepairTicket
+        fields = ("id", "code", "venue")
+        filterset_class = filters.RepairTicketFilter
+        orderset_class = orders.RepairTicketOrder
+
+
+class VenueBadgeType(DjangoType):
+    """A venue's badge, the forward side of the no-``related_name`` one-to-one."""
+
+    class Meta:
+        model = models.VenueBadge
+        fields = ("id", "code", "venue")
+        filterset_class = filters.VenueBadgeFilter
+        orderset_class = orders.VenueBadgeOrder
+
+
+class VenueSponsorType(DjangoType):
+    """A sponsor, the forward side of the no-``related_name`` many-to-many."""
+
+    class Meta:
+        model = models.VenueSponsor
+        fields = ("id", "name", "venues")
+        filterset_class = filters.VenueSponsorFilter
+        orderset_class = orders.VenueSponsorOrder
+
+
+class VisibleBranchType(DjangoType):
+    """The ``VisibleBranch`` proxy; its only visibility policy is its default manager."""
+
+    class Meta:
+        model = models.VisibleBranch
+        fields = ("id", "name", "city")
+        filterset_class = filters.VisibleBranchFilter
+        orderset_class = orders.VisibleBranchOrder
+
+
+class BranchSignageType(DjangoType):
+    """A branch sign whose visibility follows its ``VisibleBranch`` target.
+
+    The hook cascades over ``branch``. ``VisibleBranchType`` declares no hook,
+    so the cascade composes the target from ``VisibleBranch._default_manager``
+    and a sign on a city-less branch is hidden, although ``sign.branch`` itself
+    would still load that branch.
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Cascade the proxy target's default-manager visibility onto the sign."""
+        return apply_cascade_permissions(cls, queryset, info)
+
+    class Meta:
+        model = models.BranchSignage
+        fields = ("id", "code", "branch")
+        filterset_class = filters.BranchSignageFilter
+        orderset_class = orders.BranchSignageOrder
+
+
+class CirculationDeskType(DjangoType):
+    """A circulation desk carrying every relation kind, scoped to its single-column edges.
+
+    The model's generic foreign key and generic relation stay out of
+    ``Meta.fields``. The hook cascades only ``branch`` and ``shelf``: a walk
+    over every edge would reach the generic foreign key, which the cascade
+    refuses, so the scoped ``fields=`` list is the declaration a model of this
+    shape owes.
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Cascade branch and shelf visibility onto the desk."""
+        return apply_cascade_permissions(cls, queryset, info, fields=["branch", "shelf"])
+
+    class Meta:
+        model = models.CirculationDesk
+        fields = (
+            "id",
+            "name",
+            "branch",
+            "shelf",
+            "genres",
+            "children",
+            "profile",
+        )
+        filterset_class = filters.CirculationDeskFilter
+        orderset_class = orders.CirculationDeskOrder
+
+
+class DeskShiftType(DjangoType):
+    """A desk shift, published on its desk as ``children``."""
+
+    class Meta:
+        model = models.DeskShift
+        fields = ("id", "name", "desk")
+        filterset_class = filters.DeskShiftFilter
+        orderset_class = orders.DeskShiftOrder
+
+
+class DeskProfileType(DjangoType):
+    """A desk profile, published on its desk as ``profile``."""
+
+    class Meta:
+        model = models.DeskProfile
+        fields = ("id", "code", "desk")
+        filterset_class = filters.DeskProfileFilter
+        orderset_class = orders.DeskProfileOrder
+
+
 @strawberry.type
 class Query:
     """Library acceptance root fields."""
@@ -598,6 +809,36 @@ class Query:
     all_library_patron_profiles_connection: DjangoConnection[PatronProfileType] = (
         DjangoConnectionField(PatronProfileType)
     )
+
+    # The inheritance and relation-shape surface.
+    # Acceptance surface for the nullable Venue/RepairTicket cycle and three reverse relations
+    # declared without related_name.
+    all_library_venues: list[VenueType] = DjangoListField(VenueType)
+    # Acceptance surface for a multi-table inheritance child: the parent-link join, an inherited
+    # order column, and the parent-link visibility cascade.
+    all_library_lending_desks: list[LendingDeskType] = DjangoListField(LendingDeskType)
+    # Acceptance surface for a two-level multi-table inheritance chain and its transitive
+    # parent-link cascade.
+    all_library_self_serve_desks: list[SelfServeDeskType] = DjangoListField(SelfServeDeskType)
+    # Acceptance surface for a proxy whose default manager filters its rows.
+    all_library_open_venues: list[OpenVenueType] = DjangoListField(OpenVenueType)
+    # Acceptance surface for a forward key whose reverse side has no related_name.
+    all_library_repair_tickets: list[RepairTicketType] = DjangoListField(RepairTicketType)
+    # Acceptance surface for a one-to-one whose reverse side has no related_name.
+    all_library_venue_badges: list[VenueBadgeType] = DjangoListField(VenueBadgeType)
+    # Acceptance surface for a many-to-many whose reverse side has no related_name.
+    all_library_venue_sponsors: list[VenueSponsorType] = DjangoListField(VenueSponsorType)
+    # Acceptance surface for a relation target that is a proxy with a filtering default manager.
+    all_library_visible_branches: list[VisibleBranchType] = DjangoListField(VisibleBranchType)
+    # Acceptance surface for a visibility cascade composed from a proxy target's default manager.
+    all_library_branch_signage: list[BranchSignageType] = DjangoListField(BranchSignageType)
+    # Acceptance surface for one model carrying every relation kind, with explicitly named reverse
+    # relations and a cascade scoped to its single-column edges.
+    all_library_circulation_desks: list[CirculationDeskType] = DjangoListField(CirculationDeskType)
+    # Acceptance surface for the reverse foreign key published on a circulation desk as children.
+    all_library_desk_shifts: list[DeskShiftType] = DjangoListField(DeskShiftType)
+    # Acceptance surface for the reverse one-to-one published on a circulation desk as profile.
+    all_library_desk_profiles: list[DeskProfileType] = DjangoListField(DeskProfileType)
 
     all_library_branches_via_list_field: list[BranchType] = DjangoListField(
         BranchType,

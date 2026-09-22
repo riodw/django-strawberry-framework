@@ -218,6 +218,26 @@ class EntryType(DjangoType):
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
+class ItemHoldType(DjangoType):
+    """A hold on an item, the write target whose ``item`` reference refuses deletion.
+
+    Not a root connection: holds are reached only through ``createItemHold``'s
+    payload. ``item`` is ``blank=True, null=False`` on the model, so the create
+    input publishes ``itemId`` as optional while an explicit ``null`` is refused
+    field by field.
+    """
+
+    class Meta:
+        model = models.ItemHold
+        fields = (
+            "id",
+            "reason",
+            "item",
+            "substitute",
+        )
+        interfaces = (relay.Node,)
+
+
 @strawberry.type
 class Query:
     """Fakeshop products app root fields - connections-only (the cookbook mirror).
@@ -267,6 +287,12 @@ class DeleteItem(DjangoMutation):
 class CreateCategory(DjangoMutation):
     class Meta:
         model = models.Category
+        operation = "create"
+
+
+class CreateItemHold(DjangoMutation):
+    class Meta:
+        model = models.ItemHold
         operation = "create"
 
 
@@ -463,7 +489,8 @@ class Mutation:
     return `<Name>Payload` is materialized at finalization and cannot be named at
     import, so the factory types the field via a `strawberry.lazy` forward-ref. The
     `DjangoMutation` `Item` writes cover create / update / delete; `createCategory`
-    exercises a second model end to end. No `permission_classes` override - the default
+    exercises a second model end to end, and `createItemHold` writes the `ItemHold`
+    whose `PROTECT` / `RESTRICT` references make `deleteItem` refusable. No `permission_classes` override - the default
     `DjangoModelPermission` (the Django `add` / `change` / `delete` model perms) is
     exactly what the live write-authorization tests exercise (spec-036 Decision 15).
 
@@ -496,6 +523,7 @@ class Mutation:
     update_item = DjangoMutationField(UpdateItem)
     delete_item = DjangoMutationField(DeleteItem)
     create_category = DjangoMutationField(CreateCategory)
+    create_item_hold = DjangoMutationField(CreateItemHold)
     create_item_via_form = DjangoMutationField(CreateItemViaForm)
     update_item_via_form = DjangoMutationField(UpdateItemViaForm)
     create_item_with_file_via_form = DjangoMutationField(CreateItemWithFileViaForm)

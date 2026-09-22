@@ -1,6 +1,6 @@
 """OrderSet declarations for library relation-graph and keyset-cursor acceptance coverage.
 
-Twelve ordersets mirror the relation shape ``apps.library.schema`` exposes
+Twenty-four ordersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint; ``PeriodicalOrder`` and
 ``IssueOrder`` are the keyset-cursor ``orderBy:`` substrate: a root
 ``orderBy: {title: ASC}`` page over ``IssueOrder`` mints value cursors
@@ -236,17 +236,146 @@ class AnnotationOrder(OrderSet):
         fields = ["id", "body"]
 
 
+class VenueOrder(OrderSet):
+    """Venue orderset bound to ``VenueType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.Venue
+        fields = ["id", "name", "opened_on"]
+
+
+class LendingDeskOrder(OrderSet):
+    """Lending-desk orderset bound to ``LendingDeskType`` at finalize phase 2.5.
+
+    ``opened_on`` is the inherited parent column a desk page is sorted by, and
+    ``window_count`` the child's local one.
+    """
+
+    class Meta:
+        model = models.LendingDesk
+        fields = [
+            "id",
+            "name",
+            "opened_on",
+            "window_count",
+        ]
+
+
+class SelfServeDeskOrder(OrderSet):
+    """Self-serve-desk orderset bound to ``SelfServeDeskType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.SelfServeDesk
+        fields = [
+            "id",
+            "name",
+            "opened_on",
+            "window_count",
+            "kiosk_code",
+        ]
+
+
+class OpenVenueOrder(OrderSet):
+    """Open-venue orderset bound to ``OpenVenueType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.OpenVenue
+        fields = ["id", "name", "opened_on"]
+
+
+class RepairTicketOrder(OrderSet):
+    """Repair-ticket orderset bound to ``RepairTicketType`` at finalize phase 2.5."""
+
+    venue = RelatedOrder("VenueOrder", field_name="venue")
+
+    class Meta:
+        model = models.RepairTicket
+        fields = ["id", "code"]
+
+
+class VenueBadgeOrder(OrderSet):
+    """Venue-badge orderset bound to ``VenueBadgeType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.VenueBadge
+        fields = ["id", "code"]
+
+
+class VenueSponsorOrder(OrderSet):
+    """Venue-sponsor orderset bound to ``VenueSponsorType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.VenueSponsor
+        fields = ["id", "name"]
+
+
+class VisibleBranchOrder(OrderSet):
+    """Visible-branch orderset bound to ``VisibleBranchType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.VisibleBranch
+        fields = ["id", "name", "city"]
+
+
+class BranchSignageOrder(OrderSet):
+    """Branch-signage orderset bound to ``BranchSignageType`` at finalize phase 2.5."""
+
+    branch = RelatedOrder("VisibleBranchOrder", field_name="branch")
+
+    class Meta:
+        model = models.BranchSignage
+        fields = ["id", "code"]
+
+
+class CirculationDeskOrder(OrderSet):
+    """Circulation-desk orderset bound to ``CirculationDeskType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.CirculationDesk
+        fields = ["id", "name"]
+
+
+class DeskShiftOrder(OrderSet):
+    """Desk-shift orderset bound to ``DeskShiftType`` at finalize phase 2.5."""
+
+    desk = RelatedOrder("CirculationDeskOrder", field_name="desk")
+
+    class Meta:
+        model = models.DeskShift
+        fields = ["id", "name"]
+
+
+class DeskProfileOrder(OrderSet):
+    """Desk-profile orderset bound to ``DeskProfileType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.DeskProfile
+        fields = ["id", "code"]
+
+
 __all__ = (
     "AnnotationOrder",
     "BookOrder",
     "BranchOrder",
+    "BranchSignageOrder",
+    "CirculationDeskOrder",
+    "DeskProfileOrder",
+    "DeskShiftOrder",
     "EditionOrder",
     "IssueOrder",
+    "LendingDeskOrder",
     "LoanOrder",
+    "OpenVenueOrder",
     "PatronOrder",
     "PatronProfileOrder",
     "PeriodicalOrder",
     "PrintingOrder",
     "PublisherOrder",
+    "RepairTicketOrder",
+    "SelfServeDeskOrder",
     "ShelfOrder",
+    "VenueBadgeOrder",
+    "VenueOrder",
+    "VenueSponsorOrder",
+    "VisibleBranchOrder",
 )

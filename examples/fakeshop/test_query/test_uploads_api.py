@@ -37,6 +37,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
+from strawberry import relay
 
 from django_strawberry_framework.testing import TestClient
 
@@ -430,7 +431,11 @@ def test_suspicious_file_operation_is_reported_not_nulled_over_http(tmp_path, mo
 
 
 def test_media_specimen_input_exposes_upload_over_http():
-    """The generated ``MediaSpecimenInput`` maps file/image columns to NON_NULL ``Upload``."""
+    """The generated ``MediaSpecimenInput`` maps file/image columns to NON_NULL ``Upload``.
+
+    A file column is a scalar input under its own field name, never the
+    ``<field>Id`` spelling a relation key takes.
+    """
     upload = _introspect_type("Upload", "name kind")
     assert upload == {"name": "Upload", "kind": "SCALAR"}
 
@@ -439,6 +444,7 @@ def test_media_specimen_input_exposes_upload_over_http():
         "inputFields { name type { kind name ofType { kind name } } }",
     )
     by_name = {f["name"]: f["type"] for f in input_type["inputFields"]}
+    assert "attachmentId" not in by_name, by_name
     # The columns are required (no null / blank / default), so the input field is
     # ``Upload!``. Assert the DIRECT wrapper is NON_NULL -> Upload: a nullable
     # ``Upload`` (kind SCALAR at the top) must NOT pass.
@@ -469,7 +475,7 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
     mutation = """
     mutation Create($data: MediaSpecimenInput!) {
       createMediaSpecimen(data: $data) {
-        result {
+        node {
           label
           attachment { name size url }
           image { name width height }
@@ -503,7 +509,7 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
         assert res.response.status_code == 200
         payload = res.data["createMediaSpecimen"]
         assert payload["errors"] == []
-        result = payload["result"]
+        result = payload["node"]
 
         # The row landed in the database with both files attached.
         assert models.MediaSpecimen.objects.filter(label="uploaded").exists()
@@ -532,7 +538,7 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
     mutation = """
     mutation Create($data: MediaSpecimenImageFormInput!) {
       createMediaSpecimenImageViaForm(data: $data) {
-        result {
+        node {
           label
           image { name width height }
         }
@@ -556,7 +562,7 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
         assert res.response.status_code == 200
         payload = res.data["createMediaSpecimenImageViaForm"]
         assert payload["errors"] == []
-        result = payload["result"]
+        result = payload["node"]
 
         # The row landed via the FORM path with the image routed into ``files=``.
         assert models.MediaSpecimen.objects.filter(label="form-uploaded").exists()
@@ -565,3 +571,121 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
     assert result["image"]["name"].endswith("form.png")
     assert result["image"]["width"] == _IMAGE_WIDTH
     assert result["image"]["height"] == _IMAGE_HEIGHT
+
+
+_UPDATE_MEDIA_SPECIMEN = """
+mutation Update($id: ID!, $data: MediaSpecimenPartialInput!) {
+  updateMediaSpecimen(id: $id, data: $data) {
+    node { label attachment { name } }
+    errors { field messages codes }
+  }
+}
+"""
+
+
+def _stored_specimen(label: str) -> models.MediaSpecimen:
+    """Save a ``MediaSpecimen`` whose ``attachment`` holds ``b"original"`` under ``MEDIA_ROOT``."""
+    specimen = models.MediaSpecimen(label=label)
+    specimen.attachment.save("orig.txt", ContentFile(b"original"), save=False)
+    specimen.image.save("orig.png", ContentFile(_png_bytes()), save=False)
+    specimen.save()
+    return specimen
+
+
+def _specimen_gid(specimen: models.MediaSpecimen) -> str:
+    """Mint the update ``id:`` GlobalID for ``specimen`` under the model-label strategy."""
+    return str(relay.GlobalID(type_name="scalars.mediaspecimen", node_id=str(specimen.pk)))
+
+
+def _update_specimen(specimen, data, files=None):
+    """Post ``updateMediaSpecimen`` as a superuser and return its payload."""
+    user = get_user_model().objects.create_superuser("updater", "updater@example.com", "pw")
+    client = TestClient()
+    with client.login(user):
+        res = client.query(
+            _UPDATE_MEDIA_SPECIMEN,
+            variables={"id": _specimen_gid(specimen), "data": data},
+            files=files,
+            operation_name="Update",
+        )
+    assert res.response.status_code == 200
+    return res.data["updateMediaSpecimen"]
+
+
+def test_media_specimen_partial_input_makes_the_required_file_an_optional_upload_over_http():
+    """``MediaSpecimenPartialInput.attachment`` is a nullable ``Upload`` though the column is required.
+
+    Every partial-input column is omittable, file columns included, so the
+    required-on-create ``attachment`` publishes as bare ``Upload`` (no ``NON_NULL``
+    wrapper) on the update input.
+    """
+    input_type = _introspect_type(
+        "MediaSpecimenPartialInput",
+        "inputFields { name type { kind name ofType { kind name } } }",
+    )
+    by_name = {f["name"]: f["type"] for f in input_type["inputFields"]}
+    assert by_name["attachment"] == {"kind": "SCALAR", "name": "Upload", "ofType": None}
+
+
+@pytest.mark.django_db
+def test_update_omitting_the_file_keeps_the_stored_file_over_http(tmp_path):
+    """An update that leaves ``attachment`` out keeps the stored file byte-identical.
+
+    ``UNSET`` is stripped in ``django_strawberry_framework/mutations/resolvers.py``
+    before the update's ``setattr`` loop, so an omitted file column is never
+    re-assigned.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = _stored_specimen("keep-file")
+        original_name = specimen.attachment.name
+        payload = _update_specimen(specimen, {"label": "renamed"})
+        assert payload["errors"] == [], payload
+        assert payload["node"]["label"] == "renamed"
+        specimen.refresh_from_db()
+        assert specimen.attachment.name == original_name
+        with specimen.attachment.open("rb") as handle:
+            assert handle.read() == b"original"
+
+
+@pytest.mark.django_db
+def test_update_with_a_new_upload_replaces_the_stored_file_over_http(tmp_path):
+    """A multipart update carrying a new ``attachment`` replaces the stored file."""
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = _stored_specimen("replace-file")
+        payload = _update_specimen(
+            specimen,
+            {"attachment": None},
+            files={
+                "data.attachment": SimpleUploadedFile(
+                    "replacement.txt",
+                    b"replaced bytes",
+                    content_type="text/plain",
+                ),
+            },
+        )
+        assert payload["errors"] == [], payload
+        specimen.refresh_from_db()
+        assert specimen.attachment.name.endswith("replacement.txt")
+        with specimen.attachment.open("rb") as handle:
+            assert handle.read() == b"replaced bytes"
+
+
+@pytest.mark.django_db
+def test_update_explicit_null_on_the_required_file_is_a_field_error_over_http(tmp_path):
+    """An explicit ``attachment: null`` on the ``null=False`` column is a ``null`` field error.
+
+    ``django_strawberry_framework/mutations/resolvers.py::_explicit_null_error``
+    rejects a provided ``None`` on a ``null=False`` scalar column before any
+    write; a file column is a scalar input, so omittable is not clearable. The
+    stored file is untouched.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = _stored_specimen("null-file")
+        payload = _update_specimen(specimen, {"attachment": None})
+        assert payload["node"] is None, payload
+        assert [(error["field"], error["codes"]) for error in payload["errors"]] == [
+            ("attachment", ["null"]),
+        ]
+        specimen.refresh_from_db()
+        with specimen.attachment.open("rb") as handle:
+            assert handle.read() == b"original"

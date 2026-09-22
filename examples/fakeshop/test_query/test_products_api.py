@@ -390,6 +390,82 @@ def test_delete_item_happy_path():
     assert not models.Item.objects.filter(pk=item.pk).exists()
 
 
+_CREATE_ITEM_HOLD = (
+    "mutation($d: ItemHoldInput!) { createItemHold(data: $d) { "
+    "node { reason } errors { field messages codes } } }"
+)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "reference",
+    ["item", "substitute"],
+    ids=["protect", "restrict"],
+)
+def test_delete_item_refused_by_a_hold_returns_the_protected_envelope(reference):
+    """``deleteItem`` on an item an ``ItemHold`` references returns the envelope; the row survives.
+
+    ``ItemHold.item`` is ``on_delete=PROTECT`` and ``ItemHold.substitute`` is
+    ``on_delete=RESTRICT``, so Django's deletion collector raises
+    ``ProtectedError`` / ``RestrictedError``. Both subclass ``IntegrityError``;
+    ``django_strawberry_framework/mutations/resolvers.py::_delete_or_field_errors``
+    must answer with the protected-delete message, not the generic constraint
+    envelope and not a top-level GraphQL error naming the referencing model.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    held = models.Item.objects.create(name="Held", category=category)
+    other = models.Item.objects.create(name="Other", category=category)
+    if reference == "item":
+        models.ItemHold.objects.create(reason="reserved", item=held)
+    else:
+        models.ItemHold.objects.create(reason="reserved", item=other, substitute=held)
+    client = _login_with_perm("staff_1", "delete_item")
+
+    data = _graphql_data(
+        _DELETE_ITEM,
+        client=client,
+        variables={"id": _global_id("products.item", held.pk)},
+    )
+    result = data["deleteItem"]
+    assert result["node"] is None, result
+    assert result["errors"] == [
+        {
+            "field": "__all__",
+            "messages": ["Cannot delete: other rows reference this one and are protected."],
+        },
+    ]
+    assert "ItemHold" not in json.dumps(data)
+    assert models.Item.objects.filter(pk=held.pk).exists()
+
+
+@pytest.mark.django_db
+def test_create_item_hold_explicit_null_item_is_a_field_error():
+    """An explicit ``itemId: null`` on the ``blank=True, null=False`` FK is keyed to ``itemId``.
+
+    ``full_clean`` skips a ``blank=True`` empty value, so without the decode-time
+    FK null guard in ``django_strawberry_framework/mutations/resolvers.py`` the
+    write reaches a NOT NULL ``IntegrityError`` and the generic ``__all__``
+    constraint envelope; the client must learn which field failed. No row is
+    written.
+    """
+    create_users(1)
+    client = _login_with_perm("staff_1", "add_itemhold")
+
+    data = _graphql_data(
+        _CREATE_ITEM_HOLD,
+        client=client,
+        variables={"d": {"reason": "reserved", "itemId": None}},
+    )
+    result = data["createItemHold"]
+    assert result["node"] is None, result
+    assert [(error["field"], error["codes"]) for error in result["errors"]] == [
+        ("itemId", ["null"]),
+    ]
+    assert not models.ItemHold.objects.exists()
+
+
 _DELETE_ITEM_WITH_CONNECTION = (
     "mutation($id: ID!) { deleteItem(id: $id) { "
     "node { id name entriesConnection { edges { node { value } } } } "

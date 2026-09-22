@@ -216,18 +216,25 @@ class MediaSpecimen(models.Model):
     name as ``TEXT``), so this row earns its package coverage over HTTP like every
     other entry in this app instead of being deferred to synthetic tests.
 
-    Both columns are required (no ``null`` / ``blank``) **on purpose**: the live
-    SDL then pins the default-nullable output-object contract (spec-037
-    Decision 4) - the generated ``attachment`` / ``image`` fields are nullable in
-    the schema (`DjangoFileType` / `DjangoImageType`, no ``!``) even though the
-    Django columns are required, because an empty / absent stored file resolves
-    the whole object to ``null``. ``image`` reads ``width`` / ``height`` through
-    Pillow (the dev/test-only dependency added with spec-037).
+    ``attachment`` and ``image`` are required (no ``null`` / ``blank``) **on
+    purpose**: the live SDL then pins the default-nullable output-object contract
+    (spec-037 Decision 4) - the generated ``attachment`` / ``image`` fields are
+    nullable in the schema (`DjangoFileType` / `DjangoImageType`, no ``!``) even
+    though the Django columns are required, because an empty / absent stored file
+    resolves the whole object to ``null``. ``image`` reads ``width`` / ``height``
+    through Pillow (the dev/test-only dependency added with spec-037).
+
+    The two optional columns beside them make the create input's requiredness
+    rule observable one arm at a time: ``optional_attachment`` is optional only
+    because it is ``blank=True``, and ``spare_image`` only because it is
+    ``null=True`` (it is deliberately not ``blank``).
     """
 
     label = models.TextField(unique=True)
     attachment = models.FileField(upload_to="scalar_media/files/")
     image = models.ImageField(upload_to="scalar_media/images/")
+    optional_attachment = models.FileField(upload_to="scalar_media/files/", blank=True)
+    spare_image = models.ImageField(upload_to="scalar_media/images/", null=True)
 
     def __str__(self):
         return self.label

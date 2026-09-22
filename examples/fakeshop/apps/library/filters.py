@@ -1,6 +1,6 @@
 """FilterSet declarations for the library acceptance app (spec-027).
 
-Ten filtersets mirror the relation shape ``apps.library.schema`` exposes
+Twenty-two filtersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint. Inter-filterset references use
 the same-module unqualified-name form (e.g. ``RelatedFilter("ShelfFilter")``)
 so the lazy-resolution Layer-2 prefix-with-owner branch is exercised end
@@ -214,15 +214,156 @@ class AnnotationFilter(FilterSet):
         fields = {"id": ["exact", "in"], "body": ["icontains"]}
 
 
+class VenueFilter(FilterSet):
+    """Venue filterset bound to ``VenueType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.Venue
+        fields = {
+            "id": ["exact", "in"],
+            "name": ["exact", "icontains"],
+            "opened_on": ["exact", "gt"],
+        }
+
+
+class LendingDeskFilter(FilterSet):
+    """Lending-desk filterset bound to ``LendingDeskType`` at finalize phase 2.5.
+
+    ``name`` and ``opened_on`` are inherited from ``Venue``, so their lookups
+    resolve through the ``venue_ptr`` join; ``window_count`` is the child's own.
+    """
+
+    class Meta:
+        model = models.LendingDesk
+        fields = {
+            "id": ["exact", "in"],
+            "name": ["exact", "icontains"],
+            "opened_on": ["exact", "gt"],
+            "window_count": ["exact", "gt"],
+        }
+
+
+class SelfServeDeskFilter(FilterSet):
+    """Self-serve-desk filterset bound to ``SelfServeDeskType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.SelfServeDesk
+        fields = {
+            "id": ["exact", "in"],
+            "name": ["exact", "icontains"],
+            "opened_on": ["exact"],
+            "window_count": ["exact"],
+            "kiosk_code": ["exact"],
+        }
+
+
+class OpenVenueFilter(FilterSet):
+    """Open-venue filterset bound to ``OpenVenueType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.OpenVenue
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
+
+
+class RepairTicketFilter(FilterSet):
+    """Repair-ticket filterset bound to ``RepairTicketType`` at finalize phase 2.5."""
+
+    venue = RelatedFilter("VenueFilter", field_name="venue")
+
+    class Meta:
+        model = models.RepairTicket
+        fields = {"id": ["exact", "in"], "code": ["exact", "icontains"]}
+
+
+class VenueBadgeFilter(FilterSet):
+    """Venue-badge filterset bound to ``VenueBadgeType`` at finalize phase 2.5."""
+
+    venue = RelatedFilter("VenueFilter", field_name="venue")
+
+    class Meta:
+        model = models.VenueBadge
+        fields = {"id": ["exact", "in"], "code": ["exact"]}
+
+
+class VenueSponsorFilter(FilterSet):
+    """Venue-sponsor filterset bound to ``VenueSponsorType`` at finalize phase 2.5."""
+
+    venues = RelatedFilter("VenueFilter", field_name="venues")
+
+    class Meta:
+        model = models.VenueSponsor
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
+
+
+class VisibleBranchFilter(FilterSet):
+    """Visible-branch filterset bound to ``VisibleBranchType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.VisibleBranch
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"], "city": ["exact"]}
+
+
+class BranchSignageFilter(FilterSet):
+    """Branch-signage filterset bound to ``BranchSignageType`` at finalize phase 2.5."""
+
+    branch = RelatedFilter("VisibleBranchFilter", field_name="branch")
+
+    class Meta:
+        model = models.BranchSignage
+        fields = {"id": ["exact", "in"], "code": ["exact", "icontains"]}
+
+
+class CirculationDeskFilter(FilterSet):
+    """Circulation-desk filterset bound to ``CirculationDeskType`` at finalize phase 2.5."""
+
+    branch = RelatedFilter("BranchFilter", field_name="branch")
+
+    class Meta:
+        model = models.CirculationDesk
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
+
+
+class DeskShiftFilter(FilterSet):
+    """Desk-shift filterset bound to ``DeskShiftType`` at finalize phase 2.5."""
+
+    desk = RelatedFilter("CirculationDeskFilter", field_name="desk")
+
+    class Meta:
+        model = models.DeskShift
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
+
+
+class DeskProfileFilter(FilterSet):
+    """Desk-profile filterset bound to ``DeskProfileType`` at finalize phase 2.5."""
+
+    desk = RelatedFilter("CirculationDeskFilter", field_name="desk")
+
+    class Meta:
+        model = models.DeskProfile
+        fields = {"id": ["exact", "in"], "code": ["exact"]}
+
+
 __all__ = (
     "AnnotationFilter",
     "BookFilter",
     "BranchFilter",
+    "BranchSignageFilter",
+    "CirculationDeskFilter",
+    "DeskProfileFilter",
+    "DeskShiftFilter",
     "EditionFilter",
+    "LendingDeskFilter",
     "LoanFilter",
+    "OpenVenueFilter",
     "PatronFilter",
     "PatronProfileFilter",
     "PrintingFilter",
     "PublisherFilter",
+    "RepairTicketFilter",
+    "SelfServeDeskFilter",
     "ShelfFilter",
+    "VenueBadgeFilter",
+    "VenueFilter",
+    "VenueSponsorFilter",
+    "VisibleBranchFilter",
 )

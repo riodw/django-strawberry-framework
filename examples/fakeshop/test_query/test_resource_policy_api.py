@@ -2152,7 +2152,7 @@ def test_total_input_nodes_are_bounded_across_several_arguments():
 
 _SPECIMEN = (
     "mutation M($d: MediaSpecimenInput!) { createMediaSpecimen(data: $d) "
-    "{ result { label } errors { field messages } } }"
+    "{ node { label } errors { field messages } } }"
 )
 
 

@@ -27,6 +27,7 @@ tag resolving to ``null`` on the source specimen.
 from typing import Any
 
 import strawberry
+from strawberry import relay
 from strawberry.types import Info
 
 from apps.scalars import filters, forms, models, orders
@@ -185,8 +186,9 @@ class MediaSpecimenType(DjangoType):
     ``image`` to ``DjangoImageType`` - and both are **nullable by default** in
     the live SDL even though the Django columns are required, because an empty /
     absent stored file resolves the whole object to ``null`` (spec-037
-    Decision 4). Not Relay-Node-shaped (matching the other scalar specimens), so
-    the generated mutation payload carries the row in the ``result`` slot.
+    Decision 4). Relay-Node-shaped, unlike the other scalar specimens, because
+    ``updateMediaSpecimen`` locates its row by a GlobalID ``id:``; the generated
+    mutation payloads therefore carry the row in the ``node`` slot.
     """
 
     class Meta:
@@ -197,6 +199,7 @@ class MediaSpecimenType(DjangoType):
             "attachment",
             "image",
         )
+        interfaces = (relay.Node,)
         # Explicit now that a second type wraps the same model: a relation to
         # ``MediaSpecimen`` resolves here, not to the path-bearing sibling.
         primary = True
@@ -333,6 +336,22 @@ class CreateMediaSpecimen(DjangoMutation):
         operation = "create"
 
 
+class UpdateMediaSpecimen(DjangoMutation):
+    """Update mutation over ``MediaSpecimen`` - the partial-update side of the ``Upload`` surface.
+
+    The generated ``MediaSpecimenPartialInput`` makes every column omittable, so an
+    update that leaves ``attachment`` out keeps the stored file, one that sends a
+    new upload replaces it through the generic update loop, and an explicit
+    ``null`` on the required ``attachment`` column is a field error rather than a
+    silent clear. Same default ``[DjangoModelPermission]`` write authorization as
+    the create twin (``scalars.change_mediaspecimen``).
+    """
+
+    class Meta:
+        model = models.MediaSpecimen
+        operation = "update"
+
+
 class CreateMediaSpecimenImageViaForm(DjangoModelFormMutation):
     """Create a ``MediaSpecimen`` via ``MediaSpecimenImageForm`` - the FORM ``ImageField`` path.
 
@@ -355,6 +374,7 @@ class Mutation:
     """Scalars coverage write surface - the live ``Upload`` mutation path (spec-037)."""
 
     create_media_specimen = DjangoMutationField(CreateMediaSpecimen)
+    update_media_specimen = DjangoMutationField(UpdateMediaSpecimen)
     create_media_specimen_image_via_form = DjangoMutationField(CreateMediaSpecimenImageViaForm)
 
 

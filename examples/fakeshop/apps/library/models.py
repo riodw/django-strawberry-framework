@@ -81,7 +81,8 @@ class ProxyBranch(Branch):
 class BranchNote(models.Model):
     """A note whose branch foreign key is declared TO ``ProxyBranch``.
 
-    The example's only relation whose declared target is a PROXY model. A proxy
+    One of the example's two relations declared to a PROXY model (the other is
+    ``BranchSignage.branch``, whose proxy filters its default manager). A proxy
     reads its concrete model's table, so a prefetch child over ``Branch`` - and
     over ``ProxyBranch`` itself - belongs to this relation, while a child over
     any other table does not. Comparing a child against the DECLARED target
@@ -168,6 +169,15 @@ class Book(models.Model):
     genres = models.ManyToManyField(
         Genre,
         related_name="books",
+    )
+    # Genres a cataloguer archived the book under. Maintained by the catalogue
+    # import, never by a client, so ``editable=False`` keeps it out of every
+    # generated write input while the editable ``genres`` beside it stays in.
+    archive_genres = models.ManyToManyField(
+        Genre,
+        related_name="+",
+        editable=False,
+        blank=True,
     )
 
     class Meta:
@@ -444,3 +454,232 @@ class Annotation(models.Model):
 
     def __str__(self):
         return self.body
+
+
+class Venue(models.Model):
+    """A place the library lends from, the root of a multi-table inheritance chain.
+
+    ``LendingDesk`` extends it with its own table joined through the
+    auto-created ``venue_ptr`` parent link, and ``SelfServeDesk`` extends that
+    in turn, so a child row's inherited columns (``name``, ``opened_on``) live
+    one or two joins away from its local ones. ``opened_on`` is the orderable
+    parent column a child is sorted by.
+
+    Its three reverse relations are declared WITHOUT ``related_name``
+    (``RepairTicket.venue``, ``VenueBadge.venue``, ``VenueSponsor.venues``), so
+    each is reached on an instance through Django's default accessor
+    (``repairticket_set``, ``venuebadge``, ``venuesponsor_set``) while its query
+    name is the bare model name. ``lead_ticket`` points back at ``RepairTicket``,
+    closing a nullable foreign-key cycle between the two models.
+    """
+
+    name = models.TextField()
+    opened_on = models.DateField(null=True, blank=True)
+    lead_ticket = models.ForeignKey(
+        "RepairTicket",
+        related_name="+",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class LendingDesk(Venue):
+    """A staffed desk: a ``Venue`` whose own table holds only its local columns."""
+
+    window_count = models.IntegerField(default=0)
+
+
+class SelfServeDesk(LendingDesk):
+    """A kiosk desk, the third level of the ``Venue`` inheritance chain."""
+
+    kiosk_code = models.TextField()
+
+
+class OpenVenueManager(models.Manager):
+    """Default manager keeping only venues that have opened."""
+
+    def get_queryset(self):
+        return super().get_queryset().filter(opened_on__isnull=False)
+
+
+class OpenVenue(Venue):
+    """Proxy of ``Venue`` whose default manager hides venues not yet opened.
+
+    With ``LendingDesk`` beside it, the ``Venue`` table has both kinds of
+    subclass: a proxy reading the same table and a concrete child with a table
+    of its own.
+    """
+
+    objects = OpenVenueManager()
+
+    class Meta:
+        proxy = True
+
+
+class RepairTicket(models.Model):
+    """A maintenance ticket raised against a venue.
+
+    ``venue`` declares no ``related_name``, so a venue reaches its tickets
+    through the default ``repairticket_set`` accessor; the model declares no
+    ``Meta.ordering``, so that accessor carries no default order.
+    """
+
+    code = models.TextField(unique=True)
+    venue = models.ForeignKey(
+        Venue,
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.code
+
+
+class VenueBadge(models.Model):
+    """The accessibility badge a venue displays, one per venue.
+
+    ``venue`` declares no ``related_name``, so the reverse accessor on a venue
+    is the default ``venuebadge``.
+    """
+
+    code = models.TextField(unique=True)
+    venue = models.OneToOneField(
+        Venue,
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.code
+
+
+class VenueSponsor(models.Model):
+    """A sponsor funding one or more venues.
+
+    ``venues`` declares no ``related_name``, so a venue reaches its sponsors
+    through the default ``venuesponsor_set`` accessor.
+    """
+
+    name = models.TextField(unique=True)
+    venues = models.ManyToManyField(
+        Venue,
+        blank=True,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class VisibleBranchManager(models.Manager):
+    """Default manager hiding branches that have no city on record."""
+
+    def get_queryset(self):
+        return super().get_queryset().exclude(city="")
+
+
+class VisibleBranch(Branch):
+    """Proxy of ``Branch`` whose default manager is its visibility policy.
+
+    ``BranchSignage.branch`` is declared to this proxy. Django's forward
+    descriptor loads the related row through ``_base_manager``, which does not
+    apply this filter, so a signage row still reaches a city-less branch
+    through ``signage.branch``; only a visibility cascade, which composes each
+    edge target from its ``_default_manager``, hides that signage row.
+    """
+
+    objects = VisibleBranchManager()
+
+    class Meta:
+        proxy = True
+        verbose_name = "Visible branch"
+        verbose_name_plural = "Visible branches"
+
+
+class BranchSignage(models.Model):
+    """A sign mounted at a branch, declared against the filtering ``VisibleBranch`` proxy."""
+
+    code = models.TextField(unique=True)
+    branch = models.ForeignKey(
+        VisibleBranch,
+        related_name="signage",
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.code
+
+
+class CirculationDesk(models.Model):
+    """The circulation counter of a branch, carrying every relation kind on one model.
+
+    A forward key (``branch``), a forward one-to-one (``shelf``), a
+    many-to-many (``genres``), a generic foreign key (``content_type`` /
+    ``object_id`` / ``content_object``, the item currently on hold at the
+    counter), a generic relation (``tags``), and two reverse relations with
+    explicit names (``children`` from ``DeskShift``, ``profile`` from
+    ``DeskProfile``). Only ``branch``, ``shelf`` and ``content_type`` are
+    single-column forward relations; every other kind is reached through a join
+    table, a pair of columns, or the other model's column.
+    """
+
+    name = models.TextField(unique=True)
+    branch = models.ForeignKey(
+        Branch,
+        related_name="circulation_desks",
+        on_delete=models.CASCADE,
+    )
+    shelf = models.OneToOneField(
+        Shelf,
+        related_name="circulation_desk",
+        on_delete=models.CASCADE,
+    )
+    genres = models.ManyToManyField(
+        Genre,
+        related_name="circulation_desks",
+        blank=True,
+    )
+    content_type = models.ForeignKey(
+        ContentType,
+        related_name="library_circulation_desks",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+    object_id = models.PositiveIntegerField(null=True, blank=True)
+    content_object = GenericForeignKey("content_type", "object_id")
+    tags = GenericRelation(
+        TaggedItem,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class DeskShift(models.Model):
+    """A staffed shift at a circulation desk, reached from the desk as ``children``."""
+
+    name = models.TextField()
+    desk = models.ForeignKey(
+        CirculationDesk,
+        related_name="children",
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.name
+
+
+class DeskProfile(models.Model):
+    """A circulation desk's service profile, reached from the desk as ``profile``."""
+
+    code = models.TextField(unique=True)
+    desk = models.OneToOneField(
+        CirculationDesk,
+        related_name="profile",
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.code

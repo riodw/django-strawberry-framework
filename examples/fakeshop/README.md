@@ -763,14 +763,16 @@ curl -s -b /tmp/fakeshop.jar -c /tmp/fakeshop.jar -H "X-CSRFToken: $TOKEN" \
   -d '{"query":"mutation { login(username: \"YOUR_SUPERUSER\", password: \"YOUR_PASSWORD\") { errors { field messages } } }"}'
 TOKEN=$(awk '/csrftoken/ {print $7}' /tmp/fakeshop.jar)
 curl -b /tmp/fakeshop.jar -H "X-CSRFToken: $TOKEN" http://127.0.0.1:8000/graphql/ \
-  -F operations='{"query":"mutation Create($data: MediaSpecimenInput!) { createMediaSpecimen(data: $data) { result { label attachment { name size url } image { name width height } } errors { field messages } } }","variables":{"data":{"label":"first","attachment":null,"image":null}}}' \
+  -F operations='{"query":"mutation Create($data: MediaSpecimenInput!) { createMediaSpecimen(data: $data) { node { label attachment { name size url } image { name width height } } errors { field messages } } }","variables":{"data":{"label":"first","attachment":null,"image":null}}}' \
   -F map='{"0":["variables.data.attachment"],"1":["variables.data.image"]}' \
   -F 0=@notes.txt \
   -F 1=@photo.png
 ```
 
-`MediaSpecimenType` is not a Relay node, so the payload carries the row in `result`
-rather than `node`. The `url` in the response is a public URL; the server's
+`MediaSpecimenType` is a Relay node, so the payload carries the row in `node`, and
+`updateMediaSpecimen(id:, data:)` takes that GlobalID: leaving `attachment` out keeps the
+stored file, a new upload replaces it, and an explicit `null` on the required column is a
+field error. The `url` in the response is a public URL; the server's
 filesystem path is never on the wire. The package bounds upload bytes through the
 [execution resource policy][glossary-execution-resource-policy]; scanning and content
 rules belong to the deployment ([uploads in the production profile][docs-readme-uploads]).
@@ -929,7 +931,14 @@ slice ships the demonstration is one uncomment away.
   resolve rather than assume: a relation primary key, a text primary key not named
   `id`, `<word>_<digit>` field and relation names, a `to_field` foreign key, a Relay
   id built off the primary key, explicitly named fields, and a child model whose
-  default manager cannot be windowed.
+  default manager cannot be windowed. The venue surface beside it carries the
+  model shapes a visibility cascade and a write input have to read correctly: a
+  three-level multi-table inheritance chain (`Venue` -> `LendingDesk` ->
+  `SelfServeDesk`), reverse FK / OneToOne / M2M relations declared without
+  `related_name`, a nullable foreign-key cycle, two proxies whose default
+  managers filter (`OpenVenue`, `VisibleBranch`), one model carrying every
+  relation kind (`CirculationDesk`), and a non-editable M2M
+  (`Book.archive_genres`).
 - **`apps.products`**: the canonical consumer app and the subject of
   [`TODAY.md`][today]. Four Relay connections over `Category` / `Item` / `Property` /
   `Entry`, the full write surface in all three flavors, cascade visibility, plus the

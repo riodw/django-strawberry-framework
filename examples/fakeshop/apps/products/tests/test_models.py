@@ -6,7 +6,7 @@ hand-rolls Category/Item/Property/Entry instances.
 
 import pytest
 
-from apps.products.models import Category, Entry, Item, Property
+from apps.products.models import Category, Entry, Item, ItemHold, Property
 from apps.products.services import seed_data
 
 
@@ -36,3 +36,10 @@ def test_entry_str_returns_value():
     seed_data(1)
     entry = Entry.objects.first()
     assert str(entry) == entry.value
+
+
+@pytest.mark.django_db
+def test_item_hold_str_returns_reason():
+    seed_data(1)
+    hold = ItemHold.objects.create(reason="reserved", item=Item.objects.first())
+    assert str(hold) == "reserved"

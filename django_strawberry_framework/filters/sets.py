@@ -3357,7 +3357,7 @@ class FilterSet(
         *,
         run_permissions: bool = True,
     ) -> models.QuerySet:
-        """Run the perm check + form validate + ``.qs`` read trailer.
+        """Run the perm check + form validate + lazy ``.qs`` read trailer.
 
         Sync ``apply_sync`` calls this directly; async ``apply_async``
         wraps the single call in ``run_in_one_sync_boundary`` (the neutral
@@ -3396,7 +3396,7 @@ class FilterSet(
         querysets, resolve the request, apply related constraints
         BEFORE constructing the filterset (so the constraints land in
         `self.queryset` and propagate through to `.qs`), then permission
-        check, form validate, and return the materialized queryset.
+        check, form validate, and return the lazy queryset.
 
         ``run_permissions`` defaults to ``True`` for every consumer entry
         point; the related-visibility derivation passes ``False`` so a nested

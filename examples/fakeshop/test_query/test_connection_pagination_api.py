@@ -42,16 +42,40 @@ connection field this module builds over the same shipped ``GenreType`` with an
 ``connection.py::_pipeline_async``; it is served over a ``/graphql-async/``
 mount this module owns (``graphql_client.py`` is sync-only, so those rows take
 the documented ``AsyncTestClient`` + ``django_db(transaction=True)``
-exemption). The async rows cover an evaluated, sliced, combined, wrong-model,
-re-routed and non-awaitable return plus the same pass-through control; each
-asserts the typed rejection, that no raw exception text reaches the payload,
-and - through a sentinel the override records before it returns - that
-``apply_async`` was actually entered.
+exemption). The async rows mirror the sync matrix shape for shape - evaluated,
+materialized-list, none, projection, wrong-model, sliced, combined,
+routing-rewritten-in-place and malformed-deferred-filter - with one
+substitution the pipelines force: the sync-only ``awaitable-in-sync`` row has
+two async twins, ``non-awaitable`` for a public method that never returned an
+awaitable and ``residual-awaitable`` for one that awaited to a second
+awaitable. Each row asserts the typed rejection, that no raw exception text
+reaches the payload, and - through a sentinel the override records before it
+returns - that ``apply_async`` was actually entered; the pass-through control
+is the same. The residual row also reads the disposal, since the refused
+awaitable must be RELEASED rather than awaited: its coroutine is closed and the
+sentinel its body would have appended is absent, so no second await happened.
+
+The same async matrix is mirrored for the FILTER arm, row for row. Both public
+sidecar methods answer to one post-sidecar seal, so ``GenreFilter.apply_async``
+is driven over the same ``/graphql-async/`` mount with a request carrying a
+real ``filter:`` argument - the argument is what makes the pipeline invoke the
+method at all - through the same defect shapes, the same sentinel, the same
+disposal read and the same ``super()`` pass-through control, which asserts the
+filtered page. The filter step runs before ordering, the optimizer plan and the
+Relay window, so an unsealed return would reach all three.
+
+The async mount serves whichever schema the test in flight published in the
+module's holder: the acceptance harness reloads every contributing app schema
+around each test, so the local field is built inside the request helper, after
+that reload, and the slot is cleared when the request ends.
 """
+
+import inspect
 
 import pytest
 import strawberry
 from apps.library import models as library_models
+from apps.library.filters_genre import GenreFilter
 from apps.library.orders_genre import GenreOrder
 from apps.products.services import seed_data
 from django.conf import settings
@@ -380,6 +404,23 @@ async def _awaitable_queryset(queryset):
     return queryset
 
 
+def _seed_genres(*names):
+    """Create one ``Genre`` per name, in the order given.
+
+    The pass-through controls all need the same unordered spread of rows so the
+    served page proves an ordering rather than an insertion order; the setup
+    lives here so each control body carries one case.
+    """
+    for name in names:
+        library_models.Genre.objects.create(name=name)
+
+
+async def _aseed_genres(*names):
+    """Async colour of :func:`_seed_genres`, for the rows served over ``/graphql-async/``."""
+    for name in names:
+        await library_models.Genre.objects.acreate(name=name)
+
+
 def _override_evaluated(
     cls,
     order_input,
@@ -390,17 +431,26 @@ def _override_evaluated(
     return queryset
 
 
+def _untrusted_genre_queryset():
+    """Build the deferred-filter state Django never writes, for the untrusted rows.
+
+    Both the sync and the async arms plant the same shape, so the state lives
+    in one place and each override simply returns it.
+    """
+    candidate = _DeferredFilterQuerySet(model=library_models.Genre)
+    # ``negate`` decides whether the predicate is inverted and is truth-tested to
+    # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
+    candidate._deferred_filter = (1, (), {"name": "A"})
+    return candidate
+
+
 def _override_untrusted(
     cls,
     order_input,
     queryset,
     info,
 ):
-    candidate = _DeferredFilterQuerySet(model=library_models.Genre)
-    # ``negate`` decides whether the predicate is inverted and is truth-tested to
-    # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    candidate._deferred_filter = (1, (), {"name": "A"})
-    return candidate
+    return _untrusted_genre_queryset()
 
 
 def _override_in_place_routing(
@@ -557,8 +607,7 @@ def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(monk
     The seal's positive control on the shipped connection: it rejects malformed
     results without rejecting an ``OrderSet`` that simply delegates.
     """
-    for name in ("C", "A", "B"):
-        library_models.Genre.objects.create(name=name)
+    _seed_genres("C", "A", "B")
     monkeypatch.setattr(GenreOrder, "apply_sync", classmethod(_override_passthrough))
 
     data = assert_graphql_success(_GENRE_CONNECTION_ORDER_QUERY)
@@ -567,7 +616,15 @@ def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(monk
     assert names == ["A", "B", "C"]
 
 
-_ASYNC_SCHEMA: dict = {"schema": None}
+#: The schema the async mount serves for the request in flight, resolved by the
+#: view at request time. A module-level one-shot cache cannot be used here: the
+#: acceptance harness reloads every contributing app schema around each test
+#: (``examples/fakeshop/test_query/conftest.py``,
+#: ``examples/fakeshop/schema_reload.py``), so a schema built during an earlier
+#: test holds type objects no longer registered. Each test therefore builds the
+#: schema after that reload, publishes it here for the duration of its request,
+#: and clears the slot in a ``finally``.
+_ASYNC_CURRENT: dict = {"schema": None}
 
 
 async def _async_genres_resolver(root, info):
@@ -576,7 +633,7 @@ async def _async_genres_resolver(root, info):
 
 
 def _async_genre_connection_schema():
-    """Build (once) a schema whose genre connection runs the ASYNC pipeline.
+    """Build a schema whose genre connection runs the ASYNC pipeline.
 
     ``connection.py::_build_connection_resolver`` commits sync-vs-async dispatch
     per construction: the async branch is selected only when the field is given
@@ -584,25 +641,28 @@ def _async_genre_connection_schema():
     ``allLibraryGenresConnection`` declares none, so its wrapped resolver is the
     sync one; this field supplies an ``async def`` resolver over the same
     ``GenreType`` and therefore carries the async half of the seal.
+
+    Built per request rather than cached, so the field is composed from the
+    types the current reload registered.
     """
-    if _ASYNC_SCHEMA["schema"] is None:
-        # The composed project schema is imported first so the sidecar input
-        # classes this field's synthesized signature forward-references have
-        # been materialized by ``finalize_django_types``.
-        import config.schema  # noqa: F401
-        from apps.library.schema import GenreType
+    # The composed project schema is imported first so the sidecar input
+    # classes this field's synthesized signature forward-references have
+    # been materialized by ``finalize_django_types``.
+    import config.schema  # noqa: F401
+    from apps.library.schema import GenreType
 
-        @strawberry.type
-        class Query:
-            genres = DjangoConnectionField(GenreType, resolver=_async_genres_resolver)
+    @strawberry.type
+    class Query:
+        genres = DjangoConnectionField(GenreType, resolver=_async_genres_resolver)
 
-        _ASYNC_SCHEMA["schema"] = DjangoSchema(query=Query, config=strawberry_config())
-    return _ASYNC_SCHEMA["schema"]
+    return DjangoSchema(query=Query, config=strawberry_config())
 
 
 async def _async_genre_graphql_view(request):
     """The test-local async-resolver schema on an async view."""
-    return await AsyncDjangoGraphQLView.as_view(schema=_async_genre_connection_schema())(request)
+    schema = _ASYNC_CURRENT["schema"]
+    assert schema is not None
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
 
 
 urlpatterns = [
@@ -615,7 +675,11 @@ async def _post_async_genres(query: str) -> dict:
 
     ``graphql_client.py`` is sync-only, so the async rows take the documented
     exemption and drive ``AsyncTestClient`` against a mount this module owns.
+    The schema is built here, inside the test, so it is composed from the types
+    the autouse reload just registered, and published through ``_ASYNC_CURRENT``
+    for the view to read.
     """
+    _ASYNC_CURRENT["schema"] = _async_genre_connection_schema()
     try:
         with override_settings(ROOT_URLCONF=__name__, **_ERROR_POLICY_PASS_THROUGH):
             clear_url_caches()
@@ -625,6 +689,7 @@ async def _post_async_genres(query: str) -> dict:
                 url="/graphql-async/",
             )
     finally:
+        _ASYNC_CURRENT["schema"] = None
         clear_url_caches()
     assert result.response.status_code == 200
     return result.response.json()
@@ -633,6 +698,22 @@ async def _post_async_genres(query: str) -> dict:
 _GENRE_ASYNC_CONNECTION_ORDER_QUERY = (
     "{ genres(orderBy: [{ name: ASC }]) { edges { node { name } } } }"
 )
+
+
+def _assert_residual_awaitable_disposed(holder, body_ran):
+    """Assert the refused second awaitable was closed, never awaited.
+
+    ``utils/querysets.py::_dispose_sync_awaitable`` closes a never-started
+    coroutine rather than awaiting it, so the seal cannot be walked down an
+    unbounded chain of awaitables. Both halves are needed: the closed state is
+    what disposal leaves behind, and the absent sentinel is what says the body
+    never ran.
+    """
+    coro = holder["coro"]
+    assert coro is not None
+    assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
+    assert body_ran == []
+
 
 #: Names of the overrides ``apply_async`` actually entered during one request.
 #: An override that is never called cannot append to it, so an empty list after
@@ -698,6 +779,47 @@ async def _override_async_in_place_routing(
     return queryset
 
 
+async def _override_async_materialized_list(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    rows = [genre async for genre in queryset]
+    _ASYNC_APPLY_CALLS.append("materialized-list")
+    return rows
+
+
+async def _override_async_none(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("none")
+    return None
+
+
+async def _override_async_projection(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("projection")
+    return queryset.values("name")
+
+
+async def _override_async_untrusted(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("malformed-deferred-filter")
+    return _untrusted_genre_queryset()
+
+
 def _override_async_non_awaitable(
     cls,
     order_input,
@@ -706,6 +828,32 @@ def _override_async_non_awaitable(
 ):
     _ASYNC_APPLY_CALLS.append("non-awaitable")
     return queryset
+
+
+#: The coroutine object the ORDER arm's residual-awaitable override hands back,
+#: and the sentinel its body appends if anything ever advances it. The seal
+#: disposes of a second awaitable instead of awaiting it, so after the request
+#: the coroutine is closed and the sentinel list is still empty - a never-awaited
+#: coroutine and a closed one are only distinguishable by reading that state.
+_ORDER_RESIDUAL_AWAITABLE: dict = {"coro": None}
+_ORDER_RESIDUAL_BODY_RAN: list = []
+
+
+async def _order_residual_inner():
+    _ORDER_RESIDUAL_BODY_RAN.append("ran")
+
+
+async def _override_async_residual_awaitable(
+    cls,
+    order_input,
+    queryset,
+    info,
+):
+    _ORDER_RESIDUAL_BODY_RAN.clear()
+    coro = _order_residual_inner()
+    _ORDER_RESIDUAL_AWAITABLE["coro"] = coro
+    _ASYNC_APPLY_CALLS.append("residual-awaitable")
+    return coro
 
 
 async def _override_async_passthrough(
@@ -726,50 +874,98 @@ async def _override_async_passthrough(
 #: ``connection.py::_pipeline_async`` on the test-local connection field whose
 #: ``async def`` consumer resolver is what selects that branch. Every override
 #: records itself in ``_ASYNC_APPLY_CALLS`` so each row can prove the seal it
-#: names was entered rather than bypassed.
+#: names was entered rather than bypassed. The fifth member is the residual
+#: holder pair a row that returns a SECOND awaitable owns, and ``None`` for
+#: every row that returns a value directly.
 _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS = (
     (
         "evaluated",
         _override_async_evaluated,
         _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "evaluated defect",
         (),
+        None,
     ),
     (
-        "sliced",
-        _override_async_sliced,
-        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "sliced defect",
+        "materialized-list",
+        _override_async_materialized_list,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "type defect",
         (),
+        None,
     ),
     (
-        "combined",
-        _override_async_combined,
-        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "combined defect",
+        "none",
+        _override_async_none,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "type defect",
         (),
+        None,
+    ),
+    (
+        "projection",
+        _override_async_projection,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "projection defect",
+        (),
+        None,
     ),
     (
         "wrong-model",
         _override_async_wrong_model,
         _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "table defect",
         (),
+        None,
+    ),
+    (
+        "sliced",
+        _override_async_sliced,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "sliced defect",
+        (),
+        None,
+    ),
+    (
+        "combined",
+        _override_async_combined,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "combined defect",
+        (),
+        None,
     ),
     (
         "routing-rewritten-in-place",
         _override_async_in_place_routing,
         "GenreOrder.apply_async changed database routing intent",
         ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
+        None,
+    ),
+    (
+        "malformed-deferred-filter",
+        _override_async_untrusted,
+        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "untrusted defect",
+        ("deferred filter negate is a int",),
+        None,
     ),
     (
         "non-awaitable",
         _override_async_non_awaitable,
         "GenreOrder.apply_async returned a non-awaitable value",
         ("expected an awaitable coroutine or Future.",),
+        None,
+    ),
+    (
+        "residual-awaitable",
+        _override_async_residual_awaitable,
+        "GenreOrder.apply_async returned a residual awaitable value",
+        ("expected a QuerySet.",),
+        (_ORDER_RESIDUAL_AWAITABLE, _ORDER_RESIDUAL_BODY_RAN),
     ),
 )
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
-    ("override", "message_start", "substrings"),
+    (
+        "override",
+        "message_start",
+        "substrings",
+        "residual",
+    ),
     [row[1:] for row in _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS],
     ids=[row[0] for row in _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS],
 )
@@ -778,6 +974,7 @@ async def test_connection_async_branches_a_malformed_apply_async_result_names_it
     override,
     message_start,
     substrings,
+    residual,
 ):
     """Each malformed ``apply_async`` result names its exact defect over ``/graphql-async/``.
 
@@ -787,7 +984,9 @@ async def test_connection_async_branches_a_malformed_apply_async_result_names_it
     back. The field carries an ``async def`` consumer resolver, which is what
     puts the request on that pipeline. Each row asserts the typed rejection,
     that the override was entered, and that no raw exception text reaches the
-    payload.
+    payload. The residual row additionally reads the disposal: the refused
+    second awaitable is CLOSED and its body never ran, so the seal released it
+    instead of awaiting an unbounded chain.
     """
     await library_models.Genre.objects.acreate(name="A")
     monkeypatch.setattr(GenreOrder, "apply_async", classmethod(override))
@@ -806,6 +1005,8 @@ async def test_connection_async_branches_a_malformed_apply_async_result_names_it
     assert not any(
         token in message for token in ("ValueError", "TypeError", "SynchronousOnlyOperation")
     ), message
+    if residual is not None:
+        _assert_residual_awaitable_disposed(*residual)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -819,8 +1020,7 @@ async def test_connection_async_healthy_apply_async_override_still_returns_order
     delegates, and the sentinel shows the accepted result came through
     ``apply_async``.
     """
-    for name in ("C", "A", "B"):
-        await library_models.Genre.objects.acreate(name=name)
+    await _aseed_genres("C", "A", "B")
     monkeypatch.setattr(GenreOrder, "apply_async", classmethod(_override_async_passthrough))
 
     _ASYNC_APPLY_CALLS.clear()
@@ -831,3 +1031,314 @@ async def test_connection_async_healthy_apply_async_override_still_returns_order
     assert "errors" not in payload, payload
     names = [edge["node"]["name"] for edge in payload["data"]["genres"]["edges"]]
     assert names == ["A", "B", "C"]
+
+
+_GENRE_ASYNC_CONNECTION_FILTER_QUERY = (
+    '{ genres(filter: {name: {iContains: "b"}}) { edges { node { name } } } }'
+)
+
+_GENRE_FILTER_ASYNC_SHAPE_PREFIX = (
+    "GenreFilter.apply_async must return an unevaluated, unsliced, uncombined "
+    "QuerySet of Genre rows; got "
+)
+
+
+async def _filter_override_async_evaluated(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    [genre async for genre in queryset]
+    _ASYNC_APPLY_CALLS.append("filter-evaluated")
+    return queryset
+
+
+async def _filter_override_async_sliced(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-sliced")
+    return queryset.order_by("name")[:1]
+
+
+async def _filter_override_async_combined(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-combined")
+    return queryset.filter(name="A").union(queryset.filter(name="B"))
+
+
+async def _filter_override_async_wrong_model(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-wrong-model")
+    return library_models.Book.objects.all()
+
+
+async def _filter_override_async_in_place_routing(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    queryset._hints = {"tenant": 2}
+    _ASYNC_APPLY_CALLS.append("filter-routing-rewritten-in-place")
+    return queryset
+
+
+async def _filter_override_async_materialized_list(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    rows = [genre async for genre in queryset]
+    _ASYNC_APPLY_CALLS.append("filter-materialized-list")
+    return rows
+
+
+async def _filter_override_async_none(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-none")
+    return None
+
+
+async def _filter_override_async_projection(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-projection")
+    return queryset.values("name")
+
+
+async def _filter_override_async_untrusted(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-malformed-deferred-filter")
+    return _untrusted_genre_queryset()
+
+
+def _filter_override_async_non_awaitable(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-non-awaitable")
+    return queryset
+
+
+#: The FILTER arm's own residual holder pair; see ``_ORDER_RESIDUAL_AWAITABLE``.
+#: The arms keep separate holders so neither row can read the other's disposal.
+_FILTER_RESIDUAL_AWAITABLE: dict = {"coro": None}
+_FILTER_RESIDUAL_BODY_RAN: list = []
+
+
+async def _filter_residual_inner():
+    _FILTER_RESIDUAL_BODY_RAN.append("ran")
+
+
+async def _filter_override_async_residual_awaitable(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _FILTER_RESIDUAL_BODY_RAN.clear()
+    coro = _filter_residual_inner()
+    _FILTER_RESIDUAL_AWAITABLE["coro"] = coro
+    _ASYNC_APPLY_CALLS.append("filter-residual-awaitable")
+    return coro
+
+
+async def _filter_override_async_passthrough(
+    cls,
+    filter_input,
+    queryset,
+    info,
+):
+    _ASYNC_APPLY_CALLS.append("filter-passthrough")
+    return await super(GenreFilter, cls).apply_async(filter_input, queryset, info)
+
+
+#: Defect rows the post-sidecar seal names on the ASYNC connection pipeline for
+#: the FILTER arm: ``(id, override, expected message start, required
+#: substrings)``. The filter step runs before ordering, the optimizer plan and
+#: the Relay window, so an unsealed return would hand every one of those a
+#: widened, re-routed, sliced or already-evaluated queryset. Each request
+#: carries a real ``filter:`` argument, which is what makes the pipeline invoke
+#: ``GenreFilter.apply_async`` at all, and every override records itself in
+#: ``_ASYNC_APPLY_CALLS`` so a row proves the seal it names was entered. The
+#: fifth member is the residual holder pair the second-awaitable row owns, and
+#: ``None`` for every row that returns a value directly.
+_CONNECTION_MALFORMED_FILTER_APPLY_ASYNC_ROWS = (
+    (
+        "evaluated",
+        _filter_override_async_evaluated,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "evaluated defect",
+        (),
+        None,
+    ),
+    (
+        "materialized-list",
+        _filter_override_async_materialized_list,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "type defect",
+        (),
+        None,
+    ),
+    (
+        "none",
+        _filter_override_async_none,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "type defect",
+        (),
+        None,
+    ),
+    (
+        "projection",
+        _filter_override_async_projection,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "projection defect",
+        (),
+        None,
+    ),
+    (
+        "wrong-model",
+        _filter_override_async_wrong_model,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "table defect",
+        (),
+        None,
+    ),
+    (
+        "sliced",
+        _filter_override_async_sliced,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "sliced defect",
+        (),
+        None,
+    ),
+    (
+        "combined",
+        _filter_override_async_combined,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "combined defect",
+        (),
+        None,
+    ),
+    (
+        "routing-rewritten-in-place",
+        _filter_override_async_in_place_routing,
+        "GenreFilter.apply_async changed database routing intent",
+        ("expected db=None, hints={}", "got db=None, hints={'tenant': 2}"),
+        None,
+    ),
+    (
+        "malformed-deferred-filter",
+        _filter_override_async_untrusted,
+        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "untrusted defect",
+        ("deferred filter negate is a int",),
+        None,
+    ),
+    (
+        "non-awaitable",
+        _filter_override_async_non_awaitable,
+        "GenreFilter.apply_async returned a non-awaitable value",
+        ("expected an awaitable coroutine or Future.",),
+        None,
+    ),
+    (
+        "residual-awaitable",
+        _filter_override_async_residual_awaitable,
+        "GenreFilter.apply_async returned a residual awaitable value",
+        ("expected a QuerySet.",),
+        (_FILTER_RESIDUAL_AWAITABLE, _FILTER_RESIDUAL_BODY_RAN),
+    ),
+)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    (
+        "override",
+        "message_start",
+        "substrings",
+        "residual",
+    ),
+    [row[1:] for row in _CONNECTION_MALFORMED_FILTER_APPLY_ASYNC_ROWS],
+    ids=[row[0] for row in _CONNECTION_MALFORMED_FILTER_APPLY_ASYNC_ROWS],
+)
+async def test_connection_async_branches_a_malformed_filter_apply_async_result_names_its_defect(
+    monkeypatch,
+    override,
+    message_start,
+    substrings,
+    residual,
+):
+    """Each malformed ``FilterSet.apply_async`` result names its defect over ``/graphql-async/``.
+
+    The filter arm of the async pipeline awaits the SAME post-sidecar seal the
+    ordering arm does (``utils/querysets.py::apply_filterset_async``), so every
+    defect shape that matrix pins has to arrive here too. Each row asserts the
+    typed rejection, that the override was entered, and that no raw exception
+    text reaches the payload. The residual row additionally reads the disposal:
+    the refused second awaitable is CLOSED and its body never ran.
+    """
+    await library_models.Genre.objects.acreate(name="B")
+    monkeypatch.setattr(GenreFilter, "apply_async", classmethod(override))
+
+    _ASYNC_APPLY_CALLS.clear()
+
+    payload = await _post_async_genres(_GENRE_ASYNC_CONNECTION_FILTER_QUERY)
+
+    assert _ASYNC_APPLY_CALLS, payload
+    assert payload["data"] is None, payload
+    message = payload["errors"][0]["message"]
+    assert message.startswith(message_start), message
+    for substring in substrings:
+        assert substring in message, message
+    assert "Traceback" not in message, message
+    assert not any(
+        token in message for token in ("ValueError", "TypeError", "SynchronousOnlyOperation")
+    ), message
+    if residual is not None:
+        _assert_residual_awaitable_disposed(*residual)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_connection_async_healthy_filter_apply_async_override_still_filters(monkeypatch):
+    """A ``super()`` pass-through ``apply_async`` is ACCEPTED and the filtered page is served.
+
+    The filter seal's positive control on the async-resolver connection: it
+    rejects malformed results without rejecting a ``FilterSet`` that simply
+    delegates, and the sentinel shows the served page came through
+    ``apply_async``.
+    """
+    await _aseed_genres("Alpha", "Bravo", "Charlie")
+    monkeypatch.setattr(
+        GenreFilter,
+        "apply_async",
+        classmethod(_filter_override_async_passthrough),
+    )
+
+    _ASYNC_APPLY_CALLS.clear()
+
+    payload = await _post_async_genres(_GENRE_ASYNC_CONNECTION_FILTER_QUERY)
+
+    assert _ASYNC_APPLY_CALLS == ["filter-passthrough"], payload
+    assert "errors" not in payload, payload
+    names = [edge["node"]["name"] for edge in payload["data"]["genres"]["edges"]]
+    assert names == ["Bravo"]

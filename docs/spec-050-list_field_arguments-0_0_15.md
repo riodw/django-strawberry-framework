@@ -3,11 +3,12 @@
 Target card: [`DONE-050-0.0.15`][kanban]
 Status: **Shipped — candidate tree.** This tree is the candidate implementation commit of
 Decision 22: it carries the production and test changes, the shipped docs, the board's DONE
-transition, this status, and every generated output. What follows runs against this exact tree
-and is recorded nowhere else - the default, sharded and supported-floor suites with the
-structural, link, citation and tracked-path checks, one review under Decision 20, and the
-evidence-only follow-up that names this tree as its parent. Card closure is recognized only
-when that follow-up exists; this `Status:` line is the lifecycle source of truth. Following the
+transition, this status, and every generated output. What Decision 22 requires must run against
+this exact tree and be recorded only in the evidence-only follow-up that names it as parent -
+the default, sharded and supported-floor suites with the structural, link, citation and
+tracked-path checks, and one review under Decision 20. None of that has run against this tree,
+so nothing recorded anywhere is yet evidence for it. Card closure is recognized only when that
+follow-up exists; this `Status:` line is the lifecycle source of truth. Following the
 repository's shipped-card convention, the Slice checklist remains the contract ledger rather
 than implementation-history evidence; its boxes are not closure evidence until that sequence
 completes.

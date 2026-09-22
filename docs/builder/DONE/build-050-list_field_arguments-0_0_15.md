@@ -3,7 +3,9 @@
 Spec: [`docs/spec-050-list_field_arguments-0_0_15.md`][spec-050]
 Rationale: [`docs/spec-050-list_field_arguments-0_0_15-rationale.md`][spec-050-rationale]
 Target release: `0.0.15`
-Status: Candidate. This tree is the candidate implementation commit of spec Decision 22: the
+Status: Closed. The gate, the review and the evidence-only follow-up are recorded under
+`## Closing record`; this paragraph and `## Final gate record` keep the candidate's own text.
+The candidate tree is the implementation commit of spec Decision 22: the
 production and test changes, the shipped docs, the board's DONE transition, the spec status and
 every generated output are in it, and it is the tree every gate result and review conclusion
 must name. The candidate is no longer a single commit: it is the commit carrying this
@@ -34,10 +36,9 @@ chain also carries another session's concurrent work on this checkout - the opti
 tier's app-registry isolation and its relation planning over real board and library models -
 named by content under the same convention, although those commits are ancestors this record
 could name by id. It is present in whatever tree gets gated, it is not this card's deliverable,
-and it is not what a gate result certifies about spec-050. No
-gate, review or evidence-only follow-up has run against that tree yet, so no result recorded
-anywhere is evidence for it, and the card is not closed. What the gate covers, beyond the five
-slices:
+and it is not what a gate result certifies about spec-050. Its gate, review and
+evidence-only follow-up are recorded under `## Closing record`. What the gate covers, beyond
+the five slices:
 
 - the policy-authority remediation - the object every bound is read from is no longer
   reachable from any consumer-visible name, a policy subclass is canonicalized at schema
@@ -184,13 +185,13 @@ of an approved function is for the SQL it substitutes ([`spec-050`][spec-050] De
         wording, and `CHANGELOG.md` to card 053's joint cut; `pyproject.toml` and `uv.lock`
         have no duplicate root-package version to bump.
 - [x] **Cross-slice integration pass (Worker 1)**
-- [ ] **Final exact-commit gate** — the candidate implementation commit is this one; the
-      default, sharded, supported-floor, structural and documentation gates still owe a run
-      against it, and their figures belong in the evidence-only follow-up.
+- [x] **Final exact-commit gate** — run against `2c66416e`; the figures are under
+      `## Closing record`.
 
 ## Final gate record
 
-No gate is recorded. The candidate tree now exists - this commit, standing on the default-policy
+The gate is recorded under `## Closing record`. The candidate tree now exists - this commit,
+standing on the default-policy
 canonicalization with its exact-type `ErrorPolicy` strings, the connection `OrderSet` seal, the
 plain-list-relation sliced-child refusal, the card-053 `FilterSet` seal row, the list-field
 async adapter test that no longer commits its seed rows, the `FilterSet.apply_*` return
@@ -436,19 +437,153 @@ on one identified tree, then one review of that tree under Decision 20, then the
       `docs/builder/bld-050-close-trust_docs.md`.
 - [x] **Spec reconciliation and final verification (Worker 1)** - five homes agree; rationale
       change record; both cohort artifacts are superseded historical records.
-- [ ] **Gate on one candidate implementation commit** - this commit; default suite at
+- [x] **Gate on one candidate implementation commit** - `2c66416e`; default suite at
       `fail_under = 100`, sharded suite, the twenty-seven-path floor scope, hooks, citations,
       tracked-path constants, `manage.py check`, and `makemigrations --check --dry-run`.
-- [ ] **One review of that exact candidate tree under Decision 20** - record the review conclusion
+- [x] **One review of that exact candidate tree under Decision 20** - record the review conclusion
       only after the candidate gate is complete; a finding meeting the three conditions re-loops.
-- [ ] **Evidence-only follow-up and card** - the candidate carries card 050's final DONE state in
+- [x] **Evidence-only follow-up and card** - the candidate carries card 050's final DONE state in
       the board DB and generated exports; the follow-up changes this build record alone, names
       its candidate parent, and only then recognizes closure.
 
 ## Closing record
 
-No closing gate table exists yet. The close-cycle artifacts remain available as superseded history;
-they are not evidence for the candidate or its evidence-only follow-up.
+Closed 2026-09-22. This commit is the evidence-only follow-up: it changes this build record
+alone, and its parent `2c66416e` is the gated candidate. The structural checks run on this
+commit (last subsection) do not make it the full-suite tree; every suite figure below belongs to
+`2c66416e`. The close-cycle artifacts remain superseded history and are not evidence.
+
+### Gated candidate
+
+- **Gated commit** `2c66416e`, tree `5ce4c799`.
+- **Why it is not the tree the record above describes.** That text was written at `39811dab`.
+  Two commits landed on it before the gate. `f306459d` is another session's collection guard in
+  `tests/conftest.py` (`pytest_collection_modifyitems`) that refuses an async test marked
+  `django_db` without `transaction=True`, with the markers it moved. It missed one, so at
+  `f306459d` the guard raises `UsageError` at collection; under xdist that is a worker crash,
+  and the default and sharded suites both exit 3 before any test runs. `2c66416e` moves that
+  last marker
+  (`examples/fakeshop/apps/library/tests/test_generic_connection.py::test_generic_connection_planning_does_no_sync_orm_work_under_async`,
+  which writes no rows). It is the first tree on `main` that answers the gate. Neither commit is
+  this card's deliverable.
+- **What changed since the last reviewed tree.** Between `e5914bc4` and `2c66416e` nothing
+  under `django_strawberry_framework/`, `examples/fakeshop/apps/` outside that one test module,
+  `README.md`, `docs/README.md`, the spec or the rationale changed. The delta is 37 async
+  tests in six test modules moved from `django_db` to `django_db(transaction=True)`, with no
+  other line of those modules changed; the collection hook; this record; and a maintainer
+  review-input document under `docs/` that `39811dab` rewrote.
+
+Parent chain from the first candidate tree to the gated commit, oldest first:
+
+1. `737b971b` fix(list_field): read an ordering term by the form it resolves into
+2. `d6bc9f8f` test: restore the claims the live re-tiering dropped and harden their controls
+3. `1c45f84b` test(relay): move the model-label GlobalID rows live and spell the floor's UTC
+4. `08801efb` Implement code changes to enhance functionality and improve performance
+5. `bfaee91d` Fix sequence-dependent GlobalID filter test
+6. `1dd7d147` test(kanban): move the mutation wiring rows to the live tier
+7. `a01a2ab8` test: move the request-observable rows live and pin the cost each one claims
+8. `69a25369` docs: clear a superseded working note
+9. `9350eb8d` Canonicalize the default policy path and close ErrorPolicy to str subclasses
+10. `fee87ac4` fix(connection): seal the OrderSet return at the connection field
+11. `44712901` fix(optimizer): refuse a sliced child on a plain list relation with the typed defect
+12. `357e5487` docs(board): card 053 owes the FilterSet return seal at both fields
+13. `1f68871a` test(list_field): stop the async adapter test committing its seed rows
+14. `ec0d21de` Reconcile the spec-050 records with the connection OrderSet seal and prove it live async
+15. `fa6d48f8` docs(spec-034): point the strictness pin at its live row
+16. `9fb725c8` test(connection): carry the untrusted row and rewrite routing in place at the package seal
+17. `c87f4f98` fix(connection): seal the FilterSet return with the same post-sidecar seal as OrderSet
+18. `3c53842f` Drive the async connection OrderSet seal through an async consumer resolver
+19. `24e6b4d3` test(querysets): prime the retained-type set before the planted-type growth snapshot
+20. `174a109c` test(optimizer): isolate the app registry and plan the ordered window over real board models (concurrent; not this card's deliverable)
+21. `29ddc0a8` test(connection): carry every sync defect shape across both async sidecar arms
+22. `3ad0dfd6` test(optimizer): plan every relation shape over real library models (concurrent; not this card's deliverable)
+23. `5ee86193` test(connection): give the repeated rejection assertion a name
+24. `e5914bc4` test(visibility): cover the re-check on a joined but unplanned forward key
+25. `39811dab` docs(build-050): name every commit the candidate now stands on
+26. `f306459d` test: enforce transaction=True for async tests marked with django_db (concurrent; not this card's deliverable)
+27. `2c66416e` test(library): run the async generic-connection planning test under transaction=True
+
+### Gate rows
+
+Every row ran in a `git clone --no-hardlinks` of the repository detached at `f306459d` with
+the `2c66416e` hunk applied; `git write-tree` there is `5ce4c799`, equal to
+`2c66416e^{tree}`, so the bytes measured are the gated commit's. The clone has its own
+`uv sync` environment, `django_strawberry_framework.__file__` resolves inside it, and the
+shared `.venv` package list is unchanged (`uv pip list | md5` `3949f759` before and after).
+
+| Row | Command (cwd: the clone) | Result |
+|---|---|---|
+| Default suite, `fail_under = 100` | `uv run pytest` | 8516 passed, 42 skipped; 18624 statements, 0 missing, 100.00% |
+| Sharded suite | `FAKESHOP_SHARDED=1 uv run pytest --no-cov` | 8537 passed, 39 skipped |
+| Supported floor, 27 paths | `PYTHONPATH=<clone> <floor venv>/bin/python -m pytest --no-cov <scope>` | 3600 passed, 37 skipped |
+| Format | `uv run ruff format --check .` | 454 files already formatted |
+| Lint | `uv run ruff check .` | All checks passed |
+| Source layout | `scripts/check_trailing_commas.py --check` | exit 0 |
+| Citations | `scripts/check_citations.py --check` | 1164 citations resolve |
+| Kanban anchors | `scripts/check_kanban_anchors.py` | 76 card anchors unique |
+| Tracked-path constants | `scripts/build_kanban_tracked_path_constants.py --check` | exit 0 |
+| Generated docs | `build_kanban_md.py`, `build_kanban_html.py`, `build_glossary_md.py`, `build_tree_md.py`, each `--check` | all up to date |
+| Whitespace | `git diff --check f306459d` | exit 0 |
+| Django system check | `python examples/fakeshop/manage.py check` | no issues |
+| Migrations | `python examples/fakeshop/manage.py makemigrations --check --dry-run` | No changes detected |
+
+The floor environment follows [`docs/builder/BUILD.md`][build-md] `## Floor verification`:
+Python 3.10.19, Django 5.2.16, strawberry-graphql 0.316.0, over the scope in
+`### Floor-verification scope`. Its 37 skips are 34 `Schema.stream landed in
+strawberry-graphql 0.319.0` rows (`tests/extensions/test_operation_state.py` 20,
+`tests/test_schema.py` 9, `tests/test_resource_policy.py` 4,
+`tests/utils/test_execution_mode.py` 1), 2 `psycopg2` import skips in
+`tests/types/test_converters.py`, and the module-level `FAKESHOP_SHARDED=1` skip in
+`examples/fakeshop/test_query/test_multi_db.py`.
+
+Each suite count is the `5ee86193` gate's count plus exactly the three live visibility rows
+`e5914bc4` added (8513, 8534 and 3597 there). The coverage miss that failed that gate,
+`django_strawberry_framework/types/resolvers.py::_make_relation_resolver`'s synchronous
+forward-relation visibility tail, is covered by those rows.
+
+Figures reported for this cycle by an earlier run (8518, 8539 and 3619) did not reproduce at
+`39811dab` or at `2c66416e` and are not evidence.
+
+### Review under Decision 20
+
+One independent adversarial review of `2c66416e`, run after the gate in its own clone of that
+commit, admits no finding, which ends the loop.
+
+- **Byte identity.** The tree and blob hashes of `django_strawberry_framework/`, `README.md`,
+  `docs/README.md`, the spec, the rationale and the spec's terms file are identical at
+  `e5914bc4` and `2c66416e`. The production code was therefore already covered by the
+  adversarial review of `e5914bc4`, which found no Decision-20 defect; that review's two process
+  findings, the missing exact-tree gate and the unnamed candidate chain, are discharged by this
+  record.
+- **The 37 re-marked tests.** None relies on rollback, seed rows, the main-thread atomic block
+  or a query count, so `transaction=True` changes nothing any of them asserts. The two
+  `SynchronousOnlyOperation` proofs stay failable under it: with a plan-time
+  `ContentType.objects.get_for_model` injected into
+  `django_strawberry_framework/optimizer/nested_planner.py::plan_connection_relation`, both
+  `examples/fakeshop/apps/library/tests/test_generic_connection.py::test_generic_connection_planning_does_no_sync_orm_work_under_async`
+  and
+  `tests/optimizer/test_walker.py::test_generic_connection_planning_does_no_sync_db_io_under_async`
+  fail. Not admitted: no Definition-of-done row is broken and no input reaches a test marker.
+- **The collection hook.** `tests/conftest.py::pytest_collection_modifyitems` resolves module
+  `pytestmark`, class markers with a per-test override, parametrize `marks=`, positional
+  `django_db(True)` and `functools.wraps`-wrapped coroutines correctly. It fails closed on
+  `reset_sequences=True` and on the `transactional_db` fixture, which pytest-django treats as
+  transactional. It fails open on an async test that takes the `db` fixture without a marker
+  (none exists among the tree's 470 async test definitions), on a run that does not load
+  `tests/conftest.py` (`pytest examples/fakeshop` alone), and on an async fixture writing rows
+  for a sync test. Not admitted: the gate runs the full test paths, where the hook loads, and
+  none of these reaches a Definition-of-done row or a wire or configuration input.
+- **Flush side effects.** Each transactional test flushes the database, so a later module on
+  the same xdist worker no longer sees rows the kanban and glossary data migrations seeded. That
+  predates the delta and the full suites are green. Not admitted on all three conditions.
+
+The review re-measured the default suite at `2c66416e` and reproduced the figures above. It
+also checked this record's commit chain, tree id and statements of what changed.
+
+### This follow-up's own checks
+
+This commit's only change is this file. It was checked in a clone of `2c66416e` carrying it:
+source layout, citations, kanban anchors and tracked-path constants.
 
 ### Deferred work catalog
 

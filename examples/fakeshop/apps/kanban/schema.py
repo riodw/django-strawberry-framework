@@ -400,6 +400,12 @@ class CardType(DjangoType):
             "decisions",
         )
         interfaces = (relay.Node,)
+        # ``decisions`` keeps its raw list beside the synthesized
+        # ``decisionsConnection`` (explicit opt-in; see ``BookType.Meta`` in the
+        # library app) so the connection is additive: the list sibling is what the
+        # ``optimizer_hints`` prefetch below and the board exporters read, while the
+        # connection is the windowed surface over a non-pk ``Meta.ordering`` target.
+        relation_shapes = {"decisions": "both"}
         filterset_class = filters.CardFilter
         orderset_class = orders.CardOrder
         optimizer_hints = {
@@ -561,6 +567,15 @@ class WorkAttemptType(DjangoType):
 
 
 class DecisionType(DjangoType):
+    """Relay node so ``CardType.decisions`` can be read as a windowed connection.
+
+    ``Decision`` is the one board model whose ``Meta.ordering`` is a single non-pk
+    column (``decided_at``), so ``decisionsConnection`` is the live surface where a
+    nested window's ``ORDER BY <order column>, pk`` is observable. The self-relation
+    ``superseded_by_set`` stays a raw list (``relation_shapes``) - the Relay upgrade
+    is for the inbound reverse FK, not for this type's own reverse edge.
+    """
+
     class Meta:
         model = models.Decision
         fields = (
@@ -577,6 +592,8 @@ class DecisionType(DjangoType):
             "updated_date",
             "uuid",
         )
+        interfaces = (relay.Node,)
+        relation_shapes = {"superseded_by_set": "list"}
         filterset_class = filters.DecisionFilter
         orderset_class = orders.DecisionOrder
 

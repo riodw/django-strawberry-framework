@@ -14,15 +14,22 @@ directly (not via the importer, so assertions stay independent of how the real
   (``outgoingReferences``);
 * O2O selection (``spec``) plus the reverse ``uuid`` side-table and the
   inherited ``createdDate`` audit column;
-* reverse-FK from a lookup (``status { cards }``).
+* reverse-FK from a lookup (``status { cards }``);
+* the nested ``decisionsConnection`` window, whose target is the one example
+  model ordered by a single non-pk column (``Decision.decided_at``).
 """
+
+from datetime import timedelta
 
 import pytest
 from apps.glossary import models as glossary_models
 from apps.kanban import factories as kf
 from apps.kanban import models, services
 from django.conf import settings
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql
@@ -1179,6 +1186,72 @@ def test_query_work_attempts_and_decisions_root_fields():
             ],
         },
     )
+
+
+@pytest.mark.django_db
+def test_nested_decisions_connection_window_orders_by_decided_at_then_pk():
+    """The nested ``decisionsConnection`` window orders by ``decided_at`` then pk.
+
+    ``Decision`` is the board model whose ``Meta.ordering`` is a single non-pk
+    column, so this is the live surface where the windowed prefetch's
+    deterministic order (the target's own ordering, pk-suffixed) is observable in
+    emitted SQL rather than only in a plan. The page also has to COME BACK in that
+    order, so rows are seeded with ``decided_at`` deliberately against insertion
+    order.
+    """
+    seed = _seed_board()
+    actor = kf.make_actor("maintainer")
+    base = timezone.now()
+    # Both parents carry rows, so the fetch is ONE batched window rather than the
+    # single-parent page query a one-card batch collapses to.
+    for card_key, question, offset in (
+        ("conn", "conn-third", 3),
+        ("conn", "conn-first", 1),
+        ("conn", "conn-second", 2),
+        ("filters", "filters-second", 2),
+        ("filters", "filters-first", 1),
+    ):
+        models.Decision.objects.create(
+            card=seed[card_key],
+            actor=actor,
+            question=question,
+            choice="Yes",
+            decided_at=base + timedelta(minutes=offset),
+        )
+
+    with CaptureQueriesContext(connection) as ctx:
+        data = _graphql_data(
+            """
+            query {
+              allCards {
+                title
+                decisionsConnection(first: 2) {
+                  edges { node { question } }
+                }
+              }
+            }
+            """,
+        )
+
+    pages = {
+        row["title"]: [edge["node"]["question"] for edge in row["decisionsConnection"]["edges"]]
+        for row in data["allCards"]
+    }
+    assert pages[seed["conn"].title] == ["conn-first", "conn-second"]
+    assert pages[seed["filters"].title] == ["filters-first", "filters-second"]
+
+    decision_sql = [
+        entry["sql"] for entry in ctx.captured_queries if "kanban_decision" in entry["sql"]
+    ]
+    # One window for both parents; a per-parent fallback would emit two.
+    assert len(decision_sql) == 1, decision_sql
+    sql = decision_sql[0]
+    over = sql.upper().split("ROW_NUMBER() OVER (")[1].split(")")[0]
+    window_order = over.split("ORDER BY")[1]
+    decided_at_at = window_order.find('"DECIDED_AT"')
+    pk_at = window_order.find('"ID"')
+    assert decided_at_at != -1, sql
+    assert pk_at > decided_at_at, sql
 
 
 def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():

@@ -540,6 +540,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_write_transaction.py # The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
+│   ├── conftest.py               # Package-wide app-registry isolation for the optimizer test modules.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
@@ -784,6 +785,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_write_transaction.py # The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
+│   ├── conftest.py               # Package-wide app-registry isolation for the optimizer test modules.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.

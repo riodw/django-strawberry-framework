@@ -2436,57 +2436,42 @@ def _connection_relay_types():
     return {"Book": (Book, BookType), "Genre": (Genre, GenreType), "Shelf": (Shelf, ShelfType)}
 
 
-class _OrderedTag(models.Model):
-    name = models.CharField(max_length=32)
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class _OrderedPost(models.Model):
-    title = models.CharField(max_length=32)
-    tag = models.ForeignKey(_OrderedTag, related_name="posts", on_delete=models.CASCADE)
-
-    class Meta:
-        app_label = "products"
-        managed = False
-        ordering = ["title"]
-
-
 def _ordered_connection_types():
-    """Register Relay ``DjangoType``s over a child model with a NON-pk ``Meta.ordering``.
+    """Register Relay ``DjangoType``s over a real child model with a NON-pk ``Meta.ordering``.
 
     The library/products fixtures order by pk only, so their deterministic window
-    order is the pk alone. This pair (``_OrderedPost`` ordered by ``title``, a
-    reverse FK off ``_OrderedTag.posts``) lets the non-pk ordering path
-    (``("title", "id")``) be pinned for the generated prefetch's ``ORDER BY`` and
-    for the scalar-only projection so ``_concrete_order_columns`` is exercised
-    against a real non-pk column. ``managed=False`` needs no table - planning
-    builds the queryset lazily and never executes it.
+    order is the pk alone. The kanban board carries the shape those apps lack:
+    ``Decision`` declares ``Meta.ordering = ["decided_at"]`` - one non-pk column -
+    and reaches its parent through the reverse FK ``Card.decisions``. That makes
+    the non-pk ordering path (``("decided_at", "id")``) pinnable for the generated
+    prefetch's ``ORDER BY`` and for the scalar-only projection, so
+    ``_concrete_order_columns`` is exercised against a real ``Meta.ordering``
+    column on a real table instead of a test-only model. Planning builds the
+    queryset lazily and never executes it, so no rows are needed.
     """
+    from apps.kanban.models import Card, Decision
     from strawberry import relay
 
     from django_strawberry_framework import DjangoType, finalize_django_types
 
-    class OrderedPostType(DjangoType):
+    class DecisionType(DjangoType):
         class Meta:
-            model = _OrderedPost
-            fields = ("id", "title")
+            model = Decision
+            fields = ("id", "decided_at")
             interfaces = (relay.Node,)
 
-    class OrderedTagType(DjangoType):
+    class CardType(DjangoType):
         class Meta:
-            model = _OrderedTag
-            fields = ("id", "name", "posts")
+            model = Card
+            fields = ("id", "number", "decisions")
             interfaces = (relay.Node,)
 
     finalize_django_types()
-    return {"Tag": (_OrderedTag, OrderedTagType), "Post": (_OrderedPost, OrderedPostType)}
+    return {"Card": (Card, CardType), "Decision": (Decision, DecisionType)}
 
 
 def test_windowed_prefetch_queryset_carries_non_pk_deterministic_order():
-    """The generated prefetch's ``ORDER BY`` is the non-pk ``(title, pk)`` tuple.
+    """The generated prefetch's ``ORDER BY`` is the non-pk ``(decided_at, pk)`` tuple.
 
     The pk-only variant cannot catch a refactor that special-cases pk ordering;
     this pins that a real ``Meta.ordering`` column propagates to the queryset's
@@ -2495,21 +2480,21 @@ def test_windowed_prefetch_queryset_carries_non_pk_deterministic_order():
     registry.clear()
     try:
         types = _ordered_connection_types()
-        tag_model, tag_type = types["Tag"]
+        card_model, card_type = types["Card"]
         plan = plan_optimizations(
             [
                 _conn_sel(
-                    "postsConnection",
-                    node_selections=[_sel("title")],
+                    "decisionsConnection",
+                    node_selections=[_sel("decidedAt")],
                     arguments={"first": 3},
                 ),
             ],
-            tag_model,
+            card_model,
             info=_fake_info(),
-            source_type=tag_type,
+            source_type=card_type,
         )
         prefetch = _prefetch_entry(plan)
-        assert tuple(prefetch.queryset.query.order_by) == ("title", "id")
+        assert tuple(prefetch.queryset.query.order_by) == ("decided_at", "id")
     finally:
         registry.clear()
 
@@ -2518,24 +2503,30 @@ def test_scalar_only_window_projects_non_pk_order_column():
     """A scalar-only window over a non-pk-ordered target projects the order column.
 
     Covers ``_concrete_order_columns`` against a real ``Meta.ordering`` column:
-    the projection must carry pk + reverse-FK connector + the ``title`` order
-    column, not the full row (spec-033 Decision 6).
+    the projection must carry pk + reverse-FK connector + the ``decided_at``
+    order column, not the full row (spec-033 Decision 6).
     """
     registry.clear()
     try:
         types = _ordered_connection_types()
-        tag_model, tag_type = types["Tag"]
+        card_model, card_type = types["Card"]
         plan = plan_optimizations(
-            [_conn_sel("postsConnection", scalar_children=["totalCount"], arguments={"first": 3})],
-            tag_model,
+            [
+                _conn_sel(
+                    "decisionsConnection",
+                    scalar_children=["totalCount"],
+                    arguments={"first": 3},
+                ),
+            ],
+            card_model,
             info=_fake_info(),
-            source_type=tag_type,
+            source_type=card_type,
         )
         prefetch = _prefetch_entry(plan)
         only_fields, defer = prefetch.queryset.query.deferred_loading
         assert defer is False
-        # pk + reverse-FK connector (tag_id) + the non-pk ORDER column (title).
-        assert {"id", "tag_id", "title"} <= set(only_fields)
+        # pk + reverse-FK connector (card_id) + the non-pk ORDER column (decided_at).
+        assert {"id", "card_id", "decided_at"} <= set(only_fields)
     finally:
         registry.clear()
 
@@ -5453,32 +5444,6 @@ def test_connection_custom_get_queryset_builds_base_child_queryset_once():
         registry.clear()
 
 
-class _DistinctChildManager(models.Manager):
-    """Default manager whose base ``.all()`` is unsafe for window planning."""
-
-    def get_queryset(self):
-        return super().get_queryset().distinct()
-
-
-class _DistinctParent(models.Model):
-    name = models.CharField(max_length=32)
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
-class _DistinctChild(models.Model):
-    title = models.CharField(max_length=32)
-    parent = models.ForeignKey(_DistinctParent, related_name="children", on_delete=models.CASCADE)
-
-    objects = _DistinctChildManager()
-
-    class Meta:
-        app_label = "products"
-        managed = False
-
-
 def test_connection_default_manager_unsafe_queryset_is_left_unplanned():
     """Unsafe default-manager child querysets are classified before child planning.
 
@@ -5486,10 +5451,42 @@ def test_connection_default_manager_unsafe_queryset_is_left_unplanned():
     relation's default manager. If that manager returns ``distinct()``, the
     nested connection must fall back fully unplanned rather than relying on
     strategy-specific late guards.
+
+    The model pair is declared here rather than at module scope so the
+    package-wide ``tests/optimizer/conftest.py::_restore_app_registry`` fixture
+    covers it - a module-scope declaration registers at import time, before any
+    fixture runs, and leaks for the life of the worker process.
     """
     from strawberry import relay
 
     from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class _DistinctChildManager(models.Manager):
+        """Default manager whose base ``.all()`` is unsafe for window planning."""
+
+        def get_queryset(self):
+            return super().get_queryset().distinct()
+
+    class _DistinctParent(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class _DistinctChild(models.Model):
+        title = models.CharField(max_length=32)
+        parent = models.ForeignKey(
+            _DistinctParent,
+            related_name="children",
+            on_delete=models.CASCADE,
+        )
+
+        objects = _DistinctChildManager()
+
+        class Meta:
+            app_label = "products"
+            managed = False
 
     registry.clear()
     try:

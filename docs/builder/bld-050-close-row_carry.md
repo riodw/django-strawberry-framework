@@ -1,12 +1,17 @@
-# Build: Close cycle — Cohort A, the evaluation-state carry at the raw-list seam
+# Build: Close cycle — Cohort A, the evaluation-state carry at the raw-list seam — superseded historical record
 
 Spec reference: `docs/spec-050-list_field_arguments-0_0_15.md`, re-pinned at final verification
-after the spec edits recorded in `### Spec changes made (Worker 1 only)` (Decision 8, lines
-1230-1407; `## Slice checklist` Slice 3, lines 128-133; `## Implementation plan` step 4,
-lines 869-918; `## Test plan` -> `### Package tier` seal-axis bullet, lines 2466-2474;
-`## Test plan` -> `### The raw-list row source`, lines 2549-2611; `## Definition of done`,
-lines 2813-2838)
+after the spec edits recorded in `### Spec changes made (Worker 1 only)` (Decision 8;
+`## Slice checklist` Slice 3; Decision 5 step 4; `## Test plan` -> `### Package tier` seal-axis
+bullet; `## Test plan` -> `### The raw-list row source`; `## Definition of done` — cited by
+heading; the line pins first recorded here matched no committed spec revision)
 Status: superseded cohort artifact (final-accepted only for its pre-candidate snapshot)
+
+Superseded, not evidence. The measurements below describe the pre-candidate snapshot
+`20646db2` plus working-tree paths. The gated candidate is `2c66416e` (tree `5ce4c799`) and the
+evidence-only follow-up is `b38184b3`; the gate and the Decision 20 review of that exact tree are in
+`docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` `## Closing record`. Working-tree
+measurements (digests, md5s, sweep counts) are not reproducible from any commit.
 
 ## Plan (Worker 1)
 
@@ -77,7 +82,8 @@ policy object.
 ### Shared shapes across the two concurrent cohorts
 
 The partition is `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md`
-`## Close cycle (Decision 22)`; Cohort B owns `docs/README.md` and `README.md` and nothing else.
+`## Close cycle (Decision 22)`; Cohort B owns `docs/README.md` and `README.md` and nothing else
+(the DONE record's partition now also folds `schema.py` into Cohort B).
 Three shapes both cohorts could touch, each assigned to exactly one owner:
 
 1. **The documented schema spelling in an executable example.** Owner: **Cohort B**
@@ -100,7 +106,7 @@ editing — another worker's pass may have shifted the file since this plan was 
 
 **Before the first edit to any owned file:** `git diff HEAD -- <path>` must print nothing (a
 concurrent DRY cycle names `django_strawberry_framework/utils/querysets.py`). All eleven owned
-paths were clean at plan time. If one is not, stop and report it here rather than editing.
+paths (the committed partition had nine code paths before the fold-in) were clean at plan time. If one is not, stop and report it here rather than editing.
 
 1. `django_strawberry_framework/utils/querysets.py::_SealPolicy` (~line 2719) — add
    `carry_result_cache: bool = False` as the last field, and one docstring bullet for it in the
@@ -160,7 +166,8 @@ paths were clean at plan time. If one is not, stop and report it here rather tha
     `QuerySet.__getitem__` reads a populated `_result_cache` directly, so the window costs no
     query for the exact shape and for a rebuilt subclass alike. No code change in this module.
 11. `django_strawberry_framework/types/resolvers.py` many-side resolver, the comment block ending
-    `#"or the subclass is rebuilt and answers no cached rows at all, which is one extra query"` —
+    `#"or the subclass is rebuilt and answers no cached rows at all, which is one extra query"` (the
+    quoted text spans two source lines) —
     correct it: the cache entry is normalized first so the rows come out of Django's own slot on
     an object this package owns, and a rebuilt subclass carries those same rows, so the prefetched
     path costs no query whichever class the relation manager builds. **No code change in this
@@ -242,7 +249,7 @@ never only an equality. For the async rows, `pytest.mark.django_db(transaction=T
 
 **No change is planned in `examples/fakeshop/apps/library/models.py`,
 `examples/fakeshop/test_query/test_library_api.py`, or
-`examples/fakeshop/test_query/test_relations_async_api.py`.** They stay in the cohort's ownership
+`examples/fakeshop/test_query/test_relations_async_api.py`.** (superseded by P2-2: `Loan` declares `objects = LoanQuerySet.as_manager()`) They stay in the cohort's ownership
 so a surprise re-pin has an owner, but the plan needs none: see the model decision below.
 
 **Temp tests for Worker 3:** a scratch row under `docs/builder/temp-tests/050/close-row_carry/`
@@ -252,12 +259,16 @@ artifact contract.
 
 ### Why the `Manager.from_queryset` shape is mounted at the probe, not declared on a model
 
+Superseded by P2-2: `Loan` declares `objects = LoanQuerySet.as_manager()`; the mount argument
+below is historical.
+
 The spec's live row needs a relation that (a) is a many-side raw list, (b) whose **target type
 declares no custom `get_queryset`** — the one branch with no visibility rebuild in front of it, and
 the only branch that reaches `normalized_row_source` on the prefetch cache — and (c) is planned as
 a prefetch.
 
-- In the library app, `LoanType` is the only many-side target that declares no `get_queryset`
+- In the library app, `LoanType` is taken as the only many-side target that declares no
+  `get_queryset` (wrong: `GenreType`, via the `Book.genres` M2M, declares none either)
   (`ShelfType`, `BookType`, `IssueType` and the connection-shaped `Periodical.issues` all do), so
   the relation is `Patron.loans` or `Book.loans` either way.
 - **A model-level declaration removes the control.** `Loan.objects = Manager.from_queryset(...)()`
@@ -273,7 +284,7 @@ a prefetch.
   a genuine `models.Manager.from_queryset(...)` result, Django's own related-manager machinery
   builds the relation manager and the prefetch cache from it, and no framework seam is bypassed —
   the same argument `#"def _hostile_relation_manager"` already makes for its own mount.
-- `examples/fakeshop/apps/library/models.py` therefore stays unedited and no migration question
+- `examples/fakeshop/apps/library/models.py` therefore stays unedited (superseded by P2-2: `Loan` declares `objects = LoanQuerySet.as_manager()`) and no migration question
   arises. The final gate runs `manage.py makemigrations --check --dry-run` anyway; if a builder
   ever does change a model here, that command is the check, and a manager-only change generates no
   migration.
@@ -281,8 +292,10 @@ a prefetch.
 ### Boundary count and the split question
 
 **One** new boundary: the `untrusted` refusal of a `_result_cache` that is not an exact `list`
-(step 4). The carry itself is a cost fix, not a boundary — it removes a query, it says no to
-nothing. One boundary is one mutate / run / count / revert / byte-compare loop, so **the cohort is
+(step 4). The carry itself is not a refusal boundary, but not only a cost — it says no to
+nothing, yet without it the async relation path breaks (measured at `ae52bdec`: without the carry, L2 fails with `data` None because graphql-core
+iterates the lazily sliced rebuild on the event loop and Django raises `SynchronousOnlyOperation`,
+and both L1 cardinalities fail with `assert 4 == 2`). One boundary is one mutate / run / count / revert / byte-compare loop, so **the cohort is
 not split**; the docstring corrections and the tests travel with the single behavior change they
 describe and would review worse apart.
 
@@ -291,12 +304,13 @@ describe and would review worse apart.
 - **The new boundary (step 4)** owes a full proof: mutation = delete the `type(...) is list` check
   so a populated non-list cache is carried. Expected failing rows: B1 (sealer admission), B2 and B3
   (the lying sequence through both colors) — three rows, above the weakly-pinned threshold.
-- **The carry is not a boundary and owes no boundary proof**, but the plan requires its rows to be
+- **The carry is not a refusal boundary, but not only a cost, and owes no boundary proof**, but the plan requires its rows to be
   distinguishing: a mutation that sets `carry_result_cache=False` on `_RAW_LIST_SOURCE_POLICY` must
   fail **at least two rows per tier** — P2 and P3 in the package tier, and both parametrized cases
   of L1 in the live tier. Record that measurement in `### Failability proofs` beside the boundary
-  entry even though it is a cost mutation; a carry that only one row can see is weakly pinned in
-  the sense that matters here.
+  entry even though it refuses nothing; a carry that only one row can see is weakly pinned in
+  the sense that matters here. Discharged at `ae52bdec`: under the mutation L1 fails at both
+  cardinalities (`assert 4 == 2`) and L2 fails (`data` None).
 
 ### Hot-path budget
 
@@ -311,7 +325,7 @@ report.
 
 ### Floor verification
 
-Owned by **this build pass** for the two package modules; the full twenty-three-path scope is the
+Owned by **this build pass** for the two package modules; the full twenty-three-path scope (the floor at `f7192bfb`; 27 at HEAD) is the
 final gate's (`docs/builder/DONE/build-050-list_field_arguments-0_0_15.md`
 `### Floor-verification scope`). The versions and recipe are copied from
 `docs/builder/BUILD.md` `## Floor verification`, which is their single canonical statement: Django
@@ -347,6 +361,7 @@ Assessed and decided to be Worker 2's:
 
 Re-quoted at final verification from the spec as it stands after every `### Spec changes made
 (Worker 1 only)` edit below, so the text a tick is audited against is the text the spec demands.
+Measured before P2-2: this text occurs 0 times in the committed spec (`f7192bfb` and HEAD).
 `## Slice checklist` Slice 3's raw-list row, then the `## Definition of done` row Decision 8
 owns:
 
@@ -371,12 +386,13 @@ async rows asserting row identity because a capture on the calling thread cannot
 `sync_to_async` worker's ORM work. The `Manager.from_queryset` relation at Django's own manager's
 absolute count, live, under a prefetching plan, at two parent cardinalities:
 `test_a_project_queryset_class_relation_costs_what_djangos_own_manager_costs[two-parents]` and
-`[three-parents]`, asserting the identical payload and `CARRY_RELATION_QUERIES = 2` on both arms.
+`[three-parents]` (renamed by P2-2 to `…costs_two_prefetch_queries`, one arm), asserting the identical payload and
+`CARRY_RELATION_QUERIES = 2` on both arms.
 The same rows on the async transport:
 `test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited`. The pending
 reverse-relation predicate baked by the same unbound `Query.add_q`: P6 and
-`test_a_subclass_result_with_a_pending_deferred_filter_seals_with_it_baked`, both producing the
-state through Django's own `_apply_rel_filters`. A deferred-filter state Django never writes
+`test_a_subclass_result_with_a_pending_deferred_filter_seals_with_it_baked`: P6 through Django's
+own `_apply_rel_filters`; the flipped seal row hand-plants `(False, (), {"name": "later"})`. A deferred-filter state Django never writes
 refused with the typed error at both tiers: R1's four cases, R2, R3, and the two live
 `[malformed-deferred-filter]` rows. Every clause has a row, and the failability re-run below
 shows each of those rows failing when the behavior it names is removed - so none is green by
@@ -456,7 +472,7 @@ file as edited.
   manager's count"; "count" alone is an equality claim, which is vacuous, and the row named
   nothing about the admission the live proof needs. Now names the absolute count, the bake, and
   the refusal. **Home 1.**
-- Lines 879-884, `## Implementation plan` step 4 — stated "the one subclass that still fails …
+- Lines 879-884, Decision 5 step 4 — stated "the one subclass that still fails …
   a subclass carrying an unresolved `_deferred_filter` cannot be safely baked and fails closed as
   `untrusted`". Measured false (any class carries one); rewritten to put the failure on the
   STATE's shape. **Home 2.**
@@ -536,7 +552,7 @@ never written.
    predicate pending is not that reverse-relation artifact" states a premise that is false.
 2. **Every seal refuses it, not just the raw-list one.** `_seal_or_defect` was called directly on
    that subclass relation queryset under all five shipped policies. `_DEFAULT_SEAL_POLICY`,
-   `_LIST_ARGUMENT_VISIBILITY_POLICY`, `_ORDERSET_RESULT_POLICY`, `_PREFETCH_CHILD_POLICY` and
+   `_LIST_ARGUMENT_VISIBILITY_POLICY`, `_ORDERSET_RESULT_POLICY` (at `f7192bfb`; now `_SIDECAR_RESULT_POLICY`, which also seals `FilterSet.apply_*` returns), `_PREFETCH_CHILD_POLICY` and
    `_RAW_LIST_SOURCE_POLICY` each returned
    `("untrusted", "_ProjectQuerySet carries an unresolved deferred filter")`; the exact queryset
    sealed under all five. The defect is therefore NOT raw-list-local.
@@ -759,7 +775,7 @@ original plan's live section asked for, with the mount corrected by measured fac
   `finally`. Verified working end to end in this planning pass (measured fact 4: the mounted run
   reached `normalized_row_source` and the unmounted run did not). `examples/fakeshop/apps/library/models.py`
   stays unedited, so the plain-manager control remains the same relation, the same document and
-  the same seed with the mount simply absent — the control argument in
+  the same seed with the mount simply absent (superseded by P2-2: `Loan` declares `objects = LoanQuerySet.as_manager()`) — the control argument in
   `### Why the Manager.from_queryset shape is mounted at the probe, not declared on a model`
   stands unchanged and is not re-argued here.
 - **The probe schema.** A `DjangoSchema` over a `DjangoListField` `patrons` root, built in the
@@ -860,7 +876,7 @@ document and the same seed, at the larger parent cardinality). Two corrections:
 #### Floor verification (revision)
 
 Unchanged in scope and owner — this build pass, the two package modules, with the full
-twenty-three-path scope staying the final gate's. Versions and recipe from
+twenty-three-path scope (the floor at `f7192bfb`; 27 at HEAD) staying the final gate's. Versions and recipe from
 `docs/builder/BUILD.md` `## Floor verification` at run time, never from a number restated here.
 One addition: `_apply_rel_filters` is the seam the whole revision turns on and its body differs
 between the shared `.venv`'s Django and the floor's, so the floor run's scope gains
@@ -906,7 +922,7 @@ file is half-edited.
 ### Precondition
 
 `git diff HEAD -- <path>` printed zero lines for every one of the cohort's eleven owned paths
-before the first edit (the concurrent DRY cycle names `utils/querysets.py`; it had not touched
+(nine code paths before the fold-in) before the first edit (the concurrent DRY cycle names `utils/querysets.py`; it had not touched
 it). Checked as one loop over the ownership list; all clean, so the plan's stop condition did
 not fire.
 
@@ -935,7 +951,7 @@ set:
   byte-identical).
 - `tests/utils/test_querysets.py` - the sealer-admission rows.
 
-`examples/fakeshop/apps/library/models.py` is unedited, as the plan says. The three live
+`examples/fakeshop/apps/library/models.py` is unedited, as the plan says (superseded by P2-2: `Loan` declares `objects = LoanQuerySet.as_manager()`). The three live
 `examples/fakeshop/test_query/*.py` files the cohort owns are also unedited - see the pause.
 
 ### Tests added or updated
@@ -1040,7 +1056,7 @@ collection/setup errors, so both counts are valid counts.
   `filecmp.cmp(shallow=False)` True and sha256 `50091053a741df5b...` == `50091053a741df5b...`
   against the pre-mutation copy. Five rows, so not weakly pinned.
 - `django_strawberry_framework/utils/querysets.py::_RAW_LIST_SOURCE_POLICY` (**the carry itself -
-  a cost mutation, not a boundary: it refuses nothing**, recorded here because the plan requires
+  not a refusal boundary, but not only a cost: it refuses nothing**, recorded here because the plan requires
   the carry's own rows to be distinguishing) - mutation applied: `carry_result_cache=True,`
   replaced by `carry_result_cache=False,`; scope as run and pre-mutation state: identical to the
   entry above; failing node ids:
@@ -1052,7 +1068,8 @@ collection/setup errors, so both counts are valid counts.
   collection/setup errors: 0; revert proved by byte comparison as above. That is **three P rows
   across both colors** (the two B rows fail because a policy that carries nothing never reaches
   the refusal), meeting the plan's "at least two rows per tier" for the package tier. The LIVE
-  tier's half of that requirement is NOT met and is part of the pause.
+  tier's half of that requirement is NOT met and is part of the pause. (Discharged at `ae52bdec`:
+  under the mutation L1 fails at both cardinalities, `assert 4 == 2`, and L2 fails, `data` None.)
 
 The plan's exact-queryset rows (P1 sync, P4 awaited) are deliberately unaffected by the carry
 mutation: `normalized_row_source` returns an exact queryset unchanged without sealing it, so the
@@ -1094,7 +1111,7 @@ what it is rather than laundered into a passing equality.
 
 ### Floor verification
 
-The plan assigns this pass the two package modules; the full twenty-three-path scope stays the
+The plan assigns this pass the two package modules; the full twenty-three-path scope (the floor at `f7192bfb`; 27 at HEAD) stays the
 final gate's. Versions and recipe copied from `docs/builder/BUILD.md` `## Floor verification` at
 run time, never from memory.
 
@@ -1157,7 +1174,7 @@ run time, never from memory.
   `docs/builder/temp-tests/050/row_carry/` are scratch, not tests: `test_measure.py` (which
   established the mount mechanics reported below), `test_hotpath.py` (the budget readings) and
   `proofs.json` (the manifest). Named `row_carry/` per this pass's task contract; the plan's text
-  says `close-row_carry/`. Delete by explicit path at closeout.
+  says `close-row_carry/`. Deleted by explicit path at closeout.
 
 ### Notes for Worker 3
 
@@ -1307,7 +1324,8 @@ widened; the four beyond pass 1's five are new this pass.
   `apply_type_visibility` `untrusted` message each swap "unresolved deferred filter" for the
   malformed one. Pass 1's carry hunks are unchanged.
 - `django_strawberry_framework/permissions.py` - revision step 18: the same one-clause correction
-  in the cascade's `untrusted` renderer docstring. No code change.
+  in the cascade's `untrusted` renderer docstring. No code change (as committed in `f7192bfb`,
+  `permissions.py` is 5/5 including two message strings, the C1 fixes).
 - `django_strawberry_framework/resource_policy.py`, `django_strawberry_framework/types/resolvers.py`
   - pass 1's prose-only hunks, untouched this pass.
 - `tests/utils/test_querysets.py` - the flipped seal row plus R1 / R2 / R3.
@@ -1320,7 +1338,7 @@ widened; the four beyond pass 1's five are new this pass.
   `examples/fakeshop/test_query/test_list_field_async_api.py` - L3, the re-pinned refusal rows.
 
 `examples/fakeshop/apps/library/models.py`, `test_library_api.py` and
-`test_relations_async_api.py` are unedited: the mount is per-row, so no other loans path changed
+`test_relations_async_api.py` are unedited (superseded by P2-2: `Loan` declares `objects = LoanQuerySet.as_manager()`): the mount is per-row, so no other loans path changed
 shape and no re-pin was owed anywhere else in the tree (the full sweep below is what says so).
 
 ### Tests added or updated
@@ -1362,10 +1380,10 @@ Live tier, `examples/fakeshop/test_query/test_resource_policy_api.py`:
 
 - `_project_relation_manager()` mounts `Manager.from_queryset(_ProjectLoanQuerySet)()` as `Loan`'s
   DEFAULT manager through `Loan._meta.local_managers` + `_meta._expire_cache()`, restoring both in
-  `finally`. `examples/fakeshop/apps/library/models.py` stays unedited, so the control is the same
+  `finally`. `examples/fakeshop/apps/library/models.py` stays unedited (superseded by P2-2: `Loan` declares `objects = LoanQuerySet.as_manager()`), so the control is the same
   relation, the same document and the same seed with the mount simply absent.
 - `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_costs_what_djangos_own_manager_costs[two-parents]`
-  and `[three-parents]` (L1) - the same document over a prefetching mount, once with the mount and
+  and `[three-parents]` (L1) (renamed by P2-2 to `…costs_two_prefetch_queries`, one arm) - the same document over a prefetching mount, once with the mount and
   once without, asserting the identical payload, equal counts, and the ABSOLUTE
   `CARRY_RELATION_QUERIES = 2`.
 - `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited`
@@ -1431,8 +1449,8 @@ edited: `tests/test_ci_governance.py` is in no cohort's set and is untouched.
 **A second stop-and-report, not a revert.** `django_strawberry_framework/schema.py` was CLEAN in
 every `git status --short` this pass took until the last one, where it is 8 insertions / 5
 deletions rewriting `DjangoSchema`'s class docstring paragraph about refusing an enforcement-
-extension SUBCLASS entry. This pass did not write that file, it is in no cohort's writable set, and
-it has not been touched or reverted - recorded so a later pass does not read it as this cohort's
+extension SUBCLASS entry. This pass did not write that file, it is in no cohort's writable set (the
+DONE record's partition later folds `schema.py` into Cohort B), and it has not been touched or reverted - recorded so a later pass does not read it as this cohort's
 churn. Timing worth having: it was still clean when the full parallel sweep ran, so **the 8333
 figure above does not cover those hunks**.
 
@@ -1443,7 +1461,7 @@ Procedure, mechanized by `scripts/prove_failability.py`: the target is copied to
 | # | Boundary | File mutated | Mutation applied | Rows failed | Errors | Scope as run | Restore proof |
 |---|---|---|---|---|---|---|---|
 | 1 | `django_strawberry_framework/utils/querysets.py::_seal_or_defect` | `django_strawberry_framework/utils/querysets.py` | `if policy.carry_result_cache and result_cache is not None and type(result_cache) is not list:` -> `if False:` - builder's description (unverified prose): the exact-list refusal of a carried _result_cache is removed, so a cache Django never built is carried onto the rebuild and answers the window with its own subscript | **5** | 0 | `uv run pytest --no-cov --color=no -p no:cacheprovider --tb=no -q -rfE tests/test_resource_policy.py tests/utils/test_querysets.py` | filecmp.cmp(shallow=False) True; sha256 51dd1d30683cfab6... == 51dd1d30683cfab6... (vs pre-mutation copy) |
-| 2 | `django_strawberry_framework/utils/querysets.py::_RAW_LIST_SOURCE_POLICY` | `django_strawberry_framework/utils/querysets.py` | `carry_result_cache=True,` -> `carry_result_cache=False,` - builder's description (unverified prose): the raw-list row source stops carrying the fetched rows forward, so a rebuilt subclass arrives unevaluated and the window re-queries (a cost mutation, not a boundary: it refuses nothing) | **5** | 0 | `uv run pytest --no-cov --color=no -p no:cacheprovider --tb=no -q -rfE tests/test_resource_policy.py tests/utils/test_querysets.py` | filecmp.cmp(shallow=False) True; sha256 51dd1d30683cfab6... == 51dd1d30683cfab6... (vs pre-mutation copy) |
+| 2 | `django_strawberry_framework/utils/querysets.py::_RAW_LIST_SOURCE_POLICY` | `django_strawberry_framework/utils/querysets.py` | `carry_result_cache=True,` -> `carry_result_cache=False,` - builder's description (unverified prose): the raw-list row source stops carrying the fetched rows forward, so a rebuilt subclass arrives unevaluated and the window re-queries (not a refusal boundary, but not only a cost: it refuses nothing) | **5** | 0 | `uv run pytest --no-cov --color=no -p no:cacheprovider --tb=no -q -rfE tests/test_resource_policy.py tests/utils/test_querysets.py` | filecmp.cmp(shallow=False) True; sha256 51dd1d30683cfab6... == 51dd1d30683cfab6... (vs pre-mutation copy) |
 | 3 | `django_strawberry_framework/utils/querysets.py::_bake_deferred_filter_or_defect` | `django_strawberry_framework/utils/querysets.py` | `if type(negate) is not bool:` -> `if False:` - builder's description (unverified prose): the exact-bool refusal of the deferred filter's negate slot is removed, so an object planted there reaches `~predicate if negate else predicate` and decides through its own __bool__ whether the relation predicate is negated | **5** | 0 | `uv run pytest --no-cov --color=no -p no:cacheprovider --tb=no -q -rfE tests/utils/test_querysets.py tests/test_resource_policy.py examples/fakeshop/test_query/test_list_field_api.py examples/fakeshop/test_query/test_list_field_async_api.py` | filecmp.cmp(shallow=False) True; sha256 51dd1d30683cfab6... == 51dd1d30683cfab6... (vs pre-mutation copy) |
 | 4 | `django_strawberry_framework/utils/querysets.py::_seal_or_defect (deferred-filter admission)` | `django_strawberry_framework/utils/querysets.py` | `bake_defect = _bake_deferred_filter_or_defect(rebuilt_query, deferred, cls_name)` -> `if type(candidate) is not models.QuerySet: return None, ("untrusted", f"{cls_name} carries an unresolved deferred fil...` - builder's description (unverified prose): the deleted exact-QuerySet class gate is restored ahead of the bake, so a candidate that is not exactly models.QuerySet is refused for a pending deferred filter instead of having it baked (an admission WIDENING, not a boundary: it refuses nothing; recorded so the widening is proven distinguishing at both tiers) | **9** | 0 | `uv run pytest --no-cov --color=no -p no:cacheprovider --tb=no -q -rfE tests/utils/test_querysets.py tests/test_resource_policy.py examples/fakeshop/test_query/test_resource_policy_api.py` | filecmp.cmp(shallow=False) True; sha256 51dd1d30683cfab6... == 51dd1d30683cfab6... (vs pre-mutation copy) |
 
@@ -1502,7 +1520,7 @@ Failing node ids, per boundary (the count above is `len()` of this list):
    - `tests/utils/test_querysets.py::test_a_subclass_deferred_filter_state_django_never_writes_fails_closed[foreign-value]`
    - `tests/test_resource_policy.py::test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_predicate`
    - `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_costs_what_djangos_own_manager_costs[two-parents]`
-   - `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_costs_what_djangos_own_manager_costs[three-parents]`
+   - `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_costs_what_djangos_own_manager_costs[three-parents]` (renamed by P2-2 to `…costs_two_prefetch_queries`, one arm)
    - `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited`
 
 A boundary whose removal fails 0 or 1 rows is **weakly pinned** and is `revision-needed` per `docs/builder/BUILD.md` - the fix is more or better-targeted rows, never a weaker boundary. A boundary at 3 rows or fewer is inside Worker 3's mandatory independent re-run floor. A proof carrying collection or setup errors, or whose pytest run exited anything but 0 or 1 (nothing collected, interrupted, internal error, usage error), is not a valid count at all - and a 0 from such a run is not a zero-row result: resolve it and re-run.
@@ -1510,8 +1528,8 @@ A boundary whose removal fails 0 or 1 rows is **weakly pinned** and is `revision
 Every `<fill in ...>` above is a judgement no tool can make and MUST be replaced by hand before this subsection is submitted: weakly pinned and harness-impossible are the two possible readings of a zero-row result and they prescribe opposite responses (more rows, versus a production-call-site invariant assertion plus a recorded harness limitation), so a record that does not name one reads as self-contradictory.
 
 **What the four entries are.** Entry 3 is the pass's ONE new boundary. Entries 1 and 2 are pass
-1's, re-run here so the record describes the shipped bytes (entry 2 is a cost mutation, not a
-boundary). Entry 4 is the admission WIDENING, which refuses nothing and is therefore not a
+1's, re-run here so the record describes the shipped bytes (entry 2 is not a refusal boundary,
+but not only a cost). Entry 4 is the admission WIDENING, which refuses nothing and is therefore not a
 boundary either; the plan requires it to be proven distinguishing and records the measurement
 beside the boundary. Neither entry 2 nor entry 4 carries a `why 0` judgement: no entry measured
 zero rows.
@@ -1558,7 +1576,8 @@ uv run pytest -n0 docs/builder/temp-tests/050/row_carry/test_hotpath_admission.p
 "Before" was taken by `BUILD.md`'s fenced loop: anchor asserted to match exactly once, copy to
 `<scratch>/dsf-hotpath-admission-before.orig`, the deleted class gate re-inserted ahead of the
 bake, run, restore, `cmp` exit 0 and sha256
-`51dd1d30683cfab68be09db50d41b52f56ee6669430f7f052cfcc7f719d3aac9` equal on both files.
+`51dd1d30683cfab68be09db50d41b52f56ee6669430f7f052cfcc7f719d3aac9` (working tree; the committed
+`f7192bfb` file is `7dbd4755…`, 97/40) equal on both files.
 
 | Metric | Before | After | Delta |
 |---|---|---|---|
@@ -1586,7 +1605,7 @@ for an evaluated project queryset class.
 
 ### Floor verification
 
-The plan assigns this pass the two package modules; the full twenty-three-path scope stays the
+The plan assigns this pass the two package modules; the full twenty-three-path scope (the floor at `f7192bfb`; 27 at HEAD) stays the
 final gate's. Versions and recipe read from `docs/builder/BUILD.md` `## Floor verification` at run
 time. The venv from pass 1 was reused after confirming its contents rather than rebuilt.
 
@@ -1640,13 +1659,14 @@ time. The venv from pass 1 was reused after confirming its contents rather than 
   relation COSTS; a ceiling clipping the payload would make every comparison agree for the wrong
   reason. The truncation contract is the neighbouring hostile-relation group's, at a bound of one.
 - The measurement module `docs/builder/temp-tests/050/row_carry/test_hotpath_admission.py` and the
-  updated `proofs.json` are scratch beside pass 1's `test_measure.py` / `test_hotpath.py`. Delete
+  updated `proofs.json` are scratch beside pass 1's `test_measure.py` / `test_hotpath.py`. Deleted
   by explicit path at closeout.
 
 ### Notes for Worker 3
 
 - Nine files. `resource_policy.py` and `types/resolvers.py` carry ONLY pass 1's prose hunks and are
-  unchanged this pass; `permissions.py` is prose-only for this pass and owes the inverse proof
+  unchanged this pass; `permissions.py` is prose-only for this pass (the committed `f7192bfb` file is 5/5 including two
+  message strings) and owes the inverse proof
   shape - every changed line in it is inside a docstring, which `git diff` shows directly.
 - The one executable change in `utils/querysets.py` this pass is +7 lines
   (`_bake_deferred_filter_or_defect`'s `negate` check) and -2 lines (`_seal_or_defect`'s class
@@ -1760,8 +1780,8 @@ exact mutation, the listed node ids, the focused scope as run, a green pre-mutat
 same scope (`622 passed` / `794 passed` / `765 passed`, pytest exit 0), **0** collection/setup
 errors, and a byte-compared restore (`filecmp.cmp(shallow=False)` plus sha256). No entry measured
 zero rows, so no `why 0` judgement is owed and none is missing. Counts: 5 / 5 / 5 / 9 - none
-weakly pinned. Entries 2 and 4 are correctly labelled as NOT boundaries (a cost mutation and an
-admission widening); recording them beside the boundary is what the plan asked for and both are
+weakly pinned. Entries 2 and 4 are correctly labelled as NOT boundaries (a carry mutation that is not only
+a cost, and an admission widening); recording them beside the boundary is what the plan asked for and both are
 distinguishing.
 
 **Re-run independently: entries 3 and 4** - the pass's one new boundary
@@ -1791,10 +1811,11 @@ distinguishing at both tiers and the live rows are not merely green.
 
 **Restore verified independently of the tool's own claim:** after my run,
 `shasum -a 256 django_strawberry_framework/utils/querysets.py` =
-`51dd1d30683cfab68be09db50d41b52f56ee6669430f7f052cfcc7f719d3aac9`, byte-identical to the hash the
+`51dd1d30683cfab68be09db50d41b52f56ee6669430f7f052cfcc7f719d3aac9` (working tree; the committed
+`f7192bfb` file is `7dbd4755…`, 97/40), byte-identical to the hash the
 build report records for the shipped file; `grep -c 'if type(negate) is not bool:'` = 1,
 `grep -c 'carries an unresolved deferred filter'` = 0, `grep -c 'if False:'` = 0, no
-`ACTIVE-MUTATION.json`, and `git diff HEAD --stat` still reads `92 insertions, 35 deletions`.
+`ACTIVE-MUTATION.json`, and `git diff HEAD --stat` still reads `92 insertions, 35 deletions` (committed: 97/40).
 Nothing is left mutated.
 
 ### High:
@@ -1808,7 +1829,7 @@ None.
 `docs/spec-050-list_field_arguments-0_0_15.md` #"Every other seal keeps its `require_unevaluated`
 verdict: a visibility hook's input and result" states that a visibility hook's input and result
 "are still refused when evaluated". They are not: `require_unevaluated` defaults to `False` and
-only `_RAW_LIST_SOURCE_POLICY`'s sibling `_ORDERSET_RESULT_POLICY` sets it
+only `_RAW_LIST_SOURCE_POLICY`'s sibling `_ORDERSET_RESULT_POLICY` (at `f7192bfb`; now `_SIDECAR_RESULT_POLICY`, which also seals `FilterSet.apply_*` returns) sets it
 (`django_strawberry_framework/utils/querysets.py:2816`). An evaluated source at the visibility
 boundary is SEALED with its cache dropped, which is a different verdict with a different security
 argument, and the shipped code says so precisely - `_SealPolicy`'s own docstring reads "It is off
@@ -1919,7 +1940,7 @@ private slot a trusted caller wrote is a contract-level question. Routed to the 
 - The `negate` check is one conjunct inside the block that already owns the shape proof, reusing
   the established `f"{cls_name} deferred filter ... is a {_safe_type_name(...)}"` message shape,
   the `untrusted` code, and no new arm at any message site. `_raw_list_source_message`'s generic
-  `untrusted` arm renders the new `_result_cache` detail correctly (asserted live by
+  `untrusted` arm renders the new `_result_cache` detail correctly (asserted at the package tier by
   `test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried`).
 - **Repeated literals, from the helper's own output** (below): `untrusted` at **73x** in this
   module with no named constant, up exactly one from the 72 the plan recorded (pass 1 added the
@@ -1973,7 +1994,7 @@ that would each have been a High if wrong, both verified in source:
   statement after `negate, args, kwargs = deferred`, and the unpack itself is reached only through
   `type(deferred) is not tuple or len(deferred) != 3`, whose short-circuit puts the type proof
   before `len()`. The only consumer-dispatch point downstream - `~predicate if negate else
-  predicate` - is 20 lines further on. `R3`
+  predicate` - is 29 lines further on. `R3`
   (`test_a_deferred_filter_negate_is_refused_without_reaching_its_own_bool`) pins it with a
   `__bool__` spy that must never fire, and my re-run of entry 3 shows that row failing when the
   check is removed, so the ordering is pinned and not merely present.
@@ -2031,9 +2052,10 @@ property`). Temp module `docs/builder/temp-tests/050/row_carry/test_w3_mount.py`
   Worker 2's amendment is correct and is seconded below.
 - **L2's honesty, judged rather than accepted.** The async row asserts rows and no count, for the
   stated `sync_to_async` reason. It is still distinguishing: entry 4's node-id set contains it, so
-  it fails when the admission is removed. It would NOT fail if only the carry were removed (the
-  rows would be re-queried and still correct), and the build report does not claim otherwise -
-  entry 2's scope excludes it. That is the right division and it is recorded accurately.
+  it fails when the admission is removed. It was judged here NOT to fail if only the carry were removed; that is wrong:
+  measured at `ae52bdec`: without the carry, L2 fails with `data` None because graphql-core
+  iterates the lazily sliced rebuild on the event loop and Django raises `SynchronousOnlyOperation`,
+  and both L1 cardinalities fail with `assert 4 == 2`. Entry 2's scope excluded it.
 
 ### Hot-path budget
 
@@ -2072,18 +2094,21 @@ Not derived from `### Files touched` - the tree a slice misses is by definition 
 its diff.
 
 - `grep -rn "unresolved deferred filter"` over every tracked `.py` and `.md`: **zero** hits in the
-  package and in all four test trees. The surviving hits are the two archived specs already routed
+  package and in all four test trees by a per-line grep, which missed four wrapped sites (the
+  `querysets.py:54` module docstring, the `_visibility_result_error` message, two `permissions.py`
+  message strings); all were fixed in `f7192bfb`. The surviving hits are the two archived specs already routed
   to the maintainer, this artifact, and the rationale's historical measurement (correct in past
   tense at `:322`).
 - `grep -rln "_deferred_filter"` over `tests/` and `examples/`: exactly the four modules in the
   diff. No fifth tree carries the vocabulary.
 - `grep -rn "_result_cache"` over `docs/GLOSSARY.md`, `docs/TREE.md`, `docs/README.md`,
   `README.md`, `KANBAN.md`, `TODAY.md`: the falsified glossary sentence (already routed, with an
-  exact replacement paragraph) and three historical KANBAN rows about the optimizer's own
+  exact replacement paragraph) and three historical KANBAN rows (four lines) about the optimizer's own
   evaluated-queryset guard, which the carry does not touch. `docs/README.md:390` delegates to the
   glossary entry and states no `_result_cache` claim of its own, so Cohort B's file is not
   falsified by this cohort.
-- `grep -rn "extra query"` over the package: one hit, `_SealPolicy`'s `require_unevaluated` bullet,
+- `grep -rn "extra query"` over the package: two hits, one unrelated; the relevant one is `_SealPolicy`'s
+  `require_unevaluated` bullet,
   where it is correctly scoped to the seals that discard the cache. No stale "one extra query"
   claim survives at the raw-list seam.
 - Provenance sweep over every ADDED line in `django_strawberry_framework/`: zero hits for
@@ -2127,10 +2152,10 @@ routed rather than edited, and I re-confirmed all three are still live and unedi
   rows, exact and rebuilt subclass alike (P1-P5); count pinned at an absolute zero in the package
   tier (`django_assert_num_queries(0)`, never an equality); the `Manager.from_queryset` relation at
   Django's own manager's absolute count, two cardinalities, live (L1); the pending predicate baked
-  by the same unbound `Query.add_q` (P6 and the flipped seal row, both building the state through
-  Django's own `_apply_rel_filters` rather than planting it); a state Django never writes refused
+  by the same unbound `Query.add_q` (P6 through Django's own `_apply_rel_filters`; the flipped seal row
+  hand-plants `(False, (), {"name": "later"})`); a state Django never writes refused
   with the typed error at BOTH tiers (R1/R2/R3 and L3).
-- **P6 and the flipped row build their pending state through `_apply_rel_filters`.** A hand-planted
+- **P6 builds its pending state through `_apply_rel_filters`; the flipped row hand-plants it.** A hand-planted
   tuple would pin the package against its own idea of what Django writes; this is what makes the
   floor run's named selection meaningful.
 - **The async rows' substitution of identity for a count is the stronger assertion,** not a
@@ -2157,7 +2182,7 @@ Three modules under `docs/builder/temp-tests/050/row_carry/`, all Worker 3's, al
   the package has not decided to offer, and whether it should is contract-level, not a builder's.
 - `proofs-w3.json` - my two-entry failability manifest, entries transcribed from the build report.
 
-Delete all four by explicit path at closeout, beside Worker 2's `test_measure.py`,
+Deleted all four by explicit path at closeout, beside Worker 2's `test_measure.py`,
 `test_hotpath.py`, `test_hotpath_admission.py` and `proofs.json`. Nothing under
 `docs/builder/temp-tests/` is left executing against the tree.
 
@@ -2252,7 +2277,8 @@ number exists and reproduces, and nothing is left mutated.
   - six package rows and three live rows. Neither entry is weakly pinned, neither measured zero
   rows, so no `why 0` judgement is owed. Nothing is left mutated: after my run
   `shasum -a 256 django_strawberry_framework/utils/querysets.py` =
-  `51dd1d30683cfab68be09db50d41b52f56ee6669430f7f052cfcc7f719d3aac9`, the hash the build report
+  `51dd1d30683cfab68be09db50d41b52f56ee6669430f7f052cfcc7f719d3aac9` (working tree; the committed
+`f7192bfb` file is `7dbd4755…`, 97/40), the hash the build report
   records for the shipped file; `grep -c 'if type(negate) is not bool:'` = 1,
   `grep -c 'carries an unresolved deferred filter'` = 0, `grep -c 'if False:'` = 0, and no
   `ACTIVE-MUTATION.json` exists under the scratch root.
@@ -2386,7 +2412,7 @@ rows on the async transport. One new boundary, pinned at 5 rows; the admission w
 
 ### Notes for Worker 1 (routing decisions, Worker 1)
 
-- **Routed to `BACKLOG.md`, owner `maintainer` - an exact `QuerySet` carrying a foreign
+- **Recorded in the DONE record's catalog (it never reached `BACKLOG.md`), owner `maintainer` - an exact `QuerySet` carrying a foreign
   `_result_cache` bypasses the raw-list ceiling.** Worker 3 measured it with
   `docs/builder/temp-tests/050/row_carry/test_w3_exact_cache.py`: an exact `models.QuerySet` whose
   `_result_cache` holds a non-list object returns 25 rows through `bounded_rows` under a
@@ -2450,7 +2476,7 @@ rows on the async transport. One new boundary, pinned at 5 rows; the admission w
    `require_unevaluated` verdict: a visibility hook's input and result and an `OrderSet.apply_*`
    result are still refused when evaluated" is false for the visibility seals and was escalated as
    Worker 3's Medium. Measured at the code, not read from a docstring: `require_unevaluated=True`
-   appears on `_ORDERSET_RESULT_POLICY` alone
+   appears on `_ORDERSET_RESULT_POLICY` (at `f7192bfb`; now `_SIDECAR_RESULT_POLICY`, which also seals `FilterSet.apply_*` returns) alone
    (`django_strawberry_framework/utils/querysets.py:2816`); the other six `_SealPolicy` values
    leave it `False`, and `tests/utils/test_querysets.py` seals an evaluated source at the
    visibility boundary in **zero queries** while asserting both the hook's input and the returned
@@ -2463,7 +2489,7 @@ rows on the async transport. One new boundary, pinned at 5 rows; the admission w
    'require_unevaluated\|refused when evaluated\|when evaluated\|arrives evaluated\|evaluated
    source'` plus a full `grep -n 'evaluat'` over the spec returns the Decision 8 paragraph and
    nothing else asserting it; every other occurrence (`## Slice checklist` line 105,
-   `## Implementation plan` step 4, `## Test plan` line 2103 and 2311, `## Definition of done`'s
+   Decision 5 step 4, `## Test plan` line 2103 and 2311, `## Definition of done`'s
    `OrderSet.apply_*` row) is correctly scoped to the post-`OrderSet` result seal and stands
    unedited. The same sweep over the rationale returns nothing. Triggered by the close cycle,
    Cohort A.
@@ -2490,7 +2516,8 @@ rows on the async transport. One new boundary, pinned at 5 rows; the admission w
 4. `docs/spec-050-list_field_arguments-0_0_15-rationale.md` `### Decision 8`, the measured fact
    behind the pending-predicate admission (lines 322-333 as edited). "all five shipped
    `_SealPolicy` values" states a population the probe did not measure: seven values are
-   constructed at module level (`django_strawberry_framework/utils/querysets.py:2794`, `:2800`,
+   constructed at module level (at `f7192bfb`; at HEAD `_UNRECOMPOSED_CHILD_POLICY` is retired by
+   `4d9f1c3d` and `_LIST_RELATION_CHILD_POLICY` is added) (`django_strawberry_framework/utils/querysets.py:2794`, `:2800`,
    `:2805`, `:2808`, `:2814`, `:2816`, `:2826`) and the probe covered five, omitting
    `_CASCADE_SEAL_POLICY` and `_UNRECOMPOSED_CHILD_POLICY`. Rewritten to name the five exercised
    values by symbol - a closed list that cannot rot into a wrong count - plus the reason the
@@ -3361,8 +3388,8 @@ an explicit statement of its public contract ("answers in the sliced value's own
 comes back as a ``list``"). Nothing in the permanent suite asserts either half. The evaluated rows -
 `tests/test_resource_policy.py:2211` and `:2229` - assert the rows and `django_assert_num_queries(0)`
 but not `type(rows) is list`; `test_bounded_rows_slices_a_sequence_to_the_policy_bound`
-(`tests/test_resource_policy.py:956`) asserts `== [0, 1]`, which a tuple-returning or
-list-subclass-returning implementation would also satisfy. The only oracles for the sentence are
+(`tests/test_resource_policy.py:956`) asserts `== [0, 1]`, which a list-subclass-returning
+implementation would also satisfy (a tuple would not: `(0, 1) == [0, 1]` is False). The only oracles for the sentence are
 `docs/builder/temp-tests/050/row_carry/test_w3_pass3_docstring.py` and this pass's
 `test_w3_pass4_own_type.py`, both gitignored and both inside `clean_up.py`'s deletion glob - so the
 day this cycle closes, the new public promise has no pin at all. `worker-3.md` "Temp test rules" is
@@ -3568,7 +3595,8 @@ nothing in this diff touches them.
   passes 2, 3 and 4 recorded. The historical snapshot's `HEAD` was `20646db2`, the same commit
   pass 2 measured against.
   `git status --short` is the population the last three passes recorded: the concurrent session's
-  `tests/mutations/*`, `django_strawberry_framework/schema.py`, the three live example suites it
+  `tests/mutations/*`, `django_strawberry_framework/schema.py` (which the DONE record's partition
+  folds into Cohort B), the three live example suites it
   owns, `docs/feedback.md`, `docs/TREE.md`, `docs/README.md`,
   `examples/fakeshop/test_query/README.md`, `docs/bug_hunt/*`,
   `docs/builder/DONE/build-050-list_field_arguments-0_0_15.md`, plus this cohort's own files and
@@ -3585,7 +3613,8 @@ The pass-4 sentence makes `bounded_rows`' returned type an explicit statement of
 (`bounded_rows` is in `resource_policy.py`'s `__all__`). Two facts decide it.
 
 1. **The suite already treats that returned type as pinned - on the other arm.** Five permanent
-   rows assert `type(rows) is QuerySet` through these same two helpers on an UNEVALUATED source
+   rows assert `type(rows) is QuerySet` through these same two helpers (the `:2025` row uses
+   `_windowed_rows`) on an UNEVALUATED source
    (`tests/test_resource_policy.py:2001`, `:2013`, `:2025`, `:2061`, `:2081`). The evaluated arm is
    the one this cohort created, is the sentence's sole named exception, and is pinned by nothing.
    That asymmetry is the finding: the contract is not "too obvious to pin" here, because the
@@ -3668,14 +3697,14 @@ HEAD. Nothing is deferred without an owner, and no routed replacement text has g
 
 | Item | Owner | Still live and unedited in the historical snapshot (`20646db2`) |
 |---|---|---|
-| `docs/GLOSSARY.md` "Sealed execution queryset" body - `_result_cache` "never copied forward" | `maintainer`, Worker 0's card-close DB pass | quoted old text occurs **1**, replacement **0** |
-| `docs/GLOSSARY.md` `DjangoListField` body - the unqualified `LIMIT` / `OFFSET` promise | `maintainer`, same DB pass | quoted old sentence occurs **1**, replacement **0** |
+| `docs/GLOSSARY.md` "Sealed execution queryset" body - `_result_cache` "never copied forward" | `maintainer`, Worker 0's card-close DB pass | quoted old text occurs **1**, replacement **0** (discharged in substance since) |
+| `docs/GLOSSARY.md` `DjangoListField` body - the unqualified `LIMIT` / `OFFSET` promise | `maintainer`, same DB pass | quoted old sentence occurs **1**, replacement **0** (discharged since) |
 | `docs/SPECS/spec-045-visibility_boundary-0_0_14.md` "unresolved" -> "malformed" | `maintainer` | **1** hit |
 | `docs/SPECS/spec-034-permissions-0_0_10.md` "unresolved" -> "malformed" | `maintainer` | **1** hit |
-| `docs/SPECS/spec-047-resource_policy-0_0_14.md` `**The bound is applied by SLICING**` bullet | `maintainer` (recorded reading: a dated `0.0.14` record, plausibly needs nothing) | **1** hit |
-| Robustness row - an exact `QuerySet` carrying a foreign `_result_cache` bypasses the ceiling | `maintainer`, `BACKLOG.md` (`AGENTS.md` rule 35: condition (c) fails outright) | pre-existing at HEAD, unchanged |
-| `_UNRECOMPOSED_CHILD_POLICY` has no production reader after `fd39cac6` | `maintainer` (delete-or-correct, file in no cohort's set) | unchanged |
-| Decision 20's connection-field separation | `maintainer` until a card number exists, on a new card | recorded in the rationale |
+| `docs/SPECS/spec-047-resource_policy-0_0_14.md` `**The bound is applied by SLICING**` bullet | `maintainer` (recorded reading: a dated `0.0.14` record, plausibly needs nothing; amended by `b3458ee8` with the evaluated-source case) | **1** hit |
+| Robustness row - an exact `QuerySet` carrying a foreign `_result_cache` bypasses the ceiling | `maintainer`, the DONE record's catalog, not `BACKLOG.md` (`AGENTS.md` rule 35: condition (c) fails outright) | pre-existing at HEAD, unchanged |
+| `_UNRECOMPOSED_CHILD_POLICY` has no production reader after `fd39cac6` | `maintainer` (delete-or-correct, file in no cohort's set) | unchanged (retired by `4d9f1c3d`) |
+| Decision 20's connection-field separation | `maintainer` until a card number exists, on a new card | recorded in the rationale (discharged by `fee87ac4`/`c87f4f98`, card 053) |
 
 Both glossary replacements were re-matched against the CURRENT render with whitespace flattened
 rather than trusted from the earlier pass: each old text occurs exactly once and neither replacement
@@ -4071,11 +4100,11 @@ the cohort was verified at passes 1 and 2 and re-verified at 3; this diff touche
 
 - **Spec slice checklist: both boxes remain `- [x]` and both remain true.** Re-verified, not carried:
   each box's text was cut from the artifact, whitespace-flattened and counted against the CURRENT
-  `docs/spec-050-list_field_arguments-0_0_15.md` - **1 occurrence each**, so the text a tick is
+  `docs/spec-050-list_field_arguments-0_0_15.md` - **1 occurrence each** (measured before P2-2; 0 at `f7192bfb` and HEAD), so the text a tick is
   audited against is still the text the spec demands after every `### Spec changes made (Worker 1
   only)` edit. Every row the clause-by-clause tick warrant names still collects:
   `test_a_project_queryset_class_relation_costs_what_djangos_own_manager_costs[two-parents]` and
-  `[three-parents]`, `test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited`
+  `[three-parents]` (renamed by P2-2 to `…costs_two_prefetch_queries`, one arm), `test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited`
   (all three in `examples/fakeshop/test_query/test_resource_policy_api.py`),
   `test_a_subclass_result_with_a_pending_deferred_filter_seals_with_it_baked`, and both
   `[malformed-deferred-filter]` rows. The absolute-count clause is carried by
@@ -4090,14 +4119,14 @@ the cohort was verified at passes 1 and 2 and re-verified at 3; this diff touche
 
   | Routed item | Owner | Old text | Replacement |
   |---|---|---|---|
-  | `docs/GLOSSARY.md` "Sealed execution queryset" body | `maintainer`, Worker 0's card-close DB pass | **1** | **0** |
-  | `docs/GLOSSARY.md` `DjangoListField` body (`djangolistfield` anchor) | `maintainer`, same DB pass | **1** | **0** |
+  | `docs/GLOSSARY.md` "Sealed execution queryset" body | `maintainer`, Worker 0's card-close DB pass | **1** | **0** (discharged in substance since) |
+  | `docs/GLOSSARY.md` `DjangoListField` body (`djangolistfield` anchor) | `maintainer`, same DB pass | **1** | **0** (discharged since) |
   | `docs/SPECS/spec-045-visibility_boundary-0_0_14.md` #"unresolved deferred filter, unsealable prefetch child" | `maintainer` | **1** | n/a |
   | `docs/SPECS/spec-034-permissions-0_0_10.md` #"an unresolved deferred filter" | `maintainer` | **1** | n/a |
-  | `docs/SPECS/spec-047-resource_policy-0_0_14.md` #"The bound is applied by SLICING" | `maintainer` (recorded reading: a dated `0.0.14` record) | **1** | n/a |
-  | Robustness row - an exact `QuerySet` carrying a foreign `_result_cache` | `maintainer`, `BACKLOG.md` | pre-existing at HEAD | n/a |
-  | `_UNRECOMPOSED_CHILD_POLICY` has no production reader after `fd39cac6` | `maintainer` (delete-or-correct) | unchanged | n/a |
-  | Decision 20's connection-field separation | `maintainer`, on a new card once a number exists | recorded in the rationale | n/a |
+  | `docs/SPECS/spec-047-resource_policy-0_0_14.md` #"The bound is applied by SLICING" | `maintainer` (recorded reading: a dated `0.0.14` record; amended by `b3458ee8`) | **1** | n/a |
+  | Robustness row - an exact `QuerySet` carrying a foreign `_result_cache` | `maintainer`, the DONE record's catalog, not `BACKLOG.md` | pre-existing at HEAD | n/a |
+  | `_UNRECOMPOSED_CHILD_POLICY` has no production reader after `fd39cac6` | `maintainer` (delete-or-correct) | unchanged (retired by `4d9f1c3d`) | n/a |
+  | Decision 20's connection-field separation | `maintainer`, on a new card once a number exists | recorded in the rationale (discharged by `fee87ac4`/`c87f4f98`, card 053) | n/a |
 
   Control: a needle present in no file counts **0** against the same flattened reader. Eight items,
   eight named owners, none unhomed.
@@ -4148,7 +4177,7 @@ was falsified or is now under-stated. The spec's header and `Status:` lines were
 The eight routed items in the table above are the cohort's complete open set; all eight are the
 maintainer's, seven of them in Worker 0's card-close board/glossary DB pass.
 
-## Build report (Worker 3) — P2-2 public manager declaration repair
+## Build report (Worker 3) — P2-2 public manager declaration repair (no review pass followed)
 
 The earlier live carry rows were superseded: their temporary `_meta.local_managers` mount and
 private `_expire_cache()` calls proved a manager class, but did not dogfood a supported project
@@ -4189,7 +4218,8 @@ and the async payload.
   --check --dry-run` - no changes detected.
 - Trailing-comma/source-layout, citation, and spec glossary checks passed; the glossary checker
   reports 43 terms with all entries and links present.
-- A direct non-pytest `/graphql/` probe over the checked-in fakeshop data returned status 200,
+- A direct non-pytest `/graphql/` probe over a seeded database (the tracked `db.sqlite3` holds no `library_patron` rows) returned
+  status 200,
   no errors, six patrons, and exactly two queries. A metadata probe confirmed the default and
   reverse relation querysets are `LoanQuerySet`, the manager has `use_in_migrations=False`, and
   Django leaves the reverse predicate pending for the package sealer.

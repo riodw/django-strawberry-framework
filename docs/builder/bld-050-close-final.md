@@ -1,14 +1,20 @@
 # Build: Superseded close-cycle review — historical pre-candidate snapshot
 
-Spec reference: `docs/spec-050-list_field_arguments-0_0_15.md` — Decision 20 (the admission rule,
-lines 1654-1705), Decision 22 (the close sequence, lines 1749-1773), Decision 8 (lines 1230-1312),
-Decisions 14-21, and `## Definition of done` (lines 2756-2929). Admission rule also `AGENTS.md`
+Spec reference: `docs/spec-050-list_field_arguments-0_0_15.md` — Decision 20 (the admission rule),
+Decision 22 (the close sequence), Decision 8, Decisions 14-21, and `## Definition of done` (cited
+by heading; the line ranges first recorded here matched no committed tree). Admission rule also `AGENTS.md`
 rule 35 and `GOAL.md` `## Trust boundary`.
 Status: superseded historical review (accepted only for its pre-candidate snapshot)
 
+Superseded, not evidence. The measurements below describe the pre-candidate snapshot
+`20646db2` plus working-tree paths. The gated candidate is `2c66416e` (tree `5ce4c799`) and the
+evidence-only follow-up is `b38184b3`; the gate and the Decision 20 review of that exact tree are in
+`docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` `## Closing record`. Working-tree
+measurements (digests, md5s, sweep counts) are not reproducible from any commit.
+
 This artifact is not the Decision 22 gate. Its tree identifiers and measurements describe a
 pre-candidate snapshot that the current WIP checkout no longer is; the candidate commit and the
-evidence-only follow-up remain outstanding.
+evidence-only follow-up are recorded at `2c66416e` / `b38184b3`.
 
 ## Review (Worker 3)
 
@@ -57,7 +63,7 @@ Conditions, written out per row: **(a)** the Definition-of-done row it breaks, q
 project shape that could feasibly exist under supported public API, stated as code a project would
 write; **(c)** the wire or configuration input that reaches it.
 
-#### C1 — the retired "unresolved deferred filter" vocabulary survives at three first-party sites
+#### C1 — the retired "unresolved deferred filter" vocabulary survives at four first-party sites
 
 **(a) FAILS.** No `## Definition of done` row states the cause enumeration inside the seal's
 `untrusted` message or the `utils/querysets.py` module docstring. The row that is nearest —
@@ -90,7 +96,8 @@ class ItemType(DjangoType):
 ```
 
 **(c) HOLDS.** Any query selecting that type, under the pass-through error policy. Measured
-(`docs/builder/temp-tests/050/final/probe_message.py`): the seal answers
+(`docs/builder/temp-tests/050/final/probe_message.py`, run against `Category`, not the `Item`
+shown above): the seal answers
 `('untrusted', "annotation 'u' carries a MyUpper node")` and `_visibility_result_error` renders
 
 > `_T.get_queryset returned a queryset that cannot be sealed into a framework-owned execution
@@ -100,9 +107,11 @@ class ItemType(DjangoType):
 
 — naming, as a cause, a state that is no longer a defect at all.
 
-**NOT ADMITTED** (condition (a)). Recorded as a new-card candidate below. Measured population, not
-sampled: occurrences of `unresolved deferred` in tracked `.py`, **12 at HEAD → 3 now**; the nine
-retirements are this cycle's, and the three survivors are
+**NOT ADMITTED** (condition (a)). Recorded as a new-card candidate below. Measured by a per-line grep,
+which misses wrapped sites: occurrences of `unresolved deferred` in tracked `.py`, **12 at HEAD → 3
+now**. A line-joining reader gives 13→4; the fourth survivor is `permissions.py:369-370`,
+`_root_error_renderer`'s `untrusted` message. All four were fixed in `f7192bfb`. The three
+per-line survivors are
 
 - `django_strawberry_framework/permissions.py:432` — the cascade's `untrusted` wire message. The
   docstring of that same function (`_edge_error_renderer`, line 400) IS changed to `malformed` by
@@ -114,7 +123,7 @@ retirements are this cycle's, and the three survivors are
   class, a foreign row-iterable class, or an unresolved deferred filter cannot be faithfully
   rebuilt, so they fail closed (`untrusted`)". False as of this diff.
 
-Fix hypothesis if a card takes it: replace `unresolved` with `malformed` at all three, matching the
+Fix hypothesis if a card takes it: replace `unresolved` with `malformed` at all four, matching the
 wording already landed at the four sibling sites.
 
 #### C2 — the new `_result_cache` shape check emits `untrusted` after the `routing` check
@@ -123,16 +132,17 @@ wording already landed at the four sibling sites.
 Decision 5 ("`type`, `table`, `untrusted`, `routing`, `evaluated`, `sliced`, `combined`,
 `projection`, `alias`", with the rationale "every trust-family proof still runs first").
 **(c) FAILS** — no input reaches both checks: `expected_routing` is supplied only by the
-post-`OrderSet` result seal (`_ORDERSET_RESULT_POLICY`), and `carry_result_cache` is set only by
+post-`OrderSet` result seal (`_ORDERSET_RESULT_POLICY` (now `_SIDECAR_RESULT_POLICY`)), and `carry_result_cache` is set only by
 `_RAW_LIST_SOURCE_POLICY`, which `normalized_row_source` calls with `required_alias=None` and no
 `expected_routing`. The two defects cannot co-occur, so no ordering is observable.
 **NOT ADMITTED.** Robustness note only.
 
 #### C3 — the exact-`list` `_result_cache` refusal is not reachable through supported public API
 
-**(a) FAILS**, **(b) FAILS.** Django writes an exact `list` into `_result_cache` at both sites that
-populate it (`QuerySet._fetch_all` → `list(self._iterable_class(self))`, and
-`prefetch_one_level` → `qs._result_cache = vals`), so no project using supported API produces
+**(a) FAILS**, **(b) FAILS.** Django writes an exact `list` into `_result_cache` at every site that
+populates it (`QuerySet._fetch_all` → `list(self._iterable_class(self))`, and
+`prefetch_one_level` → `qs._result_cache = vals`; also `RawQuerySet._fetch_all`, and
+`Prefetch.__getstate__`, which writes `[]`), so no project using supported API produces
 another shape. **NOT ADMITTED** — it is a fail-closed typed error kept for the reason Decision 20
 keeps cheap robustness rows, and it is correctly `type(...) is list` rather than `isinstance`.
 
@@ -159,7 +169,8 @@ None.
 
 ### Low:
 
-- **C1**, the three surviving `unresolved deferred filter` sites. Low by `BUILD.md`'s tiers
+- **C1**, the three per-line surviving `unresolved deferred filter` sites (four by a line-joining
+  reader; all fixed in `f7192bfb`). Low by `BUILD.md`'s tiers
   (docstrings stale or wrong but not load-bearing) for `utils/querysets.py:54`; the two message
   sites are remediation advice a schema author reads, so they are the part worth a card. Not
   admitted; not a blocker.
@@ -173,7 +184,7 @@ None.
     for `_SealPolicy(` constructions and every `policy=` argument; no other seal can receive it, so
     `_prepared_visibility_source`'s amended claim ("this seal's policies do not carry
     `_result_cache` forward") is true by construction rather than by convention.
-  - `require_unevaluated` reaches exactly one policy (`_ORDERSET_RESULT_POLICY`), which is what
+  - `require_unevaluated` reaches exactly one policy (`_ORDERSET_RESULT_POLICY` (now `_SIDECAR_RESULT_POLICY`)), which is what
     Decision 8's amended paragraph asserts.
   - The carried rows cannot escape the ceiling: `_windowed_rows` normalizes first, then dispatches
     on `type(result) in _SLICE_BOUNDED_ROW_TYPES`; the sealed rebuild is an exact
@@ -202,7 +213,7 @@ None.
   and the control genuinely does not. Without this the two arms' equal query counts would be
   consistent with a mount that changed nothing.
 - **The three new live rows pass here**: `test_a_project_queryset_class_relation_costs_what_
-  djangos_own_manager_costs[two-parents]`, `[three-parents]`, and
+  djangos_own_manager_costs[two-parents]`, `[three-parents]` (renamed by P2-2 to `…costs_two_prefetch_queries`, one arm), and
   `test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited` — 3 passed.
 - **The package tier passes**: `uv run pytest -n0 tests/utils/test_querysets.py
   tests/test_resource_policy.py --no-cov -q` → **622 passed**, no `--cov*` flag.
@@ -240,12 +251,13 @@ None.
   contradicting rule (its `OrderSet.apply_*` row already says a sealable subclass is accepted and
   normalized rather than rejected for its class); it carries no row about the carry, which is an
   absence rather than a disagreement. The same holds for Decision 15's ladder, Decision 21 and the
-  authority DoD row after Cohort B's amendment — all three now say "as a class or as an instance"
-  on the subclass rung and "subclasses included" on the factory rung.
+  authority DoD row after Cohort B's amendment on the subclass rung ("as a class or as an
+  instance"). On the factory rung Decision 15 and Decision 21 say "subclasses included", but the
+  DoD row says only "an entry that RESOLVES into one", which is narrower; this pass missed that.
 - **Structural gates on the identified tree** (`--check` only; nothing rewritten):
   `scripts/check_trailing_commas.py --check <the 14 non-artifact paths>` → clean;
   `scripts/check_citations.py --check` → `OK: 1108 citations resolve (929 in 448 .py files, 179 in
-  KANBAN.md)`; `ruff format --check` → `425 files already formatted`; `ruff check` → `All checks
+  KANBAN.md)`; `ruff format --check` → `451 files already formatted`; `ruff check` → `All checks
   passed!`. The full gate (default suite, sharded suite, floor scope, tracked-path constants,
   `manage.py check`, `makemigrations --check`) is Worker 0's step 2 and is not restated here.
 
@@ -256,22 +268,23 @@ polarities of the retired claim:
 
 | Needle | Hits | Reading |
 |---|---|---|
-| `unresolved deferred` (tracked `.py`) | 3 | C1 above; 12 at HEAD |
+| `unresolved deferred` (tracked `.py`) | 3 | C1 above; 12 at HEAD (per-line; a line-joining reader gives 4 and 13) |
 | `unresolved deferred` (tracked `.md`) | 3 | 2 archived specs + 1 quotation inside this cycle's own rationale (quoting the pre-fix message verbatim as measured evidence — correct as a quotation). Archived specs already ROUTED |
 | `never copies` `_result_cache` | 4 | 3 in archived specs 035/045 (describe the VISIBILITY seal, which still does not carry — true), 1 unrelated (`docs/dry/DRY.md`) |
-| `one extra query` | 3 | all describe the visibility hook's discarded cache — still true |
+| `one extra query` | 3 | two describe the visibility hook's discarded cache — still true; `spec-059:563` is about fetching a deferred column |
 | `no cached rows` | 0 | the retired claim is gone from every home |
 
-Positive control: the same flattened reader finds `malformed deferred` at 4 `.py` sites, so the
+Positive control: the same reader (per-line, not flattened; it missed the wrapped `permissions.py:369-370` site) finds `malformed deferred` at 4 `.py` sites, so the
 instrument is not reporting zero because it is reading nothing.
 
 ### Failability audit
 
 No new boundary enters at this review — it introduces no diff. The boundaries the assembled tree
-carries are the three the cohort passes recorded and I re-ran at those passes at the recorded
-scopes (`bld-050-close-row_carry.md` `### Failability proofs`, passes 1, 2 and 5): the deleted
-exact-`QuerySet` class gate (the widening, re-run with the gate re-inserted — 9 rows fail across
-both tiers), the `negate` exact-`bool` gate, and the `_result_cache` exact-`list` gate. The
+carries are the three the cohort passes recorded (`bld-050-close-row_carry.md` `### Failability proofs`;
+pass 5 recorded no new boundary): the deleted exact-`QuerySet` class gate (the widening, re-run
+with the gate re-inserted — 9 rows fail across both tiers) and the `negate` exact-`bool` gate were
+re-run at the recorded scopes; the `_result_cache` exact-`list` gate was accepted on Worker 2's
+record and not re-run. The
 mandatory re-run floor is therefore empty for this pass, and no transient source mutation was made
 in this tree (`utils/querysets.py` is also named by a concurrent DRY cycle, which is a second reason
 not to mutate it here).
@@ -281,7 +294,7 @@ not to mutate it here).
 Present and reproducible as recorded: `bld-050-close-row_carry.md` `### Hot-path budget` (pass 2)
 carries before/after wall-clock medians over 50 executions with the mounted-minus-control residual
 at **+0.210 ms** after, against **+0.842 ms** before, and its instrument
-(`docs/builder/temp-tests/050/row_carry/test_hotpath_admission.py`) is still on disk and runnable.
+(`docs/builder/temp-tests/050/row_carry/test_hotpath_admission.py`) was on disk and runnable at that pass (deleted at closeout).
 The number's acceptability is the maintainer's call, not this review's.
 
 ### DRY findings
@@ -308,9 +321,9 @@ Decision 12 hold.
 - `docs/README.md`: read end to end around the three rewritten examples and the two new prose
   blocks. No plain `strawberry.Schema` schema construction survives in the file's fenced examples;
   the prose beside them was rewritten rather than left describing the old spelling (the
-  "before `strawberry.Schema(...)` is constructed" lead-in and the "Calling
-  `finalize_django_types()` after the `Schema(...)` construction" sentence both moved onto
-  `DjangoSchema`). No "coming soon" / "planned" / old-version wording remains in the paragraphs the
+  "Calling `finalize_django_types()` after the `Schema(...)` construction" sentence moved onto
+  `DjangoSchema`; the "before `strawberry.Schema(...)` is constructed" lead-in became "before the
+  schema is constructed"). No "coming soon" / "planned" / old-version wording remains in the paragraphs the
   diff touched.
 - Spec and rationale: the spec stayed at its working location (no archival in that snapshot); its
   in-flight `Status:` and the rationale's rejected alternatives were not evidence of a shipped
@@ -325,15 +338,15 @@ Re-checked on disk at this HEAD rather than carried from the artifacts:
 
 | Item | Owner | Status |
 |---|---|---|
-| `docs/GLOSSARY.md` "Sealed execution queryset" body (`_result_cache` "never copied forward") | `maintainer`, Worker 0's card-close DB pass | still live, replacement absent |
-| `docs/GLOSSARY.md` `DjangoListField` body (unqualified `LIMIT`/`OFFSET` promise) | `maintainer`, same pass | still live |
-| `docs/GLOSSARY.md`, four `strawberry.Schema` recipe sites (Cohort B) | `maintainer`, same pass | still live |
+| `docs/GLOSSARY.md` "Sealed execution queryset" body (`_result_cache` "never copied forward") | `maintainer`, Worker 0's card-close DB pass | still live, replacement absent (fixed in `f7192bfb`) |
+| `docs/GLOSSARY.md` `DjangoListField` body (unqualified `LIMIT`/`OFFSET` promise) | `maintainer`, same pass | still live (fixed in `f7192bfb`) |
+| `docs/GLOSSARY.md`, four `strawberry.Schema` recipe sites (Cohort B) | `maintainer`, same pass | still live (fixed in `f7192bfb`) |
 | `docs/SPECS/spec-045` and `spec-034` "unresolved" → "malformed" | `maintainer` | 1 hit each |
-| `docs/SPECS/spec-047` "The bound is applied by SLICING" bullet | `maintainer` | 1 hit |
-| Exact `QuerySet` carrying a foreign `_result_cache` bypasses the ceiling | `maintainer`, `BACKLOG.md` | pre-existing at HEAD, unchanged |
-| `_UNRECOMPOSED_CHILD_POLICY` has no production reader after `fd39cac6` | `maintainer` (delete-or-correct) | unchanged |
-| Connection-field sidecar seam: no routing snapshot, result not re-sealed | `maintainer`, new card (spec-030 Decision 7's row) | recorded in the rationale |
-| **NEW — C1**, three surviving `unresolved deferred filter` sites in first-party `.py` | `maintainer`, new card or the card-close pass | recorded above with measurement |
+| `docs/SPECS/spec-047` "The bound is applied by SLICING" bullet | `maintainer` | 1 hit (amended by `b3458ee8`) |
+| Exact `QuerySet` carrying a foreign `_result_cache` bypasses the ceiling | `maintainer`, the DONE record's catalog (never reached `BACKLOG.md`) | pre-existing at HEAD, unchanged |
+| `_UNRECOMPOSED_CHILD_POLICY` has no production reader after `fd39cac6` | `maintainer` (delete-or-correct) | unchanged (retired by `4d9f1c3d`) |
+| Connection-field sidecar seam: no routing snapshot, result not re-sealed | `maintainer`, new card (spec-030 Decision 7's row) | recorded in the rationale (fixed under card 053, `fee87ac4`/`c87f4f98`) |
+| **NEW — C1**, three per-line (four joined) surviving `unresolved deferred filter` sites in first-party `.py` | `maintainer`, new card or the card-close pass | recorded above with measurement (fixed in `f7192bfb`) |
 | **NEW — C2/C4**, seal ordering note and the unenforced `_SealPolicy` complement sentence | `maintainer`, note only | recorded above |
 
 ### What looks solid
@@ -349,7 +362,7 @@ Re-checked on disk at this HEAD rather than carried from the artifacts:
   after the rebuild, and the confinement is mechanical (one policy, one call site) rather than
   documentary.
 - The live proof is built so it cannot pass vacuously: two parent cardinalities, an absolute query
-  count rather than an equality, separate schemas with separate optimizer singletons per arm, and
+  count rather than an equality, separate schemas with separate optimizer singletons per arm (the pre-P2-2 setup, which P2-2 removed), and
   the async twin asserting rows rather than a count because the capture cannot see worker-thread
   work.
 - The README now says three separate things where it previously fused two, and each of the three is
@@ -363,19 +376,20 @@ Re-checked on disk at this HEAD rather than carried from the artifacts:
   live arm reaches the subclass branch once per parent row and the control does not.
 - Disposition: both are scratch, neither is promoted (the permanent oracles for the same facts are
   the two `test_resource_policy_api.py` rows and the package-tier rows this cycle added), and both
-  die with the cycle. Neither writes a tracked file; the tracked `db.sqlite3` md5 is unchanged.
+  die with the cycle (deleted at closeout). Neither writes a tracked file; the tracked `db.sqlite3` md5 is unchanged.
 
 ### Notes for Worker 1 (spec reconciliation)
 
 No spec edit is owed by this review. The spec, its rationale and the build plan were read at this
 HEAD and the amended homes agree with each other and with the code.
 
-`Escalated:` C1 — the three surviving `unresolved deferred filter` sites. It is NOT admitted under
+`Escalated:` C1 — the three per-line surviving `unresolved deferred filter` sites (four by a
+line-joining reader; all fixed in `f7192bfb`). It is NOT admitted under
 Decision 20 (condition (a) fails: no `## Definition of done` row states that wording), so under
 Decision 22 it does not re-loop this gate and belongs on a new card rather than here. Recording it
 at the close so it is not lost: two of the three are wire-reachable remediation advice naming a
 cause that no longer exists, and one of them (`permissions.py:432`) contradicts a docstring this
-same diff corrected twenty lines above it. Resolution paths for the maintainer: (i) fold the
+same diff corrected 32 lines above it. Resolution paths for the maintainer: (i) fold the
 three-word substitution into the card-close pass alongside the routed archived-spec fixes, which is
 the same sweep and the same vocabulary; or (ii) card it with the spec-045/spec-034 rows, which are
 the `.md` half of the identical population.
@@ -385,7 +399,7 @@ the `.md` half of the identical population.
 `review-accepted` for the historical pre-candidate snapshot. No finding was admitted under
 Decision 20; four candidates were recorded with their failing condition named. This does not
 complete Decision 22: the candidate commit, exact-tree gate and review, and evidence-only
-follow-up record are still required.
+follow-up record are recorded at `2c66416e` / `b38184b3`.
 
 ## P2-2 disposition — public fakeshop manager declaration
 
@@ -393,7 +407,7 @@ The historical review's temporary manager mount is superseded. The fakeshop `Loa
 declares a no-op `LoanQuerySet` through `objects = LoanQuerySet.as_manager()`, which is Django's
 supported project shape and retains `use_in_migrations=False`. The live resource-policy proof no
 longer rewrites `Loan._meta.local_managers`, assigns manager internals, expires private caches, or
-maintains a parallel control schema. It runs the existing `patrons { loans { note } }` document
+maintains a parallel control schema. It runs the existing `{ patrons { name loans { note } } }` document
 against that ordinary declaration, pins an absolute two-query prefetch cost at two and three
 parent cardinalities, and keeps the async payload assertion. The package-tier `_apply_rel_filters`
 probe remains only as a mechanism test for the deferred-predicate rebuild; it is not used to

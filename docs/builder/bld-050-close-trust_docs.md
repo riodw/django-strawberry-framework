@@ -1,11 +1,16 @@
-# Build: Close cycle — Cohort B, the trust and extension contract in the shipped docs
+# Build: Close cycle — Cohort B, the trust and extension contract in the shipped docs — superseded historical record
 
-Spec reference: `docs/spec-050-list_field_arguments-0_0_15.md` (Decision 20, lines 1648-1700;
-Decision 21, lines 1701-1742; `## Slice checklist` Slice 5, lines 161-183; `## Doc updates`,
-lines 2614-2682; `## Definition of done` row "The shipped docs state the trust contract",
-lines 2893-2898) — re-pinned at final verification; the plan-time numbers had drifted under the
-concurrent cohort's spec edits and this pass's own.
+Spec reference: `docs/spec-050-list_field_arguments-0_0_15.md` (Decision 20;
+Decision 21; `## Slice checklist` Slice 5; `## Doc updates`; `## Definition of done` row "The
+shipped docs state the trust contract") — cited by heading; the line pins first recorded here match
+none of the committed spec revisions.
 Status: superseded cohort artifact (final-accepted only for its pre-candidate snapshot)
+
+Superseded, not evidence. The measurements below describe the working tree at `e3257e25` and
+the commit `f7192bfb`. The gated candidate is `2c66416e` (tree `5ce4c799`) and the evidence-only
+follow-up is `b38184b3`; the gate and the Decision 20 review of that exact tree are in
+`docs/builder/DONE/build-050-list_field_arguments-0_0_15.md` `## Closing record`. Working-tree
+measurements (digests, md5s, sweep counts) are not reproducible from any commit.
 
 ## Plan (Worker 1)
 
@@ -158,7 +163,8 @@ stop and report it here rather than editing.
 
 **Out of scope, explicitly:** `docs/GLOSSARY.md` and the glossary DB (not in any cohort's writable
 set this cycle), `KANBAN.md`, `CHANGELOG.md`, `TODAY.md` (the spec says it is deliberately not
-touched and that "a Slice 5 executor must not invent an edit to satisfy a checklist row"), and
+touched and that "a Slice 5 executor must not invent an edit to satisfy a checklist row"; that
+sentence was removed by `f7192bfb`, and the spec now requires the candidate to update `TODAY.md`), and
 every `docs/README.md` paragraph not named above.
 
 ### Test additions / updates
@@ -202,8 +208,8 @@ text against Decisions 20 and 21, not a mutation.
 ### Floor verification
 
 `Not applicable; the plan's floor-verification scope assigns this cohort no run.` This cohort
-touches no Django / Strawberry / channels seam; the full twenty-three-path scope is the final
-gate's.
+touches no Django / Strawberry / channels seam; the full twenty-three-path scope (the floor at
+`f7192bfb`; 27 at HEAD) is the final gate's.
 
 ### Implementation discretion items
 
@@ -350,7 +356,8 @@ prose's `myapp` `Category` / `Item`.
   constants` Passed, `source layout` Passed (the link-def scaffold check), `ruff format` Skipped,
   `ruff check` Skipped, `kanban anchors` Passed, `citations resolve` Passed.
 - `uv run python scripts/check_citations.py --check` — **pass**:
-  `OK: 1101 citations resolve (922 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1101 citations resolve (922 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - Link audit over both files, fenced blocks dropped and code spans stripped **per line** (a
   document-wide `` `...` `` stripper mispairs across an odd backtick and reports false orphans —
   the first run of this audit did exactly that on this artifact): `docs/README.md` has **38** uses
@@ -567,7 +574,7 @@ one voice. No test expectation.
 ### DRY findings
 
 - **No restatement of the glossary body.** `docs/GLOSSARY.md` `## Per-operation extension
-  isolation` is ~4,900 characters of mechanism (runner, leases, tokens, streamed-frame rebinding).
+  isolation` is 5,083 characters of mechanism (runner, leases, tokens, streamed-frame rebinding).
   The new `## Quick start` paragraph states the guarantee in three clauses and links to it. That is
   the pointer-plus-contract shape the plan committed to; nothing to consolidate.
 - **No restatement of `### Production error policy`.** The enforcement paragraph states the
@@ -616,7 +623,8 @@ The slice touches docs, so this ran in full, reading `docs/README.md` end to end
 - **Gates.** `uvx pre-commit run --files docs/README.md` — pass (tracked-path constants, source
   layout, kanban anchors, citations all Passed; both ruff hooks Skipped, no Python).
   `uv run python scripts/check_citations.py --check` — pass,
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - **No process provenance.** A sweep of the added lines for `previously`, `no longer`, `as of `,
   `now`, `round N`, `Decision N`, `Slice N`, `spec-0` returns zero hits. The prose is in the
   README's own voice throughout.
@@ -632,7 +640,7 @@ All three boxes are `- [x]`, and each tick has a matching change in the diff:
    defect **inside** delivered text, not an over-tick.
 2. *Correct the executable examples …* — landed. Verified independently, not from the build
    report: a fence-tracking scan of `docs/README.md` finds **3** surviving `strawberry.Schema`
-   mentions, at lines 59, 124 and 204, **all in prose** and each a deliberate contrast with plain
+   mentions, at lines 59, 124 and 204 (at `f7192bfb`), **all in prose** and each a deliberate contrast with plain
    Strawberry; **0** inside any fenced block. `README.md` (root): **0** hits of any kind.
 3. *The shipped docs state the trust contract where a deployer reads it …* — landed, subject to the
    High and to the Medium's glossary residual.
@@ -668,8 +676,9 @@ fires.
 ### Test staleness
 
 Run independently of the artifact's file list, per `worker-3.md`: `grep -rn "docs/README"` across
-`tests/`, `examples/` and `scripts/` finds no reader — no test, fixture, or generator asserts this
-file's content, so the doc edit strands nothing. No wire-shape or model-field change is in the
+`tests/`, `examples/` and `scripts/` finds one reader, not none: `examples/fakeshop/test_query/test_transport_api.py` mounts the
+production-profile recipe, and `examples/fakeshop/README.md` and
+`examples/fakeshop/test_query/README.md` link in; none asserts the rewritten paragraphs, so the doc edit strands nothing. No wire-shape or model-field change is in the
 diff, so neither shape in `BUILD.md` `### Test staleness a focused run cannot see` applies.
 
 ### What looks solid
@@ -682,7 +691,7 @@ diff, so neither shape in `BUILD.md` `### Test staleness a focused run cannot se
   mechanically about their **results**", which is `GOAL.md`'s own hedge, and it does **not** say
   sidecar results are validated on every surface. That distinction is load-bearing right now:
   `django_strawberry_framework/connection.py::_pipeline_sync` #"qs = set_class.apply_sync(value, qs, info)"
-  applies `FilterSet` with no re-seal, while the post-`OrderSet` seal
+  applies `FilterSet` with no re-seal (discharged on card 053, `c87f4f98`), while the post-`OrderSet` seal
   `django_strawberry_framework/utils/querysets.py::apply_orderset_sync` #"return _validate_post_orderset_result"
   does re-seal and is now called from both fields — a per-surface claim would have been false on
   the day it shipped, and a per-sidecar one would still be.
@@ -760,8 +769,9 @@ untracked `docs/builder/worker-memory/050-worker-2.md`). Two edits:
    > `SCHEMA_CONFIGURATION_UNAVAILABLE` code, and a subclass of either extension — supplied as a
    > class or as an instance — is refused at construction with `ConfigurationError`.
 
-   "supplied as a class or as an instance" is deliberate over the spec-side phrasing "a subclass
-   supplying a policy": the refusal does not depend on the subclass supplying anything (probe row
+   "supplied as a class or as an instance" is deliberate over the phrasing "a subclass
+   supplying a policy" (Worker 2's pass-1 proposal, not spec text; Decision 21 read "a factory or
+   subclass resolving to one refuses the operation"): the refusal does not depend on the subclass supplying anything (probe row
    `B` is a bare class entry). The two other clauses of the paragraph are untouched, and the
    sentence is now the same ladder `### Production error policy` states three paragraphs later.
 
@@ -828,9 +838,10 @@ pass edits prose only, so the three fenced blocks are byte-identical to the ones
   `source layout` Passed, `ruff format` Skipped, `ruff check` Skipped, `kanban anchors` Passed,
   `citations resolve` Passed.
 - `uv run python scripts/check_citations.py --check` — **pass**:
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - Census, stated as a population: a fence-tracking scan of `docs/README.md` finds **3**
-  `strawberry.Schema` occurrences, at lines 59, 124 and 204, **all in prose** and **0** inside any
+  `strawberry.Schema` occurrences, at lines 59, 124 and 204 (at `f7192bfb`), **all in prose** and **0** inside any
   fenced block — unchanged by this pass, each a deliberate contrast with plain Strawberry. The same
   scan for a bare `Schema(...)` (excluding `.Schema(...)` and a backticked-qualified form) now
   finds **0** occurrences anywhere in the file; it found one before this pass, which was the Low.
@@ -999,7 +1010,7 @@ expectation.
 
 `docs/README.md` `## Schema setup` now reads "after the `DjangoSchema(...)` construction" (line
 105), naming the class the block above constructs. **Census, as a population rather than an
-absence:** a fence-tracking scan of all 915 lines of `docs/README.md` (fences balanced) finds **0**
+absence:** a fence-tracking scan of all 915 lines (at `f7192bfb`) of `docs/README.md` (fences balanced) finds **0**
 occurrences of a bare `Schema(` in the whole file — prose and fenced blocks alike — against **11**
 `DjangoSchema(`. The residue is gone.
 
@@ -1030,7 +1041,8 @@ Re-run in full over `docs/README.md`.
 - **Gates.** `uvx pre-commit run --files docs/README.md` — **pass** (tracked path constants,
   source layout, kanban anchors, citations all Passed; both ruff hooks `(no files to check)
   Skipped`, no Python in the diff). `uv run python scripts/check_citations.py --check` — **pass**,
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - **Link audit, re-run independently** (fenced blocks dropped, code spans stripped per line):
   **38** distinct `][label]` uses over 39 occurrences and **38** definitions, **0** uses without a
   definition, **0** definitions without a use; all ten group headers present in one block and in
@@ -1039,7 +1051,7 @@ Re-run in full over `docs/README.md`.
   `#visibility-and-permissions`) all name live headings. Pass 2 added and removed no link, as it
   claims.
 - **`strawberry.Schema` census.** **3** surviving occurrences in `docs/README.md`, at lines 59, 124
-  and 204, **all in prose**, **0** inside any fenced block — each a deliberate contrast with plain
+  and 204 (at `f7192bfb`), **all in prose**, **0** inside any fenced block — each a deliberate contrast with plain
   Strawberry. `README.md` (root): **0** of any kind.
 - **No process provenance introduced.** A case-insensitive sweep of the diff's **added lines** for
   `previously`, `no longer`, `as of `, `round N`, `Decision N`, `Slice N`, `spec-0`, `worker`,
@@ -1086,8 +1098,9 @@ logic. This diff touches one `.md` file and zero `.py` files.
 ### Test staleness
 
 Re-run independently of the artifact's file list: `grep -rn "docs/README"` across `tests/`,
-`examples/` and `scripts/` finds no reader, so no test, fixture or generator asserts this file's
-content and the doc edit strands nothing. No wire-shape or model-field change is in the diff.
+`examples/` and `scripts/` finds one reader, not none: `examples/fakeshop/test_query/test_transport_api.py` mounts the
+production-profile recipe, and `examples/fakeshop/README.md` and
+`examples/fakeshop/test_query/README.md` link in; none asserts the rewritten paragraphs, so the doc edit strands nothing. No wire-shape or model-field change is in the diff.
 
 ### What looks solid
 
@@ -1096,7 +1109,8 @@ content and the doc edit strands nothing. No wire-shape or model-field change is
   measured. A reader can tell the two apart from a log line alone, which is what the old single
   clause made impossible.
 - **Pass 2 chose the broader accurate form over the spec's own words.** "supplied as a class or as
-  an instance" is wider than Decision 21's "a subclass supplying a policy", and row `B` is the
+  an instance" is wider than "a subclass supplying a policy" (Worker 2's pass-1 proposal; Decision 21 read "a
+  factory or subclass resolving to one refuses the operation"), and row `B` is the
   evidence that the wider form is the correct one. A pass that had copied the spec verbatim would
   have shipped a second, subtler version of the same defect.
 - **The Low was fixed by naming the class, not by deleting the sentence.** `DjangoSchema(...)`
@@ -1264,7 +1278,8 @@ step was rejected or silently dropped.
 - `uvx pre-commit run --files docs/README.md` — **pass** (tracked path constants, source layout,
   kanban anchors, citations Passed; both ruff hooks `(no files to check) Skipped`).
 - `uv run python scripts/check_citations.py --check` — **pass**,
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - Link audit, this pass's own script (fences dropped, code spans stripped **per line**):
   `docs/README.md` **38** distinct `][label]` uses / **38** definitions, 0 missing, 0 unused, 0
   duplicate labels, all ten group headers present in canonical order, every group alphabetical,
@@ -1293,8 +1308,8 @@ step was rejected or silently dropped.
 - **No fail-open shape landed.** There is no expression in the diff to fail open; the diff contains
   no Python.
 - **Hot path.** Plan declares `none`; the diff adds no runtime code. Nothing owed.
-- **Floor verification.** The plan assigns this cohort no floor run; the twenty-three-path scope is
-  the final gate's. Nothing owed here.
+- **Floor verification.** The plan assigns this cohort no floor run; the twenty-three-path scope (the
+  floor at `f7192bfb`; 27 at HEAD) is the final gate's. Nothing owed here.
 - **DRY across accepted units.** The trust contract deliberately has two homes (`GOAL.md`
   `## Trust boundary` owns it; `docs/README.md` `### The trust boundary` states it as the package's
   own for a deployer), which Decision 20 designs. The README version is not a copy — no four-layer
@@ -1372,8 +1387,7 @@ finding that Decision 21 compressed two different refusals into one clause. Veri
 `<scratch>/w1_ladder.py` before being written. Each is a clean current contract: no chronology, no
 amendment block, no record of what the sentence used to say.
 
-1. **`### Decision 21`, the `**Enforcement is configured, not installed.**` paragraph (line 1716
-   region).** The clause "and a factory or subclass resolving to one refuses the operation" is
+1. **`### Decision 21`, the `**Enforcement is configured, not installed.**` paragraph.** The clause "and a factory or subclass resolving to one refuses the operation" is
    replaced by the two rungs stated separately: a subclass of either authority is refused at schema
    construction with `ConfigurationError`, supplied as a class or as an instance and whether or not
    it supplies a policy of its own; only a factory is opaque until called, so a factory resolving to
@@ -1381,14 +1395,14 @@ amendment block, no record of what the sentence used to say.
    `SCHEMA_CONFIGURATION_UNAVAILABLE` code. Reason: the old clause named a behavior that cannot
    occur (a directly supplied subclass never reaches `get_extensions`) and contradicted Decision 15's
    ladder in the same spec — a `START.md` "five homes per contract" defect.
-2. **`### Decision 15`, the admission-ladder table (lines 1541-1542).** Two rungs widened to what
+2. **`### Decision 15`, the admission-ladder table.** Two rungs widened to what
    the code answers: `subclass of an authority, as a class or as an instance` and
    `factory resolving to either authority, subclasses included`. Reason: the table's final rung
    ("any other class, instance or factory … runs between the two authorities") would otherwise
    claim a factory resolving to a SUBCLASS is admitted; row `5` measures it refused, and
    `DjangoSchema.get_extensions` refuses "a member of either enforcement kind … subclasses
    included".
-3. **`## Definition of done`, the "No policy object a resolver can name" row (line 2776 region).**
+3. **`## Definition of done`, the "No policy object a resolver can name" row.**
    "and an entry that resolves into one refuses the operation instead" is replaced by "A subclass
    supplied directly, as a class or as an instance, is refused with `ConfigurationError` at
    construction, and an entry that RESOLVES into one refuses the operation instead." Reason: the
@@ -1399,8 +1413,8 @@ amendment block, no record of what the sentence used to say.
 Definition-of-done row "The shipped docs state the trust contract" were each read against the code
 for the same narrowness and carry **none** — neither enumerates the refusal ladder, so neither
 required an edit. `## Edge cases and constraints` and `## Test plan` carry no restatement of it
-(`grep -n 'refuses the operation\|resolving to one'` over the spec returns only the three sites
-above plus `#"A schema that can no longer read its own configuration back refuses the operation"`,
+(`grep -n 'refuses the operation\|resolving to one'` over the spec returns two of the three sites
+above, since it cannot match Decision 15's rung "the operation is refused", plus `#"A schema that can no longer read its own configuration back refuses the operation"`,
 which is the unrelated unreadable-record case).
 
 **Rationale file: no edit.** `docs/spec-050-list_field_arguments-0_0_15-rationale.md`
@@ -1538,7 +1552,9 @@ extensions=[lambda: _optimizer])` were each built under `warnings.catch_warnings
 `simplefilter("error")` and answered a query; both exit clean with no `DeprecationWarning`, and
 `examples/fakeshop/db.sqlite3` is byte-identical across the run.
 
-**Out of the row's scope in `docs/GLOSSARY.md`, named for population completeness, no action asked:**
+**Out of the row's scope in `docs/GLOSSARY.md`, no action asked (13 of the 20 prose lines, not the
+full population: rendered line 704 is in neither list, and 936 and 1972 carry lead-ins that items 2
+and 4 rewrite):**
 prose mentions of `strawberry.Schema` at rendered lines 48, 578, 588, 732, 785, 863, 936, 968, 1228,
 1364, 1529, 1863, 1972 — each is either a deliberate contrast with plain Strawberry, a statement of
 the standalone use the package supports, or a construction-order sentence. `## Per-operation
@@ -1632,7 +1648,8 @@ qualifier "to supply it" implied.
   `source layout` Passed, `ruff format` Skipped, `ruff check` Skipped, `kanban anchors` Passed,
   `citations resolve` Passed.
 - `uv run python scripts/check_citations.py --check` — **pass**:
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - **Diff delta since the prior build report, stated as the whole cohort diff either side of this
   pass.** `git diff HEAD --stat -- docs/README.md README.md` read 28 insertions / 8 deletions before
   the edit and 29 / 9 after: one line replaced, no other hunk added or removed, and `README.md`
@@ -1642,7 +1659,7 @@ qualifier "to supply it" implied.
   `as of `, round or worker label, card id or spec id; it states the construction-time refusal as a
   standing rule in the README's own voice. Sweep over the added line for those tokens: 0 hits.
 - Census, stated as a population rather than an absence: a fence-tracking scan of `docs/README.md`
-  (fences balanced) finds **3** `strawberry.Schema` occurrences, at lines 59, 124 and 204, **all in
+  (fences balanced) finds **3** `strawberry.Schema` occurrences, at lines 59, 124 and 204 (at `f7192bfb`), **all in
   prose** and **0** inside any fenced block; **0** occurrences of a bare `Schema(` anywhere in the
   file, against **11** `DjangoSchema(`. Both figures are unchanged by this pass, which edited prose
   only and touched no fenced block.
@@ -1852,7 +1869,8 @@ Not applicable; slice did not modify CHANGELOG.md.
 ### Documentation / release sanity
 
 - **Gates.** `uv run python scripts/check_citations.py --check` — **pass**,
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
   `uvx pre-commit run --files docs/README.md` — **pass** (tracked path constants, source layout,
   kanban anchors, citations all Passed; both ruff hooks `(no files to check) Skipped`).
   **Disclosed:** the FIRST invocation of that hook set reported `citations resolve … Failed - files
@@ -1860,8 +1878,8 @@ Not applicable; slice did not modify CHANGELOG.md.
   --short` was captured either side; the entry that moved belongs to the concurrently-worked tree,
   not to this cohort's file, and the immediate re-run passed clean with no intervening edit. Recorded
   rather than silently re-run once.
-- **Census, as a population.** A fence-tracking scan of all 915 lines of `docs/README.md` (fences
-  balanced) finds **3** `strawberry.Schema` occurrences, at lines 59, 124 and 204, **all in prose**
+- **Census, as a population.** A fence-tracking scan of all 915 lines (at `f7192bfb`) of `docs/README.md` (fences
+  balanced) finds **3** `strawberry.Schema` occurrences, at lines 59, 124 and 204 (at `f7192bfb`), **all in prose**
   and **0** inside any fenced block; **0** occurrences of a bare `Schema(` anywhere in the file
   against **11** `DjangoSchema(`. Both figures match the accepted state — this pass edited prose only.
 - **Links.** The changed sentence contains **no** `][label]` use and **no** definition, verified by
@@ -1908,8 +1926,9 @@ logic. This diff touches one `.md` file and zero `.py` files.
 ### Test staleness
 
 Re-run independently of the artifact's file list: `grep -rn "docs/README"` across `tests/`,
-`examples/` and `scripts/` finds no reader, so nothing asserts this file's content and the edit
-strands nothing. No wire-shape or model-field change is in the diff.
+`examples/` and `scripts/` finds one reader, not none: `examples/fakeshop/test_query/test_transport_api.py` mounts the
+production-profile recipe, and `examples/fakeshop/README.md` and
+`examples/fakeshop/test_query/README.md` link in; none asserts the rewritten paragraphs, so the edit strands nothing. No wire-shape or model-field change is in the diff.
 
 ### What looks solid
 
@@ -2047,7 +2066,8 @@ instrument and a mutation of it is the control.
   path constants`, `source layout`, `ruff format`, `ruff check`, `kanban anchors` and `citations
   resolve` all Passed.
 - `uv run python scripts/check_citations.py --check` — **pass**:
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - `uv run pytest -n0 tests/test_schema.py --no-cov -q` — **pass**, `141 passed in 1.92s`, 0
   collection errors. No `--cov*` flag was used.
 - `git diff HEAD --stat -- django_strawberry_framework/schema.py` — 8 insertions, 5 deletions, one
@@ -2082,7 +2102,7 @@ Every remaining hit, with its file, all outside this pass's writable set:
 
 | File | Lines | What it is |
 |---|---|---|
-| `docs/builder/bld-050-close-trust_docs.md` | 431, 507, 982, 984, 1140, 1309, 1310, 1334, 1592, 1679, 1741, 1813 (+ 3 more added by this report) | 12 hits at the sweep: this artifact's own record of the finding across passes 1-3 — the quoted `docs/README.md` sentence, the Low that named it, the dispatched replacement, and the Worker 3 pass-3 Low that dispatched this pass; this report adds 3 more by quoting the retired clause. Per-cycle scratch, closes with the cycle; no action. |
+| `docs/builder/bld-050-close-trust_docs.md` | 431, 507, 983, 985, 1141, 1310, 1311, 1335, 1593, 1680, 1742, 1814 (as of `ae52bdec`, before the superseded annotation) (+ 3 more added by this report) | 12 hits at the sweep: this artifact's own record of the finding across passes 1-3 — the quoted `docs/README.md` sentence, the Low that named it, the dispatched replacement, and the Worker 3 pass-3 Low that dispatched this pass; this report adds 3 more by quoting the retired clause. Per-cycle scratch, closes with the cycle; no action. |
 | `docs/builder/worker-memory/050-worker-1.md` | 50 | Worker 1's memory line recording the same finding. Untracked scratch, another worker's file, forbidden to this role. |
 | `docs/builder/worker-memory/050-worker-3.md` | 34 | Worker 3's memory line recording the same finding. Same disposition. |
 | `tests/test_sets_mixins.py` | 298 | **Unrelated homonym**, not the retired qualifier: #"a future set family that forgets to supply it fails at" is about a set mixin's own attribute, not about subclassing an enforcement extension. No action. |
@@ -2331,7 +2351,8 @@ Not applicable; slice did not modify CHANGELOG.md.
   Passed (`kanban tracked path constants`, `source layout`, `ruff format`, `ruff check`, `kanban
   anchors`, `citations resolve`); no hook modified a file, so no re-run was needed.
   `uv run python scripts/check_citations.py --check` — **pass**,
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
   `uv run pytest -n0 tests/test_schema.py --no-cov -q` — **pass**, `141 passed in 1.80s`, **0
   collection errors**, no `--cov*` flag.
 - **ASCII and layout.** `LC_ALL=C grep -n '[^ -~\t]'` over the whole file returns **0** lines, and
@@ -2429,7 +2450,8 @@ asserts either the docstring text or the error-message text this pass echoes. No
 - Disposition: not promoted, not kept in-tree. Every property they exercise is `DjangoSchema`
   behavior already pinned by the package suite — the subclass raise by
   `tests/test_schema.py::test_a_subclass_of_an_enforcement_extension_is_refused_at_construction`,
-  which parametrizes class and instance entries for both authorities and both hybrid orders — and
+  which parametrizes class entries for both authorities and both hybrid orders (the error-policy
+  authority has an instance-entry row only in the hybrid case) — and
   their job is to check the documentation against it.
 
 ### Notes for Worker 1 (spec reconciliation)
@@ -2667,9 +2689,9 @@ Every `- [x]` re-checked against the diff, not against any build report.
    enumeration present, and the subclass rung is now true in both README homes and in the docstring
    (rows `1`-`5`).
 2. *Correct the executable examples …* — **stands**, on this pass's own fence-tracking census of all
-   915 lines of `docs/README.md` (fences balanced, 34 fenced blocks): **6** blocks construct a
-   schema, at lines 18, 95, 113, 139, 652 and 735, and **0** construct a plain `strawberry.Schema`.
-   **3** prose occurrences of `strawberry.Schema` survive, at lines 59, 124 and 204, each a
+   915 lines (at `f7192bfb`) of `docs/README.md` (fences balanced, 34 fenced blocks): **6** blocks construct a
+   schema, at lines 18, 95, 113, 139, 652 and 735 (at `f7192bfb`), and **0** construct a plain `strawberry.Schema`.
+   **3** prose occurrences of `strawberry.Schema` survive, at lines 59, 124 and 204 (at `f7192bfb`), each a
    deliberate contrast; **0** bare `Schema(` anywhere against **11** `DjangoSchema(`. Root
    `README.md`: 0 of any kind.
 3. *The shipped docs state the trust contract where a deployer reads it …* — **stands** for every
@@ -2685,7 +2707,8 @@ No box is ticked without a matching change; no box is left `- [ ]`.
   six hooks Passed (`kanban tracked path constants`, `source layout`, `ruff format`, `ruff check`,
   `kanban anchors`, `citations resolve`); no hook modified a file.
 - `uv run python scripts/check_citations.py --check` — **pass**, exit 0:
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - `uv run pytest -n0 tests/test_schema.py --no-cov -q` — **pass**, `141 passed in 1.85s`, 0
   collection errors. No `--cov*` flag was used in this pass.
 - Inbound citations into the docstring being reworded: a tree-wide sweep of `#"` citations for
@@ -2899,7 +2922,8 @@ verification expected the fix to preserve, reproduced from a script written this
   Passed (`kanban tracked path constants`, `source layout`, `ruff format`, `ruff check`, `kanban
   anchors`, `citations resolve`); no hook modified a file.
 - `uv run python scripts/check_citations.py --check` — **pass**, exit 0:
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - `uv run pytest -n0 tests/test_schema.py --no-cov -q` — **pass**, `141 passed in 1.68s`, 0
   collection errors. No `--cov*` flag was used in this pass.
 - Retired-phrase census, stated as a population rather than an absence. `same policy` over
@@ -3152,7 +3176,8 @@ consequence of a dispatch being applied, not stranded refs.
 - `uvx pre-commit run --files django_strawberry_framework/schema.py` — **pass**, all six hooks
   Passed, no hook modified a file.
 - `uv run python scripts/check_citations.py --check` — **pass**,
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - `uv run pytest -n0 tests/test_schema.py --no-cov -q` — **pass**, `141 passed in 2.11s`, 0
   collection errors. No `--cov*` flag used.
 - `git status --short` — identical to this cohort's recorded baseline plus `docs/README.md`,
@@ -3209,7 +3234,7 @@ so the plan's step 6 no-op still holds, re-derived rather than read off a prior 
 
 Not compared by eye. The dispatch's replacement block was cut out of
 `## Final verification (Worker 1, pass 2)` `### Worker 3's escalated Low, decided` by line span
-(artifact lines 2619-2620) into `<scratch>/w1p3_dispatch.txt`, and `schema.py` lines 714-715 into
+(artifact lines 2620-2621 as of `ae52bdec`) into `<scratch>/w1p3_dispatch.txt`, and `schema.py` lines 714-715 into
 `<scratch>/w1p3_shipped.txt`:
 
 ```
@@ -3275,7 +3300,8 @@ from an independently written script.
   silently re-run once. Neither cohort file was modified by any hook: `source layout`, `ruff format`
   and `ruff check` all Passed on the first invocation too.
 - `uv run python scripts/check_citations.py --check` — **pass**, exit 0:
-  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).`
+  `OK: 1104 citations resolve (925 in 448 .py files, 179 in KANBAN.md).` (dirty tree; the `f7192bfb` archive
+  gives 1108)
 - `uv run pytest -n0 tests/test_schema.py --no-cov -q` — **pass**, `141 passed in 1.86s`, **0**
   collection errors. No `--cov*` flag was used anywhere in this pass.
 
@@ -3285,10 +3311,10 @@ from an independently written script.
 number. `<scratch>/w1p3_readme_census.py` (fence-tracking, code spans stripped **per line**) reports
 every figure the pass-2 verification recorded, unchanged:
 
-- 915 lines, fences balanced, 34 fenced blocks;
-- **6** schema-constructing blocks, at lines 18, 95, 113, 139, 652 and 735, and **0** constructing a
+- 915 lines (at `f7192bfb`), fences balanced, 34 fenced blocks;
+- **6** schema-constructing blocks, at lines 18, 95, 113, 139, 652 and 735 (at `f7192bfb`), and **0** constructing a
   plain `strawberry.Schema`;
-- **3** prose occurrences of `strawberry.Schema`, at lines 59, 124 and 204, and **0** inside any
+- **3** prose occurrences of `strawberry.Schema`, at lines 59, 124 and 204 (at `f7192bfb`), and **0** inside any
   fenced block; **0** bare `Schema(` anywhere against **11** `DjangoSchema(`;
 - link audit: **38** distinct `][label]` uses over 39 occurrences / **38** definitions, 0 missing, 0
   unused, 0 duplicate labels, all ten group headers present, every group alphabetical, every relative
@@ -3332,10 +3358,9 @@ byte-identical today, there is no gate over prose, and the sweep vocabulary is
 `override the hook that does the enforcing`.
 
 The three spec edits the pass-2 verification made were re-checked at the **current** spec state,
-which a concurrent cohort is editing right now: `### Decision 15`'s two widened ladder rungs (lines
-1547-1548), `### Decision 21`'s separated construction-time rung (line 1723) and the
-`## Definition of done` row's "an entry that RESOLVES into one refuses the operation instead" (line
-2787) are all still present and still describe what the code does. No spec edit is owed by this pass,
+which a concurrent cohort is editing right now: `### Decision 15`'s two widened ladder rungs ,
+`### Decision 21`'s separated construction-time rung and the `## Definition of done` row's "an
+entry that RESOLVES into one refuses the operation instead" are all still present and still describe what the code does. No spec edit is owed by this pass,
 and none was made — the spec and its rationale are outside this pass's writable set while the
 concurrent final-verification pass holds them.
 

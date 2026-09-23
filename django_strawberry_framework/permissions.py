@@ -117,6 +117,7 @@ from .registry import registry
 # cascade-local.
 from .utils.querysets import (
     _CASCADE_SEAL_POLICY,
+    _UNSEALABLE_STATE_CAUSES,
     _defect_message,
     _prepared_visibility_source,
     apply_type_visibility_sync,
@@ -366,8 +367,7 @@ def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
                     f"apply_cascade_permissions for {name} got a root queryset that "
                     f"cannot be sealed into a framework-owned execution queryset ({detail}); "
                     f"the cascade narrows a rebuilt queryset rather than the caller's object, "
-                    f"and a foreign Query class, a foreign row iterable, or malformed "
-                    f"deferred-filter state cannot be faithfully rebuilt. Pass plain query state."
+                    f"and {_UNSEALABLE_STATE_CAUSES}"
                 ),
                 "sliced": (
                     f"apply_cascade_permissions for {name} got a sliced "
@@ -396,8 +396,8 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
     this seam keeps the cascade's path-rich per-edge prose on those failures.
     The ``type`` / ``table`` / ``alias`` / ``sliced`` / ``combined`` wordings are
     the cascade's established strings; ``untrusted`` (a queryset whose state the
-    boundary cannot seal into a framework-owned execution queryset -- a foreign
-    ``Query`` class, a foreign row iterable, or malformed deferred-filter state)
+    boundary cannot seal into a framework-owned execution queryset, with the
+    causes ``utils/querysets.py #"_UNSEALABLE_STATE_CAUSES = ("`` names)
     is boundary-new and gets cascade-flavored prose of its own. The cascade runs
     under ``_CASCADE_SEAL_POLICY``, whose ``require_model_rows=False`` means the
     boundary never raises the ``projection`` code here - a ``.values()`` return
@@ -428,9 +428,8 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
                     f"{name}.get_queryset returned a queryset that cannot be "
                     f"sealed into a framework-owned execution queryset ({detail}) for the "
                     f"cascade subquery on {edge}; the cascade "
-                    f"re-projects the sealed queryset to the edge's target column, and a "
-                    f"foreign Query class, a foreign row iterable, or malformed deferred-filter "
-                    f"state cannot be faithfully rebuilt. Return plain rows."
+                    f"re-projects the sealed queryset to the edge's target column, and "
+                    f"{_UNSEALABLE_STATE_CAUSES}"
                 ),
                 "sliced": (
                     f"{name}.get_queryset returned a sliced queryset "

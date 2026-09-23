@@ -1202,6 +1202,30 @@ def test_unsealable_hook_query_class_fails_closed_with_cascade_prose():
     assert _cascade_state.get() is None
 
 
+class _ConsumerUpper(models.Func):
+    """A project's own ``Func`` subclass: ordinary Django usage the seal cannot rebuild."""
+
+    function = "UPPER"
+
+
+def test_a_hook_carrying_a_consumer_expression_names_what_the_cascade_can_rebuild():
+    """An edge hook refused as ``untrusted`` names the full cause list and the advice."""
+
+    def _hook(cls, qs, info):
+        return _CtTarget.objects.using(qs.db).annotate(u=_ConsumerUpper(models.F("name")))
+
+    registry.clear()
+    parent_type = _register_ct_pair(_hook)
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+    message = str(excinfo.value)
+    assert "for the cascade subquery" in message
+    assert "a consumer-defined expression, lookup" in message
+    assert "Build the queryset with Django's own" in message
+    assert "Return plain rows" not in message
+    assert _cascade_state.get() is None
+
+
 @pytest.mark.django_db(transaction=True)
 def test_annotation_alias_shadow_cannot_bypass_visibility():
     """A hook annotating the target column to a constant cannot smuggle a hidden pk.
@@ -1376,6 +1400,20 @@ def test_unsealable_root_query_class_fails_closed_with_cascade_prose():
         match="apply_cascade_permissions.*cannot be sealed into a framework-owned",
     ):
         apply_cascade_permissions(parent_type, hostile_root, _INFO)
+    assert _cascade_state.get() is None
+
+
+def test_a_root_carrying_a_consumer_expression_names_what_the_cascade_can_rebuild():
+    """A root refused as ``untrusted`` names the full cause list and the advice."""
+    parent_type = _register_ct_pair(None)
+    root = _CtParent.objects.annotate(u=_ConsumerUpper(models.F("name")))
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_cascade_permissions(parent_type, root, _INFO)
+    message = str(excinfo.value)
+    assert message.startswith("apply_cascade_permissions for ")
+    assert "a consumer-defined expression, lookup" in message
+    assert "Build the queryset with Django's own" in message
+    assert "Pass plain query state" not in message
     assert _cascade_state.get() is None
 
 

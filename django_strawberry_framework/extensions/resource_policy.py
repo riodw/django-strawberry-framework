@@ -1167,12 +1167,29 @@ def restate_admission_verdict(execution_context: Any) -> None:
 class DjangoResourcePolicyExtension(_OperationBoundExtension):
     """Enforce the schema's ``ResourcePolicy`` on every operation.
 
-    Installed automatically by ``schema.py::DjangoSchema``; a consumer building a
-    plain ``strawberry.Schema`` adds it explicitly and may hand it its own
-    policy::
+    ``schema.py::DjangoSchema`` builds one on every operation from the policy it
+    was constructed with, so the bound is configured there, not installed::
+
+        schema = DjangoSchema(
+            query=Query,
+            config=strawberry_config(),
+            resource_policy=ResourcePolicy(max_depth=8),
+        )
+
+    **On a ``DjangoSchema`` this is not a consumer entry at all.** An entry that
+    IS this class, or an exact instance of it, is read once as a declaration of
+    the schema's bound and does not travel into the chain - which is also why no
+    resolver finds one in ``info.schema.extensions`` to write through. A subclass
+    is refused at construction and a factory resolving to one refuses the
+    operation: both would decide enforcement from consumer code on a request
+    already running.
+
+    A plain ``strawberry.Schema`` builds none of that, so a consumer on one adds
+    the extension explicitly and may hand it its own policy::
 
         schema = strawberry.Schema(
-            Query,
+            query=Query,
+            config=strawberry_config(),
             extensions=[lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_depth=8))],
         )
 
@@ -1182,22 +1199,13 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
     ``DjangoSchema`` builds the runner that gives such an object per-operation
     state (``extensions/operation_state.py``). A factory that returns a new
     extension per call - or the bare class, when no override is needed - is
-    operation-local on any schema, because the instance itself is.
+    operation-local on any schema, because the instance itself is. Copied onto a
+    ``DjangoSchema`` the same factory refuses every operation, by the rule above.
 
     Without an explicit policy the extension reads the one the schema resolved at
     construction, falling back to the package defaults for a schema that carries
     none. There is no configuration under which the extension is installed and
     enforces nothing.
-
-    **On a ``DjangoSchema`` this is not a consumer entry at all.** The schema
-    builds its own on every operation from the configuration it was accepted
-    with, so an entry that IS this class, or an exact instance of it, is read
-    once as a declaration of the schema's bound and does not travel into the
-    chain - which is also why no resolver finds one in
-    ``info.schema.extensions`` to write through. A subclass is refused at
-    construction and a factory resolving to one refuses the operation: both
-    would decide enforcement from consumer code on a request already running.
-    Configure the bound with ``DjangoSchema(resource_policy=...)``.
     """
 
     _reconstruction_refusal = (

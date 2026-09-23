@@ -1125,7 +1125,7 @@ def _is_resolvable_extension_entry(entry: Any) -> bool:
     callable - which a class and a factory both are. ``type()`` rather than
     ``isinstance`` for the reason :func:`_is_extension` uses it: a consumer
     object answers ``__class__`` with whatever it likes, and an object that only
-    CLAIMS to be an extension is one upstream would call anyway.
+    CLAIMS to be an extension must still pass as a callable to be accepted.
     """
     return issubclass(type(entry), SchemaExtension) or callable(entry)
 
@@ -1134,10 +1134,12 @@ def _is_extension(extension: Any, extension_type: type) -> bool:
     """Whether a RESOLVED entry is of ``extension_type``, by its type alone.
 
     ``isinstance`` consults ``__class__``, which a consumer object answers with
-    whatever it likes - and this predicate decides whether a resolved member is
-    refused as a second enforcement authority, so an object that merely claims
-    not to be one would be admitted beside the authority actually enforcing the
-    request. ``type()`` cannot be answered.
+    whatever it likes. This predicate decides both whether a resolved member is
+    an extension at all and whether it is a second enforcement authority, so a
+    member whose ``__class__`` claims ``SchemaExtension`` would be handed to
+    upstream as one, and a member claiming an ordinary class would be admitted
+    beside the authority actually enforcing the request. ``type()`` cannot be
+    answered.
     """
     return issubclass(type(extension), extension_type)
 
@@ -1284,36 +1286,24 @@ def _entry_resource_policy(entry: Any) -> ResourcePolicy | None:
     extension's own canonical copy, read through the private record that holds
     it rather than off the object.
     """
-    if isinstance(entry, type):
+    if issubclass(type(entry), type):
         return None
     policy = entry._policy
     return policy if type(policy) is ResourcePolicy else None
 
 
-def _entry_type(entry: Any) -> type | None:
+def _entry_type(entry: Any) -> type:
     """The class an entry names - itself, or the type of the instance it is.
 
-    ``None`` when the read itself fails, which a consumer object can arrange:
-    everything downstream then treats the entry as one the package cannot
-    classify rather than letting an ``isinstance`` on consumer data raise out of
-    schema construction.
+    Read with ``type()``, never ``isinstance``: a consumer instance answers
+    ``__class__`` with whatever it likes, so one claiming to be a class would be
+    classified as that claim, and an authority subclass claiming ``type`` would
+    pass for an entry that declares nothing. ``type()`` cannot be answered and
+    cannot raise.
     """
-    try:
-        return entry if isinstance(entry, type) else type(entry)
-    except Exception:
-        return None
+    return entry if issubclass(type(entry), type) else type(entry)
 
 
 def _extension_entry_matches(extension: Any, extension_type: type) -> bool:
-    """Match a class or instance entry without invoking opaque factories.
-
-    An entry this package cannot classify comes back from :func:`_entry_type` as
-    ``None``, and ``issubclass(None, ...)`` is one of the raises the guard below
-    already answers ``False`` to. One arm, not two: an entry whose own class is
-    unreadable is not a declared authority, which is the same thing the guard
-    says about every other unanswerable entry.
-    """
-    try:
-        return issubclass(_entry_type(extension), extension_type)
-    except Exception:
-        return False
+    """Match a class or instance entry by its real type, without invoking factories."""
+    return issubclass(_entry_type(extension), extension_type)

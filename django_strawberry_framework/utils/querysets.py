@@ -51,8 +51,10 @@ ordering, combinators, values projection), database routing / hints, and the
 prefetch metadata Django needs -- everything that determines which rows the SQL
 selects. What it deliberately drops: the consumer's executable override dispatch
 (the subclass identity itself), because that is precisely the leak vector. A
-foreign ``Query`` class, a foreign row-iterable class, or malformed deferred-filter
-state cannot be faithfully rebuilt, so they fail closed (``untrusted``).
+seal rebuilds only state made of Django's own objects, so anything else in it -- a
+consumer-defined query, expression, lookup or join class, a method assigned onto a
+query instance, a foreign row iterable, deferred-filter state Django never writes --
+fails closed (``untrusted``).
 
 Caller-specific tails stay with their caller: the connection field keeps its
 GraphQL non-queryset error (it calls ``normalize_query_source`` then guards),
@@ -2418,8 +2420,8 @@ def _sealed_prefetch_related_lookups(
     not pass through here: the walker seals them against the relation shape it
     plans (``_LIST_RELATION_CHILD_POLICY`` / ``_PREFETCH_CHILD_POLICY``). A child
     that cannot be sealed (a
-    non-queryset ``.queryset``, a malformed model, a foreign ``Query`` class, a
-    foreign row iterable, malformed deferred-filter state) fails
+    non-queryset ``.queryset``, a malformed model, or any state the child seal
+    refuses -- ``_UNSEALABLE_STATE_CAUSES`` lists it) fails
     the OUTER seal closed with the ``untrusted`` defect -- carrying the inner
     child's own ``(code: detail)`` in the message rather than a generic string --
     rather than being silently dropped. A ``Prefetch`` whose ``.queryset is None``
@@ -2770,17 +2772,20 @@ class _SealPolicy:
       after a combinator, and for both list-argument seals
       (``_LIST_ARGUMENT_VISIBILITY_POLICY`` / ``_SIDECAR_RESULT_POLICY``),
       which window the result with one ``[start:stop]`` slice a combined query
-      cannot take after ordering.
+      cannot take after ordering -- on the list field and the Relay connection
+      alike, wherever a list argument is active.
     - ``require_shared_alias`` -- the candidate's explicit ``_db`` must EQUAL the
       outer effective alias, INCLUDING when that alias is ``None``. Set solely
       for a ``Prefetch`` child, so one GraphQL resolution never spans two
       database connections.
     - ``require_unevaluated`` -- the candidate's ``_result_cache`` must be ``None``.
       The axis separates a RESULT the surface itself demanded from a SOURCE the
-      consumer supplies. It is on for post-OrderSet results: the list field
-      invoked that ordering method one step earlier and takes its window on what
-      comes back, so rows already fetched mean the override ordered and paged
-      something other than the query about to run. It is off for every
+      consumer supplies. It is on for every post-sidecar result
+      (``_SIDECAR_RESULT_POLICY``): a public ``FilterSet.apply_*`` or
+      ``OrderSet.apply_*`` return, on the list field and the Relay connection
+      alike. The surface invoked that method one step earlier and windows what
+      comes back, so rows already fetched mean the override filtered, ordered or
+      paged something other than the query about to run. It is off for every
       ``get_queryset`` seal, this surface's included, because that hook's
       contract is shared with the Relay node, connection and relation surfaces -
       all of which rebuild their own query from the returned one - and holding
@@ -3484,7 +3489,7 @@ def _seal_or_defect(
     # is the pending STATE's shape rather than the class holding it.
     # ``is not None`` -- never truthiness: Django only ever stores ``None`` or the
     # 3-tuple here, and ``if deferred:`` would dispatch a consumer ``__bool__`` on an
-    # arbitrary object planted in the slot (the P2 retained-state vector), letting a
+    # arbitrary object planted in the slot, letting a
     # falsy hostile value silently skip the bake. Any non-``None`` value now routes
     # through the bake path, whose exact-shape checks fail a malformed one closed.
     deferred = state.get("_deferred_filter")
@@ -3494,7 +3499,7 @@ def _seal_or_defect(
             return None, bake_defect
         # Re-prove the detached clone after baking: the predicate was added by unbound
         # Django machinery over arguments PRE-validated inert / genuine-Django (so no
-        # consumer ``resolve_expression`` ran mid-bake -- the Finding-2 vector), and this
+        # consumer ``resolve_expression`` ran mid-bake), and this
         # walk re-proves the whole graph is still genuine and confined to concrete's table.
         post_bake_defect = _combined_query_table_defect(rebuilt_query, concrete)
         if post_bake_defect is not None:  # pragma: no cover - defense in depth
@@ -3595,7 +3600,7 @@ def _seal_or_defect(
     return sealed, None
 
 
-def _row_source_model(state: dict[str, Any]) -> type[models.Model]:
+def _row_source_model(state: dict[str, Any], origin: str) -> type[models.Model]:
     """The model a candidate row source declares, proven to be a model class.
 
     ``_seal_or_defect`` reaches ``model._meta.concrete_model`` on its first line,
@@ -3612,14 +3617,14 @@ def _row_source_model(state: dict[str, Any]) -> type[models.Model]:
     model = state.get("model")
     if not issubclass(type(model), type) or not issubclass(model, models.Model):
         raise ConfigurationError(
-            "A collection resolver returned a QuerySet subclass whose model is "
+            f"{_sentence_start(origin)} a QuerySet subclass whose model is "
             f"{_safe_type_name(model)}; the row bound rebuilds a framework-owned "
             "queryset from that state and cannot do so without a model class.",
         )
     return model
 
 
-def normalized_row_source(value: Any) -> Any:
+def normalized_row_source(value: Any, *, origin: str = "a collection resolver returned") -> Any:
     """Return a row source whose slice is an operation this package owns.
 
     The raw-list ceiling is applied by slicing, because slicing a queryset is
@@ -3654,14 +3659,21 @@ def normalized_row_source(value: Any) -> Any:
     arrives evaluated is windowed from the rows it holds and costs no query the
     exact shape would not have cost either. What the rebuild drops is the
     subclass's own methods.
+
+    ``origin`` names where the value came from in every refusal, completing
+    "<origin> a <type>": a relation resolver reading Django's prefetch cache
+    passes its own, so the message points at the prefetch rather than at a
+    resolver the consumer never wrote.
     """
     source_type = type(value)
     if source_type is models.QuerySet or not issubclass(source_type, models.QuerySet):
         return value
-    model = _row_source_model(_readable_queryset_state(value))
+    model = _row_source_model(_readable_queryset_state(value, origin), origin)
     sealed, defect = _seal_or_defect(value, model, None, _RAW_LIST_SOURCE_POLICY)
     if defect is not None:
-        raise ConfigurationError(_raw_list_source_message(defect, _safe_type_name(value)))
+        raise ConfigurationError(
+            _raw_list_source_message(defect, _safe_type_name(value), origin),
+        )
     return sealed
 
 
@@ -3687,7 +3699,10 @@ def materialized_rows(value: Any) -> Any:
     return _readable_queryset_state(value).get("_result_cache")
 
 
-def _readable_queryset_state(value: Any) -> dict[str, Any]:
+def _readable_queryset_state(
+    value: Any,
+    origin: str = "a collection resolver returned",
+) -> dict[str, Any]:
     """The instance dictionary of ``value``, read without dispatching consumer code.
 
     ``object.__getattribute__`` is the only read here for the reason the seal
@@ -3700,13 +3715,32 @@ def _readable_queryset_state(value: Any) -> dict[str, Any]:
         return object.__getattribute__(value, "__dict__")
     except BaseException:
         raise ConfigurationError(
-            f"A collection resolver returned a {_safe_type_name(value)} whose "
+            f"{_sentence_start(origin)} a {_safe_type_name(value)} whose "
             "QuerySet instance state is unreadable, so the row bound cannot "
             "rebuild a framework-owned queryset to apply itself to.",
         ) from None
 
 
-def _raw_list_source_message(defect: tuple[str, str], name: str) -> str:
+def _sentence_start(phrase: str) -> str:
+    """``phrase`` with its first letter capitalized, the rest untouched."""
+    return phrase[:1].upper() + phrase[1:]
+
+
+# What an ``untrusted`` refusal tells the consumer, shared by every surface that
+# renders one: each surface prefixes its own subject and the defect detail, and the
+# cause list and advice stay one text so no surface names fewer causes than the seal
+# refuses.
+_UNSEALABLE_STATE_CAUSES = (
+    "the seal rebuilds only state made of Django's own objects, so it refuses a Query "
+    "subclass; a consumer-defined expression, lookup, where-node or join class; a method "
+    "assigned onto a query or node instance; a non-builtin value where Django stores a "
+    "builtin; a foreign row iterable; a Prefetch it cannot rebuild; or deferred-filter "
+    "state Django never writes. Build the queryset with Django's own query, expression "
+    "and lookup classes, and do not assign to its internals."
+)
+
+
+def _raw_list_source_message(defect: tuple[str, str], name: str, origin: str) -> str:
     """The wording for a row source the raw-list bound could not take ownership of.
 
     Only the defects ``_RAW_LIST_SOURCE_POLICY`` can actually reach have arms:
@@ -3715,29 +3749,29 @@ def _raw_list_source_message(defect: tuple[str, str], name: str) -> str:
     never states. A code added to the seal without an arm here renders as the
     framework defect it is rather than as one of these.
     """
+    lead = _sentence_start(origin)
     return _defect_message(
         {
             "type": (
-                f"A collection resolver returned a {name}, which the raw-list row "
+                f"{lead} a {name}, which the raw-list row "
                 "bound cannot slice; the bound is applied by slicing a queryset."
             ),
             "table": (
-                f"A collection resolver returned a {name} whose query is over a "
+                f"{lead} a {name} whose query is over a "
                 f"different table than its own model declares ({defect[1]}), so the "
                 "row bound cannot rebuild it into a framework-owned queryset."
             ),
             "untrusted": (
-                f"A collection resolver returned a {name} that cannot be sealed into "
+                f"{lead} a {name} that cannot be sealed into "
                 f"a framework-owned execution queryset ({defect[1]}), so the raw-list "
                 "row bound has nothing it owns the slice of. Slicing the subclass "
                 "itself would let the object being bounded decide how many rows the "
-                "bound returns. Return a plain django.db.models.QuerySet, or a "
-                "subclass backed by a plain django.db.models.sql.Query with Django's "
-                "own row iterable."
+                f"bound returns. {_sentence_start(_UNSEALABLE_STATE_CAUSES)} The "
+                "raw-list bound also refuses a result cache that is not an exact list."
             ),
         },
         defect,
-        f"the {name} a collection resolver returned",
+        f"The {name} {origin}",
     )
 
 
@@ -3856,11 +3890,8 @@ def _visibility_result_error(
                 ),
                 "untrusted": (
                     f"{name}.get_queryset returned a queryset that cannot be sealed "
-                    f"into a framework-owned execution queryset ({detail}); the visibility "
-                    f"boundary rebuilds a plain QuerySet from the validated query state, and a "
-                    f"foreign Query class, a foreign row iterable, or malformed deferred-filter "
-                    f"state cannot be faithfully rebuilt. Return a queryset backed by a plain "
-                    f"django.db.models.sql.Query over model or .values() rows."
+                    f"into a framework-owned execution queryset ({detail}); "
+                    f"{_UNSEALABLE_STATE_CAUSES}"
                 ),
                 "sliced": (
                     f"{name}.get_queryset returned a sliced queryset ({detail}); "
@@ -3981,10 +4012,7 @@ def _prepared_visibility_source(
                     "untrusted": (
                         f"apply_type_visibility for {name} got a source queryset "
                         f"that cannot be sealed into a framework-owned execution queryset "
-                        f"({detail}); the boundary rebuilds a plain QuerySet from the validated "
-                        f"query state, and a foreign Query class, a foreign row iterable, or "
-                        f"malformed deferred-filter state cannot be faithfully rebuilt. Pass a "
-                        f"queryset backed by a plain django.db.models.sql.Query."
+                        f"({detail}); {_UNSEALABLE_STATE_CAUSES}"
                     ),
                     "sliced": (
                         f"apply_type_visibility for {name} got a sliced source "

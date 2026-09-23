@@ -487,6 +487,25 @@ def test_optimize_returns_same_instance_for_evaluated_queryset():
 
 
 @pytest.mark.django_db
+def test_apply_to_returns_a_combined_queryset_unplanned(caplog):
+    """A combined queryset is returned as-is before any plan is built.
+
+    Django refuses ``only`` / ``select_related`` on a ``union`` result, so
+    ``apply_to`` skips planning it. ``field_nodes`` is non-empty so the skip is
+    the combinator check, not the empty-selection early return.
+    """
+    services.seed_data(1)
+    ext = DjangoOptimizerExtension()
+    qs = Category.objects.filter(pk__lt=0).union(Category.objects.all())
+    info = SimpleNamespace(field_name="allCategories", field_nodes=[object()])
+    caplog.set_level("DEBUG", logger=optimizer_logger.name)
+
+    assert ext.apply_to(None, Category, qs, info) is qs
+    assert ext.cache_info().misses == 0
+    assert any("combined (union) queryset" in r.message for r in caplog.records)
+
+
+@pytest.mark.django_db
 def test_resolve_async_passes_through_evaluated_queryset(monkeypatch):
     """Async mirror: the await -> ``_optimize`` wrapper inherits the G1 guard.
 

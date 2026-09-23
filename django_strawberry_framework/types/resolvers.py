@@ -533,6 +533,9 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     # GraphQL-surface / optimizer-key vocabulary. They diverge for reverse
     # relations without ``related_name``.
     accessor_name = instance_accessor(field)
+    # Where a refused prefetch-cache entry came from, so the error names the
+    # relation Django cached rather than a resolver the consumer never wrote.
+    prefetch_origin = f"the prefetch cache for {accessor_name!r} held"
     field_meta = _field_meta_for_resolver(field, parent_type)
     kind = field_meta.relation_kind
     visibility_type = _custom_visibility_type(field_meta)
@@ -573,7 +576,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
                     # package owns, and a rebuilt subclass carries those same
                     # rows onto the rebuild - so the prefetched path costs no
                     # query whichever class the relation manager built.
-                    cached = normalized_row_source(cached)
+                    cached = normalized_row_source(cached, origin=prefetch_origin)
                     result_cache = materialized_rows(cached)
                     source = result_cache if result_cache is not None else cached
                     return bounded_rows(source, info)

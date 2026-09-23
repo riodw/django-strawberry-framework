@@ -1612,6 +1612,32 @@ def test_sync_forward_and_many_resolver_visibility(db):
         registry.unregister(Item)
 
 
+def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_from():
+    """A prefetch-cache entry the seal refuses is named as the cache it came from.
+
+    The consumer wrote no collection resolver here; the queryset is the one
+    Django cached under the relation's accessor, so that is what the error names.
+    """
+    from django.db import models
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+
+    class _ProjectQuerySet(models.QuerySet):
+        """A project's own queryset class."""
+
+    cached = _ProjectQuerySet(model=Item)
+    cached._iterable_class = list  # a foreign row synthesizer
+    resolver = _make_relation_resolver(Category._meta.get_field("items"), parent_type=Category)
+    root = SimpleNamespace(_prefetched_objects_cache={"items": cached})
+    info = SimpleNamespace(path=_path("category", "items"), context={})
+    with pytest.raises(ConfigurationError) as excinfo:
+        resolver(root, info)
+    message = str(excinfo.value)
+    assert message.startswith("The prefetch cache for 'items' held a _ProjectQuerySet ")
+    assert "cannot be sealed into a framework-owned execution queryset" in message
+    assert "collection resolver" not in message
+
+
 def test_resolver_helpers_edge_cases():
     from django_strawberry_framework.types.resolvers import (
         _attach_file_resolvers,

@@ -1136,7 +1136,8 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
            The middleware path is behavior-identical: ``_optimize`` only adds
            the return-type resolution the connection field does NOT need
            (the connection field's return type is the connection type, not the
-           node type).
+           node type). A combined queryset passes through ``apply_to``
+           unplanned.
 
         """
         inner_result, was_adapted = unwrap_async_queryset_adapter(result)
@@ -1197,10 +1198,22 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
         3. Reconcile against the consumer's existing queryset optimizations
            and apply.
 
-        Returns ``queryset`` unchanged when there are no root field nodes or
-        the plan is empty.
+        Returns ``queryset`` unchanged when there are no root field nodes, when
+        ``queryset`` is combined (``union`` / ``intersection`` / ``difference``),
+        or when the plan is empty. Django refuses ``only`` / ``select_related`` /
+        ``prefetch_related`` on a combined queryset with ``NotSupportedError``, so
+        a combined root runs unplanned and publishes no plan: a relation it
+        selects resolves per row and reaches ``_check_n1``, so
+        ``strictness="raise"`` raises ``OptimizerError`` for it.
         """
         if not info.field_nodes:
+            return queryset
+        if queryset.query.combinator:
+            logger.debug(
+                "Optimizer: %s returned a combined (%s) queryset; passing it through unplanned.",
+                info.field_name,
+                queryset.query.combinator,
+            )
             return queryset
 
         # The O2 walker expects the children of the root field, so we build
@@ -1594,7 +1607,8 @@ def apply_connection_optimization(
     it instead of hardcoding the connection shape.
 
     Returns ``queryset`` unchanged when ``target_type`` has no registered
-    model (nothing to plan) or when no optimizer extension is installed.
+    model (nothing to plan), when no optimizer extension is installed, or when
+    ``apply_to`` passes a combined queryset through unplanned.
     """
     target_model = registry.model_for_type(target_type)
     if target_model is None:

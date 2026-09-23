@@ -1,9 +1,9 @@
 """Repo-root pytest hooks shared by every test tree in ``testpaths``.
 
-Owns two Postgres-tier concerns (both repo-root because ``pg`` behavior
-spans all three test trees - ``tests/``, ``examples/fakeshop/test_query/``,
-per-app ``examples/fakeshop/apps/*/tests/`` - and ``tests/conftest.py``
-only covers the first):
+Owns three concerns, all repo-root because each spans every test tree -
+``tests/``, ``examples/fakeshop/test_query/``, per-app
+``examples/fakeshop/apps/*/tests/`` - while ``tests/conftest.py`` loads only
+when ``tests/`` is collected:
 
 1. The ``pg`` marker (registered in ``pytest.ini``): Postgres-only tests -
    vendor-specific SQL such as the LATERAL-join nested-fetch strategy -
@@ -11,7 +11,13 @@ only covers the first):
    ``FAKESHOP_PG_DSN`` settings branch in
    ``examples/fakeshop/config/settings.py``; the ``test-postgres`` CI job).
 
-2. Stray-connection tracking for the Postgres tier. Async tests open ORM
+2. The "async + database => transactional" collection rule. An async test
+   reaches the ORM on asgiref's executor thread, outside the transaction
+   pytest-django opens on the main thread, so a non-transactional async test
+   commits rows into the shared database and leaks them into later tests.
+   Collection fails and names every offender, whichever tree it sits in.
+
+3. Stray-connection tracking for the Postgres tier. Async tests open ORM
    connections in asgiref's thread-sensitive executor threads and (under
    ``DJANGO_ALLOW_ASYNC_UNSAFE``) in per-asyncio-task contextvar contexts.
    pytest-django's teardown runs ``connections.close_all()`` on the MAIN
@@ -31,6 +37,7 @@ only covers the first):
 import asyncio
 import contextlib
 import copy
+import inspect
 import json
 import threading
 from typing import Any
@@ -105,7 +112,90 @@ def _close_stray_postgres_connections(django_db_setup: Any) -> Any:  # noqa: ARG
             stray.close()
 
 
-def pytest_collection_modifyitems(config: Any, items: list) -> None:  # noqa: ARG001 - pytest hookspec
+def _django_db_signature(
+    transaction: Any = False,
+    reset_sequences: Any = False,
+    databases: Any = None,  # noqa: ARG001 - pytest-django's parameter list, bound not read
+    serialized_rollback: Any = False,  # noqa: ARG001 - as above
+    available_apps: Any = None,  # noqa: ARG001 - as above
+) -> tuple[Any, Any]:
+    """Bind a ``django_db`` marker's arguments exactly as pytest-django's signature does.
+
+    ``transaction`` and ``reset_sequences`` are the first two positional parameters, so
+    ``django_db(True)`` and ``django_db(transaction=True)`` mean the same thing; an argument
+    pytest-django would reject raises the same ``TypeError`` here.
+    """
+    return transaction, reset_sequences
+
+
+def _uses_db_and_is_transactional(item: Any) -> tuple[bool, bool]:
+    """Resolve a test's database setup the way pytest-django orders and runs it.
+
+    Returns ``(uses_db, transactional)``. A ``django_db`` marker means database access, and
+    it is transactional when ``transaction`` or ``reset_sequences`` is set (pytest-django
+    runs a ``reset_sequences`` test as a ``TransactionTestCase``). Independently of any
+    marker, requesting ``db`` means database access, and requesting ``transactional_db`` or
+    ``live_server`` (directly or through another fixture, so ``django_db_reset_sequences``
+    counts) makes the test transactional whatever the marker says.
+    """
+    marker = item.get_closest_marker("django_db")
+    if marker is None:
+        uses_db = transactional = False
+    else:
+        transaction, reset_sequences = _django_db_signature(*marker.args, **marker.kwargs)
+        uses_db = True
+        transactional = bool(transaction or reset_sequences)
+    fixtures = getattr(item, "fixturenames", ())
+    transactional = transactional or "transactional_db" in fixtures or "live_server" in fixtures
+    uses_db = uses_db or "db" in fixtures
+    return uses_db, transactional
+
+
+def _refuse_nontransactional_async_db_tests(items: list) -> None:
+    """Fail collection for an ``async`` test that uses the database non-transactionally.
+
+    An async test reaches the ORM through ``sync_to_async`` (or Django's ``a*`` methods),
+    which run on asgiref's thread-sensitive executor thread. That thread's connection sits
+    outside the transaction pytest-django opens on the main thread for a plain ``django_db``
+    test or a ``db`` fixture, so rows written there are committed to the shared in-memory
+    SQLite database and leak into every later test in the process. A transactional test
+    flushes after the test, so the rule is "async + database => transactional". Enforcing it
+    at collection makes the failure deterministic and names the offending test, instead of
+    surfacing later as a nondeterministic row-count failure in an unrelated module.
+
+    Every offender is collected before raising so one run reports them all. ``asyncio_mode =
+    auto`` means async tests carry no explicit asyncio marker, so the coroutine check is the
+    only signal; ``get_closest_marker`` covers module-level ``pytestmark`` and lets a
+    per-test marker override it. Methods of Django's own test classes are skipped:
+    pytest-django ignores ``django_db`` on them, and Django runs an async test method
+    through ``async_to_sync``, which keeps its ORM calls on the thread holding the test's
+    transaction.
+    """
+    from django.test import SimpleTestCase
+
+    offenders = []
+    for item in items:
+        function = getattr(item, "obj", None)
+        if function is None or not inspect.iscoroutinefunction(function):
+            continue
+        test_class = getattr(item, "cls", None)
+        if test_class is not None and issubclass(test_class, SimpleTestCase):
+            continue
+        uses_db, transactional = _uses_db_and_is_transactional(item)
+        if uses_db and not transactional:
+            offenders.append(item.nodeid)
+    if offenders:
+        listing = "\n".join(f"  {nodeid}" for nodeid in offenders)
+        raise pytest.UsageError(
+            "async tests that use the database must be transactional - a plain django_db "
+            "marker or db fixture opens its transaction on the main thread and cannot contain "
+            "ORM writes made on asgiref's executor thread, so those rows leak into later "
+            "tests. Mark @pytest.mark.django_db(transaction=True) (or request "
+            "transactional_db) on:\n" + listing,
+        )
+
+
+def _skip_pg_tests_off_postgres(items: list) -> None:
     """Skip ``pg``-marked tests when the default DB vendor is not Postgres.
 
     ``connection.vendor`` is a static attribute of the configured backend -
@@ -120,6 +210,12 @@ def pytest_collection_modifyitems(config: Any, items: list) -> None:  # noqa: AR
     for item in items:
         if "pg" in item.keywords:
             item.add_marker(skip_pg)
+
+
+def pytest_collection_modifyitems(config: Any, items: list) -> None:  # noqa: ARG001 - pytest hookspec
+    """Apply the collection rules to every collected item, whichever tree it came from."""
+    _refuse_nontransactional_async_db_tests(items)
+    _skip_pg_tests_off_postgres(items)
 
 
 # ---------------------------------------------------------------------------

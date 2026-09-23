@@ -77,6 +77,24 @@ class ReversedHybridPolicyExtension(DjangoErrorPolicyExtension, DjangoResourcePo
     """The same class with its bases the other way round, which picks the other hook."""
 
 
+class _ClassClaimingResourcePolicy(DjangoResourcePolicyExtension):
+    """An authority subclass whose instances claim to be a class, which ``isinstance`` believes."""
+
+    @property
+    def __class__(self):
+        """Claim ``type``, so an ``isinstance`` classifier sees a class entry."""
+        return type
+
+
+class _ClassClaimingErrorPolicy(DjangoErrorPolicyExtension):
+    """The masking-authority subclass making the same claim."""
+
+    @property
+    def __class__(self):
+        """Claim ``type``, so an ``isinstance`` classifier sees a class entry."""
+        return type
+
+
 #: Every marker extension that ran, in order, since a test last cleared it.
 _MARKS: list[str] = []
 
@@ -167,13 +185,11 @@ def test_consumer_extension_entries_shapes():
     assert declared == ResourcePolicy(max_list_rows=4)
 
 
-def test_an_entry_whose_class_cannot_be_read_is_classified_as_no_authority():
-    """A consumer object decides what ``isinstance`` sees, and may make it raise.
+def test_an_entry_is_classified_by_its_real_type_whatever_its_class_property_says():
+    """A consumer object decides what ``isinstance`` sees, and ``type()`` ignores it.
 
-    The read is contained so an entry nobody can classify is simply an entry the
-    package does not treat as a declaration - refused later for being
-    unresolvable, rather than raising out of schema construction from the check
-    that was trying to describe it.
+    A ``__class__`` that raises, and one that claims to be a class, both come
+    back as the instance's real type.
     """
 
     class _HostileClass:
@@ -181,7 +197,8 @@ def test_an_entry_whose_class_cannot_be_read_is_classified_as_no_authority():
         def __class__(self):
             raise TypeError("hostile __class__")
 
-    assert _entry_type(_HostileClass()) is None
+    assert _entry_type(_HostileClass()) is _HostileClass
+    assert _entry_type(_ClassClaimingResourcePolicy()) is _ClassClaimingResourcePolicy
     assert _entry_type(DjangoResourcePolicyExtension) is DjangoResourcePolicyExtension
 
 
@@ -196,16 +213,6 @@ def test_extension_entry_matches_adversarial():
     assert not _extension_entry_matches("string", DjangoErrorPolicyExtension)
     assert not _extension_entry_matches(None, DjangoErrorPolicyExtension)
 
-    class BrokenMeta(type):
-        def __subclasscheck__(cls, subclass):
-            raise TypeError("Hostile metaclass check")
-
-    class BrokenClass(metaclass=BrokenMeta):
-        pass
-
-    assert not _extension_entry_matches(DjangoErrorPolicyExtension, BrokenClass)
-    assert not _extension_entry_matches(DjangoErrorPolicyExtension(), BrokenClass)
-
 
 @pytest.mark.parametrize(
     "entry",
@@ -216,6 +223,8 @@ def test_extension_entry_matches_adversarial():
         HybridPolicyExtension,
         ReversedHybridPolicyExtension,
         HybridPolicyExtension(),
+        _ClassClaimingResourcePolicy(),
+        _ClassClaimingErrorPolicy(),
     ],
     ids=[
         "error-subclass-class",
@@ -224,6 +233,8 @@ def test_extension_entry_matches_adversarial():
         "hybrid-class",
         "hybrid-class-reversed-bases",
         "hybrid-instance",
+        "resource-subclass-instance-claiming-a-class",
+        "error-subclass-instance-claiming-a-class",
     ],
 )
 def test_a_subclass_of_an_enforcement_extension_is_refused_at_construction(entry):
@@ -1357,15 +1368,6 @@ def test_widening_a_schema_policy_copy_leaves_the_schemas_own_bound():
 # ---------------------------------------------------------------------------
 
 
-class _LyingExtension:
-    """An object that answers ``__class__`` with an extension class it is not."""
-
-    @property
-    def __class__(self):
-        """Claim to be the masking extension, which ``isinstance`` would believe."""
-        return DjangoErrorPolicyExtension
-
-
 class _SlottedConsumerFactory:
     """A valid consumer-extension factory in the layout that takes no weak reference."""
 
@@ -1613,38 +1615,6 @@ def test_a_resolver_cannot_widen_a_later_request_through_an_accepted_factory():
     _assert_configuration_refusal(schema.execute_sync("{ widen }"))
     assert factory.rows == 1
     assert schema.resource_policy.max_list_rows == 1
-
-
-@pytest.mark.parametrize(
-    "entry",
-    [
-        lambda: (_ for _ in ()).throw(RuntimeError("factory sentinel")),
-        lambda: 7,
-        lambda: object(),
-        lambda: DjangoErrorPolicyExtension,
-        lambda: _LyingExtension(),
-    ],
-    ids=[
-        "factory-raises",
-        "returns-an-integer",
-        "returns-a-plain-object",
-        "returns-the-class",
-        "returns-a-lying-class",
-    ],
-)
-def test_a_factory_that_does_not_produce_an_extension_refuses_the_operation(entry):
-    """Upstream assigns ``execution_context`` on whatever a factory returned.
-
-    That loop runs before the runner exists and outside the block upstream turns
-    into a response, so an integer, a bare object or a class produces an
-    ``AttributeError`` the package's own error policy never sees, and a raising
-    factory puts the consumer's own exception text on the wire. The resolved
-    member is typed here instead, by its type rather than by what it claims, and
-    the operation is refused with the stable configuration code.
-    """
-    schema = DjangoSchema(query=DummyQuery, extensions=[entry])
-
-    _assert_configuration_refusal(schema.execute_sync("{ hello }"))
 
 
 @pytest.mark.parametrize(

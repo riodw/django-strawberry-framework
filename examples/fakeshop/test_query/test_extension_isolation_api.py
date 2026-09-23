@@ -11,6 +11,11 @@ holding ``info.schema`` in a real request and read back off the wire:
   every request on the wire, including the ones that would not have parsed and
   the ones asking for an operation name no document can carry, and still bounds
   the document it is refusing;
+- a factory resolving to anything but an ordinary extension instance - one that
+  raises, returns a non-extension or a class, returns an object whose
+  ``__class__`` claims an extension or an authority it is not, or returns an
+  authority subclass or a hybrid of both - refuses every request with the
+  stable configuration code, and the reason reaches the deployment's log only;
 - the optimizer entry every deployment is documented to write - one module-level
   singleton behind a factory - keeps its published plan on the request it
   belongs to when a consumer extension runs an operation of its own.
@@ -24,6 +29,7 @@ has.
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +48,7 @@ from django_strawberry_framework import (
     strawberry_config,
 )
 from django_strawberry_framework.extensions import (
+    DjangoErrorPolicyExtension,
     DjangoResourcePolicyExtension,
 )
 from django_strawberry_framework.optimizer._context import (
@@ -87,6 +94,52 @@ SENTINEL = "the-resolver-said-this-out-loud"
 
 class _ConsumerExtension(SchemaExtension):
     """An ordinary consumer extension: the thing an entry is still allowed to be."""
+
+
+class _ClaimsAnExtension:
+    """Not an extension, answering ``__class__`` with an ordinary one."""
+
+    @property
+    def __class__(self):
+        """Claim the ordinary consumer extension, which ``isinstance`` would believe."""
+        return _ConsumerExtension
+
+
+class _ClaimsAnAuthority:
+    """Not an extension, answering ``__class__`` with the masking authority."""
+
+    @property
+    def __class__(self):
+        """Claim the masking extension, which ``isinstance`` would believe."""
+        return DjangoErrorPolicyExtension
+
+
+class _AuthoritySubclass(DjangoResourcePolicyExtension):
+    """A consumer subclass of the bounding authority, which is not one."""
+
+
+class _HybridAuthority(DjangoResourcePolicyExtension, DjangoErrorPolicyExtension):
+    """One class answering to both authorities, of which it can dispatch one."""
+
+
+def _raise_sentinel():
+    """A factory whose own exception text must not reach the wire."""
+    raise RuntimeError(SENTINEL)
+
+
+#: Every factory shape short of an ordinary extension instance, and the reason
+#: the package logs for refusing it.
+_LADDER_FACTORIES = {
+    "raises": (_raise_sentinel, "raised"),
+    "not-an-extension": (lambda: object(), "not a SchemaExtension instance"),
+    "returns-the-class": (lambda: _ConsumerExtension, "not a SchemaExtension instance"),
+    "claims-to-be-an-extension": (lambda: _ClaimsAnExtension(), "not a SchemaExtension instance"),
+    "claims-to-be-an-authority": (lambda: _ClaimsAnAuthority(), "not a SchemaExtension instance"),
+    "authority-subclass": (lambda: _AuthoritySubclass(), "claims the resource-policy authority"),
+    "hybrid": (lambda: _HybridAuthority(), "claims the resource-policy authority"),
+}
+
+_LADDER_IDS = sorted(_LADDER_FACTORIES)
 
 
 class _MutableConsumerFactory:
@@ -388,6 +441,11 @@ def _ambiguous_schema():
     )
 
 
+def _ladder_schema(factory):
+    """A schema whose one entry is ``factory``, accepted at construction."""
+    return DjangoSchema(query=_ResourceQuery, extensions=[factory])
+
+
 def _survivor_schema():
     """The async mount: the project's own types, bounded, with the shipped optimizer."""
     from apps.products.schema import Query as ProductsQuery
@@ -472,6 +530,13 @@ urlpatterns = [
     path("iso-chain/", _view("chain", _ambiguous_schema)),
     path("iso-chain-async/", _held_async_view("chain", _ambiguous_schema)),
     path("iso-survivor/", _async_view(_survivor_schema)),
+    *(
+        path(
+            f"iso-ladder-{shape}/",
+            _view(f"ladder-{shape}", lambda f=factory: _ladder_schema(f)),
+        )
+        for shape, (factory, _) in _LADDER_FACTORIES.items()
+    ),
 ]
 
 
@@ -614,6 +679,34 @@ def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(docume
     assert refused.errors[0]["extensions"] == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
     assert "ResourcePolicy" not in refused.errors[0]["message"]
     assert "max_aliases" not in refused.errors[0]["message"]
+
+
+@pytest.mark.parametrize("shape", _LADDER_IDS, ids=_LADDER_IDS)
+def test_a_factory_resolving_to_anything_but_an_ordinary_extension_refuses_every_request(
+    shape,
+    caplog,
+):
+    """What a factory returns is typed by its real type, and every miss is one refusal.
+
+    Upstream assigns ``execution_context`` on whatever came back, outside every
+    seam the package masks at, so a raising factory, a non-extension and a class
+    would each escape as the consumer's own error. An object whose ``__class__``
+    claims an ordinary extension is the row ``isinstance`` would admit; an
+    authority subclass or hybrid is a second authority. The wire carries the
+    stable code and nothing the factory said; the reason goes to the log.
+    """
+    _, reason = _LADDER_FACTORIES[shape]
+    client = TestClient(path=f"/iso-ladder-{shape}/")
+
+    with caplog.at_level(logging.ERROR, logger="django_strawberry_framework"):
+        refused = client.query("{ hello }", assert_no_errors=False)
+
+    assert refused.data is None
+    assert [error["extensions"] for error in refused.errors] == [
+        {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
+    ]
+    assert SENTINEL not in json.dumps(refused.errors)
+    assert any(reason in record.getMessage() for record in caplog.records), caplog.text
 
 
 @pytest.mark.parametrize(

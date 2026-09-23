@@ -27,7 +27,7 @@ from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import seed_data
 from django.apps.registry import Apps
 from django.db import connection, models, router
-from django.db.models import FilteredRelation, Prefetch, Q
+from django.db.models import F, FilteredRelation, Prefetch, Q
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce, Trunc
 from django.test import override_settings
@@ -83,6 +83,7 @@ from django_strawberry_framework.utils.querysets import (
     initial_queryset,
     is_async_only_iterable,
     normalize_query_source,
+    normalized_row_source,
     pks_all_present,
     post_process_queryset_result_async,
     post_process_queryset_result_sync,
@@ -435,6 +436,32 @@ def test_unsealable_source_fails_closed():
         apply_type_visibility_sync(_stub_type(Category, _boom), source, info=None)
 
 
+class _ConsumerUpper(models.Func):
+    """A project's own ``Func`` subclass: ordinary Django usage the seal cannot rebuild."""
+
+    function = "UPPER"
+
+
+def test_a_source_carrying_a_consumer_expression_names_the_state_the_seal_rebuilds():
+    """The refusal names every kind of state the seal rebuilds, not only three of them.
+
+    A consumer ``Func`` is the common way to reach the ``untrusted`` defect, so
+    the message has to name consumer-defined expressions and say what to build
+    the queryset from instead.
+    """
+
+    def _boom(cls, queryset, info):  # pragma: no cover - must never run
+        raise AssertionError("hook ran on an unsealable source")
+
+    source = Category.objects.annotate(u=_ConsumerUpper(F("name")))
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_type_visibility_sync(_stub_type(Category, _boom), source, info=None)
+    message = str(excinfo.value)
+    assert "cannot be sealed into a framework-owned execution queryset" in message
+    assert "a consumer-defined expression, lookup" in message
+    assert "Build the queryset with Django's own" in message
+
+
 # ---------------------------------------------------------------------------
 # The hardened visibility boundary -- hook-result normalization
 # ---------------------------------------------------------------------------
@@ -716,6 +743,18 @@ def test_foreign_query_class_result_fails_closed():
         apply_type_visibility_sync(hook, Category.objects.all(), info=None)
 
 
+def test_a_hook_result_carrying_a_consumer_expression_names_the_state_the_seal_rebuilds():
+    """A hook result refused as ``untrusted`` gets the same cause list as a source."""
+    hook = _sync_hook_type(Category.objects.annotate(u=_ConsumerUpper(F("name"))))
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_type_visibility_sync(hook, Category.objects.all(), info=None)
+    message = str(excinfo.value)
+    assert "cannot be sealed into a framework-owned execution queryset" in message
+    assert "a consumer-defined expression, lookup" in message
+    assert "Build the queryset with Django's own" in message
+    assert ".values() rows" not in message
+
+
 def test_a_subclass_result_with_a_pending_deferred_filter_seals_with_it_baked():
     """A SUBCLASS result carrying a well-formed pending ``_deferred_filter`` seals.
 
@@ -969,6 +1008,59 @@ def test_a_deferred_filter_negate_is_refused_without_reaching_its_own_bool():
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter negate is a _NegateSpy")
     assert dispatched == []
+
+
+def _pending_exclude(queryset_cls, name):
+    """An ``.exclude(name=...)`` Django leaves pending, written by Django itself.
+
+    ``_defer_next_filter`` is the flag ``RelatedManager._apply_rel_filters`` sets;
+    no public path pairs it with ``.exclude()``, so the test sets it and lets
+    ``QuerySet._filter_or_exclude`` write the ``(True, (), {...})`` tuple.
+    """
+    queryset = queryset_cls(model=Category)
+    queryset._defer_next_filter = True
+    return queryset.exclude(name=name)
+
+
+def _sealed(queryset):
+    sealed, defect = _seal_or_defect(queryset, Category, None)
+    assert defect is None
+    return sealed
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("queryset_cls", "rebuild"),
+    [
+        (models.QuerySet, _sealed),
+        (_PendingFilterQuerySet, _sealed),
+        (_PendingFilterQuerySet, normalized_row_source),
+    ],
+    ids=[
+        "exact-queryset-seal",
+        "project-queryset-class-seal",
+        "project-queryset-class-row-source",
+    ],
+)
+def test_a_pending_exclude_is_baked_negated_exactly_as_django_resolves_it(queryset_cls, rebuild):
+    """A pending negated predicate is baked as ``NOT``, the way Django's getter bakes it.
+
+    The oracle is a second pending instance resolved through Django's own
+    ``.query`` getter; reading ``.query`` on the candidate would bake and clear
+    its pending state before the seal ran.
+    """
+    seed_data(1)
+    name = Category.objects.order_by("pk").values_list("name", flat=True).first()
+    candidate = _pending_exclude(queryset_cls, name)
+    oracle = _pending_exclude(queryset_cls, name)
+    assert candidate.__dict__["_deferred_filter"] == (True, (), {"name": name})
+    rebuilt = rebuild(candidate)
+    rebuilt_sql = rebuilt.query.get_compiler(using="default").as_sql()
+    assert rebuilt_sql == oracle.query.get_compiler(using="default").as_sql()
+    assert "NOT" in rebuilt_sql[0]
+    expected = sorted(Category.objects.exclude(name=name).values_list("pk", flat=True))
+    assert expected
+    assert sorted(row.pk for row in rebuilt) == expected
 
 
 @pytest.mark.django_db

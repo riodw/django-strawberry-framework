@@ -59,7 +59,7 @@ import strawberry
 from apps.products.models import Category, Item
 from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
-from django.db.models import QuerySet
+from django.db.models import F, Func, QuerySet
 from django.db.models.sql import Query
 from graphql import GraphQLError, parse
 from graphql.language.token_kind import TokenKind
@@ -2130,6 +2130,29 @@ def test_a_queryset_subclass_that_cannot_be_sealed_is_refused_not_sliced():
     with pytest.raises(ConfigurationError) as excinfo:
         bounded_rows(source, info)
     assert "cannot be sealed" in str(excinfo.value)
+
+
+@pytest.mark.django_db
+def test_a_queryset_subclass_carrying_a_consumer_expression_names_what_the_bound_can_rebuild():
+    """The raw-list refusal names the seal's full cause list and its own result-cache rule."""
+    seed_data(1)
+    info = SimpleNamespace(context={})
+    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+
+    class _ConsumerUpper(Func):
+        function = "UPPER"
+
+    class _ProjectQuerySet(QuerySet):
+        """A project's own queryset class."""
+
+    source = _ProjectQuerySet(model=Category).annotate(u=_ConsumerUpper(F("name")))
+    with pytest.raises(ConfigurationError) as excinfo:
+        bounded_rows(source, info)
+    message = str(excinfo.value)
+    assert message.startswith("A collection resolver returned a _ProjectQuerySet ")
+    assert "a consumer-defined expression, lookup" in message
+    assert "Build the queryset with Django's own" in message
+    assert "a result cache that is not an exact list" in message
 
 
 def test_a_value_that_only_claims_to_be_a_queryset_cannot_reach_the_slice():

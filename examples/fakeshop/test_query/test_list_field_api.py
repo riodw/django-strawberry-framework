@@ -2237,6 +2237,123 @@ def test_holder_branches_combined_seals(monkeypatch):
     assert "got combined defect" in p_hook["errors"][0]["message"]
 
 
+def _combined_genre_source(root, info):
+    return library_models.Genre.objects.filter(name="A").union(
+        library_models.Genre.objects.exclude(name="A"),
+    )
+
+
+def _combined_genre_schema() -> DjangoSchema:
+    """A union source on a list field and a connection, the optimizer installed."""
+
+    @strawberry.type
+    class _CombinedGenreQuery:
+        genres_combined: list[library_schema.GenreType] = DjangoListField(
+            library_schema.GenreType,
+            resolver=_combined_genre_source,
+        )
+        genres_combined_connection: DjangoConnection[library_schema.GenreType] = (
+            DjangoConnectionField(library_schema.GenreType, resolver=_combined_genre_source)
+        )
+
+    optimizer = DjangoOptimizerExtension()
+    return DjangoSchema(
+        query=_CombinedGenreQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+        resource_policy={"max_list_rows": 3},
+    )
+
+
+@pytest.mark.django_db
+def test_holder_genres_a_combined_source_is_bounded_with_the_optimizer_installed():
+    for name in (
+        "A",
+        "B",
+        "C",
+        "D",
+    ):
+        library_models.Genre.objects.create(name=name)
+
+    with CaptureQueriesContext(connection) as ctx:
+        payload = _post_sync(
+            _combined_genre_schema(),
+            "{ genresCombined { name } }",
+            extra_settings=_ERROR_POLICY_PASS_THROUGH,
+        )
+
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["genresCombined"]]
+    assert len(names) == 3
+    assert set(names) <= {
+        "A",
+        "B",
+        "C",
+        "D",
+    }
+    genre_sql = [q["sql"] for q in ctx.captured_queries if "library_genre" in q["sql"]]
+    assert len(genre_sql) == 1, genre_sql
+    assert "UNION" in genre_sql[0].upper()
+    assert "LIMIT 3" in genre_sql[0].upper()
+
+
+@pytest.mark.django_db
+def test_holder_genres_a_combined_connection_runs_unplanned_with_the_optimizer_installed():
+    for name in (
+        "A",
+        "B",
+        "C",
+        "D",
+    ):
+        library_models.Genre.objects.create(name=name)
+
+    payload = _post_sync(
+        _combined_genre_schema(),
+        "{ genresCombinedConnection(first: 3) { edges { node { name } } } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+
+    assert "errors" not in payload, payload
+    edges = payload["data"]["genresCombinedConnection"]["edges"]
+    assert [edge["node"]["name"] for edge in edges] == ["A", "B", "C"]
+
+
+class _ConsumerUpper(models.Func):
+    function = "UPPER"
+
+
+@pytest.mark.django_db
+def test_holder_genres_a_hook_carrying_a_consumer_expression_names_the_state_on_the_wire(
+    monkeypatch,
+):
+    """A ``get_queryset`` annotating with a project ``Func`` is refused with the seal's causes."""
+    library_models.Genre.objects.create(name="A")
+
+    def _annotating_get_queryset(cls, queryset, info, **kwargs):
+        return queryset.annotate(u=_ConsumerUpper(models.F("name")))
+
+    monkeypatch.setattr(
+        library_schema.GenreType,
+        "get_queryset",
+        classmethod(_annotating_get_queryset),
+    )
+
+    @strawberry.type
+    class _AnnotatedQuery:
+        genres: list[library_schema.GenreType] = DjangoListField(library_schema.GenreType)
+
+    payload = _post_sync(
+        DjangoSchema(query=_AnnotatedQuery, config=strawberry_config()),
+        "{ genres { name } }",
+        extra_settings=_ERROR_POLICY_PASS_THROUGH,
+    )
+
+    assert payload["data"] is None
+    message = payload["errors"][0]["message"]
+    assert "a consumer-defined expression, lookup" in message
+    assert "Build the queryset with Django's own" in message
+
+
 _BRANCH_ORDER_SHAPE_PREFIX = (
     "BranchOrder.apply_sync must return an unevaluated, unsliced, uncombined "
     "QuerySet of Branch rows; got "
@@ -2963,9 +3080,8 @@ def _combined_branch_oracle(monkeypatch, client):
     """Run the pre-card reference over a union source and hand back its every claim.
 
     Both schemas publish the same ``branches`` field name over the same source
-    factory, so the oracle is the legacy response's RAW BYTES - whatever the
-    pre-card composition produces, rows or a pre-existing error, with its
-    envelope ordering, locations, path and extensions intact - plus its
+    factory, so the oracle is the legacy response's RAW BYTES - the two rows,
+    with its envelope ordering, locations, path and extensions intact - plus its
     ``library_branch`` SQL, final marks, and visibility-hook count. A semantic
     projection would pass while the envelope drifted. The staff client bypasses
     ``BranchType.get_queryset``'s ``exclude`` so the combined queryset is not
@@ -2994,9 +3110,9 @@ def _combined_branch_oracle(monkeypatch, client):
     assert visibility == 1
     marks = _PARITY_CAPTURE["legacy_marks"]
     assert "UNION" in marks[0].upper()
-    if "errors" not in payload:
-        assert sorted(row["name"] for row in payload["data"]["branches"]) == ["A", "B"]
-        assert len(sql) == 1
+    assert "errors" not in payload, payload
+    assert sorted(row["name"] for row in payload["data"]["branches"]) == ["A", "B"]
+    assert len(sql) == 1
     oracle = {
         "response": response,
         "sql": sql,

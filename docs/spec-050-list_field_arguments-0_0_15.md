@@ -640,7 +640,7 @@ the factory captures the target's model
 (`list_field.py::_model_from_definition`) and its `Meta.orderset_class`
 (`list_field.py::_orderset_class_from_definition`) off it, and those two values are what the
 default resolver seeds (`utils/querysets.py::base_queryset`, never the type-keyed
-`initial_queryset`), what both visibility seals and the post-`OrderSet` seal validate against
+`initial_queryset`), what both visibility seals and the post-sidecar seal validate against
 (the captured-model seam `utils/querysets.py::_captured_model`, which every type-keyed public
 caller still omits), what the signature builder publishes, and what every resolver dispatch runs
 through. Both reads fail loudly rather than answering softly: a second read is exactly where a
@@ -1357,7 +1357,7 @@ predicate `add_q` cannot resolve) is the typed `ConfigurationError`, never a raw
 truth-tested to decide whether the predicate is negated, and an object planted there would decide
 that through its own `__bool__`. Sealability therefore does not depend on which surface seals: a
 `Manager.from_queryset` relation is admitted at the raw-list row source, at the visibility
-boundary, and at the post-`OrderSet` result seal alike.
+boundary, and at the post-sidecar result seal alike.
 
 The fakeshop acceptance model dogfoods that supported declaration directly: `Loan` defines a
 no-op `LoanQuerySet` and assigns `objects = LoanQuerySet.as_manager()`. No request rewrites model
@@ -1381,16 +1381,19 @@ from the rows it holds, with no further query, for the exact type and for a rebu
 alike: the rows are read through Django's own slot on the instance state (the same
 `object.__getattribute__` read the sealer takes), and the window over them is the package's
 own list slice. Re-querying a project queryset class for rows it had already fetched would
-make `Manager.from_queryset` cost one query more than Django's manager at every relation it is
-used on, a database-level regression that buys nothing: the count is bounded either way and
-the rows are the same rows. The rebuild therefore carries the fetched rows forward when the
+make `Manager.from_queryset` cost one query per parent row more than Django's manager at every
+relation it is used on, and on the prefetched branch of the generated many-side resolver it
+would hand graphql-core an unevaluated rebuilt source that is iterated on the event loop under
+async, where Django raises `SynchronousOnlyOperation`. The rebuild therefore carries the fetched rows forward when the
 source it rebuilt held them, and drops nothing but the subclass's own methods. That carry
 belongs to the raw-list seam alone, the one place where nothing is composed after the rebuild.
 No other seal carries it, and what the others do with an evaluated source is two rules, not one.
 `require_unevaluated` - the axis that refuses an evaluated candidate outright - is on for the
-post-`OrderSet` result seal alone: the list field invoked that ordering method one step earlier
-and takes its window on what comes back, so rows already fetched mean the override ordered and
-paged something other than the query about to run. A visibility seal ADMITS an evaluated source
+post-sidecar result seal (`utils/querysets.py #"_SIDECAR_RESULT_POLICY = _SealPolicy("`) alone,
+which seals every public `FilterSet.apply_*` and `OrderSet.apply_*` return; a `DjangoListField`
+reaches it through `orderBy` alone. The field invoked that method one step earlier and takes its
+window on what comes back, so rows already fetched mean the override filtered, ordered or paged
+something other than the query about to run. A visibility seal ADMITS an evaluated source
 and drops its `_result_cache` in the rebuild, on the hook's input and on the hook's result
 alike, so no cached or injected row crosses the boundary and a consumer that evaluates inside
 the hook pays one extra query - a cost, not a broken seal. That hook's contract is shared with
@@ -3215,7 +3218,6 @@ structural checks, and link/kanban verification prescribed by
 <!-- docs/SPECS/ -->
 [spec-020]: SPECS/spec-020-list_field-0_0_7.md
 [spec-028]: SPECS/spec-028-orders-0_0_8.md
-[spec-029]: SPECS/spec-029-consumer_dx_cleanup-0_0_9.md
 [spec-030]: SPECS/spec-030-connection_field-0_0_9.md
 [spec-047]: SPECS/spec-047-resource_policy-0_0_14.md
 [spec-053]: SPECS/spec-053-boundary_dry_squeeze-0_0_15.md
@@ -3238,9 +3240,7 @@ structural checks, and link/kanban verification prescribed by
 [private-state]: ../django_strawberry_framework/utils/private_state.py
 [querysets]: ../django_strawberry_framework/utils/querysets.py
 [resource-policy]: ../django_strawberry_framework/resource_policy.py
-[resource-policy-extension]: ../django_strawberry_framework/extensions/resource_policy.py
 [schema]: ../django_strawberry_framework/schema.py
-[types-resolvers]: ../django_strawberry_framework/types/resolvers.py
 [typing-utils]: ../django_strawberry_framework/utils/typing.py
 
 <!-- tests/ -->

@@ -572,7 +572,9 @@ commit, admits no finding, which ends the loop.
   (none exists among the tree's 470 async test definitions), on a run that does not load
   `tests/conftest.py` (`pytest examples/fakeshop` alone), and on an async fixture writing rows
   for a sync test. Not admitted: the gate runs the full test paths, where the hook loads, and
-  none of these reaches a Definition-of-done row or a wire or configuration input.
+  none of these reaches a Definition-of-done row or a wire or configuration input. The
+  skipped-conftest fail-open is discharged: the guard moved to the root
+  `conftest.py::pytest_collection_modifyitems`, which every run loads.
 - **Flush side effects.** Each transactional test flushes the database, so a later module on
   the same xdist worker no longer sees rows the kanban and glossary data migrations seeded. That
   predates the delta and the full suites are green. Not admitted on all three conditions.
@@ -618,7 +620,9 @@ none is a Definition-of-done row of this card.
   `docs/SPECS/spec-034-permissions-0_0_10.md` quotations remain historical records. The seal
   admits Django's well-formed pending predicate and refuses only malformed state.
 - **Archived `docs/SPECS/spec-047-resource_policy-0_0_14.md`** states the raw-list slice as a SQL
-  `LIMIT` without the evaluated-source case; a dated `0.0.14` record. Owner: `maintainer`.
+  `LIMIT` without the evaluated-source case - discharged - `b3458ee8` added that case to its
+  `**The bound is applied by SLICING**` bullet, and its rationale records the claim the decision
+  no longer makes.
 - **`_UNRECOMPOSED_CHILD_POLICY` had zero production readers - discharged** - `4d9f1c3d`
   retired it, and no reference remains under `django_strawberry_framework/`.
 

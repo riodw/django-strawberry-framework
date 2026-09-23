@@ -52,7 +52,7 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
   card, align the extension contract with upstream's class-or-factory spelling while stating
   per-operation isolation as the guarantee this package adds, and close the card on one recorded
   gate. Decision 8 gains the evaluation-state carry so a project queryset class costs what
-  Django's manager costs. The measurements behind the contract: `utils/querysets.py` at 3,380
+  Django's manager costs and resolves under async at all. The measurements behind the contract: `utils/querysets.py` at 3,380
   lines when this spec was written and 4,294 at this revision; the package at +4,413/-647 lines
   since the recorded gate, concentrated in four new modules
   (`extensions/operation_state.py`, `utils/private_state.py`, `utils/execution_mode.py`,
@@ -382,9 +382,16 @@ premise about Django that measurement disproved. Decision 20 names that shape as
 application code the package answers for.
 
 *Rejected — re-querying the relation instead of carrying its rows:* The cached rows are already
-in memory and are the same rows the second query would return. Paying one query per parent row to
-re-fetch them is a database-level regression bought with nothing, and it is precisely the cost
-the carry exists to remove.
+in memory. Re-fetching them costs one query per parent row, and on the prefetched branch of the
+generated many-side resolver it returns an unevaluated rebuilt source that graphql-core iterates
+on the event loop under async, where Django raises `SynchronousOnlyOperation`. The alternative is
+therefore not only a cost: it breaks the async relation outright.
+
+*Measured fact:* with the carry removed,
+`examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_costs_two_prefetch_queries`
+counts 4 queries where it pins 2, and
+`examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited`
+answers `data: null`.
 
 *Rejected — mounting the live proof on a shape that never reaches the branch:* replacing the
 reverse relation manager's queryset class. The optimizer seeds the generated `Prefetch` child

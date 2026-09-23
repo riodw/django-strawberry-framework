@@ -486,11 +486,14 @@ Sequencing rule for this group: the five primitive cards (`cost_limit_extension`
 **Spec**:
 
 ```python path=null start=null
-schema = strawberry.Schema(
+_optimizer = DjangoOptimizerExtension()
+
+schema = DjangoSchema(
     query=Query,
+    config=strawberry_config(),
     extensions=[
-        DjangoOptimizerExtension(),
-        DjangoCostLimitExtension(max_cost=1000),
+        lambda: _optimizer,
+        lambda: DjangoCostLimitExtension(max_cost=1000),
     ],
 )
 ```

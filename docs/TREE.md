@@ -467,13 +467,17 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
+├── test_bench_common.py          # Script tests for the measurement plumbing the bench scripts share.
 ├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_check_citations.py       # Script tests for the ``path::Symbol`` citation gate.
+├── test_check_trailing_commas.py # Script tests for the ``source-layout`` gate in ``scripts/check_trailing_commas.py``.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_consumers.py             # Hostile-input containment for the WebSocket consumer (spec-046).
+├── test_count_queries.py         # Script tests for the N+1 detector's verdict and comparison logic.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
@@ -493,6 +497,9 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
 ├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
+├── test_review_changed_python_diffs.py  # Repo-tooling tests for the commit-vs-HEAD stripped diff helper.
+├── test_review_inspect.py        # Repo-tooling tests for the static review inspector ``scripts/review_inspect.py``.
+├── test_review_plan.py           # Repo-tooling tests for the REVIEW plan generator, scope lister and reconciler.
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_schema.py                # Permanent behavioral tests for django_strawberry_framework.schema.
@@ -709,13 +716,17 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
+├── test_bench_common.py          # Script tests for the measurement plumbing the bench scripts share.
 ├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_check_citations.py       # Script tests for the ``path::Symbol`` citation gate.
+├── test_check_trailing_commas.py # Script tests for the ``source-layout`` gate in ``scripts/check_trailing_commas.py``.
 ├── test_ci_governance.py         # Governance tests for the CI workflow definitions.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_consumers.py             # Hostile-input containment for the WebSocket consumer (spec-046).
+├── test_count_queries.py         # Script tests for the N+1 detector's verdict and comparison logic.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position (spec-048).
@@ -735,6 +746,9 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_relay_connection.py      # Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
 ├── test_resource_policy.py       # ``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
+├── test_review_changed_python_diffs.py  # Repo-tooling tests for the commit-vs-HEAD stripped diff helper.
+├── test_review_inspect.py        # Repo-tooling tests for the static review inspector ``scripts/review_inspect.py``.
+├── test_review_plan.py           # Repo-tooling tests for the REVIEW plan generator, scope lister and reconciler.
 ├── test_routers.py               # Channels router tests: the protocol split, WebSocket wrappers and consumer seam, lazy imports.
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_schema.py                # Permanent behavioral tests for django_strawberry_framework.schema.

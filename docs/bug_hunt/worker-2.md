@@ -33,3 +33,25 @@ Worker 1's diagnosis and report only after step 1 below is written.
 
 Report `verified` with the `Verification:` line, or `revision-needed` with concrete reproducible
 challenges. Preserve unrelated work; never edit the fix or its tests; do not commit.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

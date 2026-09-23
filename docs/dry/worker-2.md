@@ -46,3 +46,25 @@ Set `Status: verified` and tick the plan item (marking it `pending execution` on
 entry remains), or `Status: revision-needed` with concrete named candidates and reproducible
 feedback.
 Preserve unrelated work; do not commit.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

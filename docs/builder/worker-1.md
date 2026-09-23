@@ -254,3 +254,25 @@ Stop and report the blocker if:
 - the spec has contradictory requirements that cannot be reconciled safely
 - the needed change would violate `AGENTS.md` or `START.md`
 - final verification cannot identify the diff or artifact status clearly
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

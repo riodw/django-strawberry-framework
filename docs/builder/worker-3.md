@@ -188,3 +188,25 @@ Stop and record the blocker if:
 - the implementation appears to require spec reconciliation before review can continue
 - validation cannot be run and the risk level requires it
 - the fix depends on an unresolved package-wide design decision
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

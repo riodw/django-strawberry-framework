@@ -64,3 +64,25 @@ commit.
 
 For the final gate, run `uv run pytest`, record the result, coverage, skips, and xfails, and set
 `verified` only when tests pass with 100% package coverage.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

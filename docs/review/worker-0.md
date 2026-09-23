@@ -40,3 +40,25 @@ coverage.
 Report findings, fixes, remaining maintainer decisions, test results, and concurrent work left
 untouched. Delete only generated scratch directories named by `REVIEW.md`; never recursively delete
 from `docs/review/`. Do not commit.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

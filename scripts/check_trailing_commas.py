@@ -59,6 +59,8 @@ Usage::
     python scripts/check_trailing_commas.py [paths...]            # auto-fix (default)
     python scripts/check_trailing_commas.py --fix [paths...]      # auto-fix (explicit)
     python scripts/check_trailing_commas.py --check [paths...]    # gate (CI); exit 1
+    python scripts/check_trailing_commas.py --diff [paths...]     # --check + the fix as a diff
+    python scripts/check_trailing_commas.py --check --json [...]  # machine-readable result
 
 ``paths`` may be files or directories; with none, the whole repo is scanned.
 A directory walk covers only what git would accept as content (tracked, plus
@@ -67,6 +69,32 @@ agent memory or any other ignored path; a file named explicitly on the command
 line is still processed. Both modes report every violation they find, with the
 file and line. ``--fix`` edits the commas and then runs ``ruff format`` on the
 touched files so the layout actually reflows.
+
+Every run ends with one summary line -- files checked, files excluded, files
+ignored (unsupported suffix), violations, errors -- so a clean pass and a pass
+over nothing never look alike. A named path that matches nothing, or a named
+directory that yields no checkable file, is an error: a gate run over an empty
+population is not a pass. A named file dropped by an exclusion is reported as
+``excluded ... not checked``; a file an exclusion drops during a directory walk
+is counted in the summary.
+
+``--diff`` implies ``--check``: nothing is written, and the unified diff
+``--fix`` would apply (``ruff format`` reflow included) is printed per file.
+``--json`` replaces all human output with one JSON document on stdout:
+``mode``, ``paths``, ``summary`` (``checked`` / ``excluded`` / ``ignored`` /
+``violations`` / ``errors`` / ``fixed`` / ``exit``), the ``checked`` /
+``excluded`` / ``ignored`` path lists, ``violations`` and ``errors`` as records
+of ``file`` / ``line`` / ``rule`` / ``message`` / ``fixable``, and, with
+``--diff``, ``diffs`` keyed by file. Rule ids are stable: ``explode``,
+``collapse``, ``md-scaffold``, ``brace-explode``, ``non-ascii`` for violations;
+``read-error``, ``parse-error``, ``unfixable``, ``unmatched-path`` for errors.
+
+Exclusions are anchored to repo-relative paths (``EXCLUDE_PATTERNS``, built from
+``EXCLUDE_SCRATCH_DIRS`` and ``EXCLUDE_SCRATCH_SUBTREES``): the per-cycle
+artifacts of the docs/ agent flows and their scratch subtrees stay out, while
+the standing docs beside them (``REVIEW.md``, ``BUILD.md``, ``worker-*.md``,
+...) and tracked ``.py`` under ``docs/`` are checked. A directory of the same
+name anywhere else in the tree is ordinary source.
 
 What the fixer refuses to touch:
 
@@ -91,6 +119,7 @@ from __future__ import annotations
 import argparse
 import ast
 import decimal
+import difflib
 import functools
 import io
 import json
@@ -103,8 +132,10 @@ import tokenize
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Iterator, Sequence
-from fnmatch import fnmatch
+from dataclasses import dataclass, field
+from fnmatch import fnmatch, fnmatchcase
 from pathlib import Path
+from types import MappingProxyType
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -158,27 +189,39 @@ EXCLUDE_DIRS = frozenset(
         ".ruff_cache",
         ".pytest_cache",
         "node_modules",
-        "docs",  # regenerable artifacts (docs/shadow/*.py), not authored source
     },
 )
-# Transient scratch trees -- never enforced (no scaffold / JSON / GraphQL layout),
-# at any depth and for every file type. These are working notes, not authored
-# source, and are meant to be churned/deleted freely.
-EXCLUDE_SCRATCH_DIRS = frozenset(
+# Per-cycle artifacts of the docs/ agent flows, keyed by the ``docs/<name>/``
+# subtree that holds them. Each glob matches a file name directly inside that
+# subtree (``**`` = the whole subtree). These records close with their cycle and
+# carry no link-definition scaffold by design; the standing docs beside them
+# (``REVIEW.md``, ``BUILD.md``, ``ARTIFACT.md``, ``DRY.md``, ``HUNT.md``,
+# ``worker-*.md``, ``dicta.md``) are authored source and stay in scope.
+EXCLUDE_SCRATCH_DIRS = MappingProxyType(
     {
-        "review",
-        "bug_hunt",
-        "builder",
-        "shadow",
-        "dry",
-        "worker-memory",
+        "review": ("rev-*.md", "review-*.md"),
+        "dry": ("dry-*.md",),
+        "builder": ("bld-*.md", "build-*.md", "DONE/**"),
+        "bug_hunt": ("bug_hunt-*.md",),
+        "shadow": ("**",),
     },
 )
-# Transient per-cycle notes under ``docs/``, matched as anchored name globs and
-# only there. As bare substrings ("worker", "feedback") the same rule would drop a
-# future ``django_strawberry_framework/worker.py`` from the gate with no output at
-# all -- staged, matched by pre-commit, then silently unenforced.
-EXCLUDE_DOC_NAME_GLOBS = ("worker-*.md", "feedback*.md")
+# Untracked scratch subtrees any docs/ flow keeps beside its artifacts.
+EXCLUDE_SCRATCH_SUBTREES = ("temp-tests", "worker-memory")
+# Repo-relative, ``/``-segmented patterns: ``*`` matches within one segment and a
+# whole-segment ``**`` matches any number of segments. Anchoring at the repo root
+# is load-bearing: a basename rule (``review``, ``builder``, ``dry``) would drop a
+# future ``django_strawberry_framework/builder/`` or ``tests/review/`` from every
+# check with no output at all.
+EXCLUDE_PATTERNS: tuple[str, ...] = (
+    *(f"docs/{name}/{glob}" for name, globs in EXCLUDE_SCRATCH_DIRS.items() for glob in globs),
+    *(f"docs/*/{name}/**" for name in EXCLUDE_SCRATCH_SUBTREES),
+)
+# Maintainer review inputs under ``docs/``, matched as anchored name globs and
+# only there. As a bare substring the same rule would drop a future
+# ``django_strawberry_framework/feedback.py`` from the gate with no output at all
+# -- staged, matched by pre-commit, then silently unenforced.
+EXCLUDE_DOC_NAME_GLOBS = ("feedback*.md",)
 # Agent-instruction markdown files exempt from the LINK-DEFINITIONS scaffold: they
 # are prose directives, not standing docs with cross-file links, so they carry no
 # link-definition footer. (Before this list AGENTS.md passed only incidentally --
@@ -524,15 +567,20 @@ def _apply(text: str, inserts: list[int], deletes: list[int]) -> str:
     return "".join(out)
 
 
-def _run_ruff_format(files: list[Path]) -> None:
-    """Reflow the touched files so added/removed commas take visual effect."""
+def _run_ruff_format(files: list[Path], *, quiet: bool = False) -> None:
+    """Reflow the touched files so added/removed commas take visual effect.
+
+    ``quiet`` sends ruff's own report to stderr, keeping stdout for ``--json``.
+    """
     ruff = shutil.which("ruff")
     cmd = ([ruff] if ruff else ["uv", "run", "ruff"]) + ["format", *(str(f) for f in files)]
     try:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, check=False, capture_output=quiet, text=quiet)
     except FileNotFoundError:
         print("note: ruff not found on PATH; run `uv run ruff format` to reflow", file=sys.stderr)
         return
+    if quiet and (result.stdout or result.stderr):
+        print(f"{result.stdout}{result.stderr}".rstrip("\n"), file=sys.stderr)
     if result.returncode != 0:
         print(f"warning: `ruff format` exited {result.returncode}", file=sys.stderr)
 
@@ -987,21 +1035,42 @@ def process_markdown_fences(text: str, do_fix: bool) -> tuple[list[int], str]:
     return violations, "\n".join(out)
 
 
+def _match_segments(pattern: tuple[str, ...], parts: tuple[str, ...]) -> bool:
+    """Match ``parts`` against ``pattern`` segment by segment (``**`` = any run)."""
+    if not pattern:
+        return not parts
+    head, rest = pattern[0], pattern[1:]
+    if head == "**":
+        return any(_match_segments(rest, parts[index:]) for index in range(len(parts) + 1))
+    return bool(parts) and fnmatchcase(parts[0], head) and _match_segments(rest, parts[1:])
+
+
+def matches_exclude_pattern(relative: str) -> bool:
+    """True when the repo-relative posix path ``relative`` matches ``EXCLUDE_PATTERNS``.
+
+    Matching is per segment, never over the joined string: ``fnmatch`` lets ``*``
+    cross ``/``, which would make ``docs/review/rev-*.md`` swallow any file under a
+    ``docs/review/rev-x/`` directory.
+    """
+    parts = tuple(relative.split("/"))
+    return any(_match_segments(tuple(pattern.split("/")), parts) for pattern in EXCLUDE_PATTERNS)
+
+
 def is_excluded(path: Path) -> bool:
     """True when ``path`` is outside the enforced set.
 
     ``EXCLUDE_DIRS`` always drops external/generated trees (``.venv``, caches,
-    ``node_modules``, ``build``/``dist``). The ``docs`` exclusion only applies to
-    ``.py`` (regenerable ``docs/shadow/*.py``); markdown anywhere under ``docs``
-    is in scope per the "every ``.md``" rule -- EXCEPT the transient scratch trees
-    in ``EXCLUDE_SCRATCH_DIRS`` and the per-cycle notes named by
-    ``EXCLUDE_DOC_NAME_GLOBS``.
+    ``node_modules``, ``build``/``dist``, ``migrations``) at any depth. Inside the
+    repo, ``EXCLUDE_PATTERNS`` drops the docs/ flows' per-cycle artifacts and
+    scratch subtrees by repo-relative path, and ``EXCLUDE_DOC_NAME_GLOBS`` drops the
+    maintainer inputs it names under a ``docs`` part. Everything else -- the
+    standing docs beside the per-cycle ones and tracked ``.py`` under ``docs/``
+    included -- is checked.
     """
-    excluded = set(EXCLUDE_DIRS)
-    if path.suffix != ".py":
-        excluded.discard("docs")  # markdown under docs/ stays in scope
-    excluded |= EXCLUDE_SCRATCH_DIRS  # scratch trees, every file type
-    if any(part in excluded for part in path.parts):
+    if any(part in EXCLUDE_DIRS for part in path.parts):
+        return True
+    relative = _repo_relative(path)
+    if relative is not None and matches_exclude_pattern(relative):
         return True
     return "docs" in path.parts and any(
         fnmatch(path.name, glob) for glob in EXCLUDE_DOC_NAME_GLOBS
@@ -1060,8 +1129,12 @@ def _repo_relative(path: Path) -> str | None:
         return None
 
 
-def _walk(root: Path, suffixes: tuple[str, ...]) -> Iterator[Path]:
-    """Yield matching files under ``root``, pruning excluded directories in place.
+def _walk(
+    root: Path,
+    suffixes: tuple[str, ...],
+    excluded: list[Path] | None = None,
+) -> Iterator[Path]:
+    """Yield matching files under ``root``, pruning external directories in place.
 
     ``rglob`` would descend all of ``.venv`` and ``node_modules`` and discard the
     results afterwards; pruning at the directory level never visits them.
@@ -1072,55 +1145,101 @@ def _walk(root: Path, suffixes: tuple[str, ...]) -> Iterator[Path]:
     LINK-DEFINITIONS footer into that file. An ignored path is not repo content,
     so the sweep does not read it. Paths named explicitly on the command line are
     still honoured; only the walk is filtered.
+
+    A git-visible file with a checked suffix that an exclusion rule drops is
+    appended to ``excluded`` (when given), so the run can count what it skipped.
     """
-    prune = EXCLUDE_DIRS | EXCLUDE_SCRATCH_DIRS
     scope = git_visible_scope()
     for dirpath, dirnames, filenames in os.walk(root):
         here = Path(dirpath)
-        # ``docs`` holds in-scope markdown, so it is filtered per file, not pruned.
-        dirnames[:] = sorted(d for d in dirnames if d not in prune or d == "docs")
+        dirnames[:] = sorted(d for d in dirnames if d not in EXCLUDE_DIRS)
         relative = _repo_relative(here) if scope is not None else None
+        base = "" if relative in (None, ".") else f"{relative}/"
         if scope is not None and relative is not None:
             visible = scope[1]
-            base = "" if relative == "." else f"{relative}/"
             dirnames[:] = [name for name in dirnames if f"{base}{name}" in visible]
         for name in sorted(filenames):
             path = here / name
-            if path.suffix not in suffixes or is_excluded(path):
+            if path.suffix not in suffixes:
                 continue
-            if scope is not None and relative is not None:
-                base = "" if relative == "." else f"{relative}/"
-                if f"{base}{name}" not in scope[0]:
-                    continue
+            if scope is not None and relative is not None and f"{base}{name}" not in scope[0]:
+                continue
+            if is_excluded(path):
+                if excluded is not None:
+                    excluded.append(path)
+                continue
             yield path
+
+
+@dataclass
+class Selection:
+    """What a run was handed and what it made of it.
+
+    ``files`` are processed. ``skipped`` were named explicitly and dropped by an
+    exclusion; ``excluded`` were reached by a directory walk and dropped by one;
+    ``ignored`` were named explicitly with a suffix no rule covers; ``unmatched``
+    pairs a named path with why it contributed nothing (missing, or a directory
+    that yielded no checkable file).
+    """
+
+    files: list[Path] = field(default_factory=list)
+    skipped: list[Path] = field(default_factory=list)
+    excluded: list[Path] = field(default_factory=list)
+    ignored: list[Path] = field(default_factory=list)
+    unmatched: list[tuple[str, str]] = field(default_factory=list)
+
+
+def select_files(paths: Sequence[str], suffixes: tuple[str, ...]) -> Selection:
+    """Resolve ``paths`` (default: the repo root) into a ``Selection``.
+
+    pre-commit passes staged paths, and its filters are looser than this script's,
+    so it routinely hands over files that are dropped here. Returning them rather
+    than swallowing them lets the caller say so: a silent skip reads exactly like a
+    clean pass. The same holds for a path that names nothing and a directory whose
+    walk comes back empty.
+    """
+    selection = Selection()
+    seen: set[Path] = set()
+    for raw in paths or ["."]:
+        root = Path(raw)
+        if root.is_dir():
+            walked: list[Path] = []
+            candidates = list(_walk(root, suffixes, walked))
+            selection.excluded.extend(path for path in walked if path not in seen)
+            seen.update(walked)
+            if not candidates:
+                selection.unmatched.append(
+                    (raw, f"directory yielded no checkable file ({len(walked)} excluded)"),
+                )
+        elif not root.exists():
+            selection.unmatched.append((raw, "matches nothing"))
+            candidates = []
+        elif root.suffix not in suffixes:
+            if root not in seen:
+                seen.add(root)
+                selection.ignored.append(root)
+            candidates = []
+        elif is_excluded(root):
+            if root not in seen:
+                seen.add(root)
+                selection.skipped.append(root)
+            candidates = []
+        else:
+            candidates = [root]
+        for path in candidates:
+            if path not in seen:
+                seen.add(path)
+                selection.files.append(path)
+    return selection
 
 
 def iter_files(paths: Sequence[str], suffixes: tuple[str, ...]) -> tuple[list[Path], list[Path]]:
     """Return ``(files to process, explicitly-named files that were excluded)``.
 
-    pre-commit passes staged paths, and its filters are looser than this script's,
-    so it routinely hands over files that are dropped here. Returning them rather
-    than swallowing them lets the caller say so: a silent skip reads exactly like a
-    clean pass.
+    The two-list view of ``select_files``.
     """
-    files: list[Path] = []
-    skipped: list[Path] = []
-    seen: set[Path] = set()
-    for raw in paths or ["."]:
-        root = Path(raw)
-        if root.is_dir():
-            candidates = list(_walk(root, suffixes))
-        elif root.suffix in suffixes:
-            candidates = [root]
-            if is_excluded(root):
-                candidates, skipped = [], [*skipped, root]
-        else:
-            candidates = []
-        for path in candidates:
-            if path not in seen:
-                seen.add(path)
-                files.append(path)
-    return files, skipped
+    selection = select_files(paths, suffixes)
+    return selection.files, selection.skipped
 
 
 def _is_emoji(cp: int) -> bool:
@@ -1179,6 +1298,71 @@ def write_source(path: Path, text: str, newline: str) -> None:
         handle.write(text.replace("\n", newline))
 
 
+MESSAGES = {
+    "explode": "explode (>= threshold, no trailing comma)",
+    "collapse": "collapse (< threshold, over-exploded)",
+    "md-scaffold": "carry the canonical LINK-DEFINITIONS footer scaffold (all category markers)",
+    "brace-explode": "explode JSON/GraphQL `{` onto its own line",
+}
+SUFFIXES = (
+    ".py",
+    ".md",
+    ".json",
+    ".graphql",
+    ".gql",
+)
+
+
+def _record(
+    path: Path | str,
+    line: int | None,
+    rule: str,
+    message: str,
+    *,
+    fixable: bool,
+) -> dict[str, object]:
+    """One violation or error record; every record carries the same keys."""
+    return {
+        "file": str(path),
+        "line": line,
+        "rule": rule,
+        "message": message,
+        "fixable": fixable,
+    }
+
+
+def _ruff_format_text(text: str, path: Path) -> str | None:
+    """``text`` as ``ruff format`` would leave it at ``path``, or ``None`` if ruff failed.
+
+    ``--stdin-filename`` makes ruff resolve the same configuration it applies to the
+    file on disk, so a ``--diff`` shows the reflow ``--fix`` would produce.
+    """
+    ruff = shutil.which("ruff")
+    cmd = ([ruff] if ruff else ["uv", "run", "ruff"]) + [
+        "format",
+        "--stdin-filename",
+        str(path),
+        "-",
+    ]
+    try:
+        result = subprocess.run(cmd, input=text, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _unified_diff(path: Path, before: str, after: str) -> str:
+    """The unified diff turning ``before`` into ``after``, labelled with ``path``."""
+    return "".join(
+        difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"a/{path}",
+            tofile=f"b/{path}",
+        ),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point: ``--fix`` (default) or ``--check`` (gate) over ``paths``."""
     parser = argparse.ArgumentParser(
@@ -1192,31 +1376,44 @@ def main(argv: list[str] | None = None) -> int:
         help="report violations and exit 1 (no edits)",
     )
     mode.add_argument("--fix", action="store_true", help="auto-fix (the default)")
+    parser.add_argument(
+        "--diff",
+        action="store_true",
+        help="with --check (implied): print the unified diff --fix would apply; writes nothing",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print one JSON result document on stdout instead of human output",
+    )
     parser.add_argument("paths", nargs="*", help="files/dirs to process (default: whole repo)")
     args = parser.parse_args(argv)
-    do_fix = not args.check
-    suffixes = (
-        ".py",
-        ".md",
-        ".json",
-        ".graphql",
-        ".gql",
-    )
-    files, skipped = iter_files(args.paths, suffixes)
-    for path in skipped:
-        print(f"{path}: excluded from the source-layout rules -- not checked", file=sys.stderr)
+    if args.diff and args.fix:
+        parser.error("--diff writes nothing; it cannot be combined with --fix")
+    check = args.check or args.diff
+    do_fix = not check
 
-    messages = {
-        "explode": "explode (>= threshold, no trailing comma)",
-        "collapse": "collapse (< threshold, over-exploded)",
-        "md-scaffold": "carry the canonical LINK-DEFINITIONS footer scaffold (all category markers)",
-        "brace-explode": "explode JSON/GraphQL `{` onto its own line",
-    }
+    def say(message: str = "", *, err: bool = False) -> None:
+        if not args.json:
+            print(message, file=sys.stderr if err else sys.stdout)
+
+    selection = select_files(args.paths, SUFFIXES)
+    files = selection.files
+    for path in selection.skipped:
+        say(f"{path}: excluded from the source-layout rules -- not checked", err=True)
+    for path in selection.ignored:
+        say(f"{path}: no source-layout rule covers this suffix -- ignored", err=True)
+    records: list[dict[str, object]] = []
+    error_records: list[dict[str, object]] = []
+    for raw, reason in selection.unmatched:
+        say(f"{raw}: {reason} -- NOT checked", err=True)
+        error_records.append(_record(raw, None, "unmatched-path", reason, fixable=False))
+
     violations = 0
     errors = 0
-    scaffold_detail: dict[Path, str] = {}
     changed: list[Path] = []
     py_changed: list[Path] = []
+    diffs: dict[str, str] = {}
     ascii_hits: list[tuple[Path, int, int, str]] = []  # non-ASCII in .py (report-only)
 
     for path in files:
@@ -1226,11 +1423,15 @@ def main(argv: list[str] | None = None) -> int:
             # A file that could not be read was not checked, so the run cannot
             # claim it passed: count it and fail, rather than printing and
             # exiting 0 on a file the gate never opened.
-            print(f"{path}: read error ({exc}) -- NOT checked", file=sys.stderr)
+            say(f"{path}: read error ({exc}) -- NOT checked", err=True)
+            error_records.append(_record(path, None, "read-error", str(exc), fixable=False))
             errors += 1
             continue
         new = text
-        found: list[tuple[int, str]] = []
+        # (line, rule, fixable); the fixed text is computed in every mode so
+        # ``--diff`` can show it and ``fixable`` is a fact, not a promise.
+        found: list[tuple[int, str, bool]] = []
+        scaffold_missing: str | None = None
 
         if path.suffix == ".py":
             # Lexical, parse-independent -- run BEFORE the comma analysis so a
@@ -1248,99 +1449,145 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 inserts, deletes, comma_found = _analyze(text, threshold_for(path))
             except (SyntaxError, tokenize.TokenError) as exc:
-                print(f"{path}: parse error ({exc}) -- NOT checked", file=sys.stderr)
+                say(f"{path}: parse error ({exc}) -- NOT checked", err=True)
+                error_records.append(_record(path, None, "parse-error", str(exc), fixable=False))
                 errors += 1
                 continue
-            found.extend(comma_found)
-            if do_fix and (inserts or deletes):
+            comma_fixable = True
+            if inserts or deletes:
                 candidate = _apply(new, inserts, deletes)
                 try:
                     ast.parse(candidate)
                     new = candidate
                 except SyntaxError as exc:  # safety net -- never write broken syntax
-                    print(
-                        f"{path}: comma fix would break syntax ({exc}) -- skipped",
-                        file=sys.stderr,
-                    )
+                    comma_fixable = False
+                    if do_fix:
+                        say(f"{path}: comma fix would break syntax ({exc}) -- skipped", err=True)
+            found.extend((ln, kind, comma_fixable) for ln, kind in comma_found)
 
         elif path.suffix == ".md":
-            missing = (
+            scaffold_missing = (
                 None
                 if path.name in EXEMPT_MD_SCAFFOLD_NAMES
                 else _scaffold_in_canonical_order(new)
             )
-            if missing is not None:
-                found.append((new.count("\n") + 1, "md-scaffold"))
-                scaffold_detail[path] = missing
-                if do_fix:
-                    rebuilt = fix_markdown_scaffold(new)
-                    if rebuilt is None:
-                        print(
-                            f"{path}: rebuilding the LINK-DEFINITIONS footer would drop "
-                            f"content -- NOT fixed; repair the footer by hand",
-                            file=sys.stderr,
+            if scaffold_missing is not None:
+                rebuilt = fix_markdown_scaffold(new)
+                found.append((new.count("\n") + 1, "md-scaffold", rebuilt is not None))
+                if rebuilt is None:
+                    if do_fix:
+                        message = (
+                            "rebuilding the LINK-DEFINITIONS footer would drop content "
+                            "-- NOT fixed; repair the footer by hand"
+                        )
+                        say(f"{path}: {message}", err=True)
+                        error_records.append(
+                            _record(path, None, "unfixable", message, fixable=False),
                         )
                         errors += 1
-                    else:
-                        new = rebuilt
-            fence_lines, fenced = process_markdown_fences(new, do_fix)
-            found.extend((ln, "brace-explode") for ln in fence_lines)
-            if do_fix:
-                new = fenced
+                else:
+                    new = rebuilt
+            fence_lines, new = process_markdown_fences(new, True)
+            found.extend((ln, "brace-explode", True) for ln in fence_lines)
 
         else:  # .json / .graphql / .gql
             kind = "json" if path.suffix == ".json" else "graphql"
             viol, jg_new = process_json_graphql_file(new, kind)
             if viol:
-                found.append((_first_divergence(new, jg_new), "brace-explode"))
-                if do_fix:
-                    new = jg_new
+                found.append((_first_divergence(new, jg_new), "brace-explode", True))
+                new = jg_new
 
         # Report what was found in BOTH modes. Under --fix these lines were being
         # computed and thrown away, so the run said only how many files it had
         # touched, never which rule fired or where.
-        for lineno, kind in sorted(found):
-            detail = messages[kind]
+        for lineno, kind, fixable in sorted(found):
+            detail = MESSAGES[kind]
             if kind == "md-scaffold":
-                detail = f"{detail} -- first missing marker: {scaffold_detail[path]}"
-            print(f"{path}:{lineno}: should {detail}")
+                detail = f"{detail} -- first missing marker: {scaffold_missing}"
+            say(f"{path}:{lineno}: should {detail}")
+            records.append(_record(path, lineno, kind, f"should {detail}", fixable=fixable))
             violations += 1
-        if not args.check and new != text:
+        if new == text:
+            continue
+        if do_fix:
             write_source(path, new, newline)
             changed.append(path)
             if path.suffix == ".py":
                 py_changed.append(path)
+        elif args.diff:
+            after = new
+            if path.suffix == ".py":
+                reflowed = _ruff_format_text(new, path)
+                if reflowed is None:
+                    say(f"{path}: ruff format failed; diff shows the comma edits only", err=True)
+                else:
+                    after = reflowed
+            diffs[str(path)] = _unified_diff(path, text, after)
 
     # Non-ASCII in .py is report-only (no safe universal auto-fix) and fails in
     # BOTH modes, so the pre-commit `--fix` run catches it too, not just CI.
     for hit_path, line, col, char in ascii_hits:
-        print(
-            f"{hit_path}:{line}:{col}: non-ASCII U+{ord(char):04X} {char!r} "
-            f"not allowed in .py (ASCII + emoji only)",
-            file=sys.stderr,
+        message = f"non-ASCII U+{ord(char):04X} {char!r} not allowed in .py (ASCII + emoji only)"
+        say(f"{hit_path}:{line}:{col}: {message}", err=True)
+        records.append(
+            _record(hit_path, line, "non-ascii", f"column {col}: {message}", fixable=False),
         )
 
-    if args.check:
+    for diff in diffs.values():
+        say(diff.rstrip("\n"))
+
+    unmatched = len(selection.unmatched)
+    if check:
         if violations:
-            print(f"\n{violations} layout violation(s); run with --fix to resolve")
+            say(f"\n{violations} layout violation(s); run with --fix to resolve")
         if ascii_hits:
-            print(
-                f"{len(ascii_hits)} non-ASCII char(s) in .py; replace with ASCII (emoji allowed)",
+            say(f"{len(ascii_hits)} non-ASCII char(s) in .py; replace with ASCII (emoji allowed)")
+        exit_code = 1 if (violations or ascii_hits or errors or unmatched) else 0
+    else:
+        if py_changed:
+            _run_ruff_format(py_changed, quiet=args.json)
+        say(f"Fixed {len(changed)} file(s).")
+        if ascii_hits:
+            say(
+                f"{len(ascii_hits)} non-ASCII char(s) in .py need manual replacement "
+                f"(emoji allowed)",
             )
-        if errors:
-            print(f"{errors} file(s) could not be checked")
-        return 1 if (violations or ascii_hits or errors) else 0
-
-    if py_changed:
-        _run_ruff_format(py_changed)
-    print(f"Fixed {len(changed)} file(s).")
-    if ascii_hits:
-        print(
-            f"{len(ascii_hits)} non-ASCII char(s) in .py need manual replacement (emoji allowed)",
-        )
+        exit_code = 1 if (ascii_hits or errors or unmatched) else 0
     if errors:
-        print(f"{errors} file(s) could not be checked")
-    return 1 if (ascii_hits or errors) else 0
+        say(f"{errors} file(s) could not be checked")
+    if unmatched:
+        say(f"{unmatched} path(s) contributed no file to check")
+
+    excluded_paths = [*selection.skipped, *selection.excluded]
+    total_violations = violations + len(ascii_hits)
+    say(
+        f"source-layout: checked {len(files)} file(s); excluded {len(excluded_paths)}; "
+        f"ignored {len(selection.ignored)}; violations {total_violations} "
+        f"(layout {violations}, non-ASCII {len(ascii_hits)}); errors {errors + unmatched}",
+    )
+    if args.json:
+        document = {
+            "mode": "check" if check else "fix",
+            "paths": list(args.paths),
+            "summary": {
+                "checked": len(files),
+                "excluded": len(excluded_paths),
+                "ignored": len(selection.ignored),
+                "violations": total_violations,
+                "errors": len(error_records),
+                "fixed": len(changed),
+                "exit": exit_code,
+            },
+            "checked": [str(path) for path in files],
+            "excluded": [str(path) for path in excluded_paths],
+            "ignored": [str(path) for path in selection.ignored],
+            "violations": records,
+            "errors": error_records,
+        }
+        if args.diff:
+            document["diffs"] = diffs
+        print(json.dumps(document, indent=2))
+    return exit_code
 
 
 if __name__ == "__main__":

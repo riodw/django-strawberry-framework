@@ -4,22 +4,55 @@ Current trees come from module docstrings and folder ``__init__.py`` docstrings.
 The target-layout sections additionally merge in the planned ``TrackedPath``
 rows linked from WIP/TODO kanban cards (``examples/fakeshop/db.sqlite3``), so
 the future package/test shape renders from the same DB the board exports use.
+
+Each rendered module's tree comment is the FIRST non-empty physical line of its
+module docstring (a folder row reads its ``__init__.py``). That line must be
+present, be exactly one sentence, end with ``.`` (never ``!`` or ``?``), and
+carry no ``e.g. `` / ``i.e. `` (a dot followed by a space reads as a sentence
+break; interior dots such as ``Meta.cursor_field`` or ``0.0.14`` are fine). A
+summary wrapped onto a second physical line therefore fails the render.
+
+``--list-docstrings [PATH ...]`` prints that line for every package module
+(default) or for the named files/directories, flags each rule violation by rule
+name, and needs neither Django nor the board database; ``--json`` emits the same
+rows as JSON. ``--check`` on a stale file names every tree row that differs and
+prints a unified diff of ``docs/TREE.md`` (``--max-hunks`` bounds it).
+
+Exit codes: ``0`` fresh / written / every listed line passes; ``1`` stale file
+(``--check``) or a module whose description breaks the first-line rule (the
+message names the module and the rule); ``2`` caller-correctable error (missing
+``docs/TREE.md`` or its delimiter, a path that does not exist, a bad flag).
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import difflib
+import json
 import re
+import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
 try:
-    from _kanban_lib import REPO_ROOT, check_freshness, configure_django, render_parser
+    from _kanban_lib import (
+        REPO_ROOT,
+        check_freshness,
+        cli_exit,
+        configure_django,
+        render_parser,
+    )
 except ModuleNotFoundError:  # imported as ``scripts.build_tree_md`` (repo root on path)
-    from scripts._kanban_lib import REPO_ROOT, check_freshness, configure_django, render_parser
+    from scripts._kanban_lib import (
+        REPO_ROOT,
+        check_freshness,
+        cli_exit,
+        configure_django,
+        render_parser,
+    )
 
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "TREE.md"
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "django_strawberry_framework"
@@ -58,6 +91,18 @@ TEMPLATE_DIRNAME = "templates"
 #: never followed by whitespace, so this pattern accepts them and still rejects
 #: a genuine run-on summary.
 SENTENCE_BREAK_RE = re.compile(r"[.!?]\s")
+#: Abbreviations whose trailing ``. `` trips ``SENTENCE_BREAK_RE``; reported under
+#: their own rule so the fix (spell it out) is named rather than "two sentences".
+ABBREVIATION_RE = re.compile(r"\b(?:e\.g|i\.e)\.\s")
+RULE_PRESENT = "present"
+RULE_PARSES = "parses"
+RULE_DESCRIBABLE = "describable"
+RULE_ENDS_WITH_PERIOD = "ends-with-period"
+RULE_NOT_BANG_OR_QUESTION = "not-bang-or-question"
+RULE_NO_EG_IE = "no-eg-ie"
+RULE_ONE_SENTENCE = "one-sentence"
+#: Default ``--check`` diff bound; ``--max-hunks 0`` prints every hunk.
+DEFAULT_MAX_HUNKS = 10
 TREE_BRANCH = "\u251c\u2500\u2500 "
 TREE_LAST = "\u2514\u2500\u2500 "
 TREE_PIPE = "\u2502   "
@@ -137,6 +182,57 @@ class TreeRenderError(ValueError):
     """A caller-correctable TREE.md rendering error."""
 
 
+class ModuleDescriptionError(TreeRenderError):
+    """A rendered node whose description breaks the first-line rule.
+
+    Distinct from its base so the CLI reports it as a documentation failure that
+    names the module and the rule (exit 1), not as a bad invocation (exit 2).
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        rule: str,
+        detail: str,
+    ) -> None:
+        """Record the offending ``path``, the broken ``rule`` and a readable ``detail``."""
+        self.path = path
+        self.rule = rule
+        self.detail = detail
+        super().__init__(f"{display_path(path)}: [{rule}] {detail}")
+
+
+@dataclass(frozen=True)
+class RuleViolation:
+    """One broken first-line rule and the reason it applies."""
+
+    rule: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class FirstLineReport:
+    """The line TREE.md renders for one module, plus every rule it breaks."""
+
+    path: Path
+    is_folder_row: bool
+    line: str | None
+    violations: tuple[RuleViolation, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the JSON shape emitted by ``--list-docstrings --json``."""
+        return {
+            "path": display_path(self.path),
+            "row": "folder" if self.is_folder_row else "file",
+            "line": self.line,
+            "ok": not self.violations,
+            "violations": [
+                {"rule": violation.rule, "detail": violation.detail}
+                for violation in self.violations
+            ],
+        }
+
+
 @dataclass(frozen=True)
 class TreePosition:
     """Connector state for one child inside a text tree."""
@@ -145,7 +241,7 @@ class TreePosition:
     child_prefix: str
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = render_parser(
         "Render the dynamic django_strawberry_framework section of docs/TREE.md.",
@@ -158,7 +254,48 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PACKAGE_DIR,
         help="Package directory to render. Defaults to django_strawberry_framework/.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--list-docstrings",
+        nargs="*",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Print the first docstring line TREE.md renders for each module (every "
+            "package .py incl. __init__.py by default, or the given files/directories) "
+            "and flag first-line rule violations; no Django or database. Exit 1 on any "
+            "violation."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="With --list-docstrings, emit the rows as JSON.",
+    )
+    parser.add_argument(
+        "--max-hunks",
+        type=int,
+        default=DEFAULT_MAX_HUNKS,
+        help=(
+            f"With --check, print at most this many diff hunks of a stale file "
+            f"(default {DEFAULT_MAX_HUNKS}; 0 prints all)."
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.json and args.list_docstrings is None:
+        parser.error("--json requires --list-docstrings")
+    if args.list_docstrings is not None and args.check:
+        parser.error("--list-docstrings and --check are separate modes")
+    if args.max_hunks < 0:
+        parser.error("--max-hunks must be 0 or more")
+    return args
+
+
+def display_path(path: Path) -> str:
+    """Return ``path`` relative to the repository root when it lives inside it."""
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path)
 
 
 def python_docstring(path: Path) -> str:
@@ -166,11 +303,11 @@ def python_docstring(path: Path) -> str:
     try:
         module = ast.parse(path.read_text())
     except SyntaxError as error:
-        raise TreeRenderError(f"{path} cannot be parsed: {error}") from error
+        raise ModuleDescriptionError(path, RULE_PARSES, f"cannot be parsed: {error}") from error
 
     docstring = ast.get_docstring(module)
     if not docstring:
-        raise TreeRenderError(f"{path} is missing a module docstring.")
+        raise ModuleDescriptionError(path, RULE_PRESENT, "is missing a module docstring.")
     return docstring
 
 
@@ -208,6 +345,54 @@ def python_docstring_paragraphs(path: Path) -> list[str]:
     return paragraphs_from_text(python_docstring(path))
 
 
+def first_line_violations(sentence: str) -> list[RuleViolation]:
+    """Return every first-line rule ``sentence`` breaks, in reporting order.
+
+    Accepts exactly what the render accepts: a line ending in ``.`` with no
+    sentence terminator followed by whitespace before that final dot. The rules
+    only split that one predicate into named causes.
+    """
+    violations = []
+    if sentence.endswith(("!", "?")):
+        violations.append(
+            RuleViolation(
+                RULE_NOT_BANG_OR_QUESTION,
+                f"first docstring line must end with '.', not {sentence[-1]!r}; got {sentence!r}.",
+            ),
+        )
+    elif not sentence.endswith("."):
+        violations.append(
+            RuleViolation(
+                RULE_ENDS_WITH_PERIOD,
+                f"first docstring line must end with '.'; got {sentence!r}. A summary "
+                "wrapped onto a second line fails here: shorten it to one line.",
+            ),
+        )
+    body = sentence[:-1] if sentence.endswith((".", "!", "?")) else sentence
+    abbreviation_ends = {match.end() for match in ABBREVIATION_RE.finditer(body)}
+    if abbreviation_ends:
+        violations.append(
+            RuleViolation(
+                RULE_NO_EG_IE,
+                f"first docstring line must not use 'e.g. ' or 'i.e. ' (the dot and "
+                f"space read as a sentence break); spell it out in {sentence!r}.",
+            ),
+        )
+    breaks = [
+        match for match in SENTENCE_BREAK_RE.finditer(body) if match.end() not in abbreviation_ends
+    ]
+    if breaks:
+        violations.append(
+            RuleViolation(
+                RULE_ONE_SENTENCE,
+                f"first docstring line must be ONE sentence; found a second sentence "
+                f"starting at offset {breaks[0].start()} of {sentence!r}. Move the trailing "
+                "prose into the next paragraph.",
+            ),
+        )
+    return violations
+
+
 def assert_single_sentence(path: Path, sentence: str) -> None:
     """Raise unless ``sentence`` is exactly one period-terminated sentence.
 
@@ -217,27 +402,45 @@ def assert_single_sentence(path: Path, sentence: str) -> None:
     docstring: later paragraphs are the file's detail prose and are free to be
     as long as they need.
     """
-    if not sentence.endswith("."):
-        raise TreeRenderError(
-            f"{path} first docstring line must end with '.'; got {sentence!r}.",
-        )
-    match = SENTENCE_BREAK_RE.search(sentence[:-1])
-    if match is not None:
-        raise TreeRenderError(
-            f"{path} first docstring line must be ONE sentence; found a second sentence "
-            f"starting at offset {match.start()} of {sentence!r}. Move the trailing prose "
-            "into the next paragraph.",
-        )
+    violations = first_line_violations(sentence)
+    if violations:
+        raise ModuleDescriptionError(path, violations[0].rule, violations[0].detail)
+
+
+def first_docstring_line(docstring: str) -> str:
+    """Return the first non-empty physical line of a cleaned docstring, stripped."""
+    return next((line.strip() for line in docstring.splitlines() if line.strip()), "")
 
 
 def first_python_docstring_sentence(path: Path) -> str:
     """Return the first module-docstring line from a Python source file."""
-    docstring = python_docstring(path)
-    sentence = next((line.strip() for line in docstring.splitlines() if line.strip()), "")
+    sentence = first_docstring_line(python_docstring(path))
     if not sentence:
-        raise TreeRenderError(f"{path} has an empty module docstring.")
+        raise ModuleDescriptionError(path, RULE_PRESENT, "has an empty module docstring.")
     assert_single_sentence(path, sentence)
     return sentence
+
+
+def first_line_report(path: Path) -> FirstLineReport:
+    """Report the line TREE.md renders for ``path`` without raising on a violation."""
+    is_folder_row = path.name == "__init__.py"
+    try:
+        sentence = first_docstring_line(python_docstring(path))
+    except ModuleDescriptionError as error:
+        return FirstLineReport(
+            path,
+            is_folder_row,
+            None,
+            (RuleViolation(error.rule, error.detail),),
+        )
+    if not sentence:
+        return FirstLineReport(
+            path,
+            is_folder_row,
+            None,
+            (RuleViolation(RULE_PRESENT, "has an empty module docstring."),),
+        )
+    return FirstLineReport(path, is_folder_row, sentence, tuple(first_line_violations(sentence)))
 
 
 def markdown_paragraphs(path: Path) -> list[str]:
@@ -287,17 +490,19 @@ def first_non_python_sentence(path: Path) -> str:
     if is_description_exempt(path):
         return ""
     if path.suffix != ".md":
-        raise TreeRenderError(
-            f"{path} is rendered into the tree but cannot carry a description. Give it a "
-            f"module docstring, or add a documented exemption beside "
-            f"DESCRIPTIONLESS_FILENAMES.",
+        raise ModuleDescriptionError(
+            path,
+            RULE_DESCRIBABLE,
+            "is rendered into the tree but cannot carry a description. Give it a "
+            "module docstring, or add a documented exemption beside "
+            "DESCRIPTIONLESS_FILENAMES.",
         )
 
     for paragraph in markdown_paragraphs(path):
         sentence = first_sentence_from_text(paragraph, strip_markup=True)
         assert_single_sentence(path, sentence)
         return sentence
-    raise TreeRenderError(f"{path} has no prose paragraph to describe it.")
+    raise ModuleDescriptionError(path, RULE_PRESENT, "has no prose paragraph to describe it.")
 
 
 def file_summary(path: Path) -> str:
@@ -372,10 +577,12 @@ def folder_description(path: Path) -> str:
     if not init_path.exists():
         if is_description_exempt(path):
             return ""
-        raise TreeRenderError(
-            f"{path} is rendered into the tree but has no __init__.py to describe it. Add "
-            f"one with a module docstring, pass an explicit root_description, or add a "
-            f"documented exemption beside DESCRIPTIONLESS_FILENAMES.",
+        raise ModuleDescriptionError(
+            path,
+            RULE_DESCRIBABLE,
+            "is rendered into the tree but has no __init__.py to describe it. Add one "
+            "with a module docstring, pass an explicit root_description, or add a "
+            "documented exemption beside DESCRIPTIONLESS_FILENAMES.",
         )
     return first_python_docstring_sentence(init_path)
 
@@ -1043,12 +1250,185 @@ def render_tree_doc(md_path: Path, package_dir: Path) -> str:
     return f"{preserved}{generated}\n"
 
 
-def main() -> int:
+# ---------------------------------------------------------------------------
+# --list-docstrings (no Django, no database)
+# ---------------------------------------------------------------------------
+
+
+def docstring_module_paths(targets: Sequence[Path], package_dir: Path) -> list[Path]:
+    """Return the ``.py`` modules ``--list-docstrings`` reports, deduplicated and sorted.
+
+    No targets means every package module, ``__init__.py`` included (its first
+    line is the folder row). A directory expands to its ``.py`` files minus the
+    directories the tree walker skips; a named file must be a ``.py`` module.
+    """
+    modules: set[Path] = set()
+    for target in targets or (package_dir,):
+        resolved = target.resolve()
+        if resolved.is_file():
+            if resolved.suffix != ".py":
+                raise TreeRenderError(f"{target} is not a Python module.")
+            modules.add(resolved)
+        elif resolved.is_dir():
+            modules.update(
+                module
+                for module in resolved.rglob("*.py")
+                if not IGNORED_TREE_DIRNAMES.intersection(module.relative_to(resolved).parts)
+            )
+        else:
+            raise TreeRenderError(f"{target} does not exist.")
+    return sorted(modules, key=display_path)
+
+
+def format_first_line_reports(reports: Sequence[FirstLineReport]) -> list[str]:
+    """Render ``--list-docstrings`` text rows: one line per module, reasons indented."""
+    lines = []
+    for report in reports:
+        row = " (folder row)" if report.is_folder_row else ""
+        status = "FAIL" if report.violations else "ok"
+        text = "<no first line>" if report.line is None else report.line
+        lines.append(f"{status:<4}  {display_path(report.path)}{row}: {text}")
+        lines.extend(
+            f"      [{violation.rule}] {violation.detail}" for violation in report.violations
+        )
+    return lines
+
+
+def list_docstrings(targets: Sequence[Path], package_dir: Path, *, as_json: bool) -> int:
+    """Print every module's rendered first line; ``1`` when any breaks the rule."""
+    reports = [first_line_report(path) for path in docstring_module_paths(targets, package_dir)]
+    failing = sum(1 for report in reports if report.violations)
+    if as_json:
+        payload = {
+            "modules": [report.as_dict() for report in reports],
+            "total": len(reports),
+            "failing": failing,
+        }
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        for line in format_first_line_reports(reports):
+            print(line)
+        print(f"{len(reports)} modules, {failing} breaking the first-line rule.", file=sys.stderr)
+    return 1 if failing else 0
+
+
+# ---------------------------------------------------------------------------
+# Stale --check report
+# ---------------------------------------------------------------------------
+
+TREE_ROW_PREFIXES = (
+    TREE_BRANCH,
+    TREE_LAST,
+    TREE_PIPE,
+    TREE_SPACE,
+)
+
+
+def tree_row_paths(lines: Sequence[str]) -> dict[int, str]:
+    """Map each fenced tree row in ``lines`` to the repository path it renders.
+
+    Reconstructed from the text alone (root label plus one four-column prefix
+    per depth), so the on-disk file and the fresh render are read the same way
+    and a row that exists on only one side is still named.
+    """
+    paths: dict[int, str] = {}
+    stack: list[str] = []
+    in_tree = False
+    for index, line in enumerate(lines):
+        if line == "```text":
+            in_tree, stack = True, []
+            continue
+        if not in_tree:
+            continue
+        if line == "```":
+            in_tree = False
+            continue
+        rest, depth = line, 0
+        while rest.startswith(TREE_ROW_PREFIXES):
+            rest, depth = rest[len(TREE_BRANCH) :], depth + 1
+        label = rest.split(maxsplit=1)[0] if rest.strip() else ""
+        if not label:
+            continue
+        stack = [*stack[:depth], label]
+        paths[index] = "".join(stack)
+    return paths
+
+
+def stale_report(
+    md_path: Path,
+    existing: str,
+    rendered: str,
+    *,
+    max_hunks: int,
+) -> list[str]:
+    """Name every tree row that differs and return a bounded unified diff of the file."""
+    old_lines = existing.splitlines()
+    new_lines = rendered.splitlines()
+    old_paths = tree_row_paths(old_lines)
+    new_paths = tree_row_paths(new_lines)
+    changed: set[str] = set()
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        changed.update(old_paths[i] for i in range(old_start, old_end) if i in old_paths)
+        changed.update(new_paths[j] for j in range(new_start, new_end) if j in new_paths)
+
+    if changed:
+        report = [f"Tree rows that differ ({len(changed)}):"]
+        report.extend(f"  {path}" for path in sorted(changed))
+    else:
+        report = ["No tree row differs; the difference is in the generated prose."]
+
+    diff = list(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=f"{display_path(md_path)} (on disk)",
+            tofile=f"{display_path(md_path)} (rendered)",
+            lineterm="",
+        ),
+    )
+    hunk_starts = [index for index, line in enumerate(diff) if line.startswith("@@")]
+    if max_hunks and len(hunk_starts) > max_hunks:
+        omitted = len(hunk_starts) - max_hunks
+        diff = [
+            *diff[: hunk_starts[max_hunks]],
+            f"... {omitted} more hunk(s) omitted; --max-hunks 0 prints all.",
+        ]
+    return [*report, *diff]
+
+
+def check_rendered(md_path: Path, rendered: str, *, max_hunks: int) -> int:
+    """Compare ``md_path`` with ``rendered``; on stale, also print the report."""
+    existing = md_path.read_text(encoding="utf-8") if md_path.is_file() else ""
+    status = check_freshness(md_path, rendered, script="scripts/build_tree_md.py")
+    if status:
+        for line in stale_report(md_path, existing, rendered, max_hunks=max_hunks):
+            print(line, file=sys.stderr)
+    return status
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point."""
-    args = parse_args()
-    rendered = render_tree_doc(args.md, args.package_dir)
+    args = parse_args(argv)
+    try:
+        if args.list_docstrings is not None:
+            return list_docstrings(args.list_docstrings, args.package_dir, as_json=args.json)
+        rendered = render_tree_doc(args.md, args.package_dir)
+    except ModuleDescriptionError as error:
+        print(
+            f"{display_path(args.md)} cannot render: module description rule broken in "
+            f"{error}\nRun scripts/build_tree_md.py --list-docstrings <path> to list first "
+            "lines.",
+            file=sys.stderr,
+        )
+        return 1
+    except TreeRenderError as error:
+        print(error, file=sys.stderr)
+        return 2
     if args.check:
-        return check_freshness(args.md, rendered, script="scripts/build_tree_md.py")
+        return check_rendered(args.md, rendered, max_hunks=args.max_hunks)
 
     args.md.write_text(rendered)
     print(f"Wrote {args.md}")
@@ -1056,4 +1436,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    cli_exit(main)

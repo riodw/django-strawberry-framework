@@ -52,3 +52,25 @@ every `## Defects` entry on a named owning card; a defect a consolidation depend
 family open until the maintainer decides. Fill `## Outcomes` with the per-finding evidence before
 deleting anything, set `Status: complete`, `partial (<scope>)` or `blocked`, then remove only this
 run's scratch by explicit path as `DRY.md` "Final gate and closeout" describes. Do not commit.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

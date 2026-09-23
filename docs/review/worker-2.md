@@ -38,3 +38,25 @@ checked and dispose of every finding.
 
 All revisions return to Worker 1. For zero-edit cycles, first confirm the target's scoped diff is
 empty. Preserve unrelated work and do not commit.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

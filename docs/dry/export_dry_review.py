@@ -369,7 +369,14 @@ def _git_status_short(root: Path) -> str | None:
     """Return ``git status --short`` for ``root``, or ``None`` outside a usable checkout."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "--no-pager", "status", "--short"],
+            [
+                "git",
+                "-C",
+                str(root),
+                "--no-pager",
+                "status",
+                "--short",
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -420,7 +427,7 @@ def _ledger_blocks() -> list[str]:
         "",
         "## Families",
         "",
-        r"One `- [ ] Family \`<name>\` — [dry-rule-<family>.md](dry-rule-<family>.md)` item per "
+        r"One `- [ ] Family \`<name>\` -- [dry-rule-<family>.md](dry-rule-<family>.md)` item per "
         "discovered",
         "family, added by Worker 0 as artifacts name them. None discovered at generation.",
         "",
@@ -482,7 +489,7 @@ def _render_source_plan(
             relative_file = source_file.relative_to(package_root)
             artifact = _artifact_name("dry-file", relative_file)
             lines.append(
-                f"- [ ] File `{relative_file.as_posix()}` — [{artifact}]({artifact})",
+                f"- [ ] File `{relative_file.as_posix()}` -- [{artifact}]({artifact})",
             )
         for child in sorted(candidate for candidate in grouped if candidate.parent == folder):
             append_folder(child)
@@ -491,7 +498,7 @@ def _render_source_plan(
             artifact = _artifact_name("dry-folder", relative_folder)
             lines.extend(["", f"## {relative_folder.as_posix()} integration", ""])
             lines.append(
-                f"- [ ] Folder integration `{relative_folder.as_posix()}/` — "
+                f"- [ ] Folder integration `{relative_folder.as_posix()}/` -- "
                 f"[{artifact}]({artifact})",
             )
 
@@ -502,7 +509,7 @@ def _render_source_plan(
             "",
             "## Project",
             "",
-            "- [ ] Project integration — [dry-project.md](dry-project.md)",
+            "- [ ] Project integration -- [dry-project.md](dry-project.md)",
             "- [ ] Final test gate",
             "",
             *_ledger_blocks(),
@@ -763,11 +770,7 @@ def _collect_symbols_and_bodies(
     return symbols, function_bodies
 
 
-def _resolved_from_module(
-    path: Path,
-    root: Path,
-    node: ast.ImportFrom,
-) -> str:
+def _resolved_from_module(path: Path, root: Path, node: ast.ImportFrom) -> str:
     """Resolve a relative ``from`` import to a best-effort dotted module."""
     if node.level == 0:
         return node.module or ""
@@ -782,7 +785,12 @@ def _resolved_from_module(
     return ".".join(current)
 
 
-def _collect_imports(tree: ast.Module, path: Path, root: Path, source: str) -> list[ImportRecord]:
+def _collect_imports(
+    tree: ast.Module,
+    path: Path,
+    root: Path,
+    source: str,
+) -> list[ImportRecord]:
     """Collect imports with resolved module names and source text."""
     records: list[ImportRecord] = []
     for node in ast.walk(tree):
@@ -982,7 +990,12 @@ def _collect_references(
                         symbol = module_symbols[module].get(alias.name)
                         if symbol is None:
                             continue
-                        key = (symbol.locator, node.lineno, "exact import", record.path.as_posix())
+                        key = (
+                            symbol.locator,
+                            node.lineno,
+                            "exact import",
+                            record.path.as_posix(),
+                        )
                         if key not in seen:
                             seen.add(key)
                             references[symbol.locator].append(
@@ -1042,7 +1055,12 @@ def _collect_references(
             symbol = by_leaf[leaf][0]
             if record.path == symbol.path and node.lineno == symbol.lineno:
                 continue
-            key = (symbol.locator, node.lineno, kind, record.path.as_posix())
+            key = (
+                symbol.locator,
+                node.lineno,
+                kind,
+                record.path.as_posix(),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -1223,12 +1241,12 @@ def _render_evidence(
     for record in records[:maximum]:
         text = getattr(record, "text", None)
         location = f"{record.path.as_posix()}:{record.lineno}"
-        suffix = f" — {_code_span(text)}" if text else ""
+        suffix = f" -- {_code_span(text)}" if text else ""
         kind = getattr(record, "kind", None)
         kind_prefix = f"{kind}: " if kind else ""
         lines.append(f"- {kind_prefix}{_code_span(location)}{suffix}")
     if len(records) > maximum:
-        lines.append(f"- … {len(records) - maximum} more occurrence(s) omitted.")
+        lines.append(f"- ... {len(records) - maximum} more occurrence(s) omitted.")
     return lines
 
 
@@ -1272,7 +1290,7 @@ def render_audit_markdown(
         (f"- `{path.as_posix()}`" for path in audit.excluded[:maximum_evidence]),
     )
     if len(audit.excluded) > maximum_evidence:
-        lines.append(f"- … {len(audit.excluded) - maximum_evidence} more path(s) omitted.")
+        lines.append(f"- ... {len(audit.excluded) - maximum_evidence} more path(s) omitted.")
     if not audit.excluded:
         lines.append("- None observed.")
 
@@ -1293,9 +1311,9 @@ def render_audit_markdown(
             lines.append("- No class/function/constant definitions.")
         for symbol in record.symbols:
             signature = f" {_code_span(symbol.signature)}" if symbol.signature else ""
-            doc = f" — {symbol.doc_summary}" if symbol.doc_summary else ""
+            doc = f" -- {symbol.doc_summary}" if symbol.doc_summary else ""
             decorators = (
-                " — decorators: "
+                " -- decorators: "
                 + ", ".join(_code_span(f"@{decorator}") for decorator in symbol.decorators)
                 if symbol.decorators
                 else ""
@@ -1307,7 +1325,7 @@ def render_audit_markdown(
         lines.extend(["", "Imports:", ""])
         lines.extend(
             (
-                f"- `{item.path.as_posix()}:{item.lineno}` — {_code_span(item.text)}"
+                f"- `{item.path.as_posix()}:{item.lineno}` -- {_code_span(item.text)}"
                 for item in record.imports
             ),
         )
@@ -1329,11 +1347,7 @@ def render_audit_markdown(
     for symbol in audit.target_symbols:
         references = audit.references.get(symbol.locator, [])
         lines.extend(
-            [
-                f"### `{symbol.locator}`",
-                "",
-                f"- Candidate occurrences: {len(references)}",
-            ],
+            [f"### `{symbol.locator}`", "", f"- Candidate occurrences: {len(references)}"],
         )
         if leaf_counts[symbol.leaf_name] > 1:
             lines.append(
@@ -1368,7 +1382,7 @@ def render_audit_markdown(
         lines.append("")
     if len(audit.repeated_literals) > maximum_evidence:
         lines.append(
-            f"- … {len(audit.repeated_literals) - maximum_evidence} additional repeated "
+            f"- ... {len(audit.repeated_literals) - maximum_evidence} additional repeated "
             "literal group(s) omitted.",
         )
 
@@ -1388,7 +1402,7 @@ def render_audit_markdown(
     else:
         for path, error in sorted(audit.failures.items(), key=lambda item: item[0].as_posix()):
             target_marker = (
-                " **TARGET — inventory incomplete**" if path in audit.target_files else ""
+                " **TARGET -- inventory incomplete**" if path in audit.target_files else ""
             )
             lines.append(f"- `{path.as_posix()}`{target_marker}: {_code_span(error)}")
 
@@ -1720,7 +1734,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_audit(args)
         if args.command == "check":
             return _run_check(args)
-    except (FileExistsError, OSError, UnicodeError, ValueError) as exc:
+    except (
+        FileExistsError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     raise AssertionError(f"unhandled command: {args.command}")

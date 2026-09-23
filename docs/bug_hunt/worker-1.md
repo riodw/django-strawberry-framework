@@ -34,3 +34,25 @@ the current source.
 
 A client-reachable isolation or authorization defect is reported abstractly with its evidence held
 in scratch; the maintainer decides disclosure before any reproducer lands in a tracked file.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

@@ -28,13 +28,24 @@ recorded count a count of other rows. The rows below pin each instance, and
 ``test_every_captured_field_of_a_run_outcome_is_load_bearing_in_the_record``
 pins the shape rather than one instance of it.
 
+The optional manifest fields have rows of their own: a declared
+``expect_failing`` set replaces the row-count grading (``[]`` = nothing may
+fail), several sites mutate and restore together, a ``pre_image`` or
+``reverse_patch`` reverts a file without git, the probe plugin reports the
+package ``__file__`` and database ``NAME`` from inside pytest, ``--workspace``
+refuses a root outside the copy, and ``--json`` carries the whole record. The
+original single-anchor shape reads and grades exactly as it did.
+
 ``REPO_ROOT`` is monkeypatched to a ``tmp_path`` fake repo (as
 ``tests/test_clean_up.py`` does) and ``_run_scope`` is stubbed, so no test here
 mutates a real file or spawns a real pytest.
 """
 
 import dataclasses
+import difflib
 import json
+import os
+import types
 
 import pytest
 
@@ -89,7 +100,7 @@ def _stub_run(
     """
     outcomes = []
 
-    def fake_run_scope(entry):
+    def fake_run_scope(entry, capture=None):
         outcomes.append(entry)
         if first_call_is_baseline and len(outcomes) == 1:
             return prove_failability.RunOutcome(
@@ -159,7 +170,7 @@ def _four_failing_rows(monkeypatch):
     calls = []
     failed = tuple(f"tests/test_x.py::test_{index}" for index in range(4))
 
-    def fake_run_scope(entry):
+    def fake_run_scope(entry, capture=None):
         calls.append(entry)
         if len(calls) % 2 == 1:
             return prove_failability.RunOutcome((), (), "baseline: stubbed", 0)
@@ -167,6 +178,19 @@ def _four_failing_rows(monkeypatch):
 
     monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
     return calls
+
+
+def _provenance(package_file, databases=(("default", "/ws/examples/fakeshop/db.sqlite3"),)):
+    """Return one pytest process's provenance as the probe would have recorded it."""
+    return prove_failability.Provenance(
+        role="controller",
+        package_file=package_file,
+        package_imported_by_run=True,
+        databases=databases,
+        executable="/ws/.venv/bin/python",
+        cwd="/ws",
+        rootpath="/ws",
+    )
 
 
 def test_a_proof_mutates_runs_restores_and_proves_the_restore_by_byte_comparison(
@@ -201,7 +225,7 @@ def test_the_mutated_text_is_what_the_scope_actually_runs_against(
     observed = {}
     calls = []
 
-    def fake_run_scope(entry):
+    def fake_run_scope(entry, capture=None):
         calls.append(entry)
         observed[f"text{len(calls)}"] = target.read_text(encoding="utf-8")
         if len(calls) == 1:
@@ -233,7 +257,7 @@ def test_a_delete_entry_removes_the_anchor_text(
     observed = {}
     calls = []
 
-    def fake_run_scope(entry):
+    def fake_run_scope(entry, capture=None):
         calls.append(entry)
         # The second call is the mutant; the first is the unmutated baseline.
         observed["text"] = target.read_text(encoding="utf-8")
@@ -343,7 +367,7 @@ def test_an_unwritable_target_is_a_restore_proof_error_not_a_bare_oserror(
     def refuse(*args, **kwargs):
         raise PermissionError("read-only file system")
 
-    def fake_run_scope(entry):
+    def fake_run_scope(entry, capture=None):
         # Break the restore only AFTER the pristine copy was taken, so the
         # failure lands where a real read-only tree would put it.
         monkeypatch.setattr(prove_failability.shutil, "copyfile", refuse)
@@ -1095,6 +1119,10 @@ def test_every_captured_field_of_a_run_outcome_is_load_bearing_in_the_record():
         "error_node_ids": ("tests/test_y.py",),
         "summary": "a different summary line",
         "return_code": 5,
+        "crash_lines": (("tests/test_x.py::test_a", "tests/test_x.py:9: assert 6 == 1"),),
+        "provenance": (_provenance("/elsewhere/django_strawberry_framework/__init__.py"),),
+        "wall_seconds": 12.5,
+        "log_path": "/scratch/runs/001-mutant.log",
     }
     captured = {field.name for field in dataclasses.fields(prove_failability.RunOutcome)}
     assert set(variants) == captured, "a new captured field needs a variant here"
@@ -1583,3 +1611,1030 @@ def test_the_output_flag_writes_the_report_to_disk(fake_repo, tmp_path, monkeypa
     )
 
     assert output.read_text(encoding="utf-8").startswith("### Failability proofs")
+
+
+# --- declared failing sets --------------------------------------------------------------
+
+
+COUNT_ROW = "tests/test_x.py::test_query_count_is_flat_across_row_counts"
+
+
+def _run_with_expectation(tmp_path, scratch_root, monkeypatch, expect_failing, **stub):
+    _stub_run(monkeypatch, **stub)
+    entry = _single_entry(tmp_path, expect_failing=expect_failing)
+    return prove_failability.execute_entry(entry, scratch_root)
+
+
+def test_a_declared_single_row_is_a_complete_proof_not_a_weak_pin(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    # One query-count function asserting two cardinalities fails as one row; the row
+    # count would grade it WEAKLY PINNED although it is exactly the row the proof names.
+    result = _run_with_expectation(
+        tmp_path,
+        scratch_root,
+        monkeypatch,
+        [COUNT_ROW],
+        failed=(COUNT_ROW,),
+    )
+
+    assert result.failed_count == 1
+    assert result.is_weakly_pinned is False
+    assert result.is_inside_rerun_floor is False
+    assert result.expectation.is_met is True
+    verdict = prove_failability._verdict(result)
+    assert "WEAKLY PINNED" not in verdict
+    assert "exactly the declared `expect_failing`" in verdict
+    report = prove_failability.render_report([result])
+    assert "why 0" not in report
+    assert f"declared `expect_failing`: `{COUNT_ROW}`" in report
+    assert prove_failability._exit_code([result]) == 0
+
+
+def test_the_same_single_row_without_a_declaration_keeps_the_row_count_grading(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    _stub_run(monkeypatch, failed=(COUNT_ROW,))
+
+    result = prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
+
+    assert result.entry.expect_failing is None
+    assert result.expectation is None
+    assert result.is_weakly_pinned is True
+    assert prove_failability._exit_code([result]) == 1
+
+
+def test_a_declared_set_names_missing_and_undeclared_rows(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    result = _run_with_expectation(
+        tmp_path,
+        scratch_root,
+        monkeypatch,
+        [COUNT_ROW],
+        failed=("tests/test_x.py::test_other",),
+    )
+
+    assert result.expectation.missing == (COUNT_ROW,)
+    assert result.expectation.unexpected == ("tests/test_x.py::test_other",)
+    assert result.is_expectation_unmet is True
+    verdict = prove_failability._verdict(result)
+    assert "EXPECTATION NOT MET" in verdict
+    assert f"declared but not failing: `{COUNT_ROW}`" in verdict
+    assert "failing but not declared: `tests/test_x.py::test_other`" in verdict
+    assert prove_failability._exit_code([result]) == 1
+
+
+def test_an_empty_declaration_is_a_behaviour_preservation_proof(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    preserved = _run_with_expectation(tmp_path, scratch_root, monkeypatch, [], code=0)
+
+    assert preserved.failed_count == 0
+    assert preserved.is_weakly_pinned is False
+    assert "behaviour preserved" in prove_failability._verdict(preserved)
+    assert "why 0" not in prove_failability.render_report([preserved])
+    assert prove_failability._exit_code([preserved]) == 0
+
+    broken = _run_with_expectation(
+        tmp_path,
+        scratch_root,
+        monkeypatch,
+        [],
+        failed=("tests/test_x.py::test_a",),
+    )
+
+    assert broken.expectation.unexpected == ("tests/test_x.py::test_a",)
+    assert prove_failability._exit_code([broken]) == 1
+
+
+def test_patterns_match_globs_and_parametrized_ids_literally(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    # ``[a-b]`` is a character class to fnmatch, so equality is tried first.
+    parametrized = "tests/test_x.py::test_count[a-b]"
+    result = _run_with_expectation(
+        tmp_path,
+        scratch_root,
+        monkeypatch,
+        [parametrized, "tests/test_y.py::test_alias_*"],
+        failed=(
+            parametrized,
+            "tests/test_y.py::test_alias_one",
+            "tests/test_y.py::test_alias_two",
+        ),
+    )
+
+    assert result.expectation.is_met is True
+
+
+def test_a_declared_row_already_failing_before_the_mutation_is_named_as_such(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    result = _run_with_expectation(
+        tmp_path,
+        scratch_root,
+        monkeypatch,
+        [COUNT_ROW],
+        baseline_failed=(COUNT_ROW,),
+    )
+
+    assert result.expectation.missing_but_failing_at_baseline == (COUNT_ROW,)
+    assert "already failing before the mutation" in prove_failability._verdict(result)
+
+
+def test_a_declaration_does_not_rescue_an_invalid_count(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    result = _run_with_expectation(
+        tmp_path,
+        scratch_root,
+        monkeypatch,
+        [],
+        errored=("tests/test_y.py",),
+    )
+
+    assert result.invalid_count_reason is not None
+    assert result.is_expectation_unmet is False
+    assert "behaviour preserved" not in prove_failability._verdict(result)
+    assert prove_failability._exit_code([result]) == 1
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "tests/test_x.py::test_a",
+        [""],
+        [7],
+        {"a": 1},
+    ],
+)
+def test_a_declaration_must_be_a_list_of_node_ids(fake_repo, tmp_path, value):
+    with pytest.raises(prove_failability.ManifestError, match="'expect_failing' must be a list"):
+        prove_failability.load_manifest(_manifest(tmp_path, expect_failing=value))
+
+
+# --- several sites mutated together ---------------------------------------------------
+
+
+OTHER_SOURCE = "def other(value):\n    return value + 1\n"
+
+
+def _sites_manifest(tmp_path, sites, **overrides):
+    entry = {"label": "package/views.py::gate", "sites": sites, "scope": ["tests/test_x.py"]}
+    entry.update(overrides)
+    path = tmp_path / "sites.json"
+    path.write_text(json.dumps({"proofs": [entry]}), encoding="utf-8")
+    return prove_failability.load_manifest(path)[0][0]
+
+
+@pytest.fixture
+def two_files(fake_repo):
+    other = fake_repo / "package" / "other.py"
+    other.write_text(OTHER_SOURCE, encoding="utf-8")
+    return fake_repo / "package" / "views.py", other
+
+
+def _two_sites():
+    return [
+        {"target": "package/views.py", "anchor": ANCHOR, "replacement": "    pass"},
+        {"target": "package/other.py", "anchor": "value + 1", "replacement": "value"},
+    ]
+
+
+def test_every_site_is_live_during_the_mutant_run_and_every_file_is_restored(
+    two_files,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    views, other = two_files
+    seen = []
+
+    def fake_run_scope(entry, capture=None):
+        seen.append((views.read_text(encoding="utf-8"), other.read_text(encoding="utf-8")))
+        return prove_failability.RunOutcome((), (), "stubbed", 0)
+
+    monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
+    entry = _sites_manifest(tmp_path, _two_sites())
+
+    result = prove_failability.execute_entry(entry, scratch_root)
+
+    assert seen[0] == (SOURCE, OTHER_SOURCE)
+    assert seen[1] == ("def gate(value):\n    pass\n    return value\n", OTHER_SOURCE[:-5] + "\n")
+    assert views.read_text(encoding="utf-8") == SOURCE
+    assert other.read_text(encoding="utf-8") == OTHER_SOURCE
+    assert [record.relative_target for record in result.files] == [
+        "package/views.py",
+        "package/other.py",
+    ]
+    for record, text in zip(result.files, (SOURCE, OTHER_SOURCE), strict=True):
+        blob = prove_failability.git_blob_id(text.encode("utf-8"))
+        assert record.blob_before == record.blob_after == blob
+        assert record.blob_mutated != blob
+        assert record.diff.startswith(f"--- a/{record.relative_target}")
+    assert result.restore_proof.count("filecmp.cmp(shallow=False) True") == 2
+    assert entry.relative_targets == ("package/views.py", "package/other.py")
+    report = prove_failability.render_report([result])
+    assert "| `package/views.py`, `package/other.py` |" in report
+    assert "```diff" in report
+
+
+def test_one_unprovable_restore_still_restores_every_other_site(
+    two_files,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    views, other = two_files
+    _stub_run(monkeypatch)
+    real_restore = prove_failability._restore_and_prove
+
+    def restore(target, pristine):
+        if target == views:
+            raise prove_failability.RestoreProofError(f"{target} could not be restored")
+        return real_restore(target, pristine)
+
+    monkeypatch.setattr(prove_failability, "_restore_and_prove", restore)
+
+    with pytest.raises(prove_failability.RestoreProofError):
+        prove_failability.execute_entry(_sites_manifest(tmp_path, _two_sites()), scratch_root)
+
+    assert other.read_text(encoding="utf-8") == OTHER_SOURCE
+    marker = json.loads(
+        (scratch_root / prove_failability.RESTORE_FAILED_MARKER_NAME).read_text(encoding="utf-8"),
+    )
+    assert marker["mutated_file"] == str(views)
+    assert [item["mutated_file"] for item in marker["files"]] == [str(views)]
+    active = json.loads(
+        (scratch_root / prove_failability.ACTIVE_MARKER_NAME).read_text(encoding="utf-8"),
+    )
+    assert [item["mutated_file"] for item in active["files"]] == [str(views), str(other)]
+
+
+def test_a_site_that_does_not_match_names_itself_and_nothing_is_written(
+    two_files,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    views, _ = two_files
+    seen = _stub_run(monkeypatch)
+    sites = _two_sites()
+    sites[1]["anchor"] = "not in the file"
+
+    result = prove_failability.execute_entry(_sites_manifest(tmp_path, sites), scratch_root)
+
+    assert seen == []
+    assert result.failure.startswith("site 2 (`package/other.py`): anchor matched 0 times")
+    assert views.read_text(encoding="utf-8") == SOURCE
+    assert not list((scratch_root / prove_failability.PRISTINE_DIRECTORY_NAME).iterdir())
+
+
+def test_two_anchor_sites_on_one_file_apply_in_order(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    views = fake_repo / "package" / "views.py"
+    seen = []
+
+    def fake_run_scope(entry, capture=None):
+        seen.append(views.read_text(encoding="utf-8"))
+        return prove_failability.RunOutcome((), (), "stubbed", 0)
+
+    monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
+    sites = [
+        {"target": "package/views.py", "anchor": ANCHOR, "replacement": "    pass"},
+        {"target": "package/views.py", "anchor": "return value", "delete": True},
+    ]
+
+    result = prove_failability.execute_entry(_sites_manifest(tmp_path, sites), scratch_root)
+
+    assert seen[1] == "def gate(value):\n    pass\n    \n"
+    assert len(result.files) == 1
+    assert views.read_text(encoding="utf-8") == SOURCE
+
+
+@pytest.mark.parametrize(
+    ("sites", "overrides", "expected"),
+    [
+        ([], {}, "'sites' must be a non-empty list"),
+        (["x"], {}, "each site must be an object"),
+        ([{"target": "package/views.py", "ancor": ANCHOR}], {}, r"unknown key\(s\) \['ancor'\]"),
+        (
+            [{"target": "package/views.py", "anchor": ANCHOR, "replacement": "x"}],
+            {"target": "package/views.py"},
+            "carries no top-level",
+        ),
+        (
+            [
+                {
+                    "target": "package/views.py",
+                    "anchor": ANCHOR,
+                    "pre_image": "x",
+                    "replacement": "",
+                },
+            ],
+            {},
+            "exactly one of",
+        ),
+    ],
+)
+def test_malformed_sites_are_refused(
+    fake_repo,
+    tmp_path,
+    sites,
+    overrides,
+    expected,
+):
+    with pytest.raises(prove_failability.ManifestError, match=expected):
+        _sites_manifest(tmp_path, sites, **overrides)
+
+
+def test_a_pre_image_site_may_not_share_its_target(fake_repo, tmp_path):
+    image = tmp_path / "views.pre"
+    image.write_text("x = 1\n", encoding="utf-8")
+    sites = [
+        {"target": "package/views.py", "pre_image": str(image)},
+        {"target": "package/views.py", "anchor": ANCHOR, "replacement": "    pass"},
+    ]
+
+    with pytest.raises(prove_failability.ManifestError, match="give that file one site"):
+        _sites_manifest(tmp_path, sites)
+
+
+def test_a_multi_site_label_may_name_any_site_and_no_other_file(two_files, tmp_path):
+    assert _sites_manifest(tmp_path, _two_sites(), label="package/other.py::other").label == (
+        "package/other.py::other"
+    )
+    with pytest.raises(prove_failability.ManifestError, match="not the mutation target of any"):
+        _sites_manifest(tmp_path, _two_sites(), label="package/third.py::gate")
+
+
+# --- revert-style inputs ----------------------------------------------------------------
+
+
+PRE_IMAGE = "def gate(value):\n    return value\n"
+
+
+def test_a_pre_image_replaces_the_file_wholesale_and_is_restored(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    views = fake_repo / "package" / "views.py"
+    (tmp_path / "inputs").mkdir()
+    (tmp_path / "inputs" / "views.pre").write_text(PRE_IMAGE, encoding="utf-8")
+    seen = []
+
+    def fake_run_scope(entry, capture=None):
+        seen.append(views.read_text(encoding="utf-8"))
+        return prove_failability.RunOutcome((), (), "stubbed", 0)
+
+    monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
+    manifest = tmp_path / "inputs" / "m.json"
+    # A relative pre-image path resolves against the manifest's directory.
+    manifest.write_text(
+        json.dumps(
+            {
+                "proofs": [
+                    {
+                        "label": "package/views.py::gate",
+                        "target": "package/views.py",
+                        "pre_image": "views.pre",
+                        "expect_failing": [],
+                        "scope": ["tests/test_x.py"],
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+    entry = prove_failability.load_manifest(manifest)[0][0]
+
+    result = prove_failability.execute_entry(entry, scratch_root)
+
+    assert seen == [SOURCE, PRE_IMAGE]
+    assert views.read_text(encoding="utf-8") == SOURCE
+    assert result.files[0].blob_mutated == prove_failability.git_blob_id(PRE_IMAGE.encode())
+    assert "replaced wholesale by the pre-image" in entry.mutation
+    assert "behaviour preserved" in prove_failability._verdict(result)
+
+
+def test_a_pre_image_identical_to_the_file_is_refused_before_anything_is_written(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    seen = _stub_run(monkeypatch)
+    image = tmp_path / "same.pre"
+    image.write_text(SOURCE, encoding="utf-8")
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "proofs": [
+                    {
+                        "label": "gate",
+                        "target": "package/views.py",
+                        "pre_image": str(image),
+                        "scope": ["tests/test_x.py"],
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    result = prove_failability.execute_entry(
+        prove_failability.load_manifest(manifest)[0][0],
+        scratch_root,
+    )
+
+    assert seen == []
+    assert "would mutate nothing" in result.failure
+
+
+def _patch_file(
+    tmp_path,
+    pre,
+    post,
+    relative="package/views.py",
+    name="item.diff",
+):
+    """Write the diff a caller saves from ``git diff <base> -- <path>`` (pre -> post)."""
+    diff = "".join(
+        difflib.unified_diff(
+            pre.splitlines(keepends=True),
+            post.splitlines(keepends=True),
+            fromfile=f"a/{relative}",
+            tofile=f"b/{relative}",
+        ),
+    )
+    path = tmp_path / name
+    path.write_text(f"diff --git a/{relative} b/{relative}\nindex 1111111..2222222 100644\n{diff}")
+    return path
+
+
+def _reverse_patch_entry(tmp_path, patch, **fields):
+    entry = {"label": "gate", "reverse_patch": str(patch), "scope": ["tests/test_x.py"]}
+    entry.update(fields)
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps({"proofs": [entry]}), encoding="utf-8")
+    return prove_failability.load_manifest(manifest)[0][0]
+
+
+def test_a_reverse_patch_restores_the_pre_image_while_the_scope_runs(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    views = fake_repo / "package" / "views.py"
+    patch = _patch_file(tmp_path, PRE_IMAGE, SOURCE)
+    seen = []
+
+    def fake_run_scope(entry, capture=None):
+        seen.append(views.read_text(encoding="utf-8"))
+        return prove_failability.RunOutcome((), (), "stubbed", 0)
+
+    monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
+
+    for fields in ({}, {"target": "package/views.py"}):
+        seen.clear()
+        entry = _reverse_patch_entry(tmp_path, patch, **fields)
+        result = prove_failability.execute_entry(entry, scratch_root)
+
+        assert seen == [SOURCE, PRE_IMAGE]
+        assert views.read_text(encoding="utf-8") == SOURCE
+        assert result.files[0].blob_after == prove_failability.git_blob_id(SOURCE.encode())
+        assert entry.mutation_sites[0].kind == prove_failability.REVERSE_PATCH_KIND
+
+
+def test_a_reverse_patch_spanning_two_files_becomes_two_sites(two_files, tmp_path):
+    views_patch = _patch_file(tmp_path, PRE_IMAGE, SOURCE).read_text()
+    other_patch = _patch_file(tmp_path, "x\n", OTHER_SOURCE, relative="package/other.py")
+    both = tmp_path / "both.diff"
+    both.write_text(views_patch + other_patch.read_text())
+
+    entry = _reverse_patch_entry(tmp_path, both)
+
+    assert entry.relative_targets == ("package/views.py", "package/other.py")
+    only_other = _reverse_patch_entry(tmp_path, both, target="package/other.py")
+    assert only_other.relative_targets == ("package/other.py",)
+
+
+def test_a_reverse_patch_whose_post_image_is_absent_mutates_nothing(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    seen = _stub_run(monkeypatch)
+    patch = _patch_file(tmp_path, PRE_IMAGE, "def gate(value):\n    return value * 2\n")
+
+    result = prove_failability.execute_entry(_reverse_patch_entry(tmp_path, patch), scratch_root)
+
+    assert seen == []
+    assert "hunk 1 for package/views.py does not apply" in result.failure
+    assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_a_repeated_post_image_is_located_by_the_hunk_header_alone():
+    text = "a\nx\nb\na\nx\nb\n"
+    hunk = prove_failability.PatchHunk(
+        new_start=4,
+        old_lines=(("a", True), ("y", True), ("b", True)),
+        new_lines=(("a", True), ("x", True), ("b", True)),
+    )
+
+    assert prove_failability._reverse_hunks(text, [hunk], "f.py") == "a\nx\nb\na\ny\nb\n"
+    elsewhere = dataclasses.replace(hunk, new_start=1)
+    assert prove_failability._reverse_hunks(text, [elsewhere], "f.py") == "a\ny\nb\na\nx\nb\n"
+    nowhere = dataclasses.replace(hunk, new_start=3)
+    with pytest.raises(prove_failability.SiteError, match="occurs 2 time"):
+        prove_failability._reverse_hunks(text, [nowhere], "f.py")
+
+
+def test_a_missing_final_newline_is_reverted_byte_for_byte(tmp_path):
+    diff = (
+        "--- a/f.py\n+++ b/f.py\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n"
+        "+c\n\\ No newline at end of file\n"
+    )
+    sections = prove_failability._parse_unified_diff(diff, "test")
+
+    assert prove_failability._reverse_hunks("a\nc", sections["f.py"], "f.py") == "a\nb"
+
+
+@pytest.mark.parametrize(
+    ("diff", "expected"),
+    [
+        ("--- /dev/null\n+++ b/package/views.py\n@@ -0,0 +1 @@\n+x\n", "creates or deletes"),
+        ("not a diff\n", "not a unified diff"),
+        ("--- a/package/views.py\n+++ b/package/views.py\n@@ -1,2 +1,2 @@\n a\n", "truncated"),
+        ("--- a/package/views.py\n+++ b/package/views.py\n@@ -1 +1 @@\n?x\n", "malformed"),
+        ("--- a/package/views.py\n+++ b/package/views.py\nBinary files differ\n", "no hunk"),
+    ],
+)
+def test_a_patch_the_applier_cannot_revert_is_refused(
+    fake_repo,
+    tmp_path,
+    diff,
+    expected,
+):
+    patch = tmp_path / "bad.diff"
+    patch.write_text(diff)
+
+    with pytest.raises(prove_failability.ManifestError, match=expected):
+        _reverse_patch_entry(tmp_path, patch)
+
+
+def test_a_patch_without_a_section_for_the_target_is_refused(two_files, tmp_path):
+    patch = _patch_file(tmp_path, PRE_IMAGE, SOURCE)
+
+    with pytest.raises(
+        prove_failability.ManifestError,
+        match="has no hunk for 'package/other.py'",
+    ):
+        _reverse_patch_entry(tmp_path, patch, target="package/other.py")
+
+
+# --- provenance observed inside pytest -------------------------------------------------
+
+
+def _load_probe():
+    probe = types.ModuleType(prove_failability.PROBE_MODULE_NAME)
+    exec(compile(prove_failability.PROBE_SOURCE, "probe", "exec"), probe.__dict__)
+    return probe
+
+
+def test_the_probe_records_package_file_database_names_and_crash_lines(tmp_path, monkeypatch):
+    output = tmp_path / "probe.jsonl"
+    monkeypatch.setenv(prove_failability.PROBE_OUTPUT_ENV, str(output))
+    monkeypatch.setenv(prove_failability.PROBE_PACKAGE_ENV, "django_strawberry_framework")
+    probe = _load_probe()
+    config = types.SimpleNamespace(rootpath=tmp_path)
+    crash = types.SimpleNamespace(path="/ws/tests/test_x.py", lineno=9, message="assert 6 == 1")
+    report = types.SimpleNamespace(
+        failed=True,
+        when="call",
+        nodeid=COUNT_ROW,
+        longrepr=types.SimpleNamespace(reprcrash=crash),
+    )
+
+    probe.pytest_configure(config)
+    probe.pytest_runtest_logreport(report)
+    probe.pytest_collectreport(
+        types.SimpleNamespace(failed=True, nodeid="tests/test_y.py", longrepr="ImportError: x"),
+    )
+    probe.pytest_sessionfinish(types.SimpleNamespace(config=config))
+    crash_lines, provenance = prove_failability._read_probe(output)
+
+    assert dict(crash_lines) == {
+        COUNT_ROW: "/ws/tests/test_x.py:9: assert 6 == 1",
+        "tests/test_y.py": "ImportError: x",
+    }
+    from django.conf import settings
+
+    import django_strawberry_framework
+
+    (record,) = provenance
+    assert record.role == "controller"
+    assert record.package_file == django_strawberry_framework.__file__
+    assert record.package_imported_by_run is True
+    assert dict(record.databases) == {
+        alias: str(options["NAME"]) for alias, options in settings.DATABASES.items()
+    }
+
+
+def test_an_xdist_worker_reports_provenance_but_leaves_rows_to_the_controller(
+    tmp_path,
+    monkeypatch,
+):
+    output = tmp_path / "probe.jsonl"
+    monkeypatch.setenv(prove_failability.PROBE_OUTPUT_ENV, str(output))
+    monkeypatch.setenv(prove_failability.PROBE_PACKAGE_ENV, "json")
+    probe = _load_probe()
+    config = types.SimpleNamespace(rootpath=tmp_path, workerinput={"workerid": "gw0"})
+    report = types.SimpleNamespace(failed=True, when="call", nodeid=COUNT_ROW, longrepr="boom")
+
+    probe.pytest_configure(config)
+    probe.pytest_runtest_logreport(report)
+    probe.pytest_sessionfinish(types.SimpleNamespace(config=config))
+    crash_lines, provenance = prove_failability._read_probe(output)
+
+    assert crash_lines == ()
+    assert provenance[0].role == "worker"
+
+
+def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    entry = _single_entry(tmp_path)
+    capture = prove_failability._new_capture(scratch_root, entry, "mutant")
+    calls = []
+
+    def fake_subprocess_run(command, **kwargs):
+        calls.append((command, kwargs))
+        capture.probe_output.write_text(
+            json.dumps({"kind": "failed", "nodeid": COUNT_ROW, "crash": "t.py:9: assert 6 == 1"})
+            + "\n"
+            + json.dumps({"kind": "provenance", "role": "controller", "package_file": "/x.py"})
+            + "\n",
+            encoding="utf-8",
+        )
+        return types.SimpleNamespace(
+            stdout=f"FAILED {COUNT_ROW} - assert 6 == 1\n1 failed in 0.1s\n",
+            stderr="",
+            returncode=1,
+        )
+
+    monkeypatch.setattr(prove_failability.subprocess, "run", fake_subprocess_run)
+
+    outcome = prove_failability._run_scope(entry, capture)
+
+    ((command, kwargs),) = calls
+    assert command[-3:] == ["-p", prove_failability.PROBE_MODULE_NAME, "tests/test_x.py"]
+    environment = kwargs["env"]
+    assert environment["PYTHONPATH"].split(os.pathsep)[0] == str(capture.probe_directory)
+    assert environment[prove_failability.PROBE_OUTPUT_ENV] == str(capture.probe_output)
+    assert (capture.probe_directory / "prove_failability_probe.py").read_text(
+        encoding="utf-8",
+    ) == prove_failability.PROBE_SOURCE
+    assert outcome.failed_node_ids == (COUNT_ROW,)
+    assert outcome.crash_line(COUNT_ROW) == "t.py:9: assert 6 == 1"
+    assert outcome.provenance[0].package_file == "/x.py"
+    assert outcome.log_path == str(capture.log_path)
+    log = capture.log_path.read_text(encoding="utf-8")
+    assert log.startswith("argv: ")
+    assert f"FAILED {COUNT_ROW}" in log
+
+
+def test_a_run_that_imported_another_tree_is_an_invalid_count(fake_repo):
+    entry = prove_failability.ProofEntry("a", fake_repo, "x", "y", "m", ("s",))
+    inside = _provenance(str(fake_repo / "django_strawberry_framework" / "__init__.py"))
+    outside = _provenance("/shared/checkout/django_strawberry_framework/__init__.py")
+    failing = (
+        COUNT_ROW,
+        "tests/test_x.py::b",
+        "tests/test_x.py::c",
+        "tests/test_x.py::d",
+    )
+
+    honest = prove_failability.ProofResult(
+        entry,
+        prove_failability.RunOutcome(failing, (), "4 failed", 1, provenance=(inside,)),
+        "proved",
+        None,
+    )
+    foreign = dataclasses.replace(
+        honest,
+        outcome=dataclasses.replace(honest.outcome, provenance=(inside, outside)),
+    )
+
+    assert honest.invalid_count_reason is None
+    assert "outside the tree under proof" in foreign.invalid_count_reason
+    assert "/shared/checkout/" in foreign.invalid_count_reason
+    # ``--workspace`` additionally refuses a run the probe observed nothing about.
+    unobserved = dataclasses.replace(
+        honest,
+        outcome=dataclasses.replace(honest.outcome, provenance=()),
+        provenance_required=True,
+    )
+    assert "reported no package `__file__`" in unobserved.invalid_count_reason
+    assert dataclasses.replace(unobserved, provenance_required=False).invalid_count_reason is None
+
+
+def test_the_git_blob_id_is_the_one_git_hash_object_prints():
+    # ``printf 'hello\n' | git hash-object --stdin``
+    assert prove_failability.git_blob_id(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
+
+
+# --- the machine-readable record and the workspace guard -------------------------------
+
+
+LONG_ANCHOR = ["    if value is None:", '        raise ValueError("no")']
+
+
+def test_the_json_record_carries_the_whole_mutation_blob_ids_and_provenance(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+):
+    long_line = "    return value  # " + "x" * 150
+    target = fake_repo / "package" / "views.py"
+    target.write_text(SOURCE.replace("    return value", long_line), encoding="utf-8")
+    calls = []
+
+    def fake_run_scope(entry, capture=None):
+        calls.append(capture)
+        if len(calls) == 1:
+            return prove_failability.RunOutcome((), (), "3 passed", 0, wall_seconds=1.0)
+        return prove_failability.RunOutcome(
+            (COUNT_ROW,),
+            (),
+            "1 failed, 2 passed",
+            1,
+            crash_lines=((COUNT_ROW, "t.py:9: assert 6 == 1\n +  where 6 = len(queries)"),),
+            provenance=(_provenance(str(fake_repo / "django_strawberry_framework.py")),),
+            wall_seconds=2.0,
+            log_path="/scratch/runs/mutant.log",
+        )
+
+    monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
+    manifest = _manifest(
+        tmp_path,
+        anchor=[*LONG_ANCHOR, long_line],
+        replacement="    pass",
+        expect_failing=[COUNT_ROW],
+    )
+    output = tmp_path / "proofs.json"
+    markdown = tmp_path / "proofs.md"
+
+    code = prove_failability.main(
+        [
+            str(manifest),
+            "--scratch-root",
+            str(tmp_path / "outside-scratch"),
+            "--json",
+            str(output),
+            "--output",
+            str(markdown),
+        ],
+    )
+
+    assert code == 0
+    assert all(capture is not None for capture in calls)
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document["exit_code"] == 0
+    assert document["repo_root"] == str(fake_repo)
+    assert document["workspace"] is None
+    (entry,) = document["entries"]
+    assert entry["sites"][0]["anchor"] == "\n".join([*LONG_ANCHOR, long_line])
+    assert long_line in entry["files"][0]["diff"]
+    original = SOURCE.replace("    return value", long_line).encode("utf-8")
+    assert entry["files"][0]["blob_before"] == prove_failability.git_blob_id(original)
+    assert entry["files"][0]["blob_after"] == entry["files"][0]["blob_before"]
+    assert entry["mutant"]["crash_lines"][COUNT_ROW].endswith("where 6 = len(queries)")
+    assert entry["mutant"]["provenance"][0]["databases"] == {
+        "default": "/ws/examples/fakeshop/db.sqlite3",
+    }
+    assert entry["baseline"]["wall_seconds"] == 1.0
+    assert entry["expectation"] == {
+        "met": True,
+        "missing": [],
+        "unexpected": [],
+        "missing_but_failing_at_baseline": [],
+    }
+    assert entry["weakly_pinned"] is False
+    rendered = markdown.read_text(encoding="utf-8")
+    assert f"Workspace: repository root mutated `{fake_repo}`" in rendered
+    assert "crash: `t.py:9: assert 6 == 1` (+1 more line(s) in --json)" in rendered
+    assert "package `__file__`" in rendered
+
+
+def test_the_json_record_is_written_for_an_aborted_run_too(fake_repo, tmp_path, monkeypatch):
+    _stub_run(monkeypatch)
+    monkeypatch.setattr(prove_failability.filecmp, "cmp", lambda *args, **kwargs: False)
+    output = tmp_path / "proofs.json"
+
+    code = prove_failability.main(
+        [
+            str(_manifest(tmp_path)),
+            "--scratch-root",
+            str(tmp_path / "outside-scratch"),
+            "--json",
+            str(output),
+        ],
+    )
+
+    assert code == 3
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document["exit_code"] == 3
+    assert (
+        "could not be restored" in document["aborted"] or "does NOT match" in document["aborted"]
+    )
+
+
+def test_workspace_refuses_a_repository_root_outside_the_given_path(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    seen = _stub_run(monkeypatch)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    code = prove_failability.main(
+        [
+            str(_manifest(tmp_path)),
+            "--scratch-root",
+            str(tmp_path / "outside-scratch"),
+            "--workspace",
+            str(elsewhere),
+        ],
+    )
+
+    assert code == 1
+    assert seen == []
+    assert "is not inside it" in capsys.readouterr().err
+    assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
+
+
+def test_workspace_refuses_a_checkout_that_holds_a_git_directory(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    seen = _stub_run(monkeypatch)
+    (fake_repo / ".git").mkdir()
+
+    code = prove_failability.main(
+        [
+            str(_manifest(tmp_path)),
+            "--scratch-root",
+            str(tmp_path / "outside-scratch"),
+            "--workspace",
+            str(fake_repo),
+        ],
+    )
+
+    assert code == 1
+    assert seen == []
+    assert "holds a .git" in capsys.readouterr().err
+
+
+def test_workspace_accepts_the_copy_and_requires_observed_provenance(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+):
+    _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
+    output = tmp_path / "proofs.json"
+
+    code = prove_failability.main(
+        [
+            str(_manifest(tmp_path)),
+            "--scratch-root",
+            str(tmp_path / "outside-scratch"),
+            "--workspace",
+            str(tmp_path),
+            "--json",
+            str(output),
+        ],
+    )
+
+    # The stub reports no provenance, which a workspace run may not accept.
+    assert code == 1
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document["workspace"] == str(tmp_path.resolve())
+    assert any(
+        "reported no package `__file__`" in reason
+        for reason in document["entries"][0]["invalid_count_reasons"]
+    )
+
+
+# --- the original manifest shape ---------------------------------------------------------
+
+
+def test_an_original_shape_manifest_reads_and_grades_exactly_as_before(
+    fake_repo,
+    scratch_root,
+    tmp_path,
+    monkeypatch,
+):
+    manifest = tmp_path / "historical.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "scratch_root": str(tmp_path / "outside-scratch"),
+                "proofs": [
+                    {
+                        "label": "package/views.py::gate",
+                        "target": "package/views.py",
+                        "anchor": ["    if value is None:", '        raise ValueError("no")'],
+                        "replacement": ["    pass"],
+                        "mutation": "the gate removed",
+                        "scope": ["-n0", "tests/test_x.py"],
+                    },
+                    {
+                        "label": "gate delete",
+                        "target": "package/views.py",
+                        "anchor": "        return value",
+                        "delete": True,
+                        "scope": ["tests/test_x.py::test_a"],
+                    },
+                ],
+            },
+        ),
+        encoding="utf-8",
+    )
+    entries, root = prove_failability.load_manifest(manifest)
+
+    assert root == str(tmp_path / "outside-scratch")
+    first, second = entries
+    assert first.sites == ()
+    assert first.expect_failing is None
+    assert first.mutation == prove_failability._describe_mutation(ANCHOR, "    pass")
+    assert first.mutation_applied.endswith(
+        "builder's description (unverified prose): the gate removed",
+    )
+    assert second.replacement is None
+    assert second.mutation.startswith("deleted:")
+    assert [site.kind for site in first.mutation_sites] == [prove_failability.ANCHOR_KIND]
+    _stub_run(monkeypatch, failed=("tests/test_x.py::test_a",))
+
+    result = prove_failability.execute_entry(first, scratch_root)
+
+    assert result.is_weakly_pinned is True
+    assert result.is_inside_rerun_floor is True
+    assert "WEAKLY PINNED - revision-needed" in prove_failability._verdict(result)
+    assert prove_failability.ZERO_ROW_PLACEHOLDER not in prove_failability.render_report([result])
+
+
+def test_the_markdown_crash_line_prefers_the_assert_line_over_a_custom_message():
+    # ``assert len(queries) == 1, queries`` puts the captured SQL first and the
+    # comparison on a later line; the comparison is what shows direction and size.
+    crash = "/ws/t.py:1166: AssertionError: ['SELECT ...']\nassert 6 == 1\n +  where 6 = len(q)"
+    run = prove_failability.RunOutcome(
+        (COUNT_ROW,),
+        (),
+        "1 failed",
+        1,
+        crash_lines=((COUNT_ROW, crash),),
+    )
+
+    assert prove_failability._crash_suffix(run, COUNT_ROW) == (
+        " - crash: `/ws/t.py:1166: assert 6 == 1` (+2 more line(s) in --json)"
+    )
+    assert prove_failability._crash_suffix(run, "tests/test_x.py::unseen") == ""

@@ -134,3 +134,25 @@ Stop and ask for direction if:
 - the implementation requires package-wide redesign beyond the slice
 - the required test placement would violate `AGENTS.md`
 - a requested changelog edit is not authorized by the spec or maintainer
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

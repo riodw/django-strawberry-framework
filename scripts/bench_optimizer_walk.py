@@ -4,10 +4,8 @@ Complements ``scripts/bench_plan_cache.py``. That script measures the
 STEADY-STATE win of serving a finished ``OptimizationPlan`` from the
 cross-request cache (warm vs cold, end to end). This script isolates the COLD
 path itself - the walker's plan BUILD - which is what runs on every plan-cache
-miss (cold start, or a workload with high query-shape churn) and is where the
-remaining optimization candidates live (the throwaway list in
-``included_field_selections``, the per-append ``_IndexedList`` key call, the
-duplicate ``_resolve_field_map`` on the FK-id-elision path).
+miss (cold start, or a workload with high query-shape churn) and on every
+request for a non-cacheable plan.
 
 Why a dedicated harness instead of ``bench_plan_cache.py``'s ``cold - warm``
 delta: that delta runs the walk through a full ``schema.execute_sync`` - GraphQL
@@ -20,9 +18,21 @@ REAL ``walker.plan_optimizations`` on those FIXED inputs in a tight loop. Holdin
 the inputs constant strips DB, parse, and conversion cost, so the measured time
 is the selection-tree walk and plan build, and nothing else.
 
-The walk cost is row-count-independent (it is a function of the selection tree,
-not the result set), so seeding is only needed to make one real execution run
-its resolvers - the loop timing does not depend on how much data is seeded.
+The plan cache is cleared before each capture, so a shape the shared
+extension already planned still reaches the walker. The walk cost is
+row-count-independent (it is a function of the selection tree, not the result
+set), so seeding is only needed to make one real execution run its resolvers;
+the glossary candidates run on ``--glossary-terms`` seeded terms. Each query
+runs ``--rounds`` timed rounds; ``min`` is the fastest walk of any round,
+``median`` the median of per-round medians and ``+-%`` the spread of those
+medians. A query that errors or triggers no walk fails the run (exit 1) after
+the table prints.
+
+What moves the figure: ``optimizer/walker.py``, ``plans.py``, ``selections.py``,
+``join_taxonomy.py``, ``utils/relations.py`` and the registry lookups they
+make. What it cannot see: the extension's cache key and hit path, nested
+connection planning and every fetch strategy; those need
+``bench_plan_cache.py`` or a query-count test.
 
 Runs entirely in-process against an in-memory SQLite database; it never touches
 the tracked ``examples/fakeshop/db.sqlite3``.
@@ -30,45 +40,47 @@ the tracked ``examples/fakeshop/db.sqlite3``.
 Usage::
 
     uv run python scripts/bench_optimizer_walk.py
-    uv run python scripts/bench_optimizer_walk.py --iterations 20000 --seed 5
+    uv run python scripts/bench_optimizer_walk.py --iterations 20000 --seed 5 --rounds 5
+    uv run python scripts/bench_optimizer_walk.py --query op.graphql --variables '{"a": 1}'
+    uv run python scripts/bench_optimizer_walk.py --json before.json
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import statistics
 import sys
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
 
-_FAKESHOP = Path(__file__).resolve().parent.parent / "examples" / "fakeshop"
+from _bench_common import (
+    FAKESHOP,
+    bootstrap_fakeshop_django,
+    build_report,
+    load_graphql_document,
+    parse_variables,
+    reset_plan_cache,
+    seed_glossary_terms,
+    summarize_rounds,
+    write_report,
+)
+
+_FAKESHOP = FAKESHOP
 
 # Below this many measured iterations the per-call median/min are dominated by
 # scheduler and GC noise, so the headline ns/call is flagged rather than trusted.
 _MIN_RELIABLE_ITERATIONS = 1000
 
 
-def _bootstrap_django() -> None:
-    """Configure Django against an in-memory DB and migrate it.
+def _bootstrap_django() -> Any:
+    """Configure Django against an in-memory DB, print provenance, and migrate.
 
-    The in-memory override happens before any connection is opened, so the
-    on-disk ``db.sqlite3`` is never read or written (mirrors
-    ``bench_plan_cache.py``).
+    Deprecated alias kept for callers that import it: the bring-up has one
+    owner, ``_bench_common.bootstrap_fakeshop_django``, which repoints every
+    alias before any connection opens.
     """
-    sys.path.insert(0, str(_FAKESHOP))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-
-    import django
-    from django.conf import settings
-
-    django.setup()
-    settings.DATABASES["default"]["NAME"] = ":memory:"
-
-    from django.core.management import call_command
-
-    call_command("migrate", run_syncdb=True, verbosity=0)
+    return bootstrap_fakeshop_django("sqlite-memory")
 
 
 # Candidate queries chosen to stress the walk on different axes: a scalar-heavy
@@ -76,7 +88,7 @@ def _bootstrap_django() -> None:
 # broad one-level-relation shape (fragment inlining + alias merge per level), and
 # a deep nested shape (walk recursion depth). A connection shape exercises the
 # ``apply_connection_optimization`` -> ``apply_to`` capture path in addition to
-# the middleware path. Queries the schema rejects are skipped with a note.
+# the middleware path. A query that errors is reported and fails the run.
 CANDIDATES: dict[str, str] = {
     "glossary scalar (scalar-heavy walk)": """
         query { allGlossaryTerms { title anchor statusText body } }
@@ -121,7 +133,13 @@ class _Capture(NamedTuple):
     source_type: type | None
 
 
-def _capture_walk_inputs(schema: Any, query: str) -> _Capture | None:
+def _capture_walk_inputs(
+    schema: Any,
+    query: str,
+    *,
+    optimizer: Any = None,
+    variables: dict[str, Any] | None = None,
+) -> _Capture | None:
     """Run ``query`` once, intercepting the first call into ``plan_optimizations``.
 
     Monkeypatches the name ``plan_optimizations`` in ``optimizer.extension``'s
@@ -131,6 +149,10 @@ def _capture_walk_inputs(schema: Any, query: str) -> _Capture | None:
     ``_get_or_build_plan``) and the connection path
     (``apply_connection_optimization`` -> ``apply_to`` -> ``_get_or_build_plan``)
     route through this single call site, so one recorder covers both.
+
+    ``optimizer`` is the schema's extension instance; its plan cache is
+    cleared first, because a cache hit skips the walker and would read as a
+    query with nothing to optimize.
 
     Returns ``None`` when the query triggers no walk (nothing to optimize).
     """
@@ -158,9 +180,11 @@ def _capture_walk_inputs(schema: Any, query: str) -> _Capture | None:
             source_type=source_type,
         )
 
+    if optimizer is not None:
+        reset_plan_cache(optimizer)
     ext_mod.plan_optimizations = _recorder
     try:
-        result = schema.execute_sync(query)
+        result = schema.execute_sync(query, variable_values=variables)
     finally:
         ext_mod.plan_optimizations = real_plan_optimizations
     if result.errors:
@@ -217,22 +241,51 @@ def _us(ns: float) -> float:
 
 def main() -> int:
     """Parse args, bootstrap the example project, and print the walk benchmark."""
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--iterations", type=int, default=10000, help="measured walks per query")
     parser.add_argument("--warmup", type=int, default=500, help="discarded warmup walks per query")
     parser.add_argument("--seed", type=int, default=3, help="Item rows per Faker provider to seed")
+    parser.add_argument(
+        "--glossary-terms",
+        type=int,
+        default=20,
+        help="glossary terms to seed, each with one row per relation (default 20)",
+    )
+    parser.add_argument("--rounds", type=int, default=3, help="timed rounds per query (default 3)")
+    parser.add_argument("--query", help="GraphQL file to bench instead of the built-in set")
+    parser.add_argument("--variables", help="JSON object of variables for --query")
+    parser.add_argument("--json", dest="json_path", help="also write the report as JSON here")
     args = parser.parse_args()
+    if args.rounds < 1 or args.iterations < 1:
+        parser.error("--rounds and --iterations must be at least 1")
+    try:
+        variables = parse_variables(args.variables)
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
+    if variables is not None and args.query is None:
+        parser.error("--variables needs --query")
 
-    _bootstrap_django()
+    provenance = _bootstrap_django()
 
+    from apps.products.models import Item
     from apps.products.services import seed_data
-    from config.schema import schema
+    from config.schema import _optimizer, schema
 
     seed_data(args.seed)
+    glossary_rows = seed_glossary_terms(args.glossary_terms)
+    item_rows = Item.objects.count()
+
+    candidates = (
+        {Path(args.query).name: load_graphql_document(args.query)} if args.query else CANDIDATES
+    )
 
     print(
-        f"optimizer-walk benchmark - {args.iterations} walks/query "
-        f"({args.warmup} warmup), seed={args.seed}\n"
+        f"\noptimizer-walk benchmark - {args.iterations} walks/query "
+        f"({args.warmup} warmup) x {args.rounds} rounds, seed={args.seed}\n"
+        f"seeded rows: Item={item_rows}, GlossaryTerm={glossary_rows['GlossaryTerm']}\n"
         "Measures walker.plan_optimizations() on fixed captured inputs "
         "(no DB / parse / conversion).\n",
     )
@@ -242,42 +295,100 @@ def main() -> int:
             f"{_MIN_RELIABLE_ITERATIONS}-iteration reliability floor; "
             "figures are noise-dominated.\n",
         )
+    width = max(44, *(len(label) for label in candidates))
     header = (
-        f"{'query':<44} {'min us':>8} {'median us':>10} "
-        f"{'mean us':>8} {'stdev us':>9} {'plan shape':>0}"
+        f"{'query':<{width}} {'min us':>8} {'median us':>10} {'+-%':>5} "
+        f"{'mean us':>8} {'stdev us':>9} plan shape"
     )
     print(header)
-    print("-" * 92)
+    print("-" * (len(header) + 30))
 
-    for label, query in CANDIDATES.items():
+    rows: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for label, query in candidates.items():
         try:
-            capture = _capture_walk_inputs(schema, query)
+            capture = _capture_walk_inputs(
+                schema,
+                query,
+                optimizer=_optimizer,
+                variables=variables,
+            )
         except RuntimeError as exc:
-            print(f"{label:<44} SKIPPED (schema rejected query): {exc}")
+            print(f"{label:<{width}} ERROR (query failed): {exc}")
+            failures.append(f"{label}: {exc}")
+            rows.append({"error": str(exc), "label": label, "status": "error"})
             continue
         if capture is None:
-            print(f"{label:<44} SKIPPED (no walk triggered - nothing to optimize)")
+            reason = "no walk triggered - nothing to optimize"
+            print(f"{label:<{width}} SKIPPED ({reason})")
+            failures.append(f"{label}: {reason}")
+            rows.append({"error": reason, "label": label, "status": "skipped"})
             continue
 
-        timings = _bench_capture(capture, args.iterations, args.warmup)
+        round_timings = [
+            _bench_capture(capture, args.iterations, args.warmup) for _ in range(args.rounds)
+        ]
+        timings = [sample for samples in round_timings for sample in samples]
+        summary = summarize_rounds(round_timings)
         shape = _plan_shape(capture)
-        mn = min(timings)
-        median = statistics.median(timings)
         mean = statistics.fmean(timings)
         stdev = statistics.stdev(timings) if len(timings) > 1 else 0.0
         print(
-            f"{label:<44} {_us(mn):>8.2f} {_us(median):>10.2f} "
-            f"{_us(mean):>8.2f} {_us(stdev):>9.2f} {shape}",
+            f"{label:<{width}} {_us(summary['min']):>8.2f} {_us(summary['median']):>10.2f} "
+            f"{summary['spread_pct']:>5.1f} {_us(mean):>8.2f} {_us(stdev):>9.2f} {shape}",
+        )
+        rows.append(
+            {
+                "label": label,
+                "plan_shape": shape,
+                "status": "ok",
+                "walk_us": {
+                    "mean": _us(mean),
+                    "median": _us(summary["median"]),
+                    "min": _us(summary["min"]),
+                    "spread": _us(summary["spread"]),
+                    "spread_pct": summary["spread_pct"],
+                    "stdev": _us(stdev),
+                },
+            },
         )
 
     print(
         "\nmin = fastest observed walk (least noise-perturbed; the cleanest signal "
         "for a CPU-bound micro-benchmark).\n"
+        "median = median of per-round medians; +-% = spread of the round medians as a "
+        "percentage of the median.\n"
         "Each walk is one full plan_optimizations() build - the work the plan cache "
         "eliminates on a hit and pays in full on a miss.\n"
         "Compare min/median across a code change to size a walker optimization; a "
         "few percent here is invisible in an end-to-end run.",
     )
+
+    if args.json_path:
+        write_report(
+            args.json_path,
+            build_report(
+                tool="bench_optimizer_walk",
+                provenance=provenance.as_dict(),
+                params={
+                    "glossary_rows": glossary_rows,
+                    "glossary_terms": args.glossary_terms,
+                    "item_rows": item_rows,
+                    "iterations": args.iterations,
+                    "query": args.query,
+                    "rounds": args.rounds,
+                    "seed": args.seed,
+                    "variables": variables,
+                    "warmup": args.warmup,
+                },
+                rows=rows,
+                failures=failures,
+            ),
+        )
+        print(f"wrote {args.json_path}")
+    if failures:
+        print(f"FAILED: {len(failures)} query(ies) errored or were skipped", file=sys.stderr)
+        return 1
     return 0
 
 

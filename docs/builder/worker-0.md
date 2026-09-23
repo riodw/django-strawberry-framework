@@ -246,3 +246,25 @@ Stop and report the blocker if:
 - Worker 1 does not set the artifact status clearly
 - a worker attempts to pass information outside the artifact/diff contract
 - requested work would violate `AGENTS.md`, `START.md`, or `docs/builder/BUILD.md`
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

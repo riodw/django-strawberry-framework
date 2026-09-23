@@ -36,3 +36,25 @@ overrides Worker 2. `docs/bug_hunt/HUNT.md` is canonical; this file is the coord
 Dispatch the package integration item after every file and scenario item, run the final gate
 yourself, then fill `## Outcomes` before deleting anything as `HUNT.md` "Closeout" describes. Set
 `Status: complete`, remove only this run's scratch by explicit path, and do not commit.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

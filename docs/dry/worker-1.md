@@ -46,3 +46,25 @@ an edit run `uv run ruff check --fix .` then `uv run ruff format .` until `uv ru
 zero-edit, is ready for independent verification; without edit rights, set `Status: designed`
 instead. Keep unrelated cleanup out of the diff, preserve concurrent work, never edit
 `CHANGELOG.md` without authorization, and do not commit.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

@@ -1,4 +1,4 @@
-- START.md README.md GOAL.md docs/README.md docs/TREE.md docs/GLOSSARY.md KANBAN.md TODAY.md CHANGELOG.md BACKLOG.md
+- START.md README.md GOAL.md TODAY.md docs/TREE.md docs/README.md
 - strawberry_django `~/projects/strawberry-django-main/strawberry_django` graphene_django `~/projects/django-graphene-filters/.venv/lib/python*/site-packages/graphene_django`
 - DRF first strawberry second: every public surface uses Meta classes (`class MyType(ModelType):` + `class Meta: model = ...`) never stacked Strawberry decorators on consumer-facing classes (that is strawberry-graphql-django's API — the reason this package exists); crib from django-graphene-filters and DRF not strawberry-graphql-django
 - Do NOT EVER mention the existence of feedback.md or feedback2.md files in the code, commits or DB, elsewhere is fine
@@ -33,3 +33,4 @@
 - NEVER create or switch branches without explicit maintainer authorization (`git branch`/`git switch`/`git checkout -b` all count); stay on the current branch; a commit request is not branch authorization
 - Files dirty at task start or changing mid-task without your edits are concurrent work (this repo is worked on concurrently); ignore as out-of-scope or check whether they belong in the current task (if so recalculate the task); never auto-revert without explicit maintainer authorization; diff against `git show HEAD:<path>` instead of stashing
 - A review finding is a defect only if it names the contract row it breaks, a feasible project shape under supported public API, and the wire or configuration input that reaches it (GOAL.md "Trust boundary"); anything else is a robustness row or a new card, never a release blocker
+- KANBAN.md docs/GLOSSARY.md CHANGELOG.md BACKLOG.md

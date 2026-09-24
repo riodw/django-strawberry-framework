@@ -50,7 +50,7 @@ type at a running Worker-0.
 | `muse resume <uuid>` / `--last` | Reopens a stored session in the TUI (interactive). | Untested for Worker-0; would need a terminal. Relaunch-with-prompt has been the practice. |
 | `muse export --session <uuid> --out <file>` | Full durable log as one JSON document (messages, tool calls, approvals, subagent lineage). Offline. | Use for post-mortems instead of grepping raw JSONL. |
 | `muse trace inspect --session-log <jsonl> [--all-runs] [--render-mode compact]` | Renders a session log as a report. | Works on our captured `<name>.jsonl`. |
-| `muse session-message list --json` / `send --target <uuid> < body` | Cross-session messaging INTO a running session. | Gated; see §4.2. Returned `external_agent_ingress_closed` for every session launched without the gate. |
+| `muse session-message list --json` / `send --target <uuid> < body` | Cross-session messaging INTO a running session. | Does not reach `exec` sessions: `target_surface_excluded` (§4.2). |
 | `muse skills …`, `muse plugins …`, `muse init`, `muse mcp`, `muse auth/login/logout`, `muse config`, `muse schema`, `muse serve` | Skills, plugins, scaffold, MCP OAuth, credentials, enterprise config, MSP wire schema, MSP host over stdio. | Not used. |
 
 ### 1.3 Environment gates seen in the binary
@@ -177,8 +177,8 @@ Notes:
   launch with `muse session-message list --json`; if it still says ingress closed, note it and
   fall back to §4.1. Observed 2026-09-22 after the gated relaunch: `list` (run with the same two
   env vars) returned `{"schema_version":1,"sessions":[]}` instead of `external_agent_ingress_closed`,
-  i.e. the gate opened but the running exec sessions are not listed. `send` stays untested
-  (each send is a metered prompt); try it only when the maintainer actually wants a message sent.
+  i.e. the gate opened but the running exec sessions are not listed. `send` was then tried
+  (16:20) and refused with `target_surface_excluded`: exec sessions cannot be messaged (§4.2).
 - Stop at a boundary without messaging: a background poller on the ledger that SIGSTOPs the
   pid the moment the item's verdict line lands (DRY: `Outcome:` + row ticked; HUNT: the next
   `Fold … UTC` paragraph ending `In flight now: …`), then TERM+CONT and relaunch. HUNT always has
@@ -231,21 +231,58 @@ Helper scripts kept in the scratchpad (`summ.py`, `tail.py`): payload_type censu
   instantly mid-instruction. Nothing is lost; `kill -CONT` resumes at the same point with the
   cache warm. `ps` shows `T`. In-flight Worker 1/2 subagents are frozen too; they did NOT finish.
 - Use STOP/CONT for "hold everything now" (maintainer wants a quiet tree for an investigation).
-- "Finish current workers, dispatch nothing new" is NOT expressible by signal. Options: (a) poll
-  the ledger every ~30 s and STOP each agent the moment its open dispatches are ticked/verified,
-  accepting the cut may land a few seconds into the next dispatch line; (b) message it (§4.2).
+- "Finish current workers, dispatch nothing new" (the maintainer's "pause, do NOT stop them") is
+  done by signal, because messaging cannot reach an `exec` session (§4.2): a background poller
+  (`scratchpad/muse/pause_on_handback.py <pidfile> <ledger> <name>`) watches the ledger, and on
+  the first change after arming (= the in-flight worker handed back) waits until the file is
+  stable for 30 s, then SIGSTOPs the Worker-0. The worker that was running has finished and been
+  recorded; a worker Worker-0 dispatched in the same write is frozen seconds old and continues on
+  SIGCONT. Nothing is killed. Run it with the Bash tool's `run_in_background` so its exit notifies
+  the supervisor (a detached `&` launch does not).
 - `kill -TERM <pid>` ends the run; the ledger keeps whatever Worker-0 last wrote; workspaces under
   `hunt-ws/` and `docs/dry/temp-tests/` stay for the next launch to clean.
 - The check-in loop: `ScheduleWakeup stop` when pausing, re-arm on resume.
 
-### 4.2 Messages (only if launched with the gates)
+### 4.2 Messages and typed steering (not available for `muse exec`)
 
-`muse session-message send --target <session-uuid> --json < body` delivers a maintainer
-instruction into the running session, e.g. "PAUSE HERE: let every dispatched worker finish and
-record normally; dispatch nothing new; when nothing is in flight write a `Paused <date> by
-maintainer` line under the current run section and end the run." Both sessions launched
-2026-09-22 without the gates answered `external_agent_ingress_closed`; the gate must be on the
-`muse exec` process at launch, it cannot be added later. Hence §2's env prefix. Each send is a metered prompt (§1.5).
+`muse session-message send --target <session-uuid-or-name> [--json] < body` exists, but a headless
+`exec` session cannot receive. Proven 2026-09-22 16:20 on both gated sessions (launched with
+`MUSE_EXPERIMENTAL_EXTERNAL_AGENT_INGRESS=on` + `MUSE_EXPERIMENTAL_LOCAL_SESSION_MESSAGING=1`,
+send run with the same env): `{"status":"unavailable","error_code":"target_surface_excluded",
+"receipts":[]}`, "session-message target is unavailable"; `list` shows `"sessions":[]`. Without the
+gates the error is `external_agent_ingress_closed` instead. Nothing was delivered, so nothing was
+metered. The binary names three client surfaces, `tbh:tui`, `tbh:exec`, `tbh:desktop`; exec is
+excluded from inbound messages.
+
+Tested 2026-09-22 16:39 with the free `--provider echo` (no quota): a TUI session launched in a
+detached `screen` with the gates DOES appear in `session-message list` (name + uuid) and passes the
+target check, but a send from our shell is refused `sender_unverified`, with or without the Bash
+sandbox and with `MUSE_SESSION_ID` set. Senders are verified by process identity
+(`verified_macos_cli` / `unverified_kernel_peer`); the CLI outside a Muse session does not qualify.
+The binary also ships a `daemon` skill (host-manager TUI, lanes in `tmux`/`herdr`, mailbox or Slack
+transport, `MUSE_DAEMON_*` env) built for exactly this; `tmux` is not installed here; untested.
+
+What DOES work: typing into the TUI. `screen -S <name> -p 0 -X stuff "<text>"`, then a SEPARATE
+`screen -S <name> -p 0 -X stuff $'\015'` (Enter). The echo session recorded it as a second
+`runtime.user_intent.accepted`. Text and `\r` in one `stuff` did not submit. So a steerable
+Worker-0 is the TUI under `screen`, not `exec`:
+
+```bash
+WT=/Users/riordenweber/.t3/worktrees/django-strawberry-framework/t3code-1cc21548
+cd "$WT" && MUSE_EXPERIMENTAL_EXTERNAL_AGENT_INGRESS=on MUSE_EXPERIMENTAL_LOCAL_SESSION_MESSAGING=1 \
+screen -dmS muse-dry ~/.local/bin/muse --yolo --workspace "$WT" \
+  --model muse-spark-1.3-contributor --reasoning-effort max "$(cat "$S/dry-prompt-N.md")"
+# steer (each submit is a metered prompt, §1.5):
+screen -S muse-dry -p 0 -X stuff "MAINTAINER (Rio): PAUSE HERE ..."; screen -S muse-dry -p 0 -X stuff $'\015'
+```
+
+Trade-offs, all untested on a real Worker-0: no `--json` stdout, so monitoring reads the durable log
+`~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<uuid>/session.jsonl`, whose vocabulary is
+`runtime.*` (`runtime.user_intent.accepted`, `runtime.session.task`, …), not §1.4's; the failure
+greps must be re-derived there; the TUI stays open after the run ends (quit the `screen` session);
+`screen -X hardcopy` printed nothing for the TUI's alternate screen. `screen` here is 4.00.03
+(no `-Logfile`). Until a real Worker-0 is launched this way, exec + signals (§4.1) + relaunch (§4.3)
+remain the proven path. The gates in §2 are harmless and stay.
 
 ### 4.3 Relaunch after a death or pause
 

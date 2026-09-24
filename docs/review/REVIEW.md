@@ -83,13 +83,20 @@ requires, their tests, the ledger rows the item lands.
   into a test run. A cell is `inapplicable by construction` when the target reaches no database,
   alias or dialect decision (the reviewer states the reason, the verifier judges it); a cell the
   environment cannot run is `unverified`, listed w/ the failing command.
-- **Database cells.** Three modes, mutually exclusive: default single SQLite; `FAKESHOP_SHARDED=1`
-  (`default` + `shard_b` on the workspace's own `db_shard_*.sqlite3`); `FAKESHOP_PG_DSN` against
+- **Database cells.** Three modes, mutually exclusive: default single SQLite (`default` on the
+  workspace's own `db.sqlite3`); `FAKESHOP_SHARDED=1` (the same `default` plus `shard_b` on the
+  workspace's own `db_shard_b.sqlite3`); `FAKESHOP_PG_DSN` against
   the throwaway `docker-compose.postgres.yml` server (tmpfs, `pg` dependency group). A finding
-  whose target reaches an alias or dialect decision runs its Proof in every mode it reaches.
-  Worker 0 owns the Postgres container: starts it once per cycle, records the DSN in
-  `## Cycle baseline`, stops it (`down`) at closeout. Both modes run only inside `$WS`, since
-  `seed_shards` and `bench_nested_fetch.py` rewrite the database they target:
+  whose target reaches an alias or dialect decision runs its Proof in every mode it reaches, as
+  a pytest node under that mode's variable: the Performance instruments (`count_queries.py` and
+  the benches bar the nested fetch) always measure an in-memory SQLite database whatever the
+  variables select, so they prove nothing about another cell. Worker 0 owns the Postgres
+  container: starts it once per cycle, records the DSN in `## Cycle baseline`, stops it (`down`)
+  at closeout. pytest creates its own `test_` database on it; `bench_nested_fetch.py` migrates and
+  reseeds the container's `fakeshop` database itself, which no workspace isolates, so Worker 0
+  runs that bench only at the baseline and the gate and never while a sibling flow's run is using
+  that database. Sharded runs stay inside `$WS`, where `seed_shards` rewrites the copy's shard
+  files, not the tracked ones:
 
   ```shell
   FAKESHOP_SHARDED=1 uv run --directory "$WS" pytest <node> --no-cov
@@ -115,17 +122,35 @@ trigger deferred loads; unbatched writes where `bulk_create` / `bulk_update` fit
 `blog_id` avoids a query; repeated `_meta` walks, repeated settings reads, repeated regex
 compilation, repeated schema or type lookups per request; `lru_cache` on methods (leaks per
 instance, `B019`); locks, cache reads, re-parses or extra round trips added to a per-request path;
-import-time cost (`python -X importtime`, settings read at import); allocation in the walk
-(throwaway lists, dict rebuilds, string building in the hot loop).
+import-time cost (a module the package import pulls in, settings read at import); allocation in the
+walk (throwaway lists, dict rebuilds, string building in the hot loop).
 
-Instrument: `django.test.utils.CaptureQueriesContext` or the `django_assert_num_queries` fixture
-at two cardinalities plus the absolute count; `QuerySet.explain()` for shape; `timeit` median over
-a stated iteration count; the repo benches [bench_plan_cache.py][bench-plan-cache] (steady-state
-plan cache), [bench_optimizer_walk.py][bench-optimizer-walk] (cold walk),
-[bench_nested_fetch.py][bench-nested-fetch] (Postgres; `--sqlite-smoke` for a vendor-free
-run whose figures never compare to Postgres), all bootstrapped through
-[_bench_common.py][bench-common]; `python -X importtime -c "import django_strawberry_framework"`.
-Every measurement runs inside a workspace copy ("Workspace"), before and after, same command.
+Instrument, every one run inside a workspace copy ("Workspace"), before and after, same command:
+
+- query shape: [count_queries.py][count-queries] runs one operation at several parent
+  cardinalities and prints the count per cell plus a verdict (`batched`, exit 0;
+  `scales with cardinality` or `mixed`, exit 1; exit 2 when nothing comparable was measured: a
+  GraphQL error, fewer than two cardinalities, root rows that did not grow at every step, or a
+  refused `--compare`); `--no-optimizer` is the positive control, `--json` the record,
+  `--compare <earlier.json>` the before/after delta. The permanent test pins the same shape w/
+  `CaptureQueriesContext` or the `django_assert_num_queries` fixture; `QuerySet.explain()` for plan
+  shape;
+- time: `timeit` median over a stated iteration count, or the repo benches
+  [bench_plan_cache.py][bench-plan-cache] (plan cache warm vs cleared: cold clears the plan cache
+  and the document-key memo), [bench_optimizer_walk.py][bench-optimizer-walk] (the walk alone),
+  [bench_nested_fetch.py][bench-nested-fetch] (nested-connection strategies; its Postgres form
+  is Worker 0's, at the baseline and the gate only ("Database cells"), so reviewers and
+  implementers use `--sqlite-smoke`, whose figures never compare to Postgres), each w/ `--json`;
+- import time: [importtime_report.py][importtime-report] `--rounds 5 --json <scratch>/...`, each
+  module's minimum across the rounds, never a single `python -X importtime` reading.
+
+The benches and `count_queries.py` bootstrap Django through [_bench_common.py][bench-common] and
+print its provenance header: package path, database `NAME` (the in-memory SQLite name for every
+instrument but the Postgres nested fetch), a content digest of the package and the blob ids of the
+instrument scripts; `importtime_report.py` prints the package path, digest and instrument ids but
+no database (it never opens one), settings or version lines. Two figures compare only when the
+digest they claim to measure and every instrument id match; a figure w/o that header is not a
+number.
 
 Record carries: `Path class: hot | cold` w/ the reason (which caller runs it per what); the
 instrument; before; after; delta; the permanent test that pins the shape (query count at two
@@ -145,7 +170,9 @@ change challenge: posit a change, count authoritative definitions; `> 1` = dupli
 sync/async twins that drifted; a guard one flavor has and a sibling lacks (a contract source must
 establish the rule applies before it is a defect; otherwise a rejection w/ trigger).
 
-Instrument: the trace (`rg` for callers, importers, registrations, tests, docs); a workspace probe
+Instrument: the trace (`rg` for callers, importers, registrations, tests, docs;
+`check_citations.py --cited-by <path>::<Symbol>` for every standing doc and code comment citing a
+symbol a move would rename); a workspace probe
 for any behavior the reader is unsure of; for a suspected defect, HUNT's evidence record
 (workspace path + package `__file__` + database `NAME`, command, digests, collected/executed
 counts, reach assertion, positive control); for suspected duplication, DRY's finding record
@@ -178,9 +205,12 @@ First lines, by kind:
   a description for a class; ruff's Google pydocstyle convention leaves mood (D401) unchecked, so
   the reviewer is the gate.
 
-A module first-line edit is a TREE.md edit: Worker 2 runs
-`uv run python scripts/build_tree_md.py` in the same change; nothing regenerates it locally and
-CI's `build_tree_md.py --check` goes red on a stale file.
+A module first-line edit is a TREE.md edit, and that holds for test modules too (the `tests/` and
+fakeshop test trees render there): Worker 2 runs `uv run python scripts/build_tree_md.py` in the
+same change, since nothing regenerates it locally and CI's `build_tree_md.py --check` goes red on
+a stale file. The render takes its rows from the files git tracks (a new module renders once it
+is `git add`-ed) but each row's text from the working tree, so Worker 2 attributes every TREE.md
+hunk like any other: a row it did not change is concurrent work.
 
 Also: a public symbol w/o a docstring; a docstring restating the signature or the type hints; "we"
 / "you" / "I"; a test docstring beginning "Tests that" or "Ensures" instead of stating the expected
@@ -191,10 +221,20 @@ shows it should be.
 
 Instrument: reading each docstring against its body and against one real caller;
 `uv run python scripts/build_tree_md.py --list-docstrings <path>` for the module first line (flags
-each rule violation by name, needs no Django); `rg -n '::[A-Za-z_]+' <path>` to check every
-symbol citation resolves; `rg -n -i
-'spec-|card|round|worker|legacy|moved from|no longer|previously' <path>` as orientation for
-provenance (a hit is a lead, the grade is the finding).
+each rule violation by name, needs no Django);
+`uv run python scripts/check_citations.py --paths <path> --substrings --json` for every
+`path::Symbol` citation in the file (each w/ `resolved`, its target and candidates), and
+`--cited-by <path>::<Symbol>` for every citer of a symbol the item renames; the Comments census of
+[review_inspect.py][review-inspect] and
+`rg -n -i 'spec-|card|round|worker|legacy|moved from|no longer|previously|\bnow\b|fix for' <path>`
+as orientation for provenance (a hit is a lead, the grade is the finding). The verifier reads the
+item's prose changes w/ the command below; a prose hunk marked `[code changed too]` changed code
+beside the prose:
+
+```shell
+uv run python scripts/review_changed_python_diffs_against_head.py <ITEM_BASELINE> \
+    --against worktree --prose --include-tests --include-init --output-dir <scratch>/diff/<item>
+```
 
 Record carries: the symbol; the grade; the text before; the text after. Text after is the
 reviewer's proposal; Worker 2 may improve it and the verifier grades what landed.
@@ -220,7 +260,9 @@ preference, and speculative risk w/o a reachable input, are not findings.
 One plan per release, `docs/review/review-<release>.md` (`0.0.15` → `review-0_0_15.md`), release
 read from the package `__version__`. Existing plan for the release → resume: validate `Status:`,
 `Run:` and `## Cycle baseline` against the tree (a `Status:` line alone is never trusted),
-continue under `## Run <release> <date>-<n>`, never replace. Worker 0 alone edits the plan; nobody
+continue under `## Run <release> <date>-<n>`, never replace (`review_plan.py resume` appends that
+heading, `Scope:`, a computed `Drift:` line and items for inventory the plan lacks; it never
+rewrites a line). Worker 0 alone edits the plan; nobody
 erases prior lines. A plan w/o `## Cycle baseline` predates this flow: its ticks are history and
 every item is re-verified under the new run.
 
@@ -230,20 +272,33 @@ root in the shared tree (it needs git) and never hand-builds an inventory:
 ```shell
 uv run python scripts/review_plan.py scope --json
 uv run python scripts/review_plan.py plan --scope <folder or module> ...
+uv run python scripts/review_plan.py resume --plan docs/review/review-<release>.md --scope <...>
 uv run python scripts/review_plan.py reconcile --plan docs/review/review-<release>.md
 ```
 
 `scope` lists the package `.py` files changed since the latest tag (`--since <rev>` overrides):
-committed changes w/ their `HEAD` blob ids, dirty or untracked paths (concurrent work), renames.
-It is how a run chooses its `--scope`. `plan` writes the plan: one file item per module minus
-`__init__.py`, one folder item per package folder, the project item, the final gate, and
-`## Out of scope this run` for everything the scope leaves out; it refuses to overwrite an
-existing plan without `--force` and carries run ids forward. `reconcile` is read-only and exits 1
-on any drift.
+committed changes w/ their `HEAD` blob ids, dirty or untracked paths (concurrent work), renames;
+each path names the item covering it (a module its file item, a folder's `__init__.py` that
+folder's integration item, the package-root `__init__.py` the project item). It is how a run
+chooses its `--scope`. `plan` writes the plan: one file item per module minus `__init__.py`, one
+folder item per package folder carrying that folder's `__init__.py` on its `Init files:` line,
+the project item carrying the package-root `__init__.py`, the final gate, and
+`## Out of scope this run` for everything the scope leaves out. `--scope` also takes a folder's
+`__init__.py` (that folder item) or the package-root `__init__.py` (the project item, otherwise
+in scope only for the whole package). On an existing plan `plan` refuses and names `resume`;
+`--force` replaces a plan only while its `## Owned changes` and `## Outcomes` hold nothing beyond
+the generated text. `reconcile` is read-only and exits 1 when the plan and the inventory
+disagree: a `.py` w/o an item, an item whose file is gone or renamed, a folder w/o an item, an
+`__init__.py` missing from, misplaced on or gone from an `Init files:` line, an item whose status
+needs artifacts that are missing. It reports untracked `.py` files too, while `plan` and
+`resume` itemize tracked files only: a new module gets its item once it is `git add`-ed, and an
+untracked one no ledger row names is concurrent work. It checks no fingerprint and no `HEAD`
+drift (it reads `HEAD` only to spot renames); those are Worker 0's checks below.
 
 Plan header: `Status: planned | in-progress | complete | partial (<scope>) | blocked`; `Mode:
 autonomous | pause-after-each-item`; `Run: <release> <date>-<n>` (repeated on every artifact);
-`Scope: package | <folder or path list>` as the entry command named it; `## Cycle baseline`;
+`Scope: package | <folder or path list>` (the entry command's scope, package-relative as
+`review_plan.py` normalizes it: `optimizer/`); `## Cycle baseline`;
 `## Bench baseline`; `## How to work one item`; one file item per inventory line; one folder
 integration item per package folder; the project integration item; the final gate;
 `## Decisions` (maintainer decisions the run surfaced: ruff rules to enable, trade-offs, contracts
@@ -255,8 +310,11 @@ Item shape:
 - [ ] optimizer/walker.py
     - Status: pending
     - Path class: <hot | cold, from the Performance record; blank until reviewed>
-    - Artifacts: rev-optimizer__walker.md + rev-optimizer__walker.<axis>.md × 3
+    - Artifacts: rev-optimizer__walker.md, rev-optimizer__walker.performance.md, rev-optimizer__walker.mechanics.md, rev-optimizer__walker.comments.md
 ```
+
+`review_plan.py` writes that shape and `reconcile` parses it; an item added by hand copies it
+exactly (one comma list of artifact names).
 
 A run scoped below the whole plan (`Scope:` names folders or paths) works only its scope, sets
 `Status: partial (<scope>)` at closeout, and closes w/ an `## Outcomes` "Scope of this run"
@@ -266,20 +324,26 @@ files, and a release rarely changes more than a few folders.
 
 Before a run's first dispatch, and again before the final gate, Worker 0 runs `reconcile` and acts
 on every line it reports: `.py` added → new item; removed / renamed → item closed w/ note,
-artifacts re-keyed. An item whose freshness fingerprints no longer match is reopened, whatever its
-checkbox says.
+artifacts re-keyed. The one line it leaves standing is an untracked `.py` no ledger row names: that
+is concurrent work, recorded on a `Drift:` line, and `reconcile` keeps exiting 1 for it; the gate's
+"inventory re-reconciled" means no line but those. Worker 0 then re-hashes every fingerprint
+recorded on an open or ticked item (`git hash-object <path>`); an item whose fingerprints no longer
+match is reopened, whatever its checkbox says.
 
 ## Baseline and ownership
 
-Cycle entry: Worker 0 appends `CYCLE_BASELINE=$(git stash create)` (empty → `HEAD`) + untracked
+Cycle entry: Worker 0 appends `CYCLE_BASELINE=$(git stash create)` (empty → the sha of
+`git rev-parse HEAD`, never the word `HEAD`, which would move) + untracked
 files under the package to `## Cycle baseline`, once. Everything dirty there = concurrent work:
 never edited, reverted, tidied. The block is never rewritten; fingerprints, not the block, decide
 staleness. When `HEAD` moves or `git status --short` names a path the block lacks, Worker 0
 appends one `Drift: <date> HEAD <old>..<new>; dirty + <paths>` line under the current run heading
 (the header `Run:` line on the first run, `## Run <release> <date>-<n>` afterwards), continuation
-lines indented two spaces.
+lines indented two spaces. `resume` writes a run's first `Drift:` line; drift found later in the
+run is appended by hand.
 
-Per item: `ITEM_BASELINE=$(git stash create)` + the same listings. Item-scoped diff =
+Per item: `ITEM_BASELINE=$(git stash create)` (empty → the `git rev-parse HEAD` sha; an empty
+value would send the diff tooling back to the latest tag) + the same listings. Item-scoped diff =
 `git diff <item baseline> -- <paths touched>` PLUS every file the item added
 (`git diff --no-index /dev/null <new>`).
 
@@ -297,11 +361,14 @@ through Worker 0. It blocks the gate row, never the item.
 ### Bench baseline
 
 Performance verdicts need a per-release reference. At cycle entry Worker 0 takes a workspace copy
-and records under `## Bench baseline` the command and output of
-[bench_plan_cache.py][bench-plan-cache] and [bench_optimizer_walk.py][bench-optimizer-walk] plus
-[bench_nested_fetch.py][bench-nested-fetch] against the cycle's Postgres container, plus
-`python -X importtime` for the package import, each bound to `CYCLE_BASELINE`. The final gate
-reruns the same commands in a fresh copy and records the delta. A Performance record cites the
+and runs the four commands `plan` writes under `## Bench baseline`, recording each one's command,
+provenance header and figures: [bench_plan_cache.py][bench-plan-cache],
+[bench_optimizer_walk.py][bench-optimizer-walk], [bench_nested_fetch.py][bench-nested-fetch]
+against the cycle's Postgres container (`FAKESHOP_PG_DSN=... uv run --directory "$WS" --group pg`),
+and [importtime_report.py][importtime-report] `--rounds 5`, each w/ `--json` into scratch. The
+package digest in each header is the baseline's binding; `CYCLE_BASELINE` is recorded beside it.
+The final gate reruns the same commands in a fresh copy and records the delta; a gate figure whose
+instrument ids differ from the baseline's compares nothing. A Performance record cites the
 baseline figure it moves; a file item whose change moves no bench figure pins its claim w/ a
 query-count test instead.
 
@@ -313,19 +380,37 @@ destructive or source-mutating probe, every bench run lives in a disposable copy
 
 ```shell
 WS=<scratch>/review-ws/<item>/<role>
-rsync -a --exclude .git --exclude .venv --exclude '__pycache__' --exclude docs/ ./ "$WS/"
+rsync -a --exclude .git --exclude .venv --exclude '__pycache__' --exclude /output/ \
+    --exclude /docs/shadow/ --exclude /docs/review/temp-tests/ --exclude 'worker-memory/' \
+    ./ "$WS/"
 uv run --directory "$WS" python -c "import django_strawberry_framework as p; print(p.__file__)"
 ```
+
+The copy keeps `docs/`: tests and scripts read from it (`tests/test_export_dry_review.py`
+imports the DRY planner, `build_tree_md.py` needs `docs/TREE.md`). It drops `.git`, since
+`prove_failability.py --workspace` refuses a root that holds one, so provenance comes from the
+printed paths and the package digest, never from a `HEAD` sha. The one exception is the final
+gate's copy ("Final gate and closeout").
 
 Every command runs w/ `$WS` as cwd (`uv run --directory "$WS"`): `--project` alone keeps the
 caller's cwd on `sys.path`, so the import above prints the SHARED package and the check passes for
 the wrong tree. Before any verdict the record shows the printed package path inside `$WS` and the
 database `NAME` resolved from inside `$WS`. A measurement importing the shared checkout or opening
 its database = `invalid`, whatever it showed. `scripts/prove_failability.py` runs only from inside
-`$WS`. Reviewers take a copy of the tree as it stands; Worker 2 measures "after" in a copy taken
-after its own edits; verifiers take a FRESH copy after Worker 2 reports so they grade the exact
-change. Promotion = Worker 2 applying the change to the shared tree by hand, then the focused
-permanent test there. No branches, no shared-tree restores.
+`$WS`, always in this form; `--workspace` refuses the shared checkout and makes provenance observed
+inside pytest mandatory, and a per-role scratch root keeps parallel verifiers' pristine copies
+apart:
+
+```shell
+uv run --directory "$WS" python scripts/prove_failability.py <manifest> --workspace "$WS" \
+    --scratch-root <scratch>/proofs/<item>/<role> --json <scratch>/proofs/<item>/<role>.json
+```
+
+Reviewers take a copy
+of the tree as it stands; Worker 2 measures "after" in a copy taken after its own edits; verifiers
+take a FRESH copy after Worker 2 reports so they grade the exact change. Promotion = Worker 2
+applying the change to the shared tree by hand, then the focused permanent test there. No branches,
+no shared-tree restores.
 
 Read-only scratch (a probe that imports the live package and writes nothing) may live under
 `docs/review/temp-tests/<scope>/`, untracked. Workers never clean up; Worker 0 removes item scratch
@@ -358,11 +443,19 @@ they exist; edits only its own axis record.
 ### Worker 1 reviews
 
 Reads the whole live target, then traces in and out until the contracts are clear: who calls,
-imports, registers, wraps, configures it; which state, lifecycle, settings, ORM, cache or
-framework hook it relies on; how representative input becomes output, error, queries, persistent
-state; which tests and public docs promise its behavior. Then reads for its axis as "The three
-axes" describes, discharging every list entry w/ a finding, a `none` w/ the reason, or a
-rejection w/ its trigger.
+imports, registers, wraps, configures it; which state, lifecycle, settings, ORM, cache or framework
+hook it relies on; how representative input becomes output, error, queries, persistent state; which
+tests and public docs promise its behavior. [review_inspect.py][review-inspect] gives the
+orientation every axis starts from: per-symbol `path::Symbol` cites and blob ids, performance
+leads, the Comments census. It is a lead list, never a finding:
+
+```shell
+uv run python scripts/review_inspect.py <path> --output-dir <scratch>/inspect \
+    --json <scratch>/inspect/<item>.json
+```
+
+Then reads for its axis as "The three axes" describes, discharging every list entry w/ a finding, a
+`none` w/ the reason, or a rejection w/ its trigger.
 
 A finding that belongs to another axis is written into THAT axis's record under
 `## Cross-axis (from <axis>)`, the one place a Worker 1 writes outside its own record; the owning
@@ -401,7 +494,7 @@ Mechanically, before Worker 2 reads anything:
 
 | Record shows | Verdict |
 |---|---|
-| a measurement w/o workspace path, package `__file__` and database `NAME` | `invalid: instrument` |
+| a measurement w/o workspace path, package `__file__` and (if it opens one) database `NAME` | `invalid: instrument` |
 | package imported from the shared checkout, or database outside `$WS` | `invalid: wrong tree` |
 | a Performance finding w/o `Path class` or w/o a before number | back to that Worker 1 |
 | a finding w/o a runnable Proof line | back to that Worker 1 |
@@ -437,8 +530,13 @@ nothing for it, and the owning verifier judges. It may improve a Recommendation'
 when the trace shows a better one, recording what it did instead and why; the Proof line still
 governs. It never silently skips a finding.
 
-After the last axis: `uv run ruff check --fix .`, then `uv run ruff format .` last, until
-`uv run ruff format --check <paths touched>` and `uv run ruff check <paths touched>` both pass.
+After the last axis, on the paths touched (explicit paths, never `.`, which rewrites files no
+item owns): `uv run ruff check --fix <paths>`, then `uv run ruff format <paths>` last, until
+`uv run ruff check <paths>`, `uv run ruff format --check <paths>` and
+`uv run python scripts/check_trailing_commas.py --check <paths>` pass, and
+`uv run python scripts/check_citations.py --check` passes on the whole tree (a rename rots
+citations in files the item never opened). These are the CI lint gates; ruff alone passes a file
+the layout gate rejects.
 Then appends `## Implementation (Worker 2)` to `rev-<path>.md`: per axis, per finding, what
 landed (`implemented | discharged by <finding> | disputed | deferred`), files changed and why each
 moved, before / after numbers w/ their workspace records, permanent tests and their focused
@@ -448,12 +546,12 @@ every file touched or read for the change. Reports to Worker 0.
 ### Worker 0 checks the report
 
 The evidence table again, on the report: every High and Medium finding has a disposition; every
-number has a workspace record; every changed path is attributed; ruff passed; the item-scoped
-diff contains no hunk the report does not explain. Failure → back to Worker 2 w/ the row named
-(twice → `blocked`). Pass → `Status: ready-for-verification/<n>`, item-scoped diff written to
-scratch, three fresh workspace copies, the SAME three Worker 1s re-dispatched (fresh only when a
-context is gone, w/ its record as the handoff), Performance and Mechanics at once, Comments after
-those two report.
+number has a workspace record; every changed path is attributed; the lint gates passed; the
+item-scoped diff contains no hunk the report does not explain. Failure → back to Worker 2 w/ the
+row named (twice → `blocked`). Pass → `Status: ready-for-verification/<n>`, item-scoped diff
+written to scratch, three fresh workspace copies, the SAME three Worker 1s re-dispatched (fresh
+only when a context is gone, w/ its record as the handoff), Performance and Mechanics at once,
+Comments after those two report.
 
 ### Worker 1 verifies
 
@@ -476,8 +574,9 @@ its own axis:
 5. Confirms permanent tests exercise real usage at the mandated tier and fail w/o the change
    (Mechanics and Performance verifiers), and that the item-scoped diff carries no process
    provenance, no line-number citation, no `we` (Comments verifier).
-6. Runs `uv run ruff format --check` and `uv run ruff check` on the touched paths (Mechanics
-   verifier); a failure is `revision-needed`.
+6. Runs the lint gates Worker 2 ran (ruff check, ruff format `--check`,
+   `check_trailing_commas.py --check` on the touched paths, `check_citations.py --check` on the
+   tree) (Mechanics verifier); a failure is `revision-needed`.
 
 Appends `## Verification (<axis>)` to its record w/ the checks and results, sets the record
 `Status: verified` or `Status: revision-needed` w/ concrete named gaps, reports to Worker 0.
@@ -578,28 +677,43 @@ per-cycle artifacts only; everything that lands in code, tests or standing docs 
 Folder pass after every file item in the folder is verified: one Worker 1 per axis again, on the
 folder as one component, looking for what no file shows alone: a hot path that crosses the folder
 (Performance), a rule split across siblings or a flavor missing a guard its siblings have
-(Mechanics), module docstrings that disagree w/ each other about who owns what (Comments). Same
-cycle, same records, `rev-<folder>.md`.
+(Mechanics), module docstrings that disagree w/ each other about who owns what (Comments). It
+also reviews the folder's own `__init__.py`, named on the item's `Init files:` line. Same cycle,
+same records, `rev-<folder>.md`.
 
-Project pass after every folder: public exports and `__init__.py` files, import-time cost of the
-package as a whole against the bench baseline, end-to-end lifecycle, gaps between package
-behavior and its tests, examples and docs. Re-inventory first. `rev-project.md`.
+Project pass after every folder: public exports and the package-root `__init__.py`, import-time
+cost of the package as a whole against the bench baseline, end-to-end lifecycle, gaps between
+package behavior and its tests, examples and docs. Re-inventory first. `rev-project.md`.
 
 ## Final gate and closeout
 
 Every item but the gate verified + inventory re-reconciled → Worker 0 runs the gate: `uv run
 pytest` (full suite, package coverage 100%), every `## Pending execution` command from every
 artifact as listed, the bench baseline commands in a fresh workspace copy w/ the delta recorded.
-Record failures, coverage, skips, xfails, collected/selected counts, `FAKESHOP_SHARDED` mode
-(sharded-only tests skip by default, so the gate runs twice more in a fresh workspace copy:
-`FAKESHOP_SHARDED=1 uv run pytest` and the `FAKESHOP_PG_DSN` suite, each recorded w/ its own
-counts). Bind the result: `git stash create` at gate time + blob ids of
-`pyproject.toml` and `uv.lock` + mode. A change to package source, tests, fixtures, pytest or
-coverage config, dependencies or mode invalidates it; prose does not. Failure in a path an item
-touched, or of a `proof:` command → that item back to Worker 2 and its verifiers; a failing
-`gate:` command reopens no item; a failure reproduced against `git show HEAD:` of its test and
-target → pre-existing, `## Defects`, gate row `blocked` for Rio; environment failure → recorded
-precisely, `blocked`.
+Sharded-only tests skip by default, so the gate runs the suite twice more, as CI's sharded node
+and Postgres job do: in a fresh gate copy that keeps `.git` (the suite's CI-governance tests ask
+git for the committable file list and fail in a copy w/o it), w/o coverage (the default run owns
+the 100% floor), and on Postgres only the database-touching tests. `--no-specials` skips the
+fsmonitor socket inside `.git`, which rsync cannot copy:
+
+```shell
+GATE_WS=<scratch>/review-ws/gate
+rsync -a --no-specials --exclude .venv --exclude '__pycache__' --exclude /output/ \
+    --exclude /docs/shadow/ --exclude /docs/review/temp-tests/ --exclude 'worker-memory/' \
+    ./ "$GATE_WS/"
+FAKESHOP_SHARDED=1 uv run --directory "$GATE_WS" pytest -o addopts="-v -n auto --dist loadscope"
+FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop \
+    uv run --directory "$GATE_WS" --group pg pytest \
+    -o addopts="-v -n 12 --dist loadscope" -m "django_db or pg"
+```
+
+Record, per run, failures, coverage, skips, xfails, collected/selected counts and the mode. Bind
+the result: `git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + mode. A
+change to package source, tests, fixtures, pytest or coverage config, dependencies or mode
+invalidates it; prose does not. Failure in a path an item touched, or of a `proof:` command → that
+item back to Worker 2 and its verifiers; a failing `gate:` command reopens no item; a failure
+reproduced against `git show HEAD:` of its test and target → pre-existing, `## Defects`, gate row
+`blocked` for Rio; environment failure → recorded precisely, `blocked`.
 
 Worker 0 fills `## Outcomes` BEFORE deleting anything. Per item: findings per axis w/ severity
 and disposition; every number before / after w/ its command; owner moves; consolidations w/ their
@@ -652,6 +766,9 @@ flow's ledger names is concurrent work here. Sibling flows share one Postgres co
 [bench-optimizer-walk]: ../../scripts/bench_optimizer_walk.py
 [bench-plan-cache]: ../../scripts/bench_plan_cache.py
 [build-tree-md]: ../../scripts/build_tree_md.py
+[count-queries]: ../../scripts/count_queries.py
+[importtime-report]: ../../scripts/importtime_report.py
+[review-inspect]: ../../scripts/review_inspect.py
 [review-plan]: ../../scripts/review_plan.py
 
 <!-- .venv/ -->

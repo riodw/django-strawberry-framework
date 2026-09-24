@@ -16,7 +16,10 @@ model. They cover:
 - the **write** ``Upload`` mapping: the generated ``MediaSpecimenInput`` exposes
   ``Upload`` over HTTP, and a real GraphQL **multipart** request creates a row
   with uploaded files end to end (URL routing -> view -> multipart parse ->
-  schema execution -> JSON response).
+  schema execution -> JSON response);
+- the **update** path over a non-Relay primary: ``updateMediaSpecimen`` takes
+  the raw pk ``id:``, and an uncoercible or missing pk is the not-found
+  ``FieldError`` on ``id``.
 
 The suite drives through the package's own ``TestClient`` (spec-043):
 the JSON posts earn the helper's happy-path lines live, and the two multipart
@@ -475,7 +478,7 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
     mutation = """
     mutation Create($data: MediaSpecimenInput!) {
       createMediaSpecimen(data: $data) {
-        node {
+        result {
           label
           attachment { name size url }
           image { name width height }
@@ -509,7 +512,7 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
         assert res.response.status_code == 200
         payload = res.data["createMediaSpecimen"]
         assert payload["errors"] == []
-        result = payload["node"]
+        result = payload["result"]
 
         # The row landed in the database with both files attached.
         assert models.MediaSpecimen.objects.filter(label="uploaded").exists()
@@ -538,7 +541,7 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
     mutation = """
     mutation Create($data: MediaSpecimenImageFormInput!) {
       createMediaSpecimenImageViaForm(data: $data) {
-        node {
+        result {
           label
           image { name width height }
         }
@@ -562,7 +565,7 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
         assert res.response.status_code == 200
         payload = res.data["createMediaSpecimenImageViaForm"]
         assert payload["errors"] == []
-        result = payload["node"]
+        result = payload["result"]
 
         # The row landed via the FORM path with the image routed into ``files=``.
         assert models.MediaSpecimen.objects.filter(label="form-uploaded").exists()
@@ -576,7 +579,7 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
 _UPDATE_MEDIA_SPECIMEN = """
 mutation Update($id: ID!, $data: MediaSpecimenPartialInput!) {
   updateMediaSpecimen(id: $id, data: $data) {
-    node { label attachment { name } }
+    result { label attachment { name } }
     errors { field messages codes }
   }
 }
@@ -592,19 +595,24 @@ def _stored_specimen(label: str) -> models.MediaSpecimen:
     return specimen
 
 
-def _specimen_gid(specimen: models.MediaSpecimen) -> str:
-    """Mint the update ``id:`` GlobalID for ``specimen`` under the model-label strategy."""
-    return str(relay.GlobalID(type_name="scalars.mediaspecimen", node_id=str(specimen.pk)))
+def _update_specimen(
+    specimen,
+    data,
+    files=None,
+    *,
+    lookup_id=None,
+):
+    """Post ``updateMediaSpecimen`` as a superuser and return its payload.
 
-
-def _update_specimen(specimen, data, files=None):
-    """Post ``updateMediaSpecimen`` as a superuser and return its payload."""
+    ``MediaSpecimenType`` is not a Relay node, so the ``id:`` is the raw pk
+    string (``str(specimen.pk)`` unless ``lookup_id`` overrides it).
+    """
     user = get_user_model().objects.create_superuser("updater", "updater@example.com", "pw")
     client = TestClient()
     with client.login(user):
         res = client.query(
             _UPDATE_MEDIA_SPECIMEN,
-            variables={"id": _specimen_gid(specimen), "data": data},
+            variables={"id": str(specimen.pk) if lookup_id is None else lookup_id, "data": data},
             files=files,
             operation_name="Update",
         )
@@ -640,7 +648,7 @@ def test_update_omitting_the_file_keeps_the_stored_file_over_http(tmp_path):
         original_name = specimen.attachment.name
         payload = _update_specimen(specimen, {"label": "renamed"})
         assert payload["errors"] == [], payload
-        assert payload["node"]["label"] == "renamed"
+        assert payload["result"]["label"] == "renamed"
         specimen.refresh_from_db()
         assert specimen.attachment.name == original_name
         with specimen.attachment.open("rb") as handle:
@@ -682,10 +690,65 @@ def test_update_explicit_null_on_the_required_file_is_a_field_error_over_http(tm
     with override_settings(MEDIA_ROOT=str(tmp_path)):
         specimen = _stored_specimen("null-file")
         payload = _update_specimen(specimen, {"attachment": None})
-        assert payload["node"] is None, payload
+        assert payload["result"] is None, payload
         assert [(error["field"], error["codes"]) for error in payload["errors"]] == [
             ("attachment", ["null"]),
         ]
         specimen.refresh_from_db()
         with specimen.attachment.open("rb") as handle:
             assert handle.read() == b"original"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "raw_id",
+    [
+        "not-a-number",
+        "99999999999999999999999",
+        str(relay.GlobalID(type_name="scalars.mediaspecimen", node_id="1")),
+    ],
+    ids=["non-numeric", "past-the-column-range", "globalid-is-just-a-literal"],
+)
+def test_update_with_an_uncoercible_raw_pk_is_the_not_found_field_error_over_http(
+    tmp_path,
+    raw_id,
+):
+    """An ``id:`` the ``MediaSpecimen`` pk field cannot coerce is the not-found ``FieldError``.
+
+    ``MediaSpecimenType`` is not a Relay node, so
+    ``django_strawberry_framework/mutations/resolvers.py::coerce_lookup_id`` coerces
+    the raw pk through the model's pk field: a non-numeric or out-of-range literal
+    identifies no row, never a top-level error or a backend ``OverflowError``. No
+    GlobalID names a non-Relay type, so a GlobalID string is one more uncoercible
+    literal here, not the Relay arm's invalid-id error. The stored row is untouched.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = _stored_specimen("bad-id")
+        payload = _update_specimen(specimen, {"label": "renamed"}, lookup_id=raw_id)
+        assert payload["result"] is None, payload
+        assert [(error["field"], error["codes"]) for error in payload["errors"]] == [
+            ("id", ["not_found"]),
+        ]
+        specimen.refresh_from_db()
+        assert specimen.label == "bad-id"
+
+
+@pytest.mark.django_db
+def test_update_with_a_missing_raw_pk_is_the_not_found_field_error_over_http(tmp_path):
+    """A well-formed raw pk naming no row reaches the locate and returns the same not-found error.
+
+    ``MediaSpecimenType`` declares no ``get_queryset``, so no row is hidden from
+    this viewer; the missing-row verdict is the one the visibility-scoped locate
+    also gives a hidden row.
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        specimen = _stored_specimen("missing-id")
+        payload = _update_specimen(
+            specimen,
+            {"label": "renamed"},
+            lookup_id=str(specimen.pk + 1000),
+        )
+        assert payload["result"] is None, payload
+        assert [(error["field"], error["codes"]) for error in payload["errors"]] == [
+            ("id", ["not_found"]),
+        ]

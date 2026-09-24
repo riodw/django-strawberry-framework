@@ -27,11 +27,12 @@ and the load-bearing invariants this module owns:
 - **``update`` / ``delete`` locate runs through the target type's
   ``get_queryset`` for visibility only** (spec-036 Decision 10): a hidden row is
   not-found, indistinguishable from a genuinely missing row (no existence leak).
-  The top-level ``id:`` is itself decoded + type-checked against the mutation's
-  target model BEFORE the lookup (a malformed / unresolvable / wrong-model id is
-  a ``FieldError`` on ``id``, never coerced to a bare pk),
-  and its ``node_id`` is coerced through the target pk field so an uncoercible
-  literal is not-found, never a raw Django ``ValueError``.
+  The top-level ``id:`` is coerced BEFORE the lookup by the target primary's
+  Relay shape: a Relay-Node primary takes a GlobalID, decoded + type-checked
+  against the mutation's target model (a malformed / unresolvable / wrong-model id
+  is a ``FieldError`` on ``id``, never coerced to a bare pk); a non-Relay primary
+  takes the raw pk. Either way the pk literal is coerced through the target pk
+  field, so an uncoercible literal is not-found, never a raw Django ``ValueError``.
 - **Write authorization is a separate seam** (spec-036 Decision 15): the pipeline
   calls the mutation's ``check_permission`` (which delegates to
   ``Meta.permission_classes``) and maps a ``False`` return to a top-level
@@ -84,6 +85,7 @@ from ..optimizer.extension import (
 )
 from ..relay import GlobalIDDecode, decode_model_global_id
 from ..resource_policy import check_deadline
+from ..types.relay import implements_relay_node
 from ..utils.errors import (
     FIELD_ERROR_CODE_INVALID,
     FIELD_ERROR_CODE_NOT_FOUND,
@@ -119,6 +121,7 @@ from ..utils.write_transaction import (
     snapshot_target_state,
 )
 from ..utils.write_values import (
+    coerce_relation_pk_or_none,
     decode_provided_fields,
     decode_scalar_leaf,
     decode_visible_relation_ids,
@@ -1187,20 +1190,22 @@ def coerce_lookup_id(
     *,
     using: str | None = None,
 ) -> tuple[Any, FieldError | None]:
-    """Decode + type-check the update/delete ``id:`` against the target model.
+    """Coerce the update/delete ``id:`` to a pk: GlobalID for a Relay primary, raw pk otherwise.
 
     ``DjangoMutationField`` declares ``id`` as ``strawberry.ID`` - the
     ``node(id: ID!)`` Relay-spec signature the shipped ``DjangoNodeField`` uses
     (``relay.py::DjangoNodeField`` #"is the Relay-spec signature"), so the package
-    decodes the GlobalID **server-side** rather than letting Strawberry's argument
-    coercion own it. The wire value therefore arrives as a base64 GlobalID
-    string; it is run through the shared
-    ``decode_model_global_id`` primitive against the mutation's target
-    model - the same decode + model-check + pk-coercion contract the relation
-    ``<field>_id`` decode uses, and the identity guard the typed ``DjangoNodeField``
-    applies (``relay.py::_check_typed_match``).
+    owns the id's interpretation **server-side** rather than letting Strawberry's
+    argument coercion own it. Which interpretation applies is the target primary's
+    Relay shape (``types/relay.py::implements_relay_node``, the same predicate that
+    picks the payload's ``node`` / ``result`` slot):
 
-    The :class:`GlobalIDDecode` status maps to this surface's two error shapes:
+    **Relay-Node primary** - the wire value is a base64 GlobalID run through the
+    shared ``decode_model_global_id`` primitive against the mutation's target
+    model: the same decode + model-check + pk-coercion contract the relation
+    ``<field>_id`` decode uses, and the identity guard the typed ``DjangoNodeField``
+    applies (``relay.py::_check_typed_match``). The :class:`GlobalIDDecode` status
+    maps to this surface's two error shapes:
 
     - ``DECODE_FAILED`` (malformed / unresolvable type, or a raw pk string with no
       GlobalID shape) and ``WRONG_MODEL`` (a well-formed id for the *wrong* model)
@@ -1219,9 +1224,24 @@ def coerce_lookup_id(
     riders that cannot thread one, and a second read of the same context variable
     at this seam could only ever return the same answer.
 
+    **Non-Relay primary** - no GlobalID names such a type, so the wire value is the
+    raw pk, coerced through the target model's pk field by the same
+    ``utils/write_values.py::coerce_relation_pk_or_none`` primitive a raw-pk
+    relation id uses (``to_python`` then ``run_validators``). An uncoercible or
+    out-of-range literal is the **not-found** ``FieldError`` on ``id`` before any
+    query, never a raw ``ValueError`` / backend ``OverflowError``; a coerced pk
+    still meets ``locate_instance``'s visibility ``get_queryset``, so a hidden row
+    and a missing row stay indistinguishable. A GlobalID string sent here is just
+    an uncoercible literal.
+
     Returns ``(pk, None)`` on success or ``(None, FieldError)`` otherwise.
     """
     target_model = model_for(target_type)
+    if not implements_relay_node(target_type):
+        pk = coerce_relation_pk_or_none(target_model, id)
+        if pk is None:
+            return None, not_found_error()
+        return pk, None
     result = decode_model_global_id(id, target_model, using=using)
     if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):
         return None, _invalid_lookup_id_error()

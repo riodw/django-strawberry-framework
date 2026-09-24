@@ -1151,7 +1151,7 @@ class UpdateBookViaForm(DjangoModelFormMutation):
     """Update a ``Book`` via ``BookGenresModelForm`` - the live FORM partial-update M2M path.
 
     ``BookType`` is Relay-Node, so the update ``id`` is a decodable ``GlobalID`` (a
-    non-Relay type supports create only). A ``title``-only update OMITS the required
+    non-Relay primary takes its raw pk instead). A ``title``-only update OMITS the required
     ``genres`` M2M, so it is reconstructed from the located row
     (``forms/resolvers.py::_reconstruct_partial_data`` - the M2M branch, previously
     package-only) rather than cleared. ``permission_classes = []`` keeps write-auth out

@@ -763,14 +763,14 @@ curl -s -b /tmp/fakeshop.jar -c /tmp/fakeshop.jar -H "X-CSRFToken: $TOKEN" \
   -d '{"query":"mutation { login(username: \"YOUR_SUPERUSER\", password: \"YOUR_PASSWORD\") { errors { field messages } } }"}'
 TOKEN=$(awk '/csrftoken/ {print $7}' /tmp/fakeshop.jar)
 curl -b /tmp/fakeshop.jar -H "X-CSRFToken: $TOKEN" http://127.0.0.1:8000/graphql/ \
-  -F operations='{"query":"mutation Create($data: MediaSpecimenInput!) { createMediaSpecimen(data: $data) { node { label attachment { name size url } image { name width height } } errors { field messages } } }","variables":{"data":{"label":"first","attachment":null,"image":null}}}' \
+  -F operations='{"query":"mutation Create($data: MediaSpecimenInput!) { createMediaSpecimen(data: $data) { result { label attachment { name size url } image { name width height } } errors { field messages } } }","variables":{"data":{"label":"first","attachment":null,"image":null}}}' \
   -F map='{"0":["variables.data.attachment"],"1":["variables.data.image"]}' \
   -F 0=@notes.txt \
   -F 1=@photo.png
 ```
 
-`MediaSpecimenType` is a Relay node, so the payload carries the row in `node`, and
-`updateMediaSpecimen(id:, data:)` takes that GlobalID: leaving `attachment` out keeps the
+`MediaSpecimenType` is not a Relay node, so the payload carries the row in `result`, and
+`updateMediaSpecimen(id:, data:)` takes the raw pk: leaving `attachment` out keeps the
 stored file, a new upload replaces it, and an explicit `null` on the required column is a
 field error. The `url` in the response is a public URL; the server's
 filesystem path is never on the wire. The package bounds upload bytes through the

@@ -27,7 +27,6 @@ tag resolving to ``null`` on the source specimen.
 from typing import Any
 
 import strawberry
-from strawberry import relay
 from strawberry.types import Info
 
 from apps.scalars import filters, forms, models, orders
@@ -186,9 +185,9 @@ class MediaSpecimenType(DjangoType):
     ``image`` to ``DjangoImageType`` - and both are **nullable by default** in
     the live SDL even though the Django columns are required, because an empty /
     absent stored file resolves the whole object to ``null`` (spec-037
-    Decision 4). Relay-Node-shaped, unlike the other scalar specimens, because
-    ``updateMediaSpecimen`` locates its row by a GlobalID ``id:``; the generated
-    mutation payloads therefore carry the row in the ``node`` slot.
+    Decision 4). Not Relay-Node-shaped (matching the other scalar specimens), so
+    the generated mutation payloads carry the row in the ``result`` slot and
+    ``updateMediaSpecimen`` locates its row by the raw pk ``id:``.
     """
 
     class Meta:
@@ -199,7 +198,6 @@ class MediaSpecimenType(DjangoType):
             "attachment",
             "image",
         )
-        interfaces = (relay.Node,)
         # Explicit now that a second type wraps the same model: a relation to
         # ``MediaSpecimen`` resolves here, not to the path-bearing sibling.
         primary = True
@@ -343,8 +341,10 @@ class UpdateMediaSpecimen(DjangoMutation):
     update that leaves ``attachment`` out keeps the stored file, one that sends a
     new upload replaces it through the generic update loop, and an explicit
     ``null`` on the required ``attachment`` column is a field error rather than a
-    silent clear. Same default ``[DjangoModelPermission]`` write authorization as
-    the create twin (``scalars.change_mediaspecimen``).
+    silent clear. ``MediaSpecimenType`` is not a Relay node, so ``id:`` is the raw
+    pk string and an uncoercible one is the not-found ``FieldError`` on ``id``.
+    Same default ``[DjangoModelPermission]`` write authorization as the create
+    twin (``scalars.change_mediaspecimen``).
     """
 
     class Meta:

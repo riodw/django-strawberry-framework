@@ -402,6 +402,12 @@ Three write flavors share one `class Meta` surface, one `FieldError` envelope, a
 
 Every model-backed mutation returns a generated `<Name>Payload` carrying the written object in a uniform slot (`node` for a Relay-Node target, `result` otherwise) plus `errors: [FieldError!]!`, each `FieldError` a `field` path and `messages`. Validation failures populate that envelope and return a null object; a **write-authorization denial is a top-level `GraphQLError`**, never an envelope entry. `Meta.permission_classes` defaults to `[DjangoModelPermission]` (the Django `add` / `change` / `delete` model perms), and an explicit `permission_classes = []` is the deliberate allow-any opt-out. The one exception is a model-less `DjangoFormMutation`: its payload is `ok` plus `errors` with no object slot, and with no model to derive perms from it defaults to `DenyAll` (details in the form section below).
 
+An `update` / `delete` takes `id: ID!`, read by the same Relay test that picks the slot: a
+Relay-Node target takes its `GlobalID` (a malformed or wrong-model id is an `invalid`
+`FieldError` on `id`), any other target takes its raw pk as the string (`"42"`). Either way
+an uncoercible pk, a missing row, and a row the target's `get_queryset` hides are the same
+`not_found` `FieldError` on `id`.
+
 ### Model mutations
 
 ```python

@@ -98,7 +98,7 @@ _ITEMS_QUERY = "query Items($first: Int) { allItems(first: $first) { edges { nod
 _CREATE_MEDIA = """
 mutation Create($data: MediaSpecimenInput!) {
   createMediaSpecimen(data: $data) {
-    node {
+    result {
       label
       attachment { name size url }
       image { name width height }
@@ -369,7 +369,7 @@ async def test_async_multipart_upload_creates_media_specimen(upload_superuser, t
     assert res.response.status_code == 200
     payload = res.data["createMediaSpecimen"]
     assert payload["errors"] == []
-    result = payload["node"]
+    result = payload["result"]
     assert result["label"] == "async-uploaded"
     assert result["attachment"]["name"].endswith("async.txt")
     assert result["attachment"]["size"] == len(b"async multipart bytes")

@@ -30,17 +30,19 @@ The per-operation argument signature is ``data: <Model>Input!`` (create), ``id``
 Decision 14. The ``id`` argument is the raw ``strawberry.ID`` string - the
 ``node(id: ID!)`` Relay-spec signature the shipped ``DjangoNodeField`` also uses
 (``relay.py::DjangoNodeField`` #"is the Relay-spec signature"), so the package
-decodes the GlobalID **server-side** rather than letting Strawberry's argument
+interprets the id **server-side** rather than letting Strawberry's argument
 conversion own it. The SDL renders
-``id: ID!`` by design (the Relay-spec / node-field contract), and the resolver
-decodes the id and type-checks it against the mutation's target model -
-``resolvers.py::coerce_lookup_id`` returns a ``FieldError`` on ``id`` for a
-malformed / unresolvable / wrong-model id, never coercing it to a bare pk. This is
+``id: ID!`` by design (the Relay-spec / node-field contract), and
+``resolvers.py::coerce_lookup_id`` reads it by the target primary's Relay shape:
+a Relay-Node primary takes a GlobalID, type-checked against the mutation's target
+model (a malformed / unresolvable / wrong-model id is a ``FieldError`` on ``id``,
+never coerced to a bare pk); a non-Relay primary, which no GlobalID names, takes
+the raw pk (an uncoercible literal is the not-found ``FieldError``). This is
 a single, consistent contract (NOT the headline schema's ``id: GlobalID!``, which
 the spec is reconciled to ``id: ID!`` to match); the relation ``<field>_id`` inputs, by
-contrast, ARE typed ``GlobalID`` (the Relay-Node target's id type), so malformed *relation*
-ids are a Strawberry coercion error while a well-formed-but-invalid one is the in-band
-``FieldError``.
+contrast, are typed by their target: ``GlobalID`` for a Relay-Node target (so a malformed
+*relation* id is a Strawberry coercion error while a well-formed-but-invalid one is the
+in-band ``FieldError``) and the raw pk type for a plain target.
 
 Fallback (NOT implemented - spec-036 Decision 5 / Risks): if Strawberry rejects a
 resolver-typed field assigned with no class annotation, the documented fallback is

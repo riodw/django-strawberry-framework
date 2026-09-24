@@ -224,12 +224,22 @@ continue under `## Run <release> <date>-<n>`, never replace. Worker 0 alone edit
 erases prior lines. A plan w/o `## Cycle baseline` predates this flow: its ticks are history and
 every item is re-verified under the new run.
 
-Inventory, run from the repo root:
+[review_plan.py][review-plan] owns the plan's shape and inventory; Worker 0 runs it from the repo
+root in the shared tree (it needs git) and never hand-builds an inventory:
 
 ```shell
-git ls-files 'django_strawberry_framework/*.py' | grep -v '__init__\.py$' | sort
-git ls-files 'django_strawberry_framework/*.py' | sed 's|/[^/]*$||' | sort -u
+uv run python scripts/review_plan.py scope --json
+uv run python scripts/review_plan.py plan --scope <folder or module> ...
+uv run python scripts/review_plan.py reconcile --plan docs/review/review-<release>.md
 ```
+
+`scope` lists the package `.py` files changed since the latest tag (`--since <rev>` overrides):
+committed changes w/ their `HEAD` blob ids, dirty or untracked paths (concurrent work), renames.
+It is how a run chooses its `--scope`. `plan` writes the plan: one file item per module minus
+`__init__.py`, one folder item per package folder, the project item, the final gate, and
+`## Out of scope this run` for everything the scope leaves out; it refuses to overwrite an
+existing plan without `--force` and carries run ids forward. `reconcile` is read-only and exits 1
+on any drift.
 
 Plan header: `Status: planned | in-progress | complete | partial (<scope>) | blocked`; `Mode:
 autonomous | pause-after-each-item`; `Run: <release> <date>-<n>` (repeated on every artifact);
@@ -254,10 +264,10 @@ section naming what ran and what did not; an unticked box never reads as examine
 are the normal mode: a full pass over the package is seven dispatches per file across a hundred
 files, and a release rarely changes more than a few folders.
 
-Before a run's first dispatch, and again before the final gate, Worker 0 reconciles the plan w/
-the current inventory: `.py` added → new item; removed / renamed → item closed w/ note, artifacts
-re-keyed. An item whose freshness fingerprints no longer match is reopened, whatever its checkbox
-says.
+Before a run's first dispatch, and again before the final gate, Worker 0 runs `reconcile` and acts
+on every line it reports: `.py` added → new item; removed / renamed → item closed w/ note,
+artifacts re-keyed. An item whose freshness fingerprints no longer match is reopened, whatever its
+checkbox says.
 
 ## Baseline and ownership
 
@@ -642,6 +652,7 @@ flow's ledger names is concurrent work here. Sibling flows share one Postgres co
 [bench-optimizer-walk]: ../../scripts/bench_optimizer_walk.py
 [bench-plan-cache]: ../../scripts/bench_plan_cache.py
 [build-tree-md]: ../../scripts/build_tree_md.py
+[review-plan]: ../../scripts/review_plan.py
 
 <!-- .venv/ -->
 

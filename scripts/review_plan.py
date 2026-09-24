@@ -47,7 +47,6 @@ from __future__ import annotations
 import argparse
 import ast
 import difflib
-import importlib.util
 import json
 import re
 import subprocess
@@ -55,7 +54,11 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
+
+try:
+    import _plan_common
+except ModuleNotFoundError:  # imported as ``scripts.review_plan`` (repo root on path)
+    from scripts import _plan_common
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = "django_strawberry_framework"
@@ -63,27 +66,7 @@ REVIEW_DIR = Path("docs/review")
 AXES = ("performance", "mechanics", "comments")
 MODES = ("autonomous", "pause-after-each-item")
 RENAME_SIMILARITY = 0.5
-_DRY_HELPERS_PATH = REPO_ROOT / "docs" / "dry" / "export_dry_review.py"
-
-
-def _load_dry_helpers(path: Path) -> ModuleType:
-    """Load the DRY planner module from its file path; ``docs`` is not a package."""
-    name = "_review_plan_dry_helpers"
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load the DRY plan helpers from {path.as_posix()}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    try:
-        spec.loader.exec_module(module)
-    except FileNotFoundError as exc:
-        del sys.modules[name]
-        raise ImportError(f"the DRY plan helpers are missing: {path.as_posix()}") from exc
-    return module
-
-
-_dry = _load_dry_helpers(_DRY_HELPERS_PATH)
-RELEASE_PATTERN = _dry.RELEASE_PATTERN
+RELEASE_PATTERN = _plan_common.RELEASE_PATTERN
 
 _RUN_ID = re.compile(
     r"^(?:Run:|## Run) (?P<release>\S+) (?P<date>\d{4}-\d{2}-\d{2})-(?P<n>\d+)\s*$",
@@ -201,7 +184,7 @@ class Item:
 
 def _artifact_set(relative: str) -> tuple[str, ...]:
     """Return the main artifact name plus one record per axis for ``relative``."""
-    main = _dry._artifact_name("rev", Path(relative))
+    main = _plan_common.artifact_name("rev", Path(relative))
     stem = main.removesuffix(".md")
     return (main, *(f"{stem}.{axis}.md" for axis in AXES))
 
@@ -464,7 +447,7 @@ def _render_plan(
         "DRY or",
         "hunt artifacts are not imported.",
         "",
-        *_dry._cycle_baseline_block(status_output),
+        *_plan_common.cycle_baseline_block(status_output),
         "",
         "CYCLE_BASELINE=<Worker 0 fills: `git stash create`, empty -> HEAD>",
         f"Untracked under {PACKAGE_DIR}/: <Worker 0 fills>",
@@ -509,26 +492,26 @@ def _default_output(release: str) -> Path:
 def _run_plan(args: argparse.Namespace) -> int:
     """Write a fresh plan; refuse to overwrite without ``--force``."""
     root = args.root.resolve()
-    release = args.target_release or _dry._package_version(root / PACKAGE_DIR)
+    release = args.target_release or _plan_common.package_version(root / PACKAGE_DIR)
     if not RELEASE_PATTERN.fullmatch(release):
         raise ValueError(
             f"invalid --target-release {release!r}; expected dotted digits such as 0.0.15",
         )
-    output = _dry._resolve_path(args.output or _default_output(release), root)
+    output = _plan_common.resolve_path(args.output or _default_output(release), root)
     if output.exists() and not args.force:
-        raise FileExistsError(_dry._overwrite_error(output))
+        raise FileExistsError(_plan_common.overwrite_error(output))
     content, counts = _render_plan(
         root,
         release=release,
         run_number=_existing_run_max(output, release) + 1,
-        generated_date=_dry._validate_date(args.generated_date),
+        generated_date=_plan_common.validate_date(args.generated_date),
         mode=args.mode,
         scope_entries=args.scope,
-        status_output=_dry._git_status_short(root),
+        status_output=_plan_common.git_status_short(root),
     )
-    _dry._atomic_write(output, content, force=args.force)
+    _plan_common.atomic_write(output, content, force=args.force)
     print(
-        f"Wrote {_dry._display_path(output, root)} ({counts['file']} file item(s), "
+        f"Wrote {_plan_common.display_path(output, root)} ({counts['file']} file item(s), "
         f"{counts['folder']} folder item(s) in scope, {counts['out_of_scope']} out of scope)",
     )
     return 0
@@ -940,11 +923,11 @@ def _render_reconcile(report: ReconcileReport, plan_path: Path) -> str:
 def _run_reconcile(args: argparse.Namespace) -> int:
     """Print plan drift; exit 1 when anything is off."""
     root = args.root.resolve()
-    plan_path = _dry._resolve_path(args.plan, root)
+    plan_path = _plan_common.resolve_path(args.plan, root)
     if not plan_path.is_file():
         raise ValueError(f"--plan is not a file: {plan_path.as_posix()}")
     report = build_reconcile(root, plan_path)
-    print(_render_reconcile(report, _dry._display_path(plan_path, root)))
+    print(_render_reconcile(report, _plan_common.display_path(plan_path, root)))
     return 0 if report.clean else 1
 
 

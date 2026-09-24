@@ -47,20 +47,32 @@ from __future__ import annotations
 
 import argparse
 import ast
-import datetime
 import fnmatch
 import hashlib
 import os
-import re
-import subprocess
 import sys
-import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-RELEASE_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
+try:
+    from scripts import _plan_common
+except ModuleNotFoundError:  # run as a file: ``docs/dry`` is on the path, the repo root is not
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from scripts import _plan_common
+
+RELEASE_PATTERN = _plan_common.RELEASE_PATTERN
+_artifact_name = _plan_common.artifact_name
+_atomic_write = _plan_common.atomic_write
+_cycle_baseline_block = _plan_common.cycle_baseline_block
+_display_path = _plan_common.display_path
+_git_status_short = _plan_common.git_status_short
+_overwrite_error = _plan_common.overwrite_error
+_package_version = _plan_common.package_version
+_resolve_path = _plan_common.resolve_path
+_validate_date = _plan_common.validate_date
+
 DEFAULT_EXCLUDES = (
     ".git/**",
     ".mypy_cache/**",
@@ -230,20 +242,6 @@ class ReviewCheckResult:
         return not self.missing_symbols and not self.missing_topics
 
 
-def _display_path(path: Path, root: Path) -> Path:
-    """Return ``path`` relative to ``root`` when possible, else absolute."""
-    resolved = path.resolve()
-    try:
-        return resolved.relative_to(root.resolve())
-    except ValueError:
-        return resolved
-
-
-def _resolve_path(path: Path, root: Path) -> Path:
-    """Resolve a CLI path relative to the configured root."""
-    return path.resolve() if path.is_absolute() else (root / path).resolve()
-
-
 def _compact(text: str, *, limit: int = MAX_SOURCE_TEXT_LENGTH) -> str:
     """Collapse whitespace and truncate a source/report fragment."""
     compact = " ".join(text.split())
@@ -258,70 +256,10 @@ def _code_span(text: str) -> str:
     return f"{delimiter}{text}{delimiter}"
 
 
-def _validate_date(value: str | None) -> str:
-    """Return an ISO date, defaulting to today, or fail with a useful error."""
-    if value is None:
-        return datetime.date.today().isoformat()
-    try:
-        return datetime.date.fromisoformat(value).isoformat()
-    except ValueError as exc:
-        raise ValueError(f"invalid ISO date {value!r}; expected YYYY-MM-DD") from exc
-
-
-def _atomic_write(path: Path, content: str, *, force: bool) -> None:
-    """Atomically write UTF-8 ``content``, refusing an overwrite unless forced."""
-    if path.exists() and not force:
-        raise FileExistsError(_overwrite_error(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    existing_mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-    temp_name: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as stream:
-            temp_name = stream.name
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temp_name, existing_mode)
-        if force:
-            os.replace(temp_name, path)
-        else:
-            try:
-                os.link(temp_name, path)
-            except FileExistsError as exc:
-                raise FileExistsError(_overwrite_error(path)) from exc
-            Path(temp_name).unlink()
-        temp_name = None
-    finally:
-        if temp_name is not None:
-            temp_path = Path(temp_name)
-            if temp_path.exists():
-                temp_path.unlink()
-
-
-def _overwrite_error(path: Path) -> str:
-    """Return the standard safe-overwrite diagnostic."""
-    return f"output already exists: {path.as_posix()} (pass --force to replace it)"
-
-
 def _default_output(target_release: str) -> Path:
     """Return ``docs/dry/dry-<release-underscored>.md``."""
     return Path(f"docs/dry/dry-{target_release.replace('.', '_')}.md")
 
-
-def _artifact_name(prefix: str, relative_path: Path) -> str:
-    """Return the artifact name for one source file or package folder."""
-    slug = relative_path.as_posix().removesuffix(".py").replace("/", "__")
-    return f"{prefix}-{slug}.md"
-
-
-VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"', re.MULTILINE)
 
 _HOW_TO_WORK_ONE_ITEM = """## How to work one item
 
@@ -346,70 +284,6 @@ one item at a time to a fresh Worker 1, then a fresh Worker 2; only Worker 2 tic
   negative control.
 - Nobody cleans up mid-item; Worker 0 removes item scratch by explicit path after verification.
 """
-
-
-def _package_version(package_root: Path) -> str:
-    """Read ``__version__`` from the package ``__init__.py``."""
-    init_path = package_root / "__init__.py"
-    try:
-        source = init_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ValueError(
-            f"cannot read the release from {init_path.as_posix()}; pass --target-release",
-        ) from exc
-    match = VERSION_PATTERN.search(source)
-    if match is None:
-        raise ValueError(
-            f"no __version__ literal in {init_path.as_posix()}; pass --target-release",
-        )
-    return match.group(1)
-
-
-def _git_status_short(root: Path) -> str | None:
-    """Return ``git status --short`` for ``root``, or ``None`` outside a usable checkout."""
-    try:
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(root),
-                "--no-pager",
-                "status",
-                "--short",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return result.stdout
-
-
-def _cycle_baseline_block(status_output: str | None) -> list[str]:
-    """Render the concurrent-work inventory captured at generation time.
-
-    Every path listed is dirty or untracked before the cycle begins, so no item
-    may edit, revert, tidy, or claim it. An empty or unavailable listing is
-    stated rather than omitted, so a missing section reads as lost, not clean.
-    """
-    if status_output is None:
-        body = ["`git status --short` unavailable at generation; Worker 0 records it at start."]
-    elif status_output.strip():
-        body = ["```text", status_output.rstrip("\n"), "```"]
-    else:
-        body = ["Clean tree at generation."]
-    return [
-        "## Cycle baseline",
-        "",
-        "`git status --short` at generation. Every path below is concurrent work: never edited, "
-        "reverted,",
-        "tidied, or attributed to an item. Worker 0 appends the `CYCLE_BASELINE` stash object "
-        "once at",
-        "start and nothing afterwards; drift goes on `Drift:` lines under the run heading.",
-        "",
-        *body,
-    ]
 
 
 def _ledger_blocks() -> list[str]:

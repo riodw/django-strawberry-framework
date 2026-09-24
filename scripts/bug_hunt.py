@@ -40,8 +40,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 if __package__:
+    from scripts import _plan_common
     from scripts import review_historical_package_snapshot_at_commit as snapshot
 else:
+    import _plan_common
     import review_historical_package_snapshot_at_commit as snapshot
 
 DEFAULT_PACKAGE_DIR = snapshot.DEFAULT_PACKAGE_DIR
@@ -52,11 +54,7 @@ BUG_HUNT_DIR = Path("docs/bug_hunt")
 DICTA_PATH = BUG_HUNT_DIR / "dicta.md"
 PACKAGE_INIT = Path("django_strawberry_framework/__init__.py")
 
-# Dotted-digit release such as 0.0.13; shared with the review and DRY flows.
-RELEASE_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
-_INIT_VERSION_PATTERN = re.compile(
-    r"""(?m)^__version__\s*=\s*(?P<quote>["'])(?P<version>[^"']+)(?P=quote)\s*(?:#.*)?$""",
-)
+RELEASE_PATTERN = _plan_common.RELEASE_PATTERN
 
 # Fallback dicta used when ``--dicta`` points at a missing or question-less file.
 _FALLBACK_DICTA = (
@@ -146,27 +144,17 @@ def _head_sha() -> str:
     return _run_git(["rev-parse", "HEAD"]).strip()
 
 
-def _init_version(repo_root: Path) -> str:
-    """Read ``__version__`` from the package ``__init__.py``."""
-    init_path = repo_root / PACKAGE_INIT
-    try:
-        text = init_path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise RuntimeError(f"could not read {PACKAGE_INIT.as_posix()}: {error}") from error
-    match = _INIT_VERSION_PATTERN.search(text)
-    if match is None:
-        raise RuntimeError(f"__version__ not found in {PACKAGE_INIT.as_posix()}")
-    return match.group("version")
-
-
 def _package_release(repo_root: Path) -> str:
     """Return the release from the single version source, the package ``__init__``.
 
     Hatchling derives packaging metadata from the same ``__version__`` literal
     via ``[tool.hatch.version]``, so there is no second declaration to compare
     against and no mismatch state to police.
+
+    Raises:
+        ValueError: the ``__init__`` is unreadable or carries no ``__version__``.
     """
-    return _init_version(repo_root)
+    return _plan_common.package_version(repo_root / PACKAGE_INIT.parent)
 
 
 def _live_python_sources(repo_root: Path, package_dir: str) -> list[str]:
@@ -448,7 +436,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         release = (
             _package_release(repo_root) if args.target_release is None else args.target_release
         )
-    except RuntimeError as error:
+    except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
     if not RELEASE_PATTERN.fullmatch(release):

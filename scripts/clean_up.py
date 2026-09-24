@@ -1,5 +1,9 @@
 """Delete generated review, builder, and bug-hunt artifacts.
 
+The maintainer runs this by hand. No flow, worker, hook or CI job invokes it,
+and an agent never runs it: ``bld-*.md`` and ``bug_hunt-*.md`` match tracked
+records, which the delete removes from the working tree.
+
 This script intentionally targets only known generated paths:
 
 - contents of ``docs/shadow/`` (recursive) - every per-script folder

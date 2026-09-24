@@ -121,6 +121,46 @@ def test_a_nested_def_inside_a_function_stays_citable(tree):
     ]
 
 
+BLOCKS_MODULE = """\
+try:
+    from fast_backend import accelerate
+except ImportError:
+    FALLBACK_LIMIT = 1
+
+
+def outer(value):
+    with open(value) as handle:
+        def in_with():
+            return handle
+        block_local = 2
+    for _ in range(value):
+        class InFor:
+            pass
+    match value:
+        case 1:
+            def in_case():
+                return block_local
+"""
+
+
+def test_a_name_bound_inside_a_compound_block_is_citable_and_a_local_still_is_not(tree):
+    _write(tree, "django_strawberry_framework/blocks.py", BLOCKS_MODULE)
+    outcomes = _cite(
+        tree,
+        """\
+        # blocks.py::FALLBACK_LIMIT blocks.py::outer.in_with blocks.py::outer.InFor
+        # blocks.py::outer.in_case blocks.py::outer.block_local
+        """,
+    )
+    assert _verdicts(outcomes) == [
+        ("blocks.py::FALLBACK_LIMIT", True),
+        ("blocks.py::outer.in_with", True),
+        ("blocks.py::outer.InFor", True),
+        ("blocks.py::outer.in_case", True),
+        ("blocks.py::outer.block_local", False),
+    ]
+
+
 def test_a_dunder_is_resolved_as_one_symbol_not_skipped_as_a_family(tree):
     outcomes = _cite(
         tree,

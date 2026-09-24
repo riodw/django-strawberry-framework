@@ -11,10 +11,12 @@ locates the file, parses it, and asserts the symbol is actually defined (or
 imported, so re-export citations such as ``__init__.py::SomeName`` resolve).
 
 What resolves: a name bound at module or class scope (``def``, ``class``,
-assignment, import), reached through ``if`` / ``try`` bodies, bare or qualified by
-its enclosing classes. Inside a function body only nested ``def`` / ``class``
-names are recorded (a closure such as a resolver factory's inner function is a
-real citable callable); a function-local variable is not a citable symbol. A
+assignment, import), bare or qualified by its enclosing classes, including one
+bound inside a compound statement's block (``if``, ``try`` / ``except``, ``with``,
+``for``, ``while``, ``match``), since a block opens no scope. Inside a function
+body only nested ``def`` / ``class`` names are recorded, in any block (a closure
+such as a resolver factory's inner function is a real citable callable); a
+function-local variable is not a citable symbol. A
 dunder (``Class.__init_subclass__``, ``__all__``) is one symbol and is resolved
 like any other name; only a trailing ``_`` or ``.`` on a non-dunder names a
 family of symbols by prefix and is skipped. A citation wrapped across two lines
@@ -281,6 +283,22 @@ def _bind(
         spans.setdefault(key, []).append(span)
 
 
+#: Compound statements whose blocks bind names in the enclosing scope.
+_BLOCK_NODES: tuple[type[ast.AST], ...] = (
+    ast.If,
+    ast.Try,
+    *((ast.TryStar,) if hasattr(ast, "TryStar") else ()),
+    ast.ExceptHandler,
+    ast.With,
+    ast.AsyncWith,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.Match,
+    ast.match_case,
+)
+
+
 def _collect(
     node: ast.AST,
     names: set[str],
@@ -291,10 +309,12 @@ def _collect(
 ) -> None:
     """Walk one scope, recording every name it binds.
 
-    Recurses into classes (so ``Class.method`` resolves), into ``if`` / ``try``
-    bodies (module-level soft-import fallbacks bind real names), and into function
-    bodies for nested ``def`` / ``class`` only (a closure is a citable callable).
-    Any other binding inside a function body is a local and is not recorded.
+    Recurses into classes (so ``Class.method`` resolves), into every compound
+    statement's blocks (``if`` / ``try`` / ``except`` / ``with`` / ``for`` /
+    ``while`` / ``match``: a module-level soft-import fallback binds a real name,
+    and a block does not open a scope), and into function bodies for nested
+    ``def`` / ``class`` only (a closure is a citable callable). Any other binding
+    inside a function body is a local and is not recorded.
 
     Args:
         node: The scope to walk.
@@ -314,7 +334,7 @@ def _collect(
                 in_function=in_function or not isinstance(child, ast.ClassDef),
                 spans=spans,
             )
-        elif isinstance(child, (ast.If, ast.Try)):
+        elif isinstance(child, _BLOCK_NODES):
             _collect(child, names, prefix, in_function=in_function, spans=spans)
         elif in_function:
             continue

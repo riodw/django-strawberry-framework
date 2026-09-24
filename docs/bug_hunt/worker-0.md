@@ -1,7 +1,7 @@
-# Worker 0: coordinator
+# Worker-0: coordinator
 
-Worker 0 keeps a bug hunt moving. It never hunts, fixes, edits a fix, grades correctness, or
-overrides Worker 2. `docs/bug_hunt/HUNT.md` is canonical; this file is the coordinator's delta.
+Worker-0 keeps a bug hunt moving. It never hunts, fixes, edits a fix, grades correctness, or
+overrides Worker-2. `docs/bug_hunt/HUNT.md` is canonical; this file is the coordinator's delta.
 
 ## Start
 
@@ -18,17 +18,17 @@ overrides Worker 2. `docs/bug_hunt/HUNT.md` is canonical; this file is the coord
 
 1. Record the item baseline as `HUNT.md` "Baseline and ownership" describes; name the workspace
    path `<scratch>/hunt-ws/<item>`.
-2. Spawn a fresh Worker 1 with the item, its prompt, the progress-file path, the run id, both
+2. Spawn a fresh Worker-1 with the item, its prompt, the progress-file path, the run id, both
    baselines, the `## Owned changes` ledger, the workspace path and the required reading.
 3. On the report, apply the `HUNT.md` "Evidence record" table first. `invalid` or `inconclusive`
-   goes back to Worker 1 with the row named; a second failure records `inconclusive` and advances.
-4. Passing checks: spawn a fresh Worker 2 with the contract rows, reproducer, item-scoped diff and
-   a fresh workspace, and hand it Worker 1's diagnosis only after it records its expectation.
+   goes back to Worker-1 with the row named; a second failure records `inconclusive` and advances.
+4. Passing checks: spawn a fresh Worker-2 with the contract rows, reproducer, item-scoped diff and
+   a fresh workspace, and hand it Worker-1's diagnosis only after it records its expectation.
 5. `verified` or `no-bugs`: append the ledger rows, the `Result:`, `Verification:` and `Cleanup:`
    lines, remove the item scratch and workspace by explicit path, tick, advance. `revision-needed`:
-   same item back to Worker 1 with the workspace intact; after two failed re-passes, `blocked`.
+   same item back to Worker-1 with the workspace intact; after two failed re-passes, `blocked`.
 6. Append a `## Scenarios` item whenever a report names a cross-file contract without one. Mark
-   `stale` any verified item whose recorded digests no longer match and re-dispatch Worker 2.
+   `stale` any verified item whose recorded digests no longer match and re-dispatch Worker-2.
 7. An unattributed hunk reported by any worker stops the item until the maintainer reconciles it.
 
 ## Closeout

@@ -1,7 +1,7 @@
 """Generate, scope and reconcile the REVIEW flow's per-release plan.
 
 ``docs/review/REVIEW.md`` is the method; this script owns only the plan's
-shape and the inventory arithmetic Worker 0 would otherwise do by hand. It is
+shape and the inventory arithmetic Worker-0 would otherwise do by hand. It is
 pure git plus filesystem: nothing is imported from the package and no Django
 settings are loaded.
 
@@ -449,7 +449,7 @@ _BENCH_COMMANDS = (
 
 
 def _bench_baseline_block() -> list[str]:
-    """Render the empty bench table Worker 0 fills at cycle entry and at the gate."""
+    """Render the empty bench table Worker-0 fills at cycle entry and at the gate."""
     return [
         "## Bench baseline",
         "",
@@ -458,7 +458,7 @@ def _bench_baseline_block() -> list[str]:
         '(REVIEW.md "Workspace"), `<scratch>` the absolute session scratchpad, `<phase>` either',
         "`baseline` or `gate`. The nested-fetch row runs against the cycle's Postgres container",
         '(REVIEW.md "Database cells"; DSN in `## Cycle baseline`).',
-        "Worker 0 fills Baseline at cycle entry, Gate and Delta at the final gate.",
+        "Worker-0 fills Baseline at cycle entry, Gate and Delta at the final gate.",
         "",
         "| Command | Baseline | Gate | Delta |",
         "|---|---|---|---|",
@@ -481,7 +481,7 @@ _HOW_TO_WORK_ONE_ITEM = """## How to work one item
 
 
 def _closing_blocks() -> list[str]:
-    """Render the sections Worker 0 maintains: decisions, ledger, outcomes."""
+    """Render the sections Worker-0 maintains: decisions, ledger, outcomes."""
     return [
         "## Decisions",
         "",
@@ -499,7 +499,7 @@ def _closing_blocks() -> list[str]:
         "",
         OUTCOMES_HEADING,
         "",
-        "Filled by Worker 0 at closeout before any scratch is removed; a scoped run adds "
+        "Filled by Worker-0 at closeout before any scratch is removed; a scoped run adds "
         '"Scope of this run".',
         "",
     ]
@@ -581,8 +581,8 @@ def _render_plan(
         "",
         *_plan_common.cycle_baseline_block(status_output),
         "",
-        "CYCLE_BASELINE=<Worker 0 fills: `git stash create`, empty -> the `git rev-parse HEAD` sha>",
-        f"Untracked under {PACKAGE_DIR}/: <Worker 0 fills>",
+        "CYCLE_BASELINE=<Worker-0 fills: `git stash create`, empty -> the `git rev-parse HEAD` sha>",
+        f"Untracked under {PACKAGE_DIR}/: <Worker-0 fills>",
         "",
         *_bench_baseline_block(),
         "",

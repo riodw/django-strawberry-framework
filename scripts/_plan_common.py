@@ -147,7 +147,7 @@ def cycle_baseline_block(status_output: str | None) -> list[str]:
     stated rather than omitted, so a missing section reads as lost, not clean.
     """
     if status_output is None:
-        body = ["`git status --short` unavailable at generation; Worker 0 records it at start."]
+        body = ["`git status --short` unavailable at generation; Worker-0 records it at start."]
     elif status_output.strip():
         body = ["```text", status_output.rstrip("\n"), "```"]
     else:
@@ -157,7 +157,7 @@ def cycle_baseline_block(status_output: str | None) -> list[str]:
         "",
         "`git status --short` at generation. Every path below is concurrent work: never edited, "
         "reverted,",
-        "tidied, or attributed to an item. Worker 0 appends the `CYCLE_BASELINE` stash object "
+        "tidied, or attributed to an item. Worker-0 appends the `CYCLE_BASELINE` stash object "
         "once at",
         "start and nothing afterwards; drift goes on `Drift:` lines under the run heading.",
         "",

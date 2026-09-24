@@ -13,9 +13,9 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
 
 - **One entry per spec decision**, with the decision's own heading and anchor, so a citation
   such as "Decision 1's rejected alternatives" resolves to exactly one place.
-- **Worker 3 reads this during review** — it stops a reviewer re-raising a settled alternative,
-  and is the reasoning the finished implementation is checked against. **Worker 1 owns it** as
-  spec custodian and audits it at final verification. **Worker 2 never reads it**: that is the
+- **Worker-3 reads this during review** — it stops a reviewer re-raising a settled alternative,
+  and is the reasoning the finished implementation is checked against. **Worker-1 owns it** as
+  spec custodian and audits it at final verification. **Worker-2 never reads it**: that is the
   point of the move.
 - **Append-only during the build.** A new review round's decisions land in the spec; their
   rejected alternatives, derivations, and retractions append here in the same custodian pass.

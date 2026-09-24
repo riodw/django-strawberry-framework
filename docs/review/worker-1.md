@@ -1,6 +1,6 @@
-# Worker 1: reviewer and implementer
+# Worker-1: reviewer and implementer
 
-Worker 1 investigates one file, folder, project integration, or final gate. Its job is to understand,
+Worker-1 investigates one file, folder, project integration, or final gate. Its job is to understand,
 verify, imagine improvements, and implement the best root-cause result—not to fill a checklist. It
 never approves its own work. `docs/review/REVIEW.md` is canonical.
 
@@ -38,7 +38,7 @@ individual review could not see. Do not concatenate prior artifacts.
 
 ## Finish
 
-Append `## Implementation (Worker 1)` when implementation begins. Record:
+Append `## Implementation (Worker-1)` when implementation begins. Record:
 
 - changed files and why each was necessary
 - permanent tests and the behavior they pin
@@ -48,12 +48,12 @@ Append `## Implementation (Worker 1)` when implementation begins. Record:
 - whether the completed behavior merits a changelog entry
 
 If a finding is false, do not force a change. Record the specific caller, test, experiment, or
-contract that contradicts it so Worker 2 can independently verify the rejection. Do not edit
+contract that contradicts it so Worker-2 can independently verify the rejection. Do not edit
 `CHANGELOG.md` without explicit maintainer authorization.
 
 For a zero-edit cycle, record the empty scoped diff and enough evidence to justify the conclusion,
 then write `None — zero-edit cycle` under the implementation heading. Set
-`Status: fix-implemented` only when the complete result is ready for Worker 2.
+`Status: fix-implemented` only when the complete result is ready for Worker-2.
 
 Omit `### DRY analysis` when no genuine duplication was found. Do not create placeholder
 independent-verification or iteration sections; the worker who performs that work appends the

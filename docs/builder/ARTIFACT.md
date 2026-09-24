@@ -1,18 +1,18 @@
 # Build artifact contract
 
-This file is the **artifact contract** referenced by [BUILD.md][build-md]: `BUILD.md` defines the build process, this file defines the file that process writes. Every build-cycle artifact — the `docs/builder/bld-<NNN>-*.md` files named by `BUILD.md` `## Build artifact naming`, the only place their names are defined — starts as a copy of the fenced template below and accumulates the full back-and-forth for that slice or cohort. The artifact is the contract that flows between workers: everything inter-worker happens through this file plus the working-tree diff, and the `Status:` line defined here is what Worker 0 reads to drive dispatch. It is a standing doc, tracked alongside `BUILD.md` and the four `worker-*.md` role files; the per-cycle artifacts it governs are not.
+This file is the **artifact contract** referenced by [BUILD.md][build-md]: `BUILD.md` defines the build process, this file defines the file that process writes. Every build-cycle artifact — the `docs/builder/bld-<NNN>-*.md` files named by `BUILD.md` `## Build artifact naming`, the only place their names are defined — starts as a copy of the fenced template below and accumulates the full back-and-forth for that slice or cohort. The artifact is the contract that flows between workers: everything inter-worker happens through this file plus the working-tree diff, and the `Status:` line defined here is what Worker-0 reads to drive dispatch. It is a standing doc, tracked alongside `BUILD.md` and the four `worker-*.md` role files; the per-cycle artifacts it governs are not.
 
 ## Status field ownership
 
 The artifact's `Status:` line is set by exactly one worker per transition:
 
-- `planned` — Worker 1 sets this when the artifact is first created. New artifacts always start with `Status: planned`.
-- `built` — Worker 2 sets this at the end of every build pass (including re-passes after a Worker 3 rejection).
-- `revision-needed` — set by Worker 3 (review surfaces unresolved findings) or Worker 1 (final verification rejects); either triggers Worker 0 to spawn Worker 2 again. **Worker 2 may also set it, for one case only:** the structural-drift pause (`worker-2.md` "Plan-vs-implementation drift"), where the right answer changes a plan-level architectural call. That one routes to Worker **1** for a plan revision, not back to Worker 2 — the setter is what distinguishes the three, so the build report must name which pause it is.
-- `review-accepted` — set by Worker 3 when accepting the diff; signals Worker 0 to spawn Worker 1 for final verification. May carry Medium-or-higher findings escalated to Worker 1 (`worker-3.md` `### Acceptance gate`); Worker 1's final verification owns the decision.
-- `final-accepted` — set by Worker 1 at the end of final verification; signals Worker 0 to mark the checklist box.
+- `planned` — Worker-1 sets this when the artifact is first created. New artifacts always start with `Status: planned`.
+- `built` — Worker-2 sets this at the end of every build pass (including re-passes after a Worker-3 rejection).
+- `revision-needed` — set by Worker-3 (review surfaces unresolved findings) or Worker-1 (final verification rejects); either triggers Worker-0 to spawn Worker-2 again. **Worker-2 may also set it, for one case only:** the structural-drift pause (`worker-2.md` "Plan-vs-implementation drift"), where the right answer changes a plan-level architectural call. That one routes to Worker **1** for a plan revision, not back to Worker-2 — the setter is what distinguishes the three, so the build report must name which pause it is.
+- `review-accepted` — set by Worker-3 when accepting the diff; signals Worker-0 to spawn Worker-1 for final verification. May carry Medium-or-higher findings escalated to Worker-1 (`worker-3.md` `### Acceptance gate`); Worker-1's final verification owns the decision.
+- `final-accepted` — set by Worker-1 at the end of final verification; signals Worker-0 to mark the checklist box.
 
-Worker 0 never writes to `Status:`. Worker 0 reads it to drive dispatch.
+Worker-0 never writes to `Status:`. Worker-0 reads it to drive dispatch.
 
 ````text
 # Build: Slice <N> — <slice title>
@@ -20,7 +20,7 @@ Worker 0 never writes to `Status:`. Worker 0 reads it to drive dispatch.
 Spec reference: `docs/spec-<NNN>-<topic>-<0_0_X>.md` (lines <start>-<end>)
 Status: planned | built | revision-needed | review-accepted | final-accepted
 
-## Plan (Worker 1)
+## Plan (Worker-1)
 
 ### DRY analysis
 
@@ -39,17 +39,17 @@ Line numbers are pin-at-write-time navigational hints. Verify against the curren
 ### Test additions / updates
 
 - Which tests prove the slice? Pin the path and assertion shape.
-- Are temp/scratch tests appropriate for development? Note them here for Worker 3.
+- Are temp/scratch tests appropriate for development? Note them here for Worker-3.
 
 ### Implementation discretion items
 
-Items where Worker 1 has **assessed the design and decided** the choice is Worker 2's (a stylistic preference between two equally valid shapes, a private kwarg name, the order of two independent setup steps). This makes discretion explicit; it is not an architectural escape hatch. If Worker 1 cannot resolve a question from the spec and the codebase, stop the planning pass and escalate to the maintainer.
+Items where Worker-1 has **assessed the design and decided** the choice is Worker-2's (a stylistic preference between two equally valid shapes, a private kwarg name, the order of two independent setup steps). This makes discretion explicit; it is not an architectural escape hatch. If Worker-1 cannot resolve a question from the spec and the codebase, stop the planning pass and escalate to the maintainer.
 
 ### Spec slice checklist (verbatim)
 
 **In a review round, this heading is replaced by `### Dispatched findings checklist`** — one `- [ ]` box per finding dispatched to this cohort, in this same position and under the identical tick-and-audit discipline described below. See `BUILD.md` `## Review rounds`, "Dispatched findings checklist", for how the boxes are written and cohorted.
 
-The spec's nested sub-bullets for this slice from `## Slice checklist`, copied verbatim as `- [ ]` boxes (preserve exact text, nested sub-bullets, inline citations). **Worker 2 ticks each box `- [x]` in the same build report that lands its contract** (and on re-passes), so progress is visible incrementally rather than only at the end; it ticks ONLY a box whose contract actually landed in its diff, and leaves a deferred or unbuilt sub-check `- [ ]` with the deferral stated in the build report. **Worker 1 audits these boxes at final verification**, no longer being the original ticker: confirm each `- [x]` truly landed (un-tick and set `revision-needed` otherwise), tick any landed box Worker 2 left open, and for any remaining `- [ ]` record a one-line deferral reason under `### Spec changes made (Worker 1 only)` or set `revision-needed`. Silently un-ticked-and-undeferred boxes block `final-accepted`. Worker 3 walks the list during review: a sub-check silently un-addressed in the diff is a Medium finding, and so is a box ticked with no matching implementation.
+The spec's nested sub-bullets for this slice from `## Slice checklist`, copied verbatim as `- [ ]` boxes (preserve exact text, nested sub-bullets, inline citations). **Worker-2 ticks each box `- [x]` in the same build report that lands its contract** (and on re-passes), so progress is visible incrementally rather than only at the end; it ticks ONLY a box whose contract actually landed in its diff, and leaves a deferred or unbuilt sub-check `- [ ]` with the deferral stated in the build report. **Worker-1 audits these boxes at final verification**, no longer being the original ticker: confirm each `- [x]` truly landed (un-tick and set `revision-needed` otherwise), tick any landed box Worker-2 left open, and for any remaining `- [ ]` record a one-line deferral reason under `### Spec changes made (Worker-1 only)` or set `revision-needed`. Silently un-ticked-and-undeferred boxes block `final-accepted`. Worker-3 walks the list during review: a sub-check silently un-addressed in the diff is a Medium finding, and so is a box ticked with no matching implementation.
 
 - [ ] (verbatim sub-check #1)
 - [ ] (verbatim sub-check #2)
@@ -57,7 +57,7 @@ The spec's nested sub-bullets for this slice from `## Slice checklist`, copied v
 
 ---
 
-## Build report (Worker 2)
+## Build report (Worker-2)
 
 ### Files touched
 
@@ -97,21 +97,21 @@ Required when the plan's floor-verification scope assigns this slice's floor run
 
 ### Implementation notes
 
-Design choices the plan did not explicitly fix — `__dict__` vs `vars()`, the shape of a shared helper, the fixture pattern chosen, a tuple-of-pairs vs parallel-list constant, the import path of a third-party utility. One bullet per non-trivial decision with a one-line "why this shape." Worker 3 reads these to follow the reasoning without reverse-engineering the diff; Worker 1 reads them at final verification to spot drift from the plan.
+Design choices the plan did not explicitly fix — `__dict__` vs `vars()`, the shape of a shared helper, the fixture pattern chosen, a tuple-of-pairs vs parallel-list constant, the import path of a third-party utility. One bullet per non-trivial decision with a one-line "why this shape." Worker-3 reads these to follow the reasoning without reverse-engineering the diff; Worker-1 reads them at final verification to spot drift from the plan.
 
-If a decision is structural enough to count as plan-vs-implementation drift (see `worker-2.md` "Plan-vs-implementation drift"), surface it in `### Notes for Worker 1 (spec reconciliation)` instead — that is the louder signal.
+If a decision is structural enough to count as plan-vs-implementation drift (see `worker-2.md` "Plan-vs-implementation drift"), surface it in `### Notes for Worker-1 (spec reconciliation)` instead — that is the louder signal.
 
-### Notes for Worker 3
+### Notes for Worker-3
 
-Anything Worker 3 should know before reviewing (shadow file used, unusual control flow, etc.).
+Anything Worker-3 should know before reviewing (shadow file used, unusual control flow, etc.).
 
-### Notes for Worker 1 (spec reconciliation)
+### Notes for Worker-1 (spec reconciliation)
 
-If the implementation surfaced a spec gap, conflict, or unstated assumption, record it here. Worker 1 reads this section during final verification and decides whether to edit the spec.
+If the implementation surfaced a spec gap, conflict, or unstated assumption, record it here. Worker-1 reads this section during final verification and decides whether to edit the spec.
 
 ---
 
-## Review (Worker 3)
+## Review (Worker-3)
 
 ### High:
 
@@ -172,9 +172,9 @@ If the slice does not touch those surfaces, write `Not applicable; slice did not
 - Temp test files used during review (cite paths).
 - Disposition: kept and promoted to a permanent test, deleted, or noted for follow-up.
 
-### Notes for Worker 1 (spec reconciliation)
+### Notes for Worker-1 (spec reconciliation)
 
-Flag anything Worker 1 should weigh during final verification (spec ambiguity, possible spec edit, follow-up slice candidate).
+Flag anything Worker-1 should weigh during final verification (spec ambiguity, possible spec edit, follow-up slice candidate).
 
 ### Review outcome
 
@@ -184,23 +184,23 @@ Flag anything Worker 1 should weigh during final verification (spec ambiguity, p
 
 ## Re-pass sections
 
-Each Worker 2 re-pass appends `## Build report (Worker 2, pass <N>)` at the same top level (NOT nested); each Worker 3 re-review appends `## Review (Worker 3, pass <N>)` the same way. The artifact reads as a linear pass / review / pass / review sequence; never edit prior entries.
+Each Worker-2 re-pass appends `## Build report (Worker-2, pass <N>)` at the same top level (NOT nested); each Worker-3 re-review appends `## Review (Worker-3, pass <N>)` the same way. The artifact reads as a linear pass / review / pass / review sequence; never edit prior entries.
 
 ---
 
-## Final verification (Worker 1)
+## Final verification (Worker-1)
 
-- Spec slice checklist: every `- [ ]` in the Plan's `### Spec slice checklist (verbatim)` is `- [x]` (the contract landed), or has a one-line deferral reason under `### Spec changes made (Worker 1 only)`. Silently un-ticked boxes block `final-accepted`.
+- Spec slice checklist: every `- [ ]` in the Plan's `### Spec slice checklist (verbatim)` is `- [x]` (the contract landed), or has a one-line deferral reason under `### Spec changes made (Worker-1 only)`. Silently un-ticked boxes block `final-accepted`.
 - DRY check across this slice and prior accepted slices: any new duplication?
 - Existing tests still pass: `uv run pytest <focused scope>`.
-- Spec reconciliation: does the spec need a Worker 1 edit to reflect what landed?
+- Spec reconciliation: does the spec need a Worker-1 edit to reflect what landed?
 - Final status: `final-accepted` or `revision-needed`.
 
 ### Summary
 
 A short summary of what this slice shipped.
 
-### Spec changes made (Worker 1 only)
+### Spec changes made (Worker-1 only)
 
 If the spec was edited as part of this slice, cite the spec lines and a one-line reason per change.
 ````

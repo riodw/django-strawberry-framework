@@ -120,7 +120,7 @@ def test_plan_renders_review_shape_in_order(repo: Path, tmp_path: Path) -> None:
         "## Outcomes",
     ]
     assert "Clean tree at generation." in text
-    assert "CYCLE_BASELINE=<Worker 0 fills" in text
+    assert "CYCLE_BASELINE=<Worker-0 fills" in text
     bench = text.split("## Bench baseline", 1)[1].split("## How to work one item", 1)[0]
     rows = [line for line in bench.splitlines() if line.startswith("| `")]
     assert [row.split("`")[1] for row in rows] == [
@@ -639,7 +639,7 @@ def test_reconcile_checks_each_init_against_its_owning_item(
 
 def _fill_cycle_baseline(plan: Path, revision: str) -> str:
     text = plan.read_text(encoding="utf-8")
-    placeholder = "CYCLE_BASELINE=<Worker 0 fills: `git stash create`, empty -> the `git rev-parse HEAD` sha>"
+    placeholder = "CYCLE_BASELINE=<Worker-0 fills: `git stash create`, empty -> the `git rev-parse HEAD` sha>"
     assert text.count(placeholder) == 1
     text = text.replace(placeholder, f"CYCLE_BASELINE={revision}")
     plan.write_text(text, encoding="utf-8")

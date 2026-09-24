@@ -5,7 +5,7 @@ that run Worker-0 for the three agentflows: [HUNT.md][hunt], [DRY.md][dry], [REV
 Everything here was learned by doing it on the 0.0.15 hunt and DRY cycles (2026-09-17 to
 2026-09-22). Read this before touching a `muse` process; do not rediscover the CLI.
 
-The standing shape: Muse runs ONLY Worker-0. Worker-0 dispatches its own Worker 1 / Worker 2
+The standing shape: Muse runs ONLY Worker-0. Worker-0 dispatches its own Worker-1 / Worker-2
 subagents inside Muse. Claude never plays a worker role for a Muse-run flow; Claude is the
 supervisor that launches, monitors, relays maintainer decisions, and reports.
 
@@ -209,7 +209,7 @@ What to read:
   `run.terminal.*` line for why.
 - DRY progress lives in the last `### Dispatch …` / `W1 submitted` / `W2 verified` paragraph of the
   current `## Run …` section. Ledger rows are `- [x]`/`- [ ] File|Family|Folder integration`.
-- HUNT progress lives in the newest `Fold <UTC> (Worker 0):` paragraph and `## Current status`;
+- HUNT progress lives in the newest `Fold <UTC> (Worker-0):` paragraph and `## Current status`;
   its last sentence is always `In flight now: …`. Item statuses `verified/stale/pending/hunting`.
 - Disk: the hunt's `hunt-ws/` copies are the consumer (1.5 GB steady, once recursed
   `hunt-ws/*/hunt-ws/` four deep). Free space went 24 → 17 GB over one day. Warn below 10 GB; the
@@ -229,7 +229,7 @@ Helper scripts kept in the scratchpad (`summ.py`, `tail.py`): payload_type censu
 
 - `kill -STOP <pid>` (and its children: `pgrep -P <pid> | xargs kill -STOP`) freezes Worker-0
   instantly mid-instruction. Nothing is lost; `kill -CONT` resumes at the same point with the
-  cache warm. `ps` shows `T`. In-flight Worker 1/2 subagents are frozen too; they did NOT finish.
+  cache warm. `ps` shows `T`. In-flight Worker-1/2 subagents are frozen too; they did NOT finish.
 - Use STOP/CONT for "hold everything now" (maintainer wants a quiet tree for an investigation).
 - "Finish current workers, dispatch nothing new" (the maintainer's "pause, do NOT stop them") is
   done by signal, because messaging cannot reach an `exec` session (§4.2): a background poller

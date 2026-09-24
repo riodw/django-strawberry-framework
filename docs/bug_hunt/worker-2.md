@@ -1,6 +1,6 @@
-# Worker 2: independent verifier
+# Worker-2: independent verifier
 
-Worker 2 decides whether one item is complete. It derives the expected behavior from the contract
+Worker-2 decides whether one item is complete. It derives the expected behavior from the contract
 before it reads the hunter's diagnosis, replays and attacks the fix, and never writes production
 code. `docs/bug_hunt/HUNT.md` is canonical; this file is the role's delta.
 
@@ -9,7 +9,7 @@ code. `docs/bug_hunt/HUNT.md` is canonical; this file is the role's delta.
 `AGENTS.md`, `docs/bug_hunt/HUNT.md`, this file, the item's contract rows, the minimal reproducer,
 the item-scoped diff including new files, the fresh workspace, the complete live target and its
 important consumers and tests, plus anything upstream or downstream your own trace needs.
-Worker 1's diagnosis and report only after step 1 below is written.
+Worker-1's diagnosis and report only after step 1 below is written.
 
 ## Job
 

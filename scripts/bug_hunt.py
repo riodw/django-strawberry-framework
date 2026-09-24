@@ -11,7 +11,7 @@ progress header carrying the run id, the cycle baseline (``git status
 static hunt brief, one checkbox per live non-``__init__.py`` Python file,
 the standing cross-file scenario items, a package-integration item, the
 final test gate, and the empty owned-changes ledger and outcomes sections
-that Worker 0 fills. Matching shadows are optional baseline aids for the
+that Worker-0 fills. Matching shadows are optional baseline aids for the
 live files. The method itself lives in ``docs/bug_hunt/HUNT.md``.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt-<release>.md``, where
@@ -91,16 +91,16 @@ method; this brief is a reminder, not a substitute.
   path, database target, exact command, source digests, collected and executed
   counts, the assertion proving the boundary was reached, a positive control.
 - Do not clean up scratch probes, workspaces, or disposable state. Report every
-  path and leave it intact so Worker 2 can replay it and Worker 0 can remove it
+  path and leave it intact so Worker-2 can replay it and Worker-0 can remove it
   only after the item is verified.
 - Implement the root-cause fix at the layer that owns the broken invariant in
   the shared tree, attributing every hunk of a dirty path first, including
   connected files when required. Add a permanent behavioral test for every
   production fix at the strongest tier required by `AGENTS.md`.
 - After edits run `uv run ruff check --fix .` then `uv run ruff format .`.
-- Report evidence, changed files, tests, and validation to Worker 0. Do not edit
-  this progress file; Worker 0 runs the mechanical checks, a fresh Worker 2
-  verifies, and Worker 0 advances it.
+- Report evidence, changed files, tests, and validation to Worker-0. Do not edit
+  this progress file; Worker-0 runs the mechanical checks, a fresh Worker-2
+  verifies, and Worker-0 advances it.
 
 ## Hunt items
 """
@@ -299,14 +299,14 @@ def _cycle_baseline_block(status_output: str) -> str:
     return (
         "## Cycle baseline\n\n"
         "`git status --short` at generation. Every path below is concurrent work: never edited, "
-        "reverted, tidied, or attributed to an item. Worker 0 appends the `CYCLE_BASELINE` stash "
+        "reverted, tidied, or attributed to an item. Worker-0 appends the `CYCLE_BASELINE` stash "
         "object once at start and nothing afterwards.\n\n"
         f"{body}"
     )
 
 
 def _scenarios_block() -> str:
-    """Render the standing scenario items; Worker 0 appends discovered ones below them."""
+    """Render the standing scenario items; Worker-0 appends discovered ones below them."""
     lines = ["## Scenarios", ""]
     for index, (title, prompt) in enumerate(_SCENARIOS):
         lines.extend(
@@ -324,13 +324,13 @@ def _scenarios_block() -> str:
 
 
 def _ledger_blocks() -> str:
-    """Render the sections Worker 0 fills: the owned-changes ledger and the outcomes."""
+    """Render the sections Worker-0 fills: the owned-changes ledger and the outcomes."""
     return (
         "## Owned changes\n\n"
         "Path, item, symbols for every tracked edit or new file a verified item landed. A later "
         "item may build on a path listed here; any other dirty hunk is external.\n\n"
         "## Outcomes\n\n"
-        "Filled by Worker 0 at closeout before any scratch is removed.\n"
+        "Filled by Worker-0 at closeout before any scratch is removed.\n"
     )
 
 
@@ -346,11 +346,11 @@ def _integration_block() -> str:
 
 
 def _final_gate_block() -> str:
-    """Render the Worker 0 full-suite gate."""
+    """Render the Worker-0 full-suite gate."""
     return (
         "- [ ] Final test gate\n"
         "    - Status: pending\n"
-        "    - Owner: Worker 0\n"
+        "    - Owner: Worker-0\n"
         "    - Prompt:\n"
         "        - Run `uv run pytest`; require a passing suite and 100% configured package "
         "coverage.\n"

@@ -263,8 +263,8 @@ def _default_output(target_release: str) -> Path:
 
 _HOW_TO_WORK_ONE_ITEM = """## How to work one item
 
-`docs/dry/DRY.md` is the method; this brief is a reminder, not a substitute. Worker 0 dispatches
-one item at a time to a fresh Worker 1, then a fresh Worker 2; only Worker 2 ticks an item.
+`docs/dry/DRY.md` is the method; this brief is a reminder, not a substitute. Worker-0 dispatches
+one item at a time to a fresh Worker-1, then a fresh Worker-2; only Worker-2 ticks an item.
 
 - File item: read the complete target, write `### Enumeration` (instrument + count, every name),
   discharge the six-axis probing matrix, run the change challenges, then assign every rule to a
@@ -282,12 +282,12 @@ one item at a time to a fresh Worker 1, then a fresh Worker 2; only Worker 2 tic
 - Source-mutating proofs run only in the disposable workspace `DRY.md` "Tests" describes; every
   finding carries freshness fingerprints, behavioral proof status, and a structural gate with its
   negative control.
-- Nobody cleans up mid-item; Worker 0 removes item scratch by explicit path after verification.
+- Nobody cleans up mid-item; Worker-0 removes item scratch by explicit path after verification.
 """
 
 
 def _ledger_blocks() -> list[str]:
-    """Render the sections Worker 0 maintains: index, families, ledger, outcomes."""
+    """Render the sections Worker-0 maintains: index, families, ledger, outcomes."""
     return [
         "## Responsibility index",
         "",
@@ -303,7 +303,7 @@ def _ledger_blocks() -> list[str]:
         "",
         r"One `- [ ] Family \`<name>\` -- [dry-rule-<family>.md](dry-rule-<family>.md)` item per "
         "discovered",
-        "family, added by Worker 0 as artifacts name them. None discovered at generation.",
+        "family, added by Worker-0 as artifacts name them. None discovered at generation.",
         "",
         "## Owned changes",
         "",
@@ -313,7 +313,7 @@ def _ledger_blocks() -> list[str]:
         "",
         "## Outcomes",
         "",
-        "Filled by Worker 0 at closeout before any scratch is removed.",
+        "Filled by Worker-0 at closeout before any scratch is removed.",
         "",
     ]
 

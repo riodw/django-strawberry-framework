@@ -70,7 +70,7 @@ Deliberate properties, each one a hand-run failure mode this encodes away:
   reads as an ``ARTIFACT.md`` ``### Failability proofs`` subsection, which
   requires one entry per new boundary. ``--only`` is not refused ``--output``
   the way ``--no-baseline`` is, because it has a legitimate use the other lacks
-  (Worker 3's mandatory independent re-run covers a *subset*, and that re-run is
+  (Worker-3's mandatory independent re-run covers a *subset*, and that re-run is
   recorded): a narrowed run is a truthful record of fewer boundaries, whereas a
   baseline-less one is a record missing a mandatory field. Instead the block is
   labelled **PARTIAL RECORD** immediately under its heading, again as its last
@@ -334,7 +334,7 @@ FORBIDDEN_SCOPE_FRAGMENT = "--cov"
 # 1 row (**WEAKLY PINNED**) and ``-n0 --maxfail=3`` grades it 3 rows (inside Worker
 # 3's re-run floor), both at exit 1, and both report "pre-existing failing rows
 # excluded: 1 / 3" where 5 rows were already failing. Because the fragment travels in
-# the recorded scope, Worker 3's independent re-run reproduces the same wrong number -
+# the recorded scope, Worker-3's independent re-run reproduces the same wrong number -
 # two measurements agreeing is exactly what the set-difference design reads as
 # corroboration, so this is the one corruption that machinery cannot catch. Under this
 # repo's default ``-n auto`` addopts the same fragments interrupt the session (exit 2)
@@ -858,7 +858,7 @@ class ProofResult:
 
     @property
     def is_inside_rerun_floor(self) -> bool:
-        """Whether a VALID count puts this boundary inside Worker 3's mandatory re-run floor.
+        """Whether a VALID count puts this boundary inside Worker-3's mandatory re-run floor.
 
         A declared ``expect_failing`` replaces the row-count grading, so neither
         threshold applies to it.
@@ -1572,9 +1572,9 @@ class ManifestSelection:
     """How much of the manifest a run covered, and by what selector it was narrowed.
 
     This exists because the fail-open is in the *record*, not in the run.
-    ``--only`` is a legitimate flag - Worker 3's mandatory independent re-run
+    ``--only`` is a legitimate flag - Worker-3's mandatory independent re-run
     covers a subset by design - but the block it emitted was indistinguishable
-    from a complete run's, and Worker 3 audits the record rather than the command
+    from a complete run's, and Worker-3 audits the record rather than the command
     line. A subset run is honest evidence once it is labelled as a subset, so the
     report carries the selection rather than the tool refusing the flag.
     """
@@ -2057,7 +2057,7 @@ def _verdict(result: ProofResult) -> str:
     if result.is_weakly_pinned:
         notes.append("**WEAKLY PINNED - revision-needed**")
     if result.is_inside_rerun_floor:
-        notes.append("inside Worker 3's mandatory re-run floor (<= 3 rows)")
+        notes.append("inside Worker-3's mandatory re-run floor (<= 3 rows)")
     if not notes:
         notes.append("pinned")
     return "; ".join(notes)
@@ -2257,7 +2257,7 @@ def render_report(
     lines.append(
         "A boundary whose removal fails 0 or 1 rows is **weakly pinned** and is "
         "`revision-needed` per `docs/builder/BUILD.md` - the fix is more or better-targeted "
-        "rows, never a weaker boundary. A boundary at 3 rows or fewer is inside Worker 3's "
+        "rows, never a weaker boundary. A boundary at 3 rows or fewer is inside Worker-3's "
         "mandatory independent re-run floor. A proof carrying collection or setup errors, or "
         "whose pytest run exited anything but 0 or 1 (nothing collected, interrupted, internal "
         "error, usage error), is not a valid count at all - and a 0 from such a run is not a "
@@ -2338,7 +2338,7 @@ def _partial_record_notice(selection: ManifestSelection) -> list[str]:
         "boundary the pass introduced, so this block does not satisfy that requirement on its own: "
         "it is evidence for the entries listed below and for nothing else. Re-run without `--only` "
         "for a complete record, or say beside this block where the remaining boundaries' proofs "
-        "are - a Worker 3 independent re-run of a subset is exactly that case, and already owes "
+        "are - a Worker-3 independent re-run of a subset is exactly that case, and already owes "
         "the artifact a statement of which boundaries it re-ran and which it accepted on Worker "
         "2's record.",
         "",

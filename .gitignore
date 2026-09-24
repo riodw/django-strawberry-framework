@@ -167,32 +167,34 @@ poetry.toml
 # Claude Code local state — settings.local.json, worktrees, scheduled tasks, agent
 # memory. Not shared; and since hatchling's sdist reads .gitignore (but not
 # .git/info/exclude), this also keeps them out of built source distributions.
-.claude/
+# agents/ is the exception: the tracked agentflow subagent definitions.
+.claude/*
+!.claude/agents/
 
 # Shared workflow shadow files (static-analysis byproducts)
 # Review/build artifacts, plan files, and worker instructions remain tracked.
 docs/shadow/
 
 # Per-worker scratch memory used during an active review cycle.
-# Created by Worker 0 at plan time; deleted by Worker 0 at closeout.
+# Created by Worker-0 at plan time; deleted by Worker-0 at closeout.
 # The tracked permanent record is the rev-*.md artifacts, never these notes.
 docs/review/worker-memory/
 
-# Temp test files Worker 3 may create to verify behavior during a review cycle.
-# Deleted by Worker 0 at closeout; permanent tests live under the AGENTS.md trees.
+# Temp test files Worker-3 may create to verify behavior during a review cycle.
+# Deleted by Worker-0 at closeout; permanent tests live under the AGENTS.md trees.
 docs/review/temp-tests/
 
 # Per-worker scratch memory used during an active build cycle.
-# Created by Worker 0 at plan time; deleted by Worker 0 at closeout.
+# Created by Worker-0 at plan time; deleted by Worker-0 at closeout.
 # The tracked permanent record is the bld-*.md artifacts, never these notes.
 docs/builder/worker-memory/
 
-# Temp test files Worker 3 may create to verify behavior during a build cycle.
-# Deleted by Worker 0 at closeout; permanent tests live under the AGENTS.md trees.
+# Temp test files Worker-3 may create to verify behavior during a build cycle.
+# Deleted by Worker-0 at closeout; permanent tests live under the AGENTS.md trees.
 docs/builder/temp-tests/
 
 # Per-worker scratch memory used during an active DRY consolidation cycle.
-# Created by Worker 0 at plan time; persists across cycles (re-seeded empty each cycle).
+# Created by Worker-0 at plan time; persists across cycles (re-seeded empty each cycle).
 # The tracked permanent record is the dry-<0_0_X>.md plan, never these notes.
 docs/dry/worker-memory/
 

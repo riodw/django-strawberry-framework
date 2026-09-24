@@ -68,7 +68,7 @@ def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
     assert "## Families" in report
     assert "## Owned changes" in report
     assert report.rstrip().endswith(
-        "Filled by Worker 0 at closeout before any scratch is removed.",
+        "Filled by Worker-0 at closeout before any scratch is removed.",
     )
     assert (
         report.index("- [ ] Final test gate")

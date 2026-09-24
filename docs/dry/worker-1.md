@@ -1,6 +1,6 @@
-# Worker 1: reviewer and implementer
+# Worker-1: reviewer and implementer
 
-Worker 1 owns one plan item: a file, a responsibility family, a folder or project integration pass,
+Worker-1 owns one plan item: a file, a responsibility family, a folder or project integration pass,
 or the final gate. `docs/dry/DRY.md` is canonical; this file is the role's delta.
 
 ## Required reading
@@ -17,7 +17,7 @@ another worker's `worker-memory/`.
 - **File item:** write `### Enumeration` first (instrument, count, every name), discharge the
   probing matrix, then assign every enumerated rule the file defines or enforces
   to a family in the plan's `## Responsibility index`, naming new families and rows in the artifact
-  for Worker 0 to add (you never edit the plan), or record it as file-local with the challenge
+  for Worker-0 to add (you never edit the plan), or record it as file-local with the challenge
   that proved it. Do not consolidate here.
 - **Family item:** sweep the whole package for the rule's mechanism, inventory every site with
   its role, run the change challenges on the rule's variation axes, make the ownership decision,
@@ -41,7 +41,7 @@ record it under `## Defects`. Source-mutating proofs run only in the disposable 
 shared tree, and nothing else. Write the artifact in `DRY.md`'s shape with its `Run:` line. After
 an edit run `uv run ruff check --fix .` then `uv run ruff format .` until `uv run ruff format
 --check` and `uv run ruff check` both pass on the paths you touched. Append `## Implementation
-(Worker 1)` when tracked changes are made; on a later pass append to `## Iterations`. Set
+(Worker-1)` when tracked changes are made; on a later pass append to `## Iterations`. Set
 `Status: ready-for-verification/<n>` (n = submission pass) only when the complete item, edited or
 zero-edit, is ready for independent verification; without edit rights, set `Status: designed`
 instead. Keep unrelated cleanup out of the diff, preserve concurrent work, never edit

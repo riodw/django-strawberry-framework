@@ -2,7 +2,7 @@
 
 This document defines the reusable process for **building a feature from a spec doc** under `docs/spec-<NNN>-<topic>-<0_0_X>.md`. It does not track a specific build run; that lives in a per-spec plan file under `docs/builder/`, moved to `docs/builder/DONE/` once its cycle closes (`## Build artifact naming`).
 
-The spec is the input contract delivered to Worker 0, not something Worker 0 invents: Worker 0 turns its slice checklist into a build plan. Worker 1 is the only worker authorized to mutate the spec, and only to reconcile pitfalls or conflicts implementation reveals.
+The spec is the input contract delivered to Worker-0, not something Worker-0 invents: Worker-0 turns its slice checklist into a build plan. Worker-1 is the only worker authorized to mutate the spec, and only to reconcile pitfalls or conflicts implementation reveals.
 
 ## Spec and build-plan filename pattern
 
@@ -15,18 +15,18 @@ Example: spec `docs/spec-017-deferred_scalars-0_0_6.md` pairs with build plan `d
 Required reading per role is `## Required reading per worker` below; nothing else lists it.
 
 !!IMPORTANT — DRY FIRST!!
-Every plan, every implementation, every review pass answers one question first: **is this the maximally DRY shape that stays readable?** Duplicated logic, parallel data flows, near-copies between modules, and repeated string/key/tuple literals are all build-time defects. Worker 1 plans for DRY before code is written, Worker 3 enforces it before code is accepted, Worker 1 re-checks it across slices at the integration pass — and Worker 3's **existence challenge**, whether the abstraction should exist at all, is in scope, since the largest DRY win in this repo's history was a deletion, not a consolidation.
+Every plan, every implementation, every review pass answers one question first: **is this the maximally DRY shape that stays readable?** Duplicated logic, parallel data flows, near-copies between modules, and repeated string/key/tuple literals are all build-time defects. Worker-1 plans for DRY before code is written, Worker-3 enforces it before code is accepted, Worker-1 re-checks it across slices at the integration pass — and Worker-3's **existence challenge**, whether the abstraction should exist at all, is in scope, since the largest DRY win in this repo's history was a deletion, not a consolidation.
 
-Standing workflow files under `docs/builder/` are tracked: `BUILD.md`, `ARTIFACT.md`, `worker-*.md`. Per-build plans (`build-<NNN>-*.md`) and artifacts (`bld-<NNN>-*.md`) are tracked; a closed cycle's plan moves to `docs/builder/DONE/` and its artifacts are deleted, both at the next cycle's pre-flight and both by explicit path (`## Build artifact naming`). Untracked scratch paths, every one namespaced by the card's `<NNN>` so concurrent cycles never share a file: `docs/builder/worker-memory/<NNN>-worker-<N>.md`, `docs/builder/temp-tests/<NNN>/`, and `<scratch>` — the session scratchpad directory the harness names, outside the repo, never bare `/tmp` (`START.md`). Worker 0 records the `<scratch>` path in the plan preamble and every spawn prompt carries it; helper output, proof copies, and the floor venv live under it.
+Standing workflow files under `docs/builder/` are tracked: `BUILD.md`, `ARTIFACT.md`, `worker-*.md`. Per-build plans (`build-<NNN>-*.md`) and artifacts (`bld-<NNN>-*.md`) are tracked; a closed cycle's plan moves to `docs/builder/DONE/` and its artifacts are deleted, both at the next cycle's pre-flight and both by explicit path (`## Build artifact naming`). Untracked scratch paths, every one namespaced by the card's `<NNN>` so concurrent cycles never share a file: `docs/builder/worker-memory/<NNN>-worker-<N>.md`, `docs/builder/temp-tests/<NNN>/`, and `<scratch>` — the session scratchpad directory the harness names, outside the repo, never bare `/tmp` (`START.md`). Worker-0 records the `<scratch>` path in the plan preamble and every spawn prompt carries it; helper output, proof copies, and the floor venv live under it.
 
 `AGENTS.md` and `START.md` still apply during build runs. Only the maintainer commits. Workers never commit, even if asked.
 
 Standing worker instructions live beside this overview:
 
-- [Worker 0: project manager][worker-0]
-- [Worker 1: architect, planner, spec custodian, final QA][worker-1]
-- [Worker 2: builder / implementer][worker-2]
-- [Worker 3: code reviewer and DRY enforcer][worker-3]
+- [Worker-0: project manager][worker-0]
+- [Worker-1: architect, planner, spec custodian, final QA][worker-1]
+- [Worker-2: builder / implementer][worker-2]
+- [Worker-3: code reviewer and DRY enforcer][worker-3]
 
 ## Required reading per worker
 
@@ -51,7 +51,7 @@ Every worker reads the standing project docs and its own role file before acting
 | current `docs/builder/bld-*.md` artifact | yes (read-only) | yes (owns plan + final sections) | yes (writes build reports) | yes (writes review section) |
 | own `docs/builder/worker-memory/<NNN>-worker-N.md` | yes | yes | yes | yes |
 | relevant source / tests | — | yes (read-only) | yes (writes) | yes (read-only) |
-| Worker 2's diff | — | — | — | yes |
+| Worker-2's diff | — | — | — | yes |
 
 Workers never read another worker's memory file during the cycle. Adding a new standing doc is a one-line change to this table.
 
@@ -73,7 +73,7 @@ The corpus is `docs/builder/BUILD.md`, `docs/builder/ARTIFACT.md`, and the four 
 
 ## Pre-flight checks
 
-Pre-flight **gates plan creation**: Worker 0 runs it before creating `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` and records the outcome in the plan's preamble. Its seven steps are Worker-0-only procedure and live in `worker-0.md` `## Pre-flight procedure`. No slice is dispatched until step 7, Worker 1's spec-rationale extraction, is done and verified, because every spawn after it reads the smaller spec (`## Spec rationale extraction`).
+Pre-flight **gates plan creation**: Worker-0 runs it before creating `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` and records the outcome in the plan's preamble. Its seven steps are Worker-0-only procedure and live in `worker-0.md` `## Pre-flight procedure`. No slice is dispatched until step 7, Worker-1's spec-rationale extraction, is done and verified, because every spawn after it reads the smaller spec (`## Spec rationale extraction`).
 
 ### Tracked binary / generated files: churn and concurrent-writer handling
 
@@ -86,26 +86,26 @@ This repo tracks binary and generated files a concurrent maintainer process (or 
 
 ## Spec rationale extraction
 
-**The first substantive action of every build.** Before the build plan is written, Worker 1 MOVES the spec's *deliberative layer* into a companion file, `docs/spec-<NNN>-<topic>-<0_0_X>-rationale.md`. It is a cut-and-paste, not a copy and not a summary: text that lands in the rationale file leaves the spec.
+**The first substantive action of every build.** Before the build plan is written, Worker-1 MOVES the spec's *deliberative layer* into a companion file, `docs/spec-<NNN>-<topic>-<0_0_X>-rationale.md`. It is a cut-and-paste, not a copy and not a summary: text that lands in the rationale file leaves the spec.
 
 Why: the deliberative layer is the largest thing in a spec and the least useful during implementation. On `spec-046`, `## Architectural decisions` alone was 118,013 bytes — **48% of a 247KB spec** — and specs here run to hundreds of kilobytes. Every worker spawn reads the active spec, so broadcasting the deliberation multiplies its cost by the spawn count, while a builder implementing one rejection path needs none of it. It IS needed later, to check the finished implementation against the reasoning that produced it — hence a move, not a deletion.
 
 **The spec stays the heart, and it never narrates its own history.** When a review round changes a decision, the custodian **rewrites that decision to state the corrected contract directly** — no amendment block, no retraction paragraph, no "as of review round N" hedge. The spec reads as a clean current contract, as though it had been right from the start; a reader must never reconstruct what is currently true by applying a chronology to it. What changed, when, why, and what was rejected live in the rationale file. That is the difference between a contract and a changelog, and the spec is the contract.
 
-Worker 1 is the only role that performs the move, so what moves, what stays, and the mechanics of performing it live in `worker-1.md` `### Performing the rationale move`. One rule is not the mover's but the reader's, and stays here:
+Worker-1 is the only role that performs the move, so what moves, what stays, and the mechanics of performing it live in `worker-1.md` `### Performing the rationale move`. One rule is not the mover's but the reader's, and stays here:
 
-**The rationale file is keyed to the spec, so it works as a review instrument rather than an archive.** Every entry names the spec decision it belongs to by heading and anchor, and carries for that decision: the alternatives rejected and why each lost; every change the decision has undergone, with the round that caused it; and any claim the decision once made and may no longer make. Worker 3 checks the finished implementation against these entries and Worker 1 audits them at final verification — an entry naming no decision cannot be looked up, and is worthless however well argued.
+**The rationale file is keyed to the spec, so it works as a review instrument rather than an archive.** Every entry names the spec decision it belongs to by heading and anchor, and carries for that decision: the alternatives rejected and why each lost; every change the decision has undergone, with the round that caused it; and any claim the decision once made and may no longer make. Worker-3 checks the finished implementation against these entries and Worker-1 audits them at final verification — an entry naming no decision cannot be looked up, and is worthless however well argued.
 
 ### Who reads it, and when
 
-- **Worker 2 never reads it.** That is the point of the move.
-- **Worker 3 reads it during review** — it stops a reviewer re-raising a rejected alternative, and it is the reasoning the finished implementation is checked against.
-- **Worker 1 reads and owns both files**, as spec custodian and at final verification.
-- **Worker 0** carries the correct file into each spawn prompt, and never sends the rationale file to a builder.
+- **Worker-2 never reads it.** That is the point of the move.
+- **Worker-3 reads it during review** — it stops a reviewer re-raising a rejected alternative, and it is the reasoning the finished implementation is checked against.
+- **Worker-1 reads and owns both files**, as spec custodian and at final verification.
+- **Worker-0** carries the correct file into each spawn prompt, and never sends the rationale file to a builder.
 
 ## Versioned build plan
 
-Worker 0 is **handed** the active spec at the start of the cycle and derives the plan from it; it never writes the spec. Read the spec, take its topic slug and target release version (dots to underscores — version-bump correctness is the maintainer's responsibility), and create `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`. That file is the canonical checklist for the whole build and is committed alongside the implementation changes.
+Worker-0 is **handed** the active spec at the start of the cycle and derives the plan from it; it never writes the spec. Read the spec, take its topic slug and target release version (dots to underscores — version-bump correctness is the maintainer's responsibility), and create `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`. That file is the canonical checklist for the whole build and is committed alongside the implementation changes.
 
 If the spec is missing, malformed, or its slice checklist cannot be parsed, stop and record the mismatch in the plan before any slice work starts.
 
@@ -115,25 +115,25 @@ The build covers every slice in the spec's "Slice checklist", in declared order.
 
 - Build only one slice at a time. **Spec slices** are sequentially dependent by construction — a later slice builds on the surface an earlier one lands. `### Parallel cohorts under a declared ownership partition` is the one licensed exception.
 - Do not start the next slice until the current one's plan/build/review/verification/spec-reconciliation cycle is complete.
-- After all in-spec slices are built, Worker 1 runs the cross-slice **integration pass** (which may trigger a second-loop refactor through Workers 2 and 3 if DRY opportunities appear).
-- The build closes with one final test-run gate, handled by Worker 1.
+- After all in-spec slices are built, Worker-1 runs the cross-slice **integration pass** (which may trigger a second-loop refactor through Worker-2 and Worker-3 if DRY opportunities appear).
+- The build closes with one final test-run gate, handled by Worker-1.
 
 ### Parallel cohorts under a declared ownership partition
 
 Strict serialization is the right default for spec slices and the wrong default for everything else. When work decomposes into cohorts whose **file ownership is provably disjoint** — a review round's findings, an integration-pass consolidation across unrelated modules — serializing them costs wall-clock for no quality gain. A prior cycle ran three builder cohorts concurrently with zero collisions; a fourth waited only because it shared one test file.
 
-What licenses concurrent dispatch is the **ownership partition**: Worker 0's declared mapping of every file the cohorts will write to exactly one cohort.
+What licenses concurrent dispatch is the **ownership partition**: Worker-0's declared mapping of every file the cohorts will write to exactly one cohort.
 
-- Worker 0 declares it **in the build plan, before dispatch** (see `## Required plan structure`). An undeclared partition is not a partition — dispatch sequentially.
+- Worker-0 declares it **in the build plan, before dispatch** (see `## Required plan structure`). An undeclared partition is not a partition — dispatch sequentially.
 - Every file any cohort will write (source, tests, docs, its own artifact) appears in exactly one cohort's list. Files no cohort writes are not listed.
 - **Any file owned by two cohorts serializes them.** Cohorts with entirely disjoint production files that both re-pin assertions in one shared test file run in sequence. One shared file is enough; overlap size does not matter.
 - Each cohort still runs the full worker cycle (plan → build → review → final verification) on its own artifact. Concurrency changes the dispatch order, never the cycle, and never `### Isolation is non-waivable`.
 - Spec slices stay sequential unless the spec proves two slices touch disjoint files **and** neither consumes the other's surface. Ordinarily a later slice consumes an earlier one's surface, so the default holds.
-- If a collision surfaces mid-flight (a cohort needs to write a file it does not own), Worker 0 stops that cohort, folds the file into the owning cohort's scope or re-partitions, and records the correction in the plan. A worker never silently writes outside its cohort's ownership.
+- If a collision surfaces mid-flight (a cohort needs to write a file it does not own), Worker-0 stops that cohort, folds the file into the owning cohort's scope or re-partitions, and records the correction in the plan. A worker never silently writes outside its cohort's ownership.
 
 ### Procedural-closure slices
 
-When a slice's spec contract is to ship nothing in this card ("carried by sibling" because a dependent card ships first, or a slice the spec explicitly defers), close it via a single Worker 1 pass that sets `Status: final-accepted` directly — no Worker 2 build, no Worker 3 review. The artifact carries one combined Plan + Final-verification block citing the spec clause that authorizes the closure. Worker 0 dispatches Worker 1 once with explicit procedural-closure framing.
+When a slice's spec contract is to ship nothing in this card ("carried by sibling" because a dependent card ships first, or a slice the spec explicitly defers), close it via a single Worker-1 pass that sets `Status: final-accepted` directly — no Worker-2 build, no Worker-3 review. The artifact carries one combined Plan + Final-verification block citing the spec clause that authorizes the closure. Worker-0 dispatches Worker-1 once with explicit procedural-closure framing.
 
 ### Generated docs are DB-backed: edit the DB, then regenerate
 
@@ -146,14 +146,14 @@ A **review round** is a cycle whose input is a maintainer adversarial review of 
 ### The review document is evidence, not contract
 
 - **No worker ever edits the review document** — not to tick findings, not to annotate, not to record disagreement. It is the maintainer's artifact.
-- **Decisions live in the spec** (see `## Spec reconciliation`). A finding the round accepts becomes a spec amendment authored by Worker 1; the spec, not the review, is what the next reader must be able to trust.
+- **Decisions live in the spec** (see `## Spec reconciliation`). A finding the round accepts becomes a spec amendment authored by Worker-1; the spec, not the review, is what the next reader must be able to trust.
 - Findings tracked as work live in the round's `bld-<NNN>-review-*.md` artifact.
 
-### Worker 0 verifies every finding against source before dispatching
+### Worker-0 verifies every finding against source before dispatching
 
 **An incoming review can itself be wrong, and following it verbatim can cause the defect.** One review's own prescribed remediation said to preserve body bytes "in the request shape Django expects", which reads as assigning `request._body` — and doing so **disables Django's `DATA_UPLOAD_MAX_MEMORY_SIZE`**. A live test row flipping 400 → 200 proved it. That review was the source of a regression, not the cure for one.
 
-So before any builder is dispatched, Worker 0 reads the current source behind every finding and records, per finding:
+So before any builder is dispatched, Worker-0 reads the current source behind every finding and records, per finding:
 
 - whether the described condition actually holds at HEAD, citing the symbol-qualified path (`AGENTS.md` "Source refs in docs and code comments");
 - whether the review's **prescribed remediation** holds. A finding can be real while its prescribed fix is wrong. A prescribed fix is a hypothesis, never an instruction;
@@ -164,27 +164,27 @@ So before any builder is dispatched, Worker 0 reads the current source behind ev
 - a **defect against an existing contract** — the code does not do what the spec, docs, or tests say. Workers fix these.
 - a **contract-level finding** — the answer turns on which contract the package *should* offer (whether a consumer seam is supported at all, whether a stricter default is a breaking change, whether an abstraction should exist). **Not a worker's call.**
 
-Worker 0 escalates every contract-level finding to the maintainer as a decision **before** builders are dispatched, and records in the round artifact the decision made and the **rejected alternatives, each with its reason**. The rejected alternatives are load-bearing: the next reader's first instinct will be the alternative, and only the recorded reason stops the round being re-fought.
+Worker-0 escalates every contract-level finding to the maintainer as a decision **before** builders are dispatched, and records in the round artifact the decision made and the **rejected alternatives, each with its reason**. The rejected alternatives are load-bearing: the next reader's first instinct will be the alternative, and only the recorded reason stops the round being re-fought.
 
 ### Dispatched findings checklist
 
-A round has no `## Slice checklist` to copy from, so its artifact carries a **`### Dispatched findings checklist`** in the `## Plan (Worker 1)` section, in the position and under the tick-and-audit discipline `### Spec slice checklist (verbatim)` holds for a spec slice. This is the canonical name; all four role files use it verbatim.
+A round has no `## Slice checklist` to copy from, so its artifact carries a **`### Dispatched findings checklist`** in the `## Plan (Worker-1)` section, in the position and under the tick-and-audit discipline `### Spec slice checklist (verbatim)` holds for a spec slice. This is the canonical name; all four role files use it verbatim.
 
-- **Worker 1 writes it** at plan time: one `- [ ]` box per finding dispatched to this cohort, quoting the finding as the review stated it and citing the symbol-qualified path Worker 0's verification pass recorded (`### Worker 0 verifies every finding against source before dispatching`). Every dispatched finding appears in exactly one cohort's list, mirroring the ownership partition. Boxes stay `- [ ]` at planning.
-- **Worker 2 ticks `- [x]`** only a box whose fix actually landed in its diff this pass, and states any deferral in the build report rather than ticking.
-- **Worker 3 walks the list** during review. A box the diff does not address with no recorded deferral is a Medium finding; a box ticked with no matching fix is likewise. The round-specific checks in `worker-3.md` "Review-round duties" apply on top.
-- **Worker 1 audits every tick at final verification**, exactly as for `### Spec slice checklist (verbatim)`: un-tick and set `revision-needed` for an over-tick, tick a landed box Worker 2 left open, record a one-line deferral reason for anything still `- [ ]`.
+- **Worker-1 writes it** at plan time: one `- [ ]` box per finding dispatched to this cohort, quoting the finding as the review stated it and citing the symbol-qualified path Worker-0's verification pass recorded (`### Worker-0 verifies every finding against source before dispatching`). Every dispatched finding appears in exactly one cohort's list, mirroring the ownership partition. Boxes stay `- [ ]` at planning.
+- **Worker-2 ticks `- [x]`** only a box whose fix actually landed in its diff this pass, and states any deferral in the build report rather than ticking.
+- **Worker-3 walks the list** during review. A box the diff does not address with no recorded deferral is a Medium finding; a box ticked with no matching fix is likewise. The round-specific checks in `worker-3.md` "Review-round duties" apply on top.
+- **Worker-1 audits every tick at final verification**, exactly as for `### Spec slice checklist (verbatim)`: un-tick and set `revision-needed` for an over-tick, tick a landed box Worker-2 left open, record a one-line deferral reason for anything still `- [ ]`.
 
-A maintainer decision the round escalated is not a checklist box — it becomes a numbered spec Decision authored by Worker 1 (`worker-1.md` "Review-round custody").
+A maintainer decision the round escalated is not a checklist box — it becomes a numbered spec Decision authored by Worker-1 (`worker-1.md` "Review-round custody").
 
 ### Cohorting, naming, and closure
 
 - **Cohort findings by ownership partition, not by severity.** Group findings by the files their fix and their tests touch, then apply `### Parallel cohorts under a declared ownership partition`. Severity grouping feels natural and is the wrong axis: the tests for several findings of unrelated severity frequently live in one file, and that file's ownership decides whether two groups can run concurrently.
 - **Artifact naming:** `## Build artifact naming` gives the path; one artifact per cohort of the round's ownership partition. The `Status:` chain and the [ARTIFACT.md][artifact] template apply **unchanged**, failability-proof and hot-path-budget subsections included.
-- **Spec amendments stay custodian-only.** Every builder writes its required-spec-amendment list **into its artifact on disk** under `### Notes for Worker 1 (spec reconciliation)`, not only into its return report to Worker 0. Detail living only in a subagent's report does not reach the next worker: in one round two builders' amendment lists never landed on disk and the custodian had to re-derive all of them. The template already provides the section; the failure was not using it.
-- **Closure:** a round closes with a Worker 3 pass over the round's whole diff and the full `## Final test-run gate` (including `## Floor verification` where it applies), then hands to the maintainer. A round that skips the gate is not closed.
+- **Spec amendments stay custodian-only.** Every builder writes its required-spec-amendment list **into its artifact on disk** under `### Notes for Worker-1 (spec reconciliation)`, not only into its return report to Worker-0. Detail living only in a subagent's report does not reach the next worker: in one round two builders' amendment lists never landed on disk and the custodian had to re-derive all of them. The template already provides the section; the failure was not using it.
+- **Closure:** a round closes with a Worker-3 pass over the round's whole diff and the full `## Final test-run gate` (including `## Floor verification` where it applies), then hands to the maintainer. A round that skips the gate is not closed.
 - **Pre-flight for a round** runs every step of `worker-0.md` `## Pre-flight procedure` **except** step 3's artifact reset — the prior cycle's `bld-*.md` artifacts are the record of the work now under review and must survive. Verify only that the round's own new `bld-<NNN>-review-*.md` paths do not already exist.
-- **A round over a shipped spec** (one already archived under `docs/SPECS/`) reads and — Worker 1 only — amends the spec at its archived path, with the rationale companion under `docs/SPECS/appx/`; pre-flight step 6 runs `check_spec_glossary.py --spec` against that path; the plan is created at `docs/builder/build-<NNN>-<topic>-<0_0_X>-round-<R>.md` (the build's own plan stays in `DONE/` under its unsuffixed name; the round's plan joins it when the round closes, and the suffix is what keeps `mv -n` from ever meeting an existing file); artifacts follow `## Build artifact naming` with the card's `<NNN>`. Archived paths never move inside a build (`### Spec stays at its working location`).
+- **A round over a shipped spec** (one already archived under `docs/SPECS/`) reads and — Worker-1 only — amends the spec at its archived path, with the rationale companion under `docs/SPECS/appx/`; pre-flight step 6 runs `check_spec_glossary.py --spec` against that path; the plan is created at `docs/builder/build-<NNN>-<topic>-<0_0_X>-round-<R>.md` (the build's own plan stays in `DONE/` under its unsuffixed name; the round's plan joins it when the round closes, and the suffix is what keeps `mv -n` from ever meeting an existing file); artifacts follow `## Build artifact naming` with the card's `<NNN>`. Archived paths never move inside a build (`### Spec stays at its working location`).
 
 ## Coverage is the maintainer's gate, not a worker's tool
 
@@ -192,9 +192,9 @@ Workers do not run `pytest` with coverage flags. `--cov=...`, `--cov-report=...`
 
 Coverage enforcement is CI's job (`pyproject.toml [tool.coverage.report] fail_under = 100`) and the maintainer's. Missing test branches are caught by comparing the diff against the spec — "Decision 4 says X must be rejected; is there a test that asserts X is rejected?" — not by running coverage. If gap-discovery feels intractable, escalate to the maintainer rather than running coverage.
 
-**Coverage output is also the lower-quality finding, which is why the substitute is not a concession.** "Line 325 is uncovered" never says which spec contract went unasserted; reading the diff against the spec names the contract, and a finding that names the contract is one Worker 2 can close without guessing what the assertion was supposed to prove.
+**Coverage output is also the lower-quality finding, which is why the substitute is not a concession.** "Line 325 is uncovered" never says which spec contract went unasserted; reading the diff against the spec names the contract, and a finding that names the contract is one Worker-2 can close without guessing what the assertion was supposed to prove.
 
-Tests themselves are still in scope: Worker 1 plans which must exist, Worker 2 writes them in the same change as the code, Worker 3 verifies they exercise the right branches by reading the diff against the spec. Focused runs without coverage flags are fine anywhere they confirm pass/fail.
+Tests themselves are still in scope: Worker-1 plans which must exist, Worker-2 writes them in the same change as the code, Worker-3 verifies they exercise the right branches by reading the diff against the spec. Focused runs without coverage flags are fine anywhere they confirm pass/fail.
 
 ### Query-shape tests must pin the load-bearing property, not observability
 
@@ -252,13 +252,13 @@ Required for every **new boundary, guard, gate, or rejection path** a slice intr
 
 ### Who performs it
 
-**Worker 2 performs and records the proof; Worker 3 audits every record and independently re-runs a subset.** This division is settled — two agents have already argued each half is redundant. Neither is.
+**Worker-2 performs and records the proof; Worker-3 audits every record and independently re-runs a subset.** This division is settled — two agents have already argued each half is redundant. Neither is.
 
-- **Worker 2's obligation is mandatory, not sampled.** Every new boundary the pass introduces carries a proof in the build report's `### Failability proofs` subsection. Not redundant: in the most recent round the builder's own self-proof is what discovered the harness-impossible interleaving below — which the reviewer never saw, precisely because the builder found and closed it first.
-- **Worker 3 audits every recorded proof and independently re-runs a subset — not all of them.** `worker-3.md` "Reading is necessary, not sufficient" sets the **mandatory floor** on that subset; above it, Worker 3 re-runs whatever it distrusts. The re-run is not redundant either: it is performed by an agent with **no memory of why the test was written that way**, the only vantage point from which a self-convincing proof looks thin. Subset-not-all is the cost control — proving every boundary twice is what would make this unaffordable.
-- **Worker 3's narrow source carve-out stands** (`worker-3.md` "Scope"): record the mutation in the artifact before making it, revert it inside the same pass, prove the revert by byte-comparison. It exists so the independent re-run is possible, and licenses no other source edit.
-- A missing, unconvincing, or unreverted proof is `revision-needed`, set by Worker 3.
-- Worker 3 may still write a temp test under `docs/builder/temp-tests/<NNN>/<slice>/` to demonstrate that an existing assertion is non-distinguishing.
+- **Worker-2's obligation is mandatory, not sampled.** Every new boundary the pass introduces carries a proof in the build report's `### Failability proofs` subsection. Not redundant: in the most recent round the builder's own self-proof is what discovered the harness-impossible interleaving below — which the reviewer never saw, precisely because the builder found and closed it first.
+- **Worker-3 audits every recorded proof and independently re-runs a subset — not all of them.** `worker-3.md` "Reading is necessary, not sufficient" sets the **mandatory floor** on that subset; above it, Worker-3 re-runs whatever it distrusts. The re-run is not redundant either: it is performed by an agent with **no memory of why the test was written that way**, the only vantage point from which a self-convincing proof looks thin. Subset-not-all is the cost control — proving every boundary twice is what would make this unaffordable.
+- **Worker-3's narrow source carve-out stands** (`worker-3.md` "Scope"): record the mutation in the artifact before making it, revert it inside the same pass, prove the revert by byte-comparison. It exists so the independent re-run is possible, and licenses no other source edit.
+- A missing, unconvincing, or unreverted proof is `revision-needed`, set by Worker-3.
+- Worker-3 may still write a temp test under `docs/builder/temp-tests/<NNN>/<slice>/` to demonstrate that an existing assertion is non-distinguishing.
 
 ### Mutations are transient
 
@@ -266,7 +266,7 @@ A mutation is deliberately broken production code sitting in the working tree. A
 
 - Keep each proof **narrow** — one boundary, one mutation.
 - **Revert before moving to the next proof**, not at the end of the pass.
-- Never leave a mutation in place across a `Status:` transition, and never hand a mutated tree to Worker 3.
+- Never leave a mutation in place across a `Status:` transition, and never hand a mutated tree to Worker-3.
 
 ### What gets recorded
 
@@ -280,7 +280,7 @@ Per new boundary, in the build report's `### Failability proofs` subsection:
 - the **revert, proved by byte-comparison** (command and result);
 - on any **zero-row** result, a one-line **why 0** naming which case it is: weakly pinned (the acceptance rule below) or a harness-impossible interleaving (`### Harness-impossible interleavings`). Those two sections prescribe opposite responses to the same measurement, so a record that does not name one reads as though they contradict each other.
 
-**A "test row" is one failing test node id under the focused scope** — a parametrized case is one row, not one per file or per assertion. Two thresholds key off the count: the weakly-pinned rule below (0 or 1) and Worker 3's mandatory re-run floor (3 or fewer, `worker-3.md` "Reading is necessary, not sufficient"). A wider scope inflates it and so silently shrinks the reviewer's mandatory subset, hence **Worker 3 re-runs at the scope Worker 2 recorded** and compares node-id sets rather than numbers.
+**A "test row" is one failing test node id under the focused scope** — a parametrized case is one row, not one per file or per assertion. Two thresholds key off the count: the weakly-pinned rule below (0 or 1) and Worker-3's mandatory re-run floor (3 or fewer, `worker-3.md` "Reading is necessary, not sufficient"). A wider scope inflates it and so silently shrinks the reviewer's mandatory subset, hence **Worker-3 re-runs at the scope Worker-2 recorded** and compares node-id sets rather than numbers.
 
 ### Acceptance rule: weakly pinned is `revision-needed`
 
@@ -289,7 +289,7 @@ A boundary is **weakly pinned** when removing it makes **0 or 1** test rows fail
 - **0 rows fail** — nothing pins the boundary at all. The suite cannot tell whether it exists.
 - **1 row fails** — the boundary rests on one assertion in one row. A single refactor, fixture change, or skip retires it silently.
 
-Worker 3 sets `revision-needed` and names the additional rows required. The fix is more (or better-targeted) rows — never a weaker boundary, and never a recorded exception.
+Worker-3 sets `revision-needed` and names the additional rows required. The fix is more (or better-targeted) rows — never a weaker boundary, and never a recorded exception.
 
 ### Harness-impossible interleavings
 
@@ -333,7 +333,7 @@ if remaining <= 0:
 
 so the undeterminable case exits the permit path instead of being coerced into it. Note that the reviewer's own first prescribed guard — `if end < position` — was **also insufficient**: it enumerates one shape of incoherent input and leaves the rest (`end == position` on an unmeasurable stream) flowing into the permit branch. A guard written against an input spelling is a guess; a guard written against the answer is a boundary. This is also why a review's prescribed remediation is a hypothesis and not an instruction (`## Review rounds`).
 
-Because coverage cannot see these, they are found by **reading for the shape**: Worker 1 at plan time (do not plan one), Worker 2 at implementation time, Worker 3 at review time. A fail-open shape on a decision path is at minimum a Medium finding, and High when the decision is a security or data-isolation boundary.
+Because coverage cannot see these, they are found by **reading for the shape**: Worker-1 at plan time (do not plan one), Worker-2 at implementation time, Worker-3 at review time. A fail-open shape on a decision path is at minimum a Medium finding, and High when the decision is a security or data-isolation boundary.
 
 ## Hot-path budget
 
@@ -341,11 +341,11 @@ Nothing else in this process measures performance; cost is invisible to every co
 
 A different obligation from `### Query-shape tests must pin the load-bearing property, not observability`: those are an **N+1 detector**, answering "is the work batched?" with a query count and a pass/fail. A **hot-path budget** is a *number*, before and after, for a change that adds cost to a path that runs often. A slice can hold a perfectly green query-count assertion and still have added a lock, a per-request cache read, an extra round trip, or a re-parse to every call.
 
-- **Worker 1 declares it at plan time**, in the plan preamble (`## Required plan structure`) and per-slice where slices differ. A hot path runs per request, per resolver, per row, per connection, or per outbound message — as opposed to per process start, per schema build, or per management command.
-- **Worker 2 captures a before/after number** for any slice declared hot-path, in the build report's `### Hot-path budget` subsection: what was measured, how (exact command or snippet), before, after, delta. A query count, a wall-clock median over a stated iteration count, or an added-`await` count all qualify; the metric must be stated, reproducible, and the *same* one before and after. A single-shot wall-clock reading is not a number.
-- **Worker 3 verifies the number EXISTS** and is reproducible as recorded — not that it is good. A hot-path-declared slice whose build report carries no number is a Medium finding and `revision-needed`.
+- **Worker-1 declares it at plan time**, in the plan preamble (`## Required plan structure`) and per-slice where slices differ. A hot path runs per request, per resolver, per row, per connection, or per outbound message — as opposed to per process start, per schema build, or per management command.
+- **Worker-2 captures a before/after number** for any slice declared hot-path, in the build report's `### Hot-path budget` subsection: what was measured, how (exact command or snippet), before, after, delta. A query count, a wall-clock median over a stated iteration count, or an added-`await` count all qualify; the metric must be stated, reproducible, and the *same* one before and after. A single-shot wall-clock reading is not a number.
+- **Worker-3 verifies the number EXISTS** and is reproducible as recorded — not that it is good. A hot-path-declared slice whose build report carries no number is a Medium finding and `revision-needed`.
 - **Whether the trade-off is acceptable is the maintainer's call.** No worker accepts or rejects a slice on performance grounds, and none weakens a correctness boundary to buy back a number. The obligation is only that the number exists, sits next to the change that caused it, and reaches the maintainer — so a cost is never accepted **silently**.
-- If Worker 1 declares a slice **not** hot-path and Worker 2 or 3 finds otherwise, record it under `### Notes for Worker 1 (spec reconciliation)`; Worker 1 decides at final verification whether the slice re-loops for a measurement.
+- If Worker-1 declares a slice **not** hot-path and Worker-2 or 3 finds otherwise, record it under `### Notes for Worker-1 (spec reconciliation)`; Worker-1 decides at final verification whether the slice re-loops for a measurement.
 
 ## Required plan structure
 
@@ -355,9 +355,9 @@ A different obligation from `### Query-shape tests must pin the load-bearing pro
 - the **hot-path declaration** — which slices touch a hot path and therefore owe a before/after number (`## Hot-path budget`)
 - the **floor-verification scope** — which slices touch a Django / Strawberry / channels integration seam, the focused tests they re-run at the floor, and the pass that owns each run (`## Floor verification`)
 
-Then a slice-level checklist. Every slice and every integration/final pass carries a checkbox (only Worker 0 marks `- [x]`, and only after Worker 1's final verification accepts it), the spec slice it implements, and the exact artifact file to create.
+Then a slice-level checklist. Every slice and every integration/final pass carries a checkbox (only Worker-0 marks `- [x]`, and only after Worker-1's final verification accepts it), the spec slice it implements, and the exact artifact file to create.
 
-A fictional placeholder rendering of the whole file — preamble, artifact list, checklist — lives in `worker-0.md` `### Template shape`, the only role that writes the plan. Workers 1, 2, and 3 read the actual plan, never its template.
+A fictional placeholder rendering of the whole file — preamble, artifact list, checklist — lives in `worker-0.md` `### Template shape`, the only role that writes the plan. Worker-1, Worker-2 and Worker-3 read the actual plan, never its template.
 
 ## Build artifact naming
 
@@ -373,7 +373,7 @@ Per-slice, integration, and final artifacts are tracked Markdown files under `do
 
 The plan is the cycle's only surviving record once its artifacts are deleted, so archival carries three obligations, all in the same pre-flight step:
 
-1. **Closing record present.** The plan ends with a `## Closing record` section that Worker 0 wrote at the final checkbox (`## Final test-run gate`): the gate's command table and the `### Deferred work catalog` copied verbatim from `bld-<NNN>-final.md`, each deferred item carrying a named owner (a card id, a future spec, or `maintainer`). A plan without it is not closed: stop and ask rather than delete evidence the plan does not hold.
+1. **Closing record present.** The plan ends with a `## Closing record` section that Worker-0 wrote at the final checkbox (`## Final test-run gate`): the gate's command table and the `### Deferred work catalog` copied verbatim from `bld-<NNN>-final.md`, each deferred item carrying a named owner (a card id, a future spec, or `maintainer`). A plan without it is not closed: stop and ask rather than delete evidence the plan does not hold.
 2. **Artifacts pointed at by commit.** Append to the closing record one line per deleted artifact in the form `git show <sha>:docs/builder/bld-<NNN>-<name>.md`, `<sha>` from `git log -1 --format=%h -- <that path>`. This is the retirement form `START.md` prescribes for a per-cycle artifact with inbound references; an untracked artifact has no `<sha>` and is not deleted — stop and ask.
 3. **Links rebased, citers swept.** `mv -n` changes every relative target in the plan's `<!-- LINK DEFINITIONS -->` block by one directory (`../SPECS/` becomes `../../SPECS/`, `BUILD.md` becomes `../BUILD.md`); rewrite each, then confirm every target resolves from `DONE/`. Sweep inbound: `git grep -n --untracked 'build-<NNN>-' -- . ':!docs/builder/DONE'` and retarget or de-link every hit outside the cycle's own deleted artifacts. `scripts/check_citations.py --check` closes the step.
 
@@ -381,7 +381,7 @@ The build plan must list every artifact before build work starts.
 
 ## Build artifact template
 
-Every `bld-*.md` artifact is copied from the template in **[ARTIFACT.md][artifact]**, which governs the `Status:` line, its per-transition ownership, and every named section Workers 1, 2, and 3 write. It is a separate file because each worker reads all of it while needing only its own role's sections. Read it once per spawn; this document does not restate its structure. Every `###` artifact-subsection name cited here is defined there — the two exceptions, defined in this document, are `### Dispatched findings checklist` (under `## Review rounds`) and `### Deferred work catalog` (under `## Final test-run gate`).
+Every `bld-*.md` artifact is copied from the template in **[ARTIFACT.md][artifact]**, which governs the `Status:` line, its per-transition ownership, and every named section Worker-1, Worker-2 and Worker-3 write. It is a separate file because each worker reads all of it while needing only its own role's sections. Read it once per spawn; this document does not restate its structure. Every `###` artifact-subsection name cited here is defined there — the two exceptions, defined in this document, are `### Dispatched findings checklist` (under `## Review rounds`) and `### Deferred work catalog` (under `## Final test-run gate`).
 
 ## Severity definitions
 
@@ -407,9 +407,9 @@ The helper parses the target file as text and AST only — it never imports or e
 
 ### When to run the helper during build
 
-Worker 1 **must run** it during planning when the plan adds logic to any existing `.py` file of 150+ source lines, or to any file under `django_strawberry_framework/optimizer/` or `django_strawberry_framework/types/`.
+Worker-1 **must run** it during planning when the plan adds logic to any existing `.py` file of 150+ source lines, or to any file under `django_strawberry_framework/optimizer/` or `django_strawberry_framework/types/`.
 
-Worker 3 **must run** it during review when the slice:
+Worker-3 **must run** it during review when the slice:
 
 - adds a new `.py` file of any size, **unless** that file is a pure-class-definition module (only `class` declarations with docstrings, no logic);
 - touches an existing `.py` file under `optimizer/` or `types/`;
@@ -417,7 +417,7 @@ Worker 3 **must run** it during review when the slice:
 
 Either worker may skip the helper for a file whose artifact disposition will be "no review-worthy logic" (pure re-exports, single-line constants) — the skip is recorded explicitly with a short reason.
 
-Worker 2 **may re-run** it when refreshed output would help implementation, noting shadow-file use in `### Notes for Worker 3`.
+Worker-2 **may re-run** it when refreshed output would help implementation, noting shadow-file use in `### Notes for Worker-3`.
 
 ### How to run
 
@@ -447,42 +447,42 @@ Stripping shifts the line numbers, so they do not match the original source. Bui
 
 ## Subagent dispatch and worker memory
 
-Workers 1, 2, and 3 each run as **separate subagent invocations per cycle item**; Worker 0 stays in the main thread as project manager. The split is what makes the artifact-as-contract model work: the worker that reviews a build has no in-context memory of the worker that wrote it.
+Worker-1, Worker-2 and Worker-3 each run as **separate subagent invocations per cycle item**; Worker-0 stays in the main thread as project manager. The split is what makes the artifact-as-contract model work: the worker that reviews a build has no in-context memory of the worker that wrote it.
 
 ### Worker memory
 
-Each worker keeps a private gitignored notebook at `docs/builder/worker-memory/<NNN>-worker-<N>.md` that **persists across slices within a single build** and is invisible to every other worker. The `<NNN>` prefix is the card's: two cycles on one checkout (`START.md` "Concurrent sessions") each own four files and neither can clear the other's. Worker 0 creates the directory if missing and seeds this cycle's four files empty at plan time; they are deleted by explicit path at this cycle's closeout, after the retrospective has read them, never by another cycle's pre-flight.
+Each worker keeps a private gitignored notebook at `docs/builder/worker-memory/<NNN>-worker-<N>.md` that **persists across slices within a single build** and is invisible to every other worker. The `<NNN>` prefix is the card's: two cycles on one checkout (`START.md` "Concurrent sessions") each own four files and neither can clear the other's. Worker-0 creates the directory if missing and seeds this cycle's four files empty at plan time; they are deleted by explicit path at this cycle's closeout, after the retrospective has read them, never by another cycle's pre-flight.
 
 **What a worker writes.** At the end of each cycle it appends a short entry (3-5 lines) capturing what to carry into the next. Entries are append-only; past ~50 lines the worker consolidates similar entries into one pattern observation **before** adding more. Acknowledging the cap and continuing to append is not consolidation — do the merge first.
 
-**Isolation, both directions.** A worker reads and writes **only** its own memory file. Worker 0 reads all four at closeout for the retrospective — never during the active cycle — and never edits another worker's.
+**Isolation, both directions.** A worker reads and writes **only** its own memory file. Worker-0 reads all four at closeout for the retrospective — never during the active cycle — and never edits another worker's.
 
 ### Spawn-per-cycle dispatch
 
-Worker 0 spawns the workers in this order per slice. Each appends to its own memory file and returns.
+Worker-0 spawns the workers in this order per slice. Each appends to its own memory file and returns.
 
-1. **Worker 1 (planning pass)** — writes the artifact's plan section, sets `Status: planned`.
-2. **Worker 2 (build pass)** — implements the slice, appends a build report, sets `Status: built`.
-3. **Worker 3 (review pass)** — reviews, appends the review section, may create temp tests under `docs/builder/temp-tests/<NNN>/<slice>/`, sets `Status: review-accepted` or `revision-needed`.
-4. **If `revision-needed`:** Worker 0 re-spawns Worker 2 (apply-changes pass, new build report), then Worker 3 (re-review). Repeat until Worker 3 has no unresolved findings, or every remaining finding is intentionally rejected with a recorded reason.
-5. **Worker 1 (final-verification pass)** — runs the slice-local checks, reconciles the spec if needed, appends the final-verification section, sets `Status: final-accepted` or `revision-needed`.
-6. **Worker 0** marks the slice's checkbox `- [x]` only if Worker 1 set `final-accepted`, then appends progress to its own memory file, `docs/builder/worker-memory/<NNN>-worker-0.md`.
+1. **Worker-1 (planning pass)** — writes the artifact's plan section, sets `Status: planned`.
+2. **Worker-2 (build pass)** — implements the slice, appends a build report, sets `Status: built`.
+3. **Worker-3 (review pass)** — reviews, appends the review section, may create temp tests under `docs/builder/temp-tests/<NNN>/<slice>/`, sets `Status: review-accepted` or `revision-needed`.
+4. **If `revision-needed`:** Worker-0 re-spawns Worker-2 (apply-changes pass, new build report), then Worker-3 (re-review). Repeat until Worker-3 has no unresolved findings, or every remaining finding is intentionally rejected with a recorded reason.
+5. **Worker-1 (final-verification pass)** — runs the slice-local checks, reconciles the spec if needed, appends the final-verification section, sets `Status: final-accepted` or `revision-needed`.
+6. **Worker-0** marks the slice's checkbox `- [x]` only if Worker-1 set `final-accepted`, then appends progress to its own memory file, `docs/builder/worker-memory/<NNN>-worker-0.md`.
 
-What every spawn prompt must carry is a mechanical checklist, and it is Worker 0's alone: `worker-0.md` `### Spawn-prompt contents`.
+What every spawn prompt must carry is a mechanical checklist, and it is Worker-0's alone: `worker-0.md` `### Spawn-prompt contents`.
 
 **No cross-worker chatter.** Subagents never message each other. All inter-worker information flows through the artifact and the diff.
 
 ### Isolation is non-waivable
 
-Worker 2 and Worker 3 always run as separate subagent invocations — even for trivial slices, even with no High-severity findings. Combining them would let the agent that wrote the code also approve it.
+Worker-2 and Worker-3 always run as separate subagent invocations — even for trivial slices, even with no High-severity findings. Combining them would let the agent that wrote the code also approve it.
 
 ### Recovery from interrupted subagent runs
 
-If a subagent fails mid-run (transient API error, network failure, time-out), the on-disk diff and the artifact's appended sections are the record of how far it got. Worker 0 dispatches a **fresh subagent of the same role** with explicit "pick up where the prior pass left off" context: the partial artifact, the working-tree diff as authoritative, the worker's own memory file, and the original task contract. The new subagent finishes the **same** pass — no "pass N+1" suffix — and sets the appropriate `Status:`. If the diff is unsalvageable, escalate to the maintainer rather than guessing at rollback.
+If a subagent fails mid-run (transient API error, network failure, time-out), the on-disk diff and the artifact's appended sections are the record of how far it got. Worker-0 dispatches a **fresh subagent of the same role** with explicit "pick up where the prior pass left off" context: the partial artifact, the working-tree diff as authoritative, the worker's own memory file, and the original task contract. The new subagent finishes the **same** pass — no "pass N+1" suffix — and sets the appropriate `Status:`. If the diff is unsalvageable, escalate to the maintainer rather than guessing at rollback.
 
 ## Cross-slice integration pass
 
-After every slice in the spec is checked complete, Worker 1 runs the integration pass and produces `docs/builder/bld-<NNN>-integration.md`. Before writing it, Worker 1 must:
+After every slice in the spec is checked complete, Worker-1 runs the integration pass and produces `docs/builder/bld-<NNN>-integration.md`. Before writing it, Worker-1 must:
 
 1. Read every prior `docs/builder/bld-<NNN>-slice-*.md` artifact in slice order. No "as needed" — every artifact is required context for the cross-slice DRY scan.
 2. Confirm the static inspection helper ran, or was explicitly skipped with a recorded reason, for every Python file with review-worthy logic the build touched.
@@ -493,11 +493,11 @@ After every slice in the spec is checked complete, Worker 1 runs the integration
 
 The pass itself checks for: duplicated helpers across slices; inconsistent naming or error handling between slices; repeated ORM/queryset patterns that should be centralized; misplaced responsibilities between modules touched by different slices; missing or too-broad exports; repeated string literals / dictionary keys / tuple shapes across slices; and whether comments now tell one coherent story across the new code.
 
-If DRY opportunities are found, Worker 1 records them in `bld-<NNN>-integration.md` and asks Worker 0 to dispatch Worker 2 for a consolidation pass and Worker 3 for a review pass. Repeat until clean.
+If DRY opportunities are found, Worker-1 records them in `bld-<NNN>-integration.md` and asks Worker-0 to dispatch Worker-2 for a consolidation pass and Worker-3 for a review pass. Repeat until clean.
 
 ## Final test-run gate
 
-After the integration pass is clean, Worker 1 runs the final test-run gate and produces `docs/builder/bld-<NNN>-final.md`.
+After the integration pass is clean, Worker-1 runs the final test-run gate and produces `docs/builder/bld-<NNN>-final.md`.
 
 The gate is intentionally narrow:
 
@@ -506,11 +506,11 @@ The gate is intentionally narrow:
 - The lint/format/diff gate, all read-only (never `--fix`): `uv run ruff format --check .`, `uv run ruff check .`, and `git diff --check` (whitespace errors and conflict markers anywhere in the tree). Failures block `final-accepted` unless a pre-flight baseline exception was recorded in the plan's preamble.
 - **Floor verification** for every slice in the plan's floor-verification scope: that slice's focused tests, re-run in an isolated floor venv. The shared `.venv` is NOT the floor. See `## Floor verification` for the procedure and what gets recorded — the gate is the backstop confirming it happened, not the owner.
 
-Record each command's pass/fail in `bld-<NNN>-final.md`. On failure, re-loop through whichever slice owns the failing behavior (Worker 1 plans, Worker 0 dispatches Workers 2 and 3, Worker 1 re-runs the gate).
+Record each command's pass/fail in `bld-<NNN>-final.md`. On failure, re-loop through whichever slice owns the failing behavior (Worker-1 plans, Worker-0 dispatches Worker-2 and Worker-3, Worker-1 re-runs the gate).
 
-`bld-<NNN>-final.md` must also include a `### Deferred work catalog` subsection — the next spec author's reading list. Walk every per-slice and integration artifact's spec-reconciliation notes and `What looks solid` / `Notes for Worker 1` sections and surface every item explicitly deferred to a future slice, future spec, or maintainer follow-up: one bullet each with the source artifact section, the spec line that licenses the deferral (if any), and a one-line description. If nothing was deferred, write `No deferred work; the build delivered the spec end-to-end.`.
+`bld-<NNN>-final.md` must also include a `### Deferred work catalog` subsection — the next spec author's reading list. Walk every per-slice and integration artifact's spec-reconciliation notes and `What looks solid` / `Notes for Worker-1` sections and surface every item explicitly deferred to a future slice, future spec, or maintainer follow-up: one bullet each with the source artifact section, the spec line that licenses the deferral (if any), and a one-line description. If nothing was deferred, write `No deferred work; the build delivered the spec end-to-end.`.
 
-The gate closes the build cycle. Worker 0 then marks the final checkbox `- [x]` and appends `## Closing record` to the plan: the gate's command table and the `### Deferred work catalog` copied verbatim from `bld-<NNN>-final.md`, each deferred item given a named owner. The artifacts are deleted at the next cycle's pre-flight, so this copy is the only place the evidence survives in the tree (`### Archiving a plan`).
+The gate closes the build cycle. Worker-0 then marks the final checkbox `- [x]` and appends `## Closing record` to the plan: the gate's command table and the `### Deferred work catalog` copied verbatim from `bld-<NNN>-final.md`, each deferred item given a named owner. The artifacts are deleted at the next cycle's pre-flight, so this copy is the only place the evidence survives in the tree (`### Archiving a plan`).
 
 ## Floor verification
 
@@ -526,7 +526,7 @@ Every command in the gate above runs in the shared `.venv`. **The shared `.venv`
 
 Any slice touching a **Django / Strawberry / channels integration seam** re-runs its **focused** tests at the floor: request/response handling, view or ASGI plumbing, upload or body parsing, the session/auth surface, queryset or expression compilation, schema and type construction against Strawberry internals, consumer or middleware wiring. Not the full sweep — the focused scope for the seam the slice touched.
 
-**Worker 1 declares the scope in the plan preamble and the declaration names the owning pass** — the builder pass for that slice, or Worker 1 itself. The `## Final test-run gate` is the **backstop that confirms it happened**, not a second owner: a planned floor verification no pass ran is grounds for `revision-needed`.
+**Worker-1 declares the scope in the plan preamble and the declaration names the owning pass** — the builder pass for that slice, or Worker-1 itself. The `## Final test-run gate` is the **backstop that confirms it happened**, not a second owner: a planned floor verification no pass ran is grounds for `revision-needed`.
 
 Slices touching none of those seams (docs, KANBAN / glossary regeneration, pure-Python helpers with no framework surface) declare `none` and skip it.
 
@@ -550,7 +550,7 @@ uv pip install --python <scratch>/dsf-floor/bin/python 'django==5.2.16' 'strawbe
 
 The spec is **input** to the build, not output. But implementation routinely reveals gaps (a Decision depending on something unstated), conflicts between Decisions, and codebase realities the spec did not anticipate.
 
-**Only Worker 1** may mutate `docs/spec-<NNN>-<topic>-<0_0_X>.md`, and records each edit in the active artifact under `### Spec changes made (Worker 1 only)` with cited spec line(s), a one-line reason, and the slice that triggered it. Workers 0, 2, and 3 surface spec issues under `### Notes for Worker 1 (spec reconciliation)` instead; they never edit the spec. If an edit fundamentally changes the contract Worker 2 already implemented against, Worker 1 re-spawns Worker 2 for an adjustment pass before final verification.
+**Only Worker-1** may mutate `docs/spec-<NNN>-<topic>-<0_0_X>.md`, and records each edit in the active artifact under `### Spec changes made (Worker-1 only)` with cited spec line(s), a one-line reason, and the slice that triggered it. Worker-0, Worker-2 and Worker-3 surface spec issues under `### Notes for Worker-1 (spec reconciliation)` instead; they never edit the spec. If an edit fundamentally changes the contract Worker-2 already implemented against, Worker-1 re-spawns Worker-2 for an adjustment pass before final verification.
 
 ### `## Current state`: observations stand, predictions do not
 
@@ -558,7 +558,7 @@ Its vintage framing licenses dated **observations** of the pre-build repo, not *
 
 ### Slice splitting
 
-Worker 1 may also **split a planned slice into sub-slices** (e.g. `5a` / `5b`) when implementation reveals it cannot land as one coherent diff — the diff is too large for sensible review, the two halves have independent risk profiles, or one half is blocked while the other can ship. The split is a spec edit, recorded like any other. Worker 1 then returns control to Worker 0 to regenerate the plan's checklist and dispatch each sub-slice in sequence. A split costs an extra artifact and an extra full worker cycle, so reserve it for cases where the unsplit slice would harm review quality.
+Worker-1 may also **split a planned slice into sub-slices** (e.g. `5a` / `5b`) when implementation reveals it cannot land as one coherent diff — the diff is too large for sensible review, the two halves have independent risk profiles, or one half is blocked while the other can ship. The split is a spec edit, recorded like any other. Worker-1 then returns control to Worker-0 to regenerate the plan's checklist and dispatch each sub-slice in sequence. A split costs an extra artifact and an extra full worker cycle, so reserve it for cases where the unsplit slice would harm review quality.
 
 **Estimated new boundary count is a further trigger, independent of diff size.** Boundaries are dense — a rejection path can be three lines — so a unit can be tiny by diff and enormous by boundary. The load is the builder's, not the reviewer's: each new boundary owes a mandatory mutate / run / count-rows / revert / byte-compare loop (`## Failability proofs: prove the test can fail`) on top of the change, its tests, ruff, churn classification, a hot-path number where declared, and a floor venv where scoped. One cohort in a prior build was handed ~20 boundaries, i.e. ~20 such loops in one pass. That overload never surfaces as a refusal; it surfaces as corners cut invisibly — a proof written from memory, a revert asserted in prose, several boundaries folded into one mutation that removes only one.
 
@@ -566,15 +566,15 @@ As with diff size, the obligation is to **answer** the split question in writing
 
 ### Spec stays at its working location
 
-Specs stay at `docs/spec-<NNN>-<topic>-<0_0_X>.md` after the build closes; closing a build does NOT imply archiving the spec. Archival is not a build step at all: `AGENTS.md`'s design-docs rule gives it to the NEXT spec's author, who runs `docs/SPECS/NEXT.md` Step 8 to move every prior spec to `docs/SPECS/` and its companions to `docs/SPECS/appx/`, rewriting every cross-reference in one sweep — never at the completing spec's own merge, never per card. A spec slice or plan line that says "archive the spec" is a spec defect; Worker 1 rewrites it under `### Spec changes made (Worker 1 only)`. Live follow-up state belongs in the durable docs the spec named (`docs/GLOSSARY.md`, `KANBAN.md`, and `CHANGELOG.md` only when the spec or the maintainer authorizes the entry).
+Specs stay at `docs/spec-<NNN>-<topic>-<0_0_X>.md` after the build closes; closing a build does NOT imply archiving the spec. Archival is not a build step at all: `AGENTS.md`'s design-docs rule gives it to the NEXT spec's author, who runs `docs/SPECS/NEXT.md` Step 8 to move every prior spec to `docs/SPECS/` and its companions to `docs/SPECS/appx/`, rewriting every cross-reference in one sweep — never at the completing spec's own merge, never per card. A spec slice or plan line that says "archive the spec" is a spec defect; Worker-1 rewrites it under `### Spec changes made (Worker-1 only)`. Live follow-up state belongs in the durable docs the spec named (`docs/GLOSSARY.md`, `KANBAN.md`, and `CHANGELOG.md` only when the spec or the maintainer authorizes the entry).
 
 ## Slice handoff (no maintainer pause between slices)
 
-The build runs end-to-end without pausing for maintainer review between slices. After Worker 0 marks a slice `- [x]` (Worker 1's final-verification set the artifact to `final-accepted`), Worker 0 IMMEDIATELY dispatches the next slice's planning pass — or, if every spec slice is complete, the cross-slice integration pass. Worker 1's final-verification IS the per-slice safety net; nothing else runs between slices.
+The build runs end-to-end without pausing for maintainer review between slices. After Worker-0 marks a slice `- [x]` (Worker-1's final-verification set the artifact to `final-accepted`), Worker-0 IMMEDIATELY dispatches the next slice's planning pass — or, if every spec slice is complete, the cross-slice integration pass. Worker-1's final-verification IS the per-slice safety net; nothing else runs between slices.
 
-The maintainer's first touch point is after the final gate sets `bld-<NNN>-final.md` to `final-accepted` and Worker 0 marks the final checkbox. Worker 0 then stops driving and hands off; the maintainer reviews the whole build and commits the source changes + every `bld-*.md` artifact + spec edits + the completed plan, at their discretion. The closeout retrospective runs after that commit, not before.
+The maintainer's first touch point is after the final gate sets `bld-<NNN>-final.md` to `final-accepted` and Worker-0 marks the final checkbox. Worker-0 then stops driving and hands off; the maintainer reviews the whole build and commits the source changes + every `bld-*.md` artifact + spec edits + the completed plan, at their discretion. The closeout retrospective runs after that commit, not before.
 
-If anything goes wrong mid-cycle (an unresolvable spec ambiguity, an unsalvageable diff, a stop-condition in `worker-0.md`), Worker 0 escalates immediately rather than waiting for the end of the build. The non-pause rule applies to the happy path, not to genuine blockers.
+If anything goes wrong mid-cycle (an unresolvable spec ambiguity, an unsalvageable diff, a stop-condition in `worker-0.md`), Worker-0 escalates immediately rather than waiting for the end of the build. The non-pause rule applies to the happy path, not to genuine blockers.
 
 Workers also never amend, force-push, or otherwise rewrite git history.
 

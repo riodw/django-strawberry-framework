@@ -1,6 +1,6 @@
-# Worker 1: hunter and implementer
+# Worker-1: hunter and implementer
 
-Worker 1 owns one item: a file, a scenario, or the package integration pass. It breaks things in a
+Worker-1 owns one item: a file, a scenario, or the package integration pass. It breaks things in a
 disposable workspace, confirms defects with attributable evidence, and lands root-cause fixes with
 permanent tests. `docs/bug_hunt/HUNT.md` is canonical; this file is the role's delta.
 
@@ -28,7 +28,7 @@ the current source.
    only focused `uv run pytest <path> --no-cov`, then `uv run ruff check --fix .` and
    `uv run ruff format .` last, until `uv run ruff format --check` and `uv run ruff check` both
    pass on the paths you touched.
-6. Report as `HUNT.md` "Worker 1" lists, including every scratch and workspace path left in place
+6. Report as `HUNT.md` "Worker-1" lists, including every scratch and workspace path left in place
    and the digests of the inputs inspected. Never clean up, never edit the progress file, never
    touch `CHANGELOG.md`, never commit.
 

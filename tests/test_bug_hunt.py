@@ -93,8 +93,8 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     assert "Record the contract row for every boundary before probing it" in report
     assert "Every claim links to an evidence record" in report
     assert "Do not clean up scratch probes" in report
-    assert "leave it intact so Worker 2 can replay it" in report
-    assert "Report evidence, changed files, tests, and validation to Worker 0" in report
+    assert "leave it intact so Worker-2 can replay it" in report
+    assert "Report evidence, changed files, tests, and validation to Worker-0" in report
     assert "layers often fail only when several reasonable assumptions stack together" in report
     assert "- [ ] django_strawberry_framework/module.py" in report
     assert "Use django_strawberry_framework/module.py as the entry point" in report
@@ -122,7 +122,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     assert "- [ ] Package integration" in report
     assert "including public exports and `__init__.py` files" in report
     assert "- [ ] Final test gate" in report
-    assert "    - Owner: Worker 0" in report
+    assert "    - Owner: Worker-0" in report
     assert "## Owned changes" in report
     assert "## Outcomes" in report
     assert report.index(stripped.name) < report.index("## Scenarios")

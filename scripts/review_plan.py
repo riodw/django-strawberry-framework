@@ -294,10 +294,10 @@ _GATE_ITEM = Item(
     label="Final gate",
     artifacts=(),
     extra=(
-        "Runs: `uv run pytest`; every `## Pending execution` command from every artifact; the "
-        "`## Bench baseline` commands in a fresh workspace copy, delta recorded; "
-        "`FAKESHOP_SHARDED=1` and `FAKESHOP_PG_DSN` suites in a fresh gate copy that keeps "
-        '`.git` (REVIEW.md "Final gate and closeout"), each w/ its own counts',
+        "Runs: `uv run python scripts/workspace.py gate review` (default, `FAKESHOP_SHARDED=1` "
+        'and Postgres suites in a gate copy that keeps a git index, REVIEW.md "Final gate and '
+        'closeout"), each w/ its own counts; every `## Pending execution` command from every '
+        "artifact; the `## Bench baseline` commands at `<phase>` `gate`, delta recorded",
     ),
 )
 
@@ -435,15 +435,15 @@ def _assert_unique_artifacts(items: Sequence[Item]) -> None:
             owners[name] = item.label
 
 
+_BENCH_RUN = "uv run python scripts/workspace.py run review/bench/<phase>"
 _BENCH_COMMANDS = (
-    'uv run --directory "$WS" python scripts/bench_plan_cache.py '
+    f"{_BENCH_RUN} -- python scripts/bench_plan_cache.py "
     "--json <scratch>/bench/<phase>/plan_cache.json",
-    'uv run --directory "$WS" python scripts/bench_optimizer_walk.py '
+    f"{_BENCH_RUN} -- python scripts/bench_optimizer_walk.py "
     "--json <scratch>/bench/<phase>/optimizer_walk.json",
-    "FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop "
-    'uv run --directory "$WS" --group pg python scripts/bench_nested_fetch.py '
+    f"{_BENCH_RUN} --cell pg -- python scripts/bench_nested_fetch.py "
     "--json <scratch>/bench/<phase>/nested_fetch.json",
-    'uv run --directory "$WS" python scripts/importtime_report.py --rounds 5 '
+    f"{_BENCH_RUN} -- python scripts/importtime_report.py --rounds 5 "
     "--json <scratch>/bench/<phase>/importtime.json",
 )
 
@@ -454,10 +454,10 @@ def _bench_baseline_block() -> list[str]:
         "## Bench baseline",
         "",
         "Each figure is bound by the package digest and instrument ids in its provenance",
-        "header; `CYCLE_BASELINE` is recorded beside it. `$WS` is a fresh workspace copy",
-        '(REVIEW.md "Workspace"), `<scratch>` the absolute session scratchpad, `<phase>` either',
-        "`baseline` or `gate`. The nested-fetch row runs against the cycle's Postgres container",
-        '(REVIEW.md "Database cells"; DSN in `## Cycle baseline`).',
+        "header; `CYCLE_BASELINE` is recorded beside it, and each run's workspace run id",
+        '(REVIEW.md "Workspace"). `<scratch>` is the absolute session scratchpad, `<phase>`',
+        "either `baseline` or `gate`, each its own copy. The nested-fetch row runs in that",
+        'copy\'s own Postgres database (REVIEW.md "Database cells").',
         "Worker-0 fills Baseline at cycle entry, Gate and Delta at the final gate.",
         "",
         "| Command | Baseline | Gate | Delta |",

@@ -124,14 +124,14 @@ def test_plan_renders_review_shape_in_order(repo: Path, tmp_path: Path) -> None:
     bench = text.split("## Bench baseline", 1)[1].split("## How to work one item", 1)[0]
     rows = [line for line in bench.splitlines() if line.startswith("| `")]
     assert [row.split("`")[1] for row in rows] == [
-        'uv run --directory "$WS" python scripts/bench_plan_cache.py '
-        "--json <scratch>/bench/<phase>/plan_cache.json",
-        'uv run --directory "$WS" python scripts/bench_optimizer_walk.py '
-        "--json <scratch>/bench/<phase>/optimizer_walk.json",
-        "FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop "
-        'uv run --directory "$WS" --group pg python scripts/bench_nested_fetch.py '
-        "--json <scratch>/bench/<phase>/nested_fetch.json",
-        'uv run --directory "$WS" python scripts/importtime_report.py --rounds 5 '
+        "uv run python scripts/workspace.py run review/bench/<phase> -- "
+        "python scripts/bench_plan_cache.py --json <scratch>/bench/<phase>/plan_cache.json",
+        "uv run python scripts/workspace.py run review/bench/<phase> -- "
+        "python scripts/bench_optimizer_walk.py --json <scratch>/bench/<phase>/optimizer_walk.json",
+        "uv run python scripts/workspace.py run review/bench/<phase> --cell pg -- "
+        "python scripts/bench_nested_fetch.py --json <scratch>/bench/<phase>/nested_fetch.json",
+        "uv run python scripts/workspace.py run review/bench/<phase> -- "
+        "python scripts/importtime_report.py --rounds 5 "
         "--json <scratch>/bench/<phase>/importtime.json",
     ]
     assert "importtime -c" not in text

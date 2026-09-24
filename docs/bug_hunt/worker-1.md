@@ -15,8 +15,8 @@ the current source.
 
 ## Job
 
-1. Build the workspace as `HUNT.md` "Workspace" describes and print its package path and database
-   target into the record before the first probe.
+1. Run every probe through `workspace.py run hunt/<item>/hunt` as `HUNT.md` "Workspace" describes;
+   the record cites each run id, whose header carries the package path and database target.
 2. Record the contract row for every boundary you will probe. A boundary nobody can cite a contract
    for is reported `Blocked`, never fixed.
 3. Break things inside the workspace; discharge every axis of the mandatory matrix with a probe or
@@ -28,7 +28,7 @@ the current source.
    only focused `uv run pytest <path> --no-cov`, then `uv run ruff check --fix .` and
    `uv run ruff format .` last, until `uv run ruff format --check` and `uv run ruff check` both
    pass on the paths you touched.
-6. Report as `HUNT.md` "Worker-1" lists, including every scratch and workspace path left in place
+6. Report as `HUNT.md` "Worker-1" lists, including every scratch path and run id left in place
    and the digests of the inputs inspected. Never clean up, never edit the progress file, never
    touch `CHANGELOG.md`, never commit.
 

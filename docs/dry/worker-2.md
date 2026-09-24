@@ -23,9 +23,9 @@ artifact. Never Worker-1's `worker-memory/`.
    projection) and that no oracle was rewritten to read from the owner it checks.
 4. Confirm observable equivalence on the axes of `DRY.md` principle 8, using fresh scratch tests
    under `docs/dry/temp-tests/<scope>/` when execution gives stronger evidence than inspection;
-   anything mutating source runs in a fresh workspace copy taken after Worker-1's edits, as
-   `DRY.md` "Tests" describes. Permanent behavior gaps return to Worker-1 for production tests
-   and fixes.
+   anything mutating source runs through `workspace.py` at your address `dry/<item>/verify-<n>`,
+   whose first run syncs a copy taken after Worker-1's edits, as `DRY.md` "Tests" describes.
+   Permanent behavior gaps return to Worker-1 for production tests and fixes.
 5. For a zero-edit family, folder, or project item, confirm the scoped diff is empty and search
    independently for a real consolidation before accepting. For a file item, validate coverage and
    assignment and route any candidate to its holding family; never demand a production edit.

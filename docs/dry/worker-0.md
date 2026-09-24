@@ -24,13 +24,14 @@ Entry: `Execute docs/dry/DRY.md (You are Worker-0)`.
 
 ## Dispatch one item
 
-1. Record the item baseline as `DRY.md` "Baseline and ownership" describes.
+1. Run `uv run python scripts/workspace.py baseline dry/<item>` and record the item baseline as
+   `DRY.md` "Baseline and ownership" describes.
 2. Spawn a fresh Worker-1 with the item (file, family, folder, project, or final gate), its
-   artifact path, the run id, the baseline, the `## Owned changes` ledger, and the required
-   reading.
+   artifact path, the run id, the baseline, the `## Owned changes` ledger, its address
+   `dry/<item>/consolidate`, and the required reading.
 3. Dispatch by artifact status: `ready-for-verification/<n>` → Worker-2 (fresh on pass 1, the
-   same one afterwards), given the plan item, target, item-scoped diff, and a fresh workspace
-   first and told to record its own trace before reading
+   same one afterwards), given the plan item, target, item-scoped diff, and its address
+   `dry/<item>/verify-<n>` first and told to record its own trace before reading
    `## Findings`; `revision-needed` → Worker-1; `designed` → a Worker-1 with edit rights, or the
    maintainer; `verified` → advance in `autonomous` mode, or report the outcome and wait for the
    maintainer in `pause-after-each-item`. Add a `## Families` item whenever an artifact names a

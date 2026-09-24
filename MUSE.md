@@ -211,9 +211,10 @@ What to read:
   current `## Run …` section. Ledger rows are `- [x]`/`- [ ] File|Family|Folder integration`.
 - HUNT progress lives in the newest `Fold <UTC> (Worker-0):` paragraph and `## Current status`;
   its last sentence is always `In flight now: …`. Item statuses `verified/stale/pending/hunting`.
-- Disk: the hunt's `hunt-ws/` copies are the consumer (1.5 GB steady, once recursed
-  `hunt-ws/*/hunt-ws/` four deep). Free space went 24 → 17 GB over one day. Warn below 10 GB; the
-  prompts tell Worker-0 to stop dispatching below 6 GB.
+- Disk: workspace copies are the consumer. In-tree `hunt-ws/` copies once held 1.5 GB steady and
+  recursed `hunt-ws/*/hunt-ws/` four deep (free space 24 → 17 GB in a day); `scripts/workspace.py`
+  now keeps a capped pool per flow outside the tree and refuses a new copy below 6 GB free
+  (`workspace.py status` shows it). Warn below 10 GB.
 - Coverage-gate regressions are NOT loop material unless the maintainer asked; the hunt's
   guards + tests land uncommitted and are its business.
 
@@ -239,8 +240,9 @@ Helper scripts kept in the scratchpad (`summ.py`, `tail.py`): payload_type censu
   recorded; a worker Worker-0 dispatched in the same write is frozen seconds old and continues on
   SIGCONT. Nothing is killed. Run it with the Bash tool's `run_in_background` so its exit notifies
   the supervisor (a detached `&` launch does not).
-- `kill -TERM <pid>` ends the run; the ledger keeps whatever Worker-0 last wrote; workspaces under
-  `hunt-ws/` and `docs/dry/temp-tests/` stay for the next launch to clean.
+- `kill -TERM <pid>` ends the run; the ledger keeps whatever Worker-0 last wrote; workspace copies
+  and `docs/dry/temp-tests/` stay for the next launch (`workspace.py gc <flow>` clears the
+  copies).
 - The check-in loop: `ScheduleWakeup stop` when pausing, re-arm on resume.
 
 ### 4.2 Messages and typed steering (not available for `muse exec`)
@@ -325,9 +327,9 @@ Context you must absorb before your first action:
    names, "partial expectation files are never to be opened"; on-disk things to KEEP.
 6. Counts at last write (items/checked/unchecked; verified/stale/pending/hunting) and the full
    stale list, so the agent's first census has an oracle.
-7. Disk: current free GB, the workspace-copy recursion hazard (exclude `hunt-ws` from every
-   copy), delete per-item scratch at item close, keep expectation files, stop dispatching below
-   6 GB and write a decision request, "delete nothing outside <your scratch>".
+7. Disk: current free GB, "copies only through `scripts/workspace.py`, never by hand", delete
+   per-item scratch at item close, keep expectation files, stop dispatching when `workspace.py`
+   refuses a copy for disk and write a decision request, "delete nothing outside <your scratch>".
 8. Concurrent work in the same tree that is NOT yours and NOT to be reverted: the other flow's
    directories and files, the MIXED files with which hunks belong to whom, "attribute every
    hunk by DIFF CONTENT against `git show HEAD:<path>`, never by filename", "record blocked-on-
@@ -337,12 +339,12 @@ Context you must absorb before your first action:
    previously, worker, grader, feedback); docstring-only production edits remove no duplication.
 10. Open maintainer decisions carried unchanged: list them; "do not resolve them yourself; the
     final gate stays blocked on X".
-11. Standing rules: no commit, no branch create/switch, no `git stash`/`git checkout --`/
-    `git restore`, `git add <path>` only if the flow calls for staging; after every edit
-    `uv run ruff check --fix --exclude hunt-ws .` then `uv run ruff format --exclude hunt-ws .`;
-    no `pragma: no cover`; scratch under `hunt-ws/`, `docs/<flow>/temp-tests/` or the OS temp
-    dir, never the repo root; run to `Status: complete` or a genuine maintainer decision; when
-    blocked, write the decision request into the ledger and stop.
+11. Standing rules: no commit, no branch create/switch, no `git stash`/`git checkout --`/ `git
+    restore`, `git add <path>` only if the flow calls for staging; after every edit `uv run ruff
+    check --fix --exclude hunt-ws .` then `uv run ruff format --exclude hunt-ws .`; no `pragma: no
+    cover`; scratch under `docs/<flow>/temp-tests/` or the OS temp dir, copies through
+    `workspace.py`, never the repo root; run to `Status: complete` or a genuine maintainer
+    decision; when blocked, write the decision request into the ledger and stop.
 ```
 
 Things that measurably helped:

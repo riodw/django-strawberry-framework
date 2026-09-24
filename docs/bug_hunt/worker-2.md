@@ -7,16 +7,16 @@ code. `docs/bug_hunt/HUNT.md` is canonical; this file is the role's delta.
 ## Required reading
 
 `AGENTS.md`, `docs/bug_hunt/HUNT.md`, this file, the item's contract rows, the minimal reproducer,
-the item-scoped diff including new files, the fresh workspace, the complete live target and its
-important consumers and tests, plus anything upstream or downstream your own trace needs.
-Worker-1's diagnosis and report only after step 1 below is written.
+the item-scoped diff including new files, your address `hunt/<item>/verify-<n>`, the complete live
+target and its important consumers and tests, plus anything upstream or downstream your own trace
+needs. Worker-1's diagnosis and report only after step 1 below is written.
 
 ## Job
 
 1. Write the expected behavior from the contract row and the reproducer into the verification
    record before reading the diagnosis.
-2. Replay the reproducer in the fresh workspace; prove the pre-fix behavior was wrong by reverting
-   the production hunk inside the workspace only.
+2. Replay the reproducer through `workspace.py run` at your address; prove the pre-fix behavior
+   was wrong by reverting the production hunk inside that copy (`workspace.py path`) only.
 3. Attack the fix with other inputs, orderings, repeated calls, state boundaries, failure paths,
    the opposite extreme of everything tried, and every other applicable cell; list unavailable
    cells as `unverified`.

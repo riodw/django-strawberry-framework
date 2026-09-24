@@ -294,6 +294,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_sets_mixins.py",
     "tests/test_strawberry_patches.py",
     "tests/test_views.py",
+    "tests/test_workspace.py",
     "tests/testing/__init__.py",
     "tests/testing/test_client.py",
     "tests/testing/test_relay.py",

@@ -216,7 +216,7 @@ First try to DISPROVE shared responsibility: inputs, outputs, errors, state tran
 framework hooks, extension points, reasons to change. Read test bodies + public docs; names +
 structure ≠ proof. Uncertain behavior → small executable experiment under
 `docs/dry/temp-tests/<scope>/` (untracked), read-only against the live package. Anything that
-mutates source runs only in the disposable workspace ("Tests"). Record command + what it proved.
+mutates source runs only through `workspace.py` ("Tests"). Record command + what it proved.
 
 Confirmed family → ownership decision (principle 7), then the shape: reuse/extend an existing
 owner; move policy from callers into the owning object/lifecycle; parallel representations → one
@@ -282,27 +282,28 @@ That runner mutates and restores the checkout it lives in: root from its own pat
 resolved against it, pytest run inside it, scratch root refused inside it. Copying a target under
 `temp-tests/` redirects nothing; running the live script on a package target edits the shared tree
 and its restore can erase a concurrent edit ([HUNT.md][hunt] "A scratch directory is not a
-sandbox"). Workspace = the hunt's recipe:
+sandbox"). Every source-mutating run goes through [workspace.py][workspace], which builds, syncs,
+checks and cleans the copy; a worker names only its address:
 
 ```shell
-WS=<scratch>/dry-ws/<item>
-rsync -a --exclude .git --exclude .venv --exclude '__pycache__' --exclude docs/ ./ "$WS/"
-uv run --directory "$WS" python -c "import django_strawberry_framework as p; print(p.__file__)"
+uv run python scripts/workspace.py run dry/<item>/<role> [--cell sharded|pg] [--fresh] -- <cmd>
+uv run python scripts/workspace.py prove dry/<item>/<role> <manifest.json>
+uv run python scripts/workspace.py path dry/<item>/<role>
 ```
 
-Copy of the live tree, cycle edits included. Every command runs w/ `$WS` as cwd via
-`uv run --directory "$WS"`: `--project` alone keeps the caller's cwd on `sys.path`, so the import
-above then prints the SHARED package and the check passes for the wrong tree. Run THAT copy's
-runner the same way w/ `--scratch-root` outside both trees; before any verdict record the printed
-package `__file__` + the database `NAME` resolved from inside `$WS`; never branch. A proof
-importing the shared checkout or opening its database = invalid, whatever it showed. Worker-2
-takes a fresh copy after Worker-1's edits. The entry command authorizes any run inside `$WS`, a
-focused permanent test w/ `--no-cov` in the shared tree, and the final gate `uv run pytest`;
-nothing else converts into a test run, and a proof needing one it can't get =
-`execution-deferred`. `FAKESHOP_SHARDED=1` and Postgres cells need Rio's separate word; without
-it they stay `unverified` and the gate lists them, unless `inapplicable by construction`: the
-target's code path reaches no database, alias or dialect decision, Worker-1 states the reason,
-Worker-2 judges it.
+`<role>` is `consolidate` (Worker-1) or `verify-<n>` (Worker-2 on pass `<n>`: a new address, so
+its first run syncs a copy taken after Worker-1's edits). The copy mirrors the live tree, cycle
+edits included; `<cmd>` is what follows `uv run`. `prove` runs that copy's runner w/
+`--workspace` and its scratch outside both trees. Every run prints a provenance header (run id,
+copy, package `__file__` and digest, cell and database `NAME`s, copy fresh or modified, shared
+tree moved since the sync) and refuses to run (exit 125) when the package, the interpreter or a
+database resolves outside the copy; a record cites the run id. Never branch. The entry command
+authorizes any `workspace.py run` or `prove`, a focused permanent test w/ `--no-cov` in the
+shared tree, and the final gate `workspace.py gate dry`; nothing else converts into a test run,
+and a proof needing one it can't get = `execution-deferred`. `--cell sharded` and `--cell pg`
+need Rio's separate word; without it they stay `unverified` and the gate lists them, unless
+`inapplicable by construction`: the target's code path reaches no database, alias or dialect
+decision, Worker-1 states the reason, Worker-2 judges it.
 
 ### Defects found while tracing
 
@@ -369,10 +370,11 @@ appends one `Drift: <date> HEAD <old>..<new>; dirty + <paths>` line under the cu
 heading (the header `Run:` line on the first run, `## Run <release> <date>-<n>` afterwards),
 continuation lines indented two spaces. A drifted path is concurrent work like the rest.
 
-Per item: `ITEM_BASELINE=$(git stash create)` + the same listings, for the item-scoped comparison
-only. Item-scoped diff = `git diff <item baseline> -- <paths touched>` PLUS every file the item
-added (`git diff --no-index /dev/null <new>`): a new owner and its tests never drop out of review
-for being unstaged.
+Per item: `uv run python scripts/workspace.py baseline dry/<item>` prints `ITEM_BASELINE` (`git
+stash create`, or the `HEAD` sha) and takes the item's `before` copy; Worker-0 records it + the
+same listings, for the item-scoped comparison only. Item-scoped diff = `git diff <item baseline> --
+<paths touched>` PLUS every file the item added (`git diff --no-index /dev/null <new>`): a new
+owner and its tests never drop out of review for being unstaged.
 
 Dirty ≠ untouchable. Each item landing tracked edits or new files appends to the plan's
 `## Owned changes`: path, item, symbols changed. A later item may build on a path listed there.
@@ -383,9 +385,9 @@ touches; dirt elsewhere is concurrent work to leave alone, not a stop. Same stop
 item-scoped diff shows hunks the worker didn't make. A file clean at cycle entry, dirty w/o a
 ledger row = external.
 
-A test failing before the item's first edit is pre-existing: reproduce it in a workspace copy taken
-before that edit, record it under `## Defects` w/ owner + the failing command, route to Rio
-through Worker-0. It blocks the gate row, never the item.
+A test failing before the item's first edit is pre-existing: reproduce it in the item's `before`
+copy, record it under `## Defects` w/ owner + the failing command, route to Rio through Worker-0.
+It blocks the gate row, never the item.
 
 ### Workers
 
@@ -402,41 +404,40 @@ an investigation that stopped at the target's own module has not been done. Only
 scoped: the owner, its tests, the ledger rows the item lands.
 
 1. **Worker-0** dispatches in plan order: file items; a family item as soon as an artifact names
-   it, before the folder item holding its members; folder items; project; gate. Per item: record
-   the baseline, spawn a fresh Worker-1 w/ the item, artifact path, run id, baseline, ledger,
-   required reading. Artifact `Status:` drives the next step: `ready-for-verification/<n>` →
-   Worker-2 (fresh on pass 1);
-   `designed` → Worker-1 w/ edit rights, or Rio; `revision-needed` → Worker-1 again, and its
-   resubmission returns to the SAME Worker-2 whose trace is already on disk (fresh only when that
-   context is gone; two failed re-passes → `blocked`, Rio decides; a standing Worker-1 / Worker-2
-   disagreement → `blocked` at once w/ both positions recorded, never a third pass to break it);
-   `verified` → ledger rows,
-   tick, advance (`autonomous`) or
-   report + wait for Rio's go (`pause-after-each-item`). Adds `## Families` items, index rows,
-   ledger rows; reconciles unattributed hunks w/ Rio before further dispatch; removes item scratch
-   by explicit path after `verified` only. Never reviews, implements, approves, overrides Worker-2.
+   it, before the folder item holding its members; folder items; project; gate. Per item: run
+   `workspace.py baseline dry/<item>`, spawn a fresh Worker-1 w/ the item, artifact path, run id,
+   baseline, ledger, its address `dry/<item>/consolidate`, required reading. Artifact `Status:`
+   drives the next step: `ready-for-verification/<n>` → Worker-2 (fresh on pass 1); `designed` →
+   Worker-1 w/ edit rights, or Rio; `revision-needed` → Worker-1 again, and its resubmission
+   returns to the SAME Worker-2 whose trace is already on disk (fresh only when that context is
+   gone; two failed re-passes → `blocked`, Rio decides; a standing Worker-1 / Worker-2 disagreement
+   → `blocked` at once w/ both positions recorded, never a third pass to break it); `verified` →
+   ledger rows, tick, advance (`autonomous`) or report + wait for Rio's go
+   (`pause-after-each-item`). Adds `## Families` items, index rows, ledger rows; reconciles
+   unattributed hunks w/ Rio before further dispatch; removes item scratch by explicit path and
+   runs `workspace.py release dry/<item>` after `verified` only, and `release dry/<item> --role
+   verify-<n>` when a pass returns `revision-needed`. Never reviews, implements, approves,
+   overrides Worker-2.
 2. **Worker-1** traces the family/target system-wide, tries to disprove each candidate, writes the
    artifact; confirmed consolidation → implements at the owner w/ permanent tests in the same
    change. `Status: ready-for-verification/<n>` (n = submission pass) for edited AND proved
    zero-edit results. No edit rights (design pass) → `Status: designed`: findings complete +
    unapplied, proofs ≤ `static-reviewed`.
-3. **Worker-2** works expectation-first: receives the plan item, target, item-scoped diff and
-   fresh workspace, records its own trace (sites, roles, definition counts, owner) in
-   `## Independent verification (Worker-2)` BEFORE reading `## Findings`; then checks
-   `### Enumeration` member by member, never by sample; challenges equivalence + ownership;
-   confirms matrix discharged against the target's REAL surface (claimed inapplicability judged
-   on its reason); confirms each gate fails its negative control; checks the item-scoped diff
-   against [AGENTS.md][agents] prose rules (no process provenance, `path::Symbol` citations, test
-   tier) and runs `uv run ruff format --check` + `uv run ruff check` on the paths it touched (a
-   failure is `revision-needed`); records defects it finds under `## Defects` marked
-   `(Worker-2)`. Zero-edit family /
-   folder / project item → searches for a real consolidation before accepting; zero-edit FILE
-   item → validates coverage + assignment and routes any candidate to its holding family (a file
-   item never owes a production edit). `verified` (a `proof:` entry remains → plan item marked
-   `verified, pending execution`; `gate:` entries alone leave it `verified`) or
-   `revision-needed` w/ concrete named candidates.
-   Worker-2 alone completes a plan item; verification goes stale (item reopens) when any
-   freshness fingerprint changes.
+3. **Worker-2** works expectation-first: receives the plan item, target, item-scoped diff and its
+   address `dry/<item>/verify-<n>`, records its own trace (sites, roles, definition counts, owner)
+   in `## Independent verification (Worker-2)` BEFORE reading `## Findings`; then checks `###
+   Enumeration` member by member, never by sample; challenges equivalence + ownership; confirms
+   matrix discharged against the target's REAL surface (claimed inapplicability judged on its
+   reason); confirms each gate fails its negative control; checks the item-scoped diff against
+   [AGENTS.md][agents] prose rules (no process provenance, `path::Symbol` citations, test tier) and
+   runs `uv run ruff format --check` + `uv run ruff check` on the paths it touched (a failure is
+   `revision-needed`); records defects it finds under `## Defects` marked `(Worker-2)`. Zero-edit
+   family / folder / project item → searches for a real consolidation before accepting; zero-edit
+   FILE item → validates coverage + assignment and routes any candidate to its holding family (a
+   file item never owes a production edit). `verified` (a `proof:` entry remains → plan item marked
+   `verified, pending execution`; `gate:` entries alone leave it `verified`) or `revision-needed`
+   w/ concrete named candidates. Worker-2 alone completes a plan item; verification goes stale
+   (item reopens) when any freshness fingerprint changes.
 
 Cross-file changes expected when a family reveals a package-owned rule. Unrelated cleanup out of
 scope. After an edit: `uv run ruff check --fix .`, then `uv run ruff format .` last, until
@@ -495,19 +496,20 @@ reasoning. No inventories, copied tool output, empty placeholders.
 
 ### Final gate and closeout
 
-Every item but the gate verified + inventory re-reconciled → Worker-0 dispatches the gate
-Worker-1 (the entry command authorized `uv run pytest`). Gate = full suite + package coverage 100%
-+ every `## Pending execution` command from every artifact, run as listed (a green unmutated suite
-discharges no failability proof). Record failures, coverage, skips, xfails, collected/selected
-counts, `FAKESHOP_SHARDED` mode: sharded-only tests skip by default, so their behaviors stay
-unverified unless Rio also authorizes a `FAKESHOP_SHARDED=1` run. Bind the result:
-`git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + mode. Change to
-package source, tests, fixtures, pytest/coverage config, dependencies or mode invalidates it; prose
-doesn't. Worker-2 completes the gate row by confirming the bound inputs still match the tree and
-each pending command ran. Failure in a path an item touched, or of a `proof:` command → that
-item back to Worker-1; a failing `gate:` command reopens no item; failure reproduced against
-`git show HEAD:` of its test + target → pre-existing, `## Defects`, gate row `blocked` on it for
-Rio; environment failure → recorded precisely, `blocked`.
+Every item but the gate verified + inventory re-reconciled → Worker-0 dispatches the gate Worker-1
+(the entry command authorized `workspace.py gate dry`: the suite in a gate copy carrying its own
+git index). Gate = full suite + package coverage 100% + every `## Pending execution` command from
+every artifact, run as listed (a green unmutated suite discharges no failability proof). Record
+failures, coverage, skips, xfails, collected/selected counts, `FAKESHOP_SHARDED` mode: sharded-only
+tests skip by default, so their behaviors stay unverified unless Rio also authorizes a
+`FAKESHOP_SHARDED=1` run (`--suites default,sharded`, `pg` likewise). The gate's result file binds
+it: `git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + each suite's
+cell. Change to package source, tests, fixtures, pytest/coverage config, dependencies or mode
+invalidates it; prose doesn't. Worker-2 completes the gate row by confirming the bound inputs still
+match the tree and each pending command ran. Failure in a path an item touched, or of a `proof:`
+command → that item back to Worker-1; a failing `gate:` command reopens no item; failure reproduced
+against `git show HEAD:` of its test + target → pre-existing, `## Defects`, gate row `blocked` on
+it for Rio; environment failure → recorded precisely, `blocked`.
 
 Worker-0 fills `## Outcomes` BEFORE deleting anything. Artifacts are untracked; Outcomes is the
 only record a later run can invalidate a verdict from. Per finding: rule, owner before/after, each
@@ -516,10 +518,10 @@ judgment. Per run: machinery deleted; rejections w/ triggers; families left open
 (each on a NAMED owning card); coupling introduced; net source change vs cycle baseline; gate
 record; cells unverified; blocked items w/ the decision owed; concurrent work untouched. Then
 `Status: complete` (`partial (<scope>)` for a scoped run; `blocked` w/ the decision Rio owes);
-remove only this run's `docs/dry/temp-tests/<scope>/` dirs, `<scratch>/dry-ws/`, +
-`docs/dry/worker-memory/` contents, by explicit path. Never recursively clear `docs/dry/`; never
-delete another run's scratch. Never
-remove `DRY.md`, the role files, the planner, or the plan. Do not commit.
+remove only this run's `docs/dry/temp-tests/<scope>/` dirs + `docs/dry/worker-memory/` contents, by
+explicit path, then `uv run python scripts/workspace.py gc dry` (copies, evidence, databases).
+Never recursively clear `docs/dry/`; never delete another run's scratch. Never remove `DRY.md`, the
+role files, the planner, or the plan. Do not commit.
 
 <!-- LINK DEFINITIONS -->
 
@@ -553,6 +555,7 @@ remove `DRY.md`, the role files, the planner, or the plan. Do not commit.
 <!-- examples/ -->
 
 <!-- scripts/ -->
+[workspace]: ../../scripts/workspace.py
 
 <!-- .venv/ -->
 

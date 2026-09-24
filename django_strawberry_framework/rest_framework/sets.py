@@ -1,4 +1,4 @@
-"""The ``SerializerMutation`` base + ``Meta`` validation + the phase-2.5 bind (spec-039).
+"""``SerializerMutation`` base + ``Meta`` validation + the input seams the phase-2.5 bind calls.
 
 The DRF-serializer write surface, riding the ``036`` mutation seams
 (``mutations/sets.py``) exactly as ``038``'s ``DjangoModelFormMutation`` does

@@ -1,4 +1,4 @@
-"""Mutations subsystem - the write side (spec-036).
+"""Mutations subsystem - the write side.
 
 A six-module subpackage in the spirit of ``filters/`` / ``orders/`` (Decision 4's
 ``inputs`` / ``sets`` / ``resolvers`` / ``fields`` quartet plus ``permissions.py``

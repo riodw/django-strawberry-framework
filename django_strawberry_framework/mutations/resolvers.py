@@ -1,4 +1,4 @@
-"""The sync + async create / update / delete write pipeline (spec-036).
+"""The sync + async create / update / delete write pipeline + the skeleton every flavor rides.
 
 The write-side runtime: one pipeline per operation, in a sync and an async form
 (spec-036 Decision 8). The pipeline is

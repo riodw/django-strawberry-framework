@@ -1,4 +1,4 @@
-"""The sync + async serializer-mutation resolver pipeline (spec-039).
+"""The sync + async serializer-mutation resolver pipeline.
 
 The DRF-serializer write runtime, the third sibling of ``mutations/resolvers.py``
 (the ``036`` model pipeline) and ``forms/resolvers.py`` (the ``038`` form

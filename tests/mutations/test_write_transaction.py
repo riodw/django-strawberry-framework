@@ -1,4 +1,4 @@
-"""The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
+"""The mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 
 Completion-spanning transaction internals: the plain-``strawberry.Schema``
 refusal, concurrent async savepoint isolation, ``BaseException`` unwind,

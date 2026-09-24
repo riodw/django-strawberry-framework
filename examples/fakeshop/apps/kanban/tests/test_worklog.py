@@ -1,4 +1,4 @@
-"""Tests for the Phase 2 work-tracking dimension.
+"""Kanban work-tracking tests for card status, transitions, attempts, decisions, and readiness.
 
 Covers the status state machine (``services.set_card_status`` + the signal
 guard), ``CardTransition`` logging, the ``WorkAttempt`` lifecycle, ``Decision``

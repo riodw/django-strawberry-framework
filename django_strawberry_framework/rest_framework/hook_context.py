@@ -1,4 +1,4 @@
-"""The frozen serializer-hook context + upload metadata (the hardening pass).
+"""The frozen serializer-hook context + upload metadata.
 
 The consumer hooks (``get_serializer_kwargs`` / ``get_serializer_injected_data`` /
 ``get_serializer_save_kwargs``) no longer receive the LIVE located model instance:

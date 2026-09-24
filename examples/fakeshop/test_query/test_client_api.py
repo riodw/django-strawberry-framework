@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP acceptance tests for the spec-043 test-client family.
+"""Live GraphQL HTTP acceptance tests for the ``testing`` package's test-client family.
 
 The request-driving half of ``testing/client.py``'s coverage: every case here
 posts through Django's real fakeshop URLconf (the live ``/graphql/`` endpoint or

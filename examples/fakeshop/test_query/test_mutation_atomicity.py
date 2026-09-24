@@ -1,4 +1,4 @@
-"""Live HTTP acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
+"""Live HTTP acceptance for the mutation transaction that spans response completion.
 
 Pins the mutation-atomicity contract shipped at 0.0.14 (commit 1b06c39e;
 tracked pre-renumber as card BETA-055): a ``DjangoMutation`` runs its write inside a

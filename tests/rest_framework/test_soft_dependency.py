@@ -1,4 +1,4 @@
-"""The DRF soft-dependency import guard (spec-039 Decision 12).
+"""The DRF soft-dependency import guard.
 
 Covers the ``rest_framework/__init__.py::require_drf()`` guard + the root
 ``django_strawberry_framework.__getattr__`` plumbing:

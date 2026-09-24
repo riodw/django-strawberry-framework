@@ -1,4 +1,4 @@
-"""Form-mutation resolver-pipeline tests (spec-038).
+"""Form-mutation resolver-pipeline tests.
 
 Package-only: construction hooks, decode helpers, reconstruction internals,
 throwaway-schema branches a shipped mutation cannot express, and fail-closed

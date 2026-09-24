@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` production-error-policy acceptance tests (spec-048).
+"""Live ``/graphql/`` production-error-policy acceptance tests.
 
 ``ErrorPolicy`` is a promise about what a REAL client reads out of a REAL
 response, so the category matrix is pinned where a client can see it: over the

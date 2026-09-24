@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` transport-boundary acceptance tests (spec-046).
+"""Live ``/graphql/`` transport-boundary acceptance tests.
 
 The HTTP-boundary tier: every proof that Django's real request lifecycle
 executes on the package's GraphQL HTTP route now that ``routers.py`` no longer

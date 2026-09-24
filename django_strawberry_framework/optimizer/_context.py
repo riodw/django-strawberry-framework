@@ -1,4 +1,4 @@
-"""Optimizer <-> resolver context hand-off: the optimizer's own stash keys.
+"""Optimizer <-> resolver context hand-off: the optimizer's stash keys and its per-execution frame.
 
 The shape-agnostic read / write / delete dispatch lives in
 ``utils/context.py`` and is shared with the request resource policy

@@ -1,4 +1,4 @@
-"""Consumer-facing GraphQL test client family - live HTTP test ergonomics (spec-043).
+"""Consumer-facing GraphQL test client family - live HTTP test ergonomics.
 
 ``TestClient`` / ``AsyncTestClient`` are thin wrappers over Django's
 ``django.test.Client`` / ``django.test.AsyncClient`` that post GraphQL

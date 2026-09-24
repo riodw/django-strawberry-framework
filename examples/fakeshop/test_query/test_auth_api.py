@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` auth API acceptance tests (spec-040).
+"""Live ``/graphql/`` auth API acceptance tests.
 
 The primary harness for the spec-040 session-auth surface: every
 consumer-reachable ``login`` / ``logout`` / ``register`` / ``me`` behavior is

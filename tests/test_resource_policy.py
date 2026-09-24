@@ -1,4 +1,4 @@
-"""``ResourcePolicy`` construction, narrowing, threading, and walker edge cases (spec-047).
+"""``ResourcePolicy`` construction, narrowing, threading, and walker edge cases.
 
 The package tier of the resource policy: everything a live ``/graphql/`` request
 cannot reach. The boundaries themselves - what a real document, a real variable

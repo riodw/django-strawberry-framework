@@ -1,4 +1,4 @@
-"""The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
+"""The ``current_user()`` query-field factory + its return-alias namespace.
 
 ``current_user()`` returns the nullable session actor - ``request.user`` when
 authenticated, ``null`` otherwise - typed as the consumer's primary user

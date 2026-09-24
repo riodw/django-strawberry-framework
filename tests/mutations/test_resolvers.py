@@ -1,4 +1,4 @@
-"""Write-pipeline resolver tests (spec-036).
+"""Write-pipeline resolver tests.
 
 Internals a live fakeshop request cannot express: custom ``relay.NodeID`` write
 locate (shipped ``CategoryType`` uses pk; changing it would retarget every

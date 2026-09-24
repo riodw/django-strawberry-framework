@@ -1,4 +1,4 @@
-"""Order input-class BFS factory + the (currently unconsumed) dynamic-OrderSet cache.
+"""Order input-class BFS factory + a dynamic-OrderSet cache with no in-package consumer.
 
 Layer 5 of the spec-028 six-layer pipeline (the BFS that builds every
 reachable Strawberry input class via ``_build_input_fields`` +

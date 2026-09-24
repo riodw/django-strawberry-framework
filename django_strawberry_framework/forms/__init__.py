@@ -1,4 +1,4 @@
-"""Form-mutations subsystem - the Django-``Form`` / ``ModelForm`` write side (spec-038).
+"""Form-mutations subsystem - the Django-``Form`` / ``ModelForm`` write side.
 
 A four-module subpackage in the spirit of ``mutations/`` (the module names
 mirror it per spec-038 Decision 4):

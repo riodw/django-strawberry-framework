@@ -1,4 +1,4 @@
-"""Opt-in session-auth field factories (spec-040).
+"""Opt-in session-auth field factories.
 
 The package root intentionally does not import or re-export this module
 (spec-040 Decision 3 - the opt-in is structural, and a consumer who doesn't use

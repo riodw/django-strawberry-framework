@@ -1,4 +1,4 @@
-"""``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036).
+"""``DjangoMutation`` base + metaclass + ``Meta`` validation + phase-2.5 bind + shared seams.
 
 The write-side declarative surface, in the spirit of ``filters/sets.py`` /
 ``orders/sets.py`` (a base class with a nested ``class Meta``, never a decorator -

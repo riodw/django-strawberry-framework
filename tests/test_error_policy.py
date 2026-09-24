@@ -1,4 +1,4 @@
-"""``ErrorPolicy`` construction, precedence, and install position (spec-048).
+"""``ErrorPolicy`` construction, precedence, and install position.
 
 The package tier of the production error policy: everything a live ``/graphql/``
 request cannot reach. What a client actually reads out of a masked response - the

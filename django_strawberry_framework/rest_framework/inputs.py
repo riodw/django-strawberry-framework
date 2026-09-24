@@ -1,4 +1,4 @@
-"""DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039).
+"""DRF-serializer-derived ``@strawberry.input`` generation substrate.
 
 Pure, finalizer-free machinery: given a DRF ``Serializer`` / ``ModelSerializer``
 class + an effective field set (after ``Meta.fields`` / ``Meta.exclude``), it

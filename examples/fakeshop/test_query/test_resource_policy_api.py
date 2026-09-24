@@ -1,4 +1,4 @@
-"""Live ``/graphql/`` execution-resource-policy acceptance tests (spec-047).
+"""Live ``/graphql/`` execution-resource-policy acceptance tests.
 
 Every bound in ``ResourcePolicy`` is a promise about what a real request over the
 wire can spend, so the boundaries are pinned where a real request can reach them:

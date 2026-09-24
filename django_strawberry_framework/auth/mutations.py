@@ -1,4 +1,4 @@
-"""Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
+"""Session-auth mutation factories + the phase-2.5 auth bind.
 
 The package's opt-in session-auth surface: ``login_mutation()`` /
 ``logout_mutation()`` (this module), ``register_mutation()`` (this module - a

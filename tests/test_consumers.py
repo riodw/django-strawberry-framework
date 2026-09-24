@@ -1,4 +1,4 @@
-"""Hostile-input containment for the WebSocket consumer (spec-046).
+"""Hostile-input containment for the WebSocket consumer.
 
 Package-tier because fakeshop has no ``config/asgi.py`` and no WebSocket
 mount: a live ``/graphql/`` HTTP request cannot present a Channels scope,

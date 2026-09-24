@@ -1,4 +1,4 @@
-"""Form-derived ``@strawberry.input`` generation substrate (spec-038).
+"""Form-derived ``@strawberry.input`` generation substrate.
 
 Pure, finalizer-free machinery: given a Django ``Form`` / ``ModelForm`` class +
 an operation kind + the effective field set (after ``Meta.fields`` /

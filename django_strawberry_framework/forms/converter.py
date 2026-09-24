@@ -1,4 +1,4 @@
-"""Form-field -> Strawberry annotation conversion + the per-input-field reverse map (spec-038).
+"""Form-field -> Strawberry annotation conversion + the decode kinds the form resolver reads.
 
 This module is the genuinely net-new machinery for the **model-less case**
 (spec-038 Decision 7): a plain ``forms.Form`` field (a ``captcha``, a

@@ -1,4 +1,4 @@
-"""``DjangoMutationField`` - the write-side field factory (spec-036).
+"""``DjangoMutationField`` - the write-side field factory.
 
 The write-side sibling of ``connection.py::DjangoConnectionField`` /
 ``relay.py::DjangoNodeField`` (every root field the package ships is a factory

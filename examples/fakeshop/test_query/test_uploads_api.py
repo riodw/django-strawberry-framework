@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the spec-037 file/image wire contract.
+"""Live GraphQL HTTP tests for the file / image field wire contract.
 
 These earn the package's ``FileField`` / ``ImageField`` coverage over a real
 ``/graphql/`` round-trip (the placement the ``test_query`` README reserves for

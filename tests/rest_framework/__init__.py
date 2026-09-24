@@ -1,1 +1,1 @@
-"""Package-internal DRF serializer-mutation tests (spec-039)."""
+"""Package-internal DRF serializer-mutation tests."""

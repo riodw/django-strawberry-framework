@@ -1,4 +1,4 @@
-"""``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036).
+"""``DjangoModelPermission`` class behavior + write-auth enforcement.
 
 The class-behavior tests exercise ``DjangoModelPermission.has_permission``
 DIRECTLY - a stub ``info`` whose ``context.request.user`` is a real Django ``User``

@@ -1,4 +1,4 @@
-"""Converter tests for the DRF serializer-field -> Strawberry annotation registry (spec-039).
+"""Converter tests for the DRF serializer-field -> Strawberry annotation registry.
 
 Covers ``django_strawberry_framework/rest_framework/serializer_converter.py``:
 

@@ -1,4 +1,4 @@
-"""Canonical mutation operation descriptors (spec-036, spec-038, spec-039).
+"""Canonical mutation operation descriptors: ``create``, ``update``, ``delete``, and ``form``.
 
 Single authoritative home for the write-side operation vocabulary (``create``,
 ``update``, ``delete``, plus the plain form ``form`` sentinel). Centralizes:

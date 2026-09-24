@@ -1,4 +1,4 @@
-"""The serializer flavor IMPORTS its shared substrate; it never redefines it (spec-039).
+"""The serializer flavor IMPORTS its shared substrate; it never redefines it.
 
 `rest_framework/inputs.py` and `rest_framework/serializer_converter.py` are assembled
 from the shared input / converter / string helpers and the shared field-spec and

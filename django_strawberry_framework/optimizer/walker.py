@@ -1,4 +1,4 @@
-"""Selection walker that delegates nested Relay connections to their private planner."""
+"""Selection walker that emits the ``OptimizationPlan``, delegating nested Relay connections."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""``DjangoMutationField`` factory tests (spec-036).
+"""``DjangoMutationField`` factory tests.
 
 Construction-time factory: annotation-less field typing, lazy payload bind,
 target guards, metadata passthrough, and flavor dispatch identity. The shipped

@@ -1,4 +1,4 @@
-"""Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039).
+"""Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``).
 
 ``convert_with_mro`` is class-creation dispatch, not a request. Form and serializer
 field maps on the wire live in ``examples/fakeshop/test_query/test_products_api.py``

@@ -1,4 +1,4 @@
-"""FilterSet declarations for the library acceptance app (spec-027).
+"""FilterSet declarations for the library acceptance app.
 
 Twenty-two filtersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint. Inter-filterset references use

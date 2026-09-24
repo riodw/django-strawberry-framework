@@ -1,4 +1,4 @@
-"""The sync + async form-mutation resolver pipeline (spec-038).
+"""The sync + async form-mutation resolver pipeline.
 
 The form-flavor write runtime, the sibling of ``mutations/resolvers.py`` (the
 ``036`` model pipeline). The pipeline is (spec-038 Decision 8):

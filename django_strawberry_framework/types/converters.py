@@ -1,4 +1,4 @@
-"""Convert Django model fields to Strawberry-compatible Python types.
+"""Django model-field -> Strawberry type conversion, choice enums, and file / image output types.
 
 Public surface:
 

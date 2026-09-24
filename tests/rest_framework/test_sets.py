@@ -1,4 +1,4 @@
-"""``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039).
+"""``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind.
 
 Covers ``django_strawberry_framework/rest_framework/sets.py``:
 

@@ -1,4 +1,4 @@
-"""DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map (spec-039).
+"""DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map.
 
 The serializer-flavor analog of ``forms/converter.py`` (spec-038): a DRF
 ``serializers.Field``-keyed registry mapping each supported serializer field to

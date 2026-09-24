@@ -1,4 +1,4 @@
-"""Form-derived input tests for the generated ``<FormClass>Input`` / ``PartialInput`` (spec-038).
+"""Form-derived input tests for the generated ``<FormClass>Input`` / ``PartialInput``.
 
 Covers ``django_strawberry_framework/forms/inputs.py`` (the generation
 substrate):

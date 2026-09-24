@@ -1,4 +1,4 @@
-"""Consumer Django forms for the scalars app's live form-mutation surface (spec-038).
+"""Consumer Django forms for the scalars app's live form-mutation surface.
 
 Wraps ``MediaSpecimen`` (the spec-037 ``FileField`` / ``ImageField`` model) in a
 ``DjangoModelFormMutation`` so the spec-038 FORM path's ``ImageField -> Upload`` mapping

@@ -1,4 +1,4 @@
-"""Postgres planner regression for the Part 1 row-preserving correlated ``EXISTS``.
+"""Postgres planner regression for the row-preserving correlated ``EXISTS`` predicate.
 
 Live HTTP already pins the emitted SQL and the row-preserving payload on the
 shipped ``allLibraryLoans`` ``LoanFilter`` leaf

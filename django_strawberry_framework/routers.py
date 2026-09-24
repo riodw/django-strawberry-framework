@@ -1,4 +1,4 @@
-"""Channels ASGI router: Django owns HTTP, the package composes WebSocket (spec-046).
+"""Channels ASGI router: Django owns HTTP, the package composes WebSocket.
 
 ``DjangoGraphQLProtocolRouter`` is the package's Channels transport helper - a
 ``channels.routing.ProtocolTypeRouter`` subclass whose ``"http"`` value IS the

@@ -1,4 +1,4 @@
-"""Package-internal tests for the opt-in auth subsystem (spec-040).
+"""Package-internal tests for the opt-in auth subsystem.
 
 Holds ONLY the residue a live fakeshop ``/graphql/`` request cannot drive: the
 surface-keyed declaration ledger / bind, register-rider factory cache and decode /

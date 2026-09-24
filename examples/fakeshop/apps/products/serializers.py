@@ -1,4 +1,4 @@
-"""DRF serializers for the products live serializer-mutation surface (spec-039).
+"""DRF serializers for the products live serializer-mutation surface.
 
 Plain DRF ``ModelSerializer``s declared the standard DRF way (no package imports);
 ``apps/products/schema.py`` wraps them in the shipped ``SerializerMutation`` base so

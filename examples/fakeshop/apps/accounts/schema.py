@@ -1,4 +1,4 @@
-"""Fakeshop GraphQL auth surface (spec-040).
+"""Fakeshop GraphQL auth surface.
 
 The app is schema-only: it declares the example ``UserType`` over the stock
 ``auth.User`` plus the four opt-in auth fields, and adds no models or services.

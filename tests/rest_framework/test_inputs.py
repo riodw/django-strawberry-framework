@@ -1,4 +1,4 @@
-"""Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
+"""Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput``.
 
 Covers ``django_strawberry_framework/rest_framework/inputs.py`` (the generation
 substrate):

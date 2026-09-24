@@ -1,4 +1,4 @@
-"""``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038).
+"""``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind.
 
 Covers ``django_strawberry_framework/forms/sets.py``:
 

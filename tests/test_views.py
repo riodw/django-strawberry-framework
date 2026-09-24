@@ -1,4 +1,4 @@
-"""Package-tier contracts for the package's Django GraphQL views (spec-046).
+"""Package-tier contracts for the package's Django GraphQL views.
 
 Deliberately narrow: this file holds only what a live request cannot express
 (spec-046 Decision 13, Placement). Every request-shaped S1 proof - project

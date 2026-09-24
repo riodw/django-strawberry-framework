@@ -1,8 +1,9 @@
 """Script tests for the measurement plumbing the bench scripts share.
 
 Keeps the database-free half of ``scripts/_bench_common.py`` (provenance
-refusals, round summaries, the ``--json`` document shape, the plan-cache reset
-guard, root-row counting) and the ``-X importtime`` parser in
+refusals, the package content digest and instrument blob ids, round summaries,
+the ``--json`` document shape, the plan-cache reset guard, root-row counting)
+and the ``-X importtime`` parser in
 ``scripts/importtime_report.py``. None of it has a wire shape: it is tooling
 that measures the package, so there is no live sibling in
 ``examples/fakeshop/test_query/``. No test here opens a database or calls
@@ -11,6 +12,7 @@ that measures the package, so there is no live sibling in
 
 import importlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,19 @@ import time:      1361 |       3242 |     django_strawberry_framework.keyset
 import time:       368 |       9000 | django_strawberry_framework
 not an importtime line
 """
+
+
+@pytest.fixture
+def package_tree(tmp_path):
+    """Build a small package tree: nested ``.py`` files plus a non-Python data file."""
+    root = tmp_path / "pkg"
+    (root / "sub").mkdir(parents=True)
+    (root / "__init__.py").write_bytes(b"VALUE = 1\n")
+    (root / "a.py").write_bytes(b"def a():\n    return 1\n")
+    (root / "sub" / "__init__.py").write_bytes(b"")
+    (root / "sub" / "b.py").write_bytes(b"B = 'b'\n")
+    (root / "README.txt").write_bytes(b"not python\n")
+    return root
 
 
 @pytest.fixture
@@ -120,6 +135,121 @@ def test_package_outside_the_running_tree_is_refused(tmp_path):
         _bench_common.assert_package_in_tree(tmp_path / "pkg" / "__init__.py")
 
     _bench_common.assert_package_in_tree(_bench_common.REPO_ROOT / "pkg" / "__init__.py")
+
+
+def test_package_digest_is_stable_and_ignores_non_python_files(package_tree):
+    """Hashing one tree twice gives one digest; a non-``.py`` file is outside it."""
+    first = _bench_common.package_digest(package_tree)
+
+    assert first.startswith("sha256:")
+    assert _bench_common.package_digest(package_tree) == first
+    (package_tree / "README.txt").write_bytes(b"edited\n")
+    assert _bench_common.package_digest(package_tree) == first
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        pytest.param(lambda root: (root / "sub" / "b.py").write_bytes(b"B = 'c'\n"), id="bytes"),
+        pytest.param(lambda root: (root / "a.py").rename(root / "c.py"), id="rename"),
+        pytest.param(lambda root: (root / "sub" / "new.py").write_bytes(b""), id="added"),
+    ],
+)
+def test_package_digest_changes_when_a_package_file_changes(package_tree, mutate):
+    """Changing any ``.py`` file's bytes, path or presence moves the digest."""
+    before = _bench_common.package_digest(package_tree)
+
+    mutate(package_tree)
+
+    assert _bench_common.package_digest(package_tree) != before
+
+
+def test_package_digest_is_independent_of_file_system_order(package_tree, monkeypatch):
+    """Files enumerated in the reverse order hash to the same digest."""
+    forward = _bench_common.package_digest(package_tree)
+    original_rglob = Path.rglob
+    seen: list[list[str]] = []
+
+    def reversed_rglob(self, pattern, *args, **kwargs):
+        paths = sorted(original_rglob(self, pattern, *args, **kwargs), reverse=True)
+        seen.append([path.name for path in paths])
+        return iter(paths)
+
+    monkeypatch.setattr(Path, "rglob", reversed_rglob)
+
+    assert _bench_common.package_digest(package_tree) == forward
+    assert seen == [
+        [
+            "b.py",
+            "__init__.py",
+            "a.py",
+            "__init__.py",
+        ],
+    ]
+
+
+def test_package_digest_refuses_a_tree_without_python_files(tmp_path):
+    """An empty population raises instead of fingerprinting nothing."""
+    with pytest.raises(ValueError, match="no .py file"):
+        _bench_common.package_digest(tmp_path)
+
+
+def test_git_blob_id_matches_git_hash_object(tmp_path):
+    """The blob id computed without a repository equals ``git hash-object``."""
+    path = tmp_path / "script.py"
+    path.write_bytes(b"print('bench')\n\x00binary tail")
+    completed = subprocess.run(
+        ["git", "hash-object", str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert _bench_common.git_blob_id(path) == completed.stdout.strip()
+
+
+def test_instrument_ids_name_the_script_and_the_shared_module_by_tree_path():
+    """Both instrument files are keyed by path relative to the tree, sorted."""
+    script = SCRIPTS / "bench_plan_cache.py"
+
+    ids = _bench_common.instrument_ids(script)
+
+    assert ids == {
+        "scripts/_bench_common.py": _bench_common.git_blob_id(_bench_common.BENCH_COMMON),
+        "scripts/bench_plan_cache.py": _bench_common.git_blob_id(script),
+    }
+    assert _bench_common.instrument_ids(None)["__main__"] == "unavailable"
+
+
+def test_provenance_dict_carries_the_digest_and_instrument_ids_as_a_mapping():
+    """The ``--json`` provenance adds ``package_digest`` and an ``instrument_ids`` object."""
+    provenance = _bench_common.BenchProvenance(
+        package_file="/tree/django_strawberry_framework/__init__.py",
+        package_digest="sha256:abc",
+        instrument_ids=(("scripts/_bench_common.py", "1" * 40), ("scripts/x.py", "2" * 40)),
+        repo_root="/tree",
+        git_head="unavailable",
+        settings_module="config.settings",
+        db_alias="default",
+        db_vendor="sqlite",
+        db_name="file:x",
+        python="3",
+        django="5",
+        strawberry="0",
+        platform="p",
+    )
+
+    as_dict = provenance.as_dict()
+
+    assert as_dict["package_digest"] == "sha256:abc"
+    assert as_dict["instrument_ids"] == {
+        "scripts/_bench_common.py": "1" * 40,
+        "scripts/x.py": "2" * 40,
+    }
+    assert json.loads(json.dumps(as_dict)) == as_dict
+    lines = provenance.lines()
+    assert "  digest    sha256:abc" in lines
+    assert f"  script    scripts/x.py blob {'2' * 40}" in lines
 
 
 def test_bootstrap_refuses_an_unknown_mode_before_touching_django():

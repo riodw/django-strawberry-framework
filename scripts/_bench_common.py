@@ -8,6 +8,14 @@ the package it imported and the database it opened, so the bootstrap prints
 and returns that provenance and refuses to run when either points outside the
 tree the script lives in.
 
+A path names a location, not the bytes measured there, so the provenance also
+fingerprints content: ``package_digest`` hashes every ``.py`` file of the
+imported package and ``instrument_ids`` gives the git blob id of the running
+script and of this module. Two runs are the same instrument on the same tree
+only when their package digest and every instrument id match. The git HEAD
+beside them is supplementary: a workspace copy without ``.git`` reads
+``unavailable``, and a dirty working tree runs bytes HEAD does not hold.
+
 Also owns the pieces several scripts share after bring-up: the query-count
 capture, the plan-cache reset, the glossary seeder, per-round timing
 summaries and the ``--json`` document shape. Django imports stay
@@ -16,6 +24,7 @@ function-local so the module imports without a configured project.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -33,6 +42,7 @@ if TYPE_CHECKING:
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FAKESHOP = REPO_ROOT / "examples" / "fakeshop"
 TRACKED_DB = FAKESHOP / "db.sqlite3"
+BENCH_COMMON = Path(__file__).resolve()
 
 BootstrapMode = Literal["sqlite-memory", "pg"]
 BOOTSTRAP_MODES: tuple[str, ...] = get_args(BootstrapMode)
@@ -58,9 +68,15 @@ def is_memory_db_name(name: object) -> bool:
 
 @dataclass(frozen=True)
 class BenchProvenance:
-    """Identify the tree, package, database and versions one measurement ran against."""
+    """Identify the tree, package, content, database and versions one measurement ran against.
+
+    ``instrument_ids`` pairs each instrument file's path (relative to the tree
+    when inside it) with its git blob id, sorted by path.
+    """
 
     package_file: str
+    package_digest: str
+    instrument_ids: tuple[tuple[str, str], ...]
     repo_root: str
     git_head: str
     settings_module: str
@@ -72,16 +88,18 @@ class BenchProvenance:
     strawberry: str
     platform: str
 
-    def as_dict(self) -> dict[str, str]:
+    def as_dict(self) -> dict[str, Any]:
         """Return the provenance as a plain dict for a ``--json`` header."""
-        return asdict(self)
+        return {**asdict(self), "instrument_ids": dict(self.instrument_ids)}
 
     def lines(self) -> list[str]:
         """Return the human-readable header block printed before any figure."""
         return [
             "provenance",
             f"  package   {self.package_file}",
-            f"  tree      {self.repo_root} (git HEAD {self.git_head})",
+            f"  digest    {self.package_digest}",
+            *(f"  script    {path} blob {blob}" for path, blob in self.instrument_ids),
+            f"  tree      {self.repo_root} (git HEAD {self.git_head}, supplementary)",
             f"  settings  {self.settings_module}",
             f"  database  alias={self.db_alias} vendor={self.db_vendor} NAME={self.db_name}",
             f"  versions  python {self.python}, django {self.django}, "
@@ -93,9 +111,10 @@ class BenchProvenance:
 def git_head(root: Path = REPO_ROOT) -> str:
     """Return the checkout's HEAD sha, or ``unavailable`` for a copy without ``.git``.
 
-    A workspace copy made by rsync or ``git archive`` carries no repository, so
-    the sha is best-effort; the package path and the database name are the
-    fields a verdict depends on.
+    A workspace copy made by rsync or ``git archive`` carries no repository,
+    and a dirty working tree runs bytes no commit holds, so the sha is
+    supplementary; ``package_digest`` and ``instrument_ids`` identify the
+    content a figure measured.
     """
     if not (root / ".git").exists():
         return "unavailable"
@@ -115,6 +134,78 @@ def git_head(root: Path = REPO_ROOT) -> str:
     except OSError:
         return "unavailable"
     return completed.stdout.strip() or "unavailable"
+
+
+def git_blob_id(path: str | Path) -> str:
+    """Return the git blob id of the file at ``path``, the id ``git hash-object`` prints.
+
+    The id is ``sha1(b"blob <size>" + NUL + bytes)``, computed without a
+    repository, so a workspace copy without ``.git`` still names the exact
+    bytes of the instrument it ran.
+    """
+    data = Path(path).read_bytes()
+    header = b"blob %d\0" % len(data)
+    return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
+
+
+def package_digest(package_root: str | Path) -> str:
+    """Return a sha256 over every ``.py`` file under ``package_root``.
+
+    Each file contributes its path relative to ``package_root`` (POSIX form)
+    and its bytes, both length-prefixed so two different trees never feed the
+    hash the same byte stream; files are taken in sorted path order, so the
+    file-system enumeration order cannot move the digest. Compiled ``.pyc``
+    files and non-Python data are outside the population.
+
+    Raises:
+        ValueError: ``package_root`` holds no ``.py`` file, so the digest
+            would fingerprint an empty population.
+    """
+    root = Path(package_root)
+    files = sorted((path.relative_to(root).as_posix(), path) for path in root.rglob("*.py"))
+    if not files:
+        msg = f"no .py file under {root}; nothing to fingerprint"
+        raise ValueError(msg)
+    digest = hashlib.sha256()
+    for relative, path in files:
+        name = relative.encode("utf-8")
+        data = path.read_bytes()
+        digest.update(len(name).to_bytes(8, "big"))
+        digest.update(name)
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def running_script() -> Path | None:
+    """Return the resolved path of the ``__main__`` script, or ``None`` without one."""
+    main_file = getattr(sys.modules.get("__main__"), "__file__", None)
+    return Path(main_file).resolve() if main_file else None
+
+
+def instrument_ids(script: Path | None, root: Path = REPO_ROOT) -> dict[str, str]:
+    """Map the running ``script`` and this module to their git blob ids, sorted by path.
+
+    Paths inside ``root`` are keyed relative to it, so two workspace copies of
+    one tree produce the same keys. ``script`` of ``None`` (``python -c``, a
+    REPL) is recorded as ``__main__: unavailable`` rather than omitted.
+    """
+
+    def _key(path: Path) -> str:
+        resolved = path.resolve()
+        base = root.resolve()
+        return (
+            resolved.relative_to(base).as_posix()
+            if resolved.is_relative_to(base)
+            else str(resolved)
+        )
+
+    ids = {_key(BENCH_COMMON): git_blob_id(BENCH_COMMON)}
+    if script is None:
+        ids["__main__"] = "unavailable"
+    else:
+        ids[_key(script)] = git_blob_id(script)
+    return dict(sorted(ids.items()))
 
 
 def _distribution_version(name: str) -> str:
@@ -220,8 +311,11 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
 
     if mode == "pg" and connection.vendor != "postgresql":
         sys.exit(f"Expected a postgresql connection, got {connection.vendor!r}.")
+    package_file = Path(django_strawberry_framework.__file__).resolve()
     provenance = BenchProvenance(
-        package_file=str(Path(django_strawberry_framework.__file__).resolve()),
+        package_file=str(package_file),
+        package_digest=package_digest(package_file.parent),
+        instrument_ids=tuple(instrument_ids(running_script()).items()),
         repo_root=str(REPO_ROOT),
         git_head=git_head(),
         settings_module=os.environ["DJANGO_SETTINGS_MODULE"],

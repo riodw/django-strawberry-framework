@@ -1,7 +1,8 @@
 """Repo-tooling tests for the REVIEW plan generator, scope lister and reconciler.
 
-Keeps the plan-shape, scope-grouping and reconcile contracts for
-``scripts/review_plan.py`` against throwaway git repositories under ``tmp_path``,
+Keeps the plan-shape, append-only resume, scope-grouping and reconcile
+contracts for ``scripts/review_plan.py`` against throwaway git repositories
+under ``tmp_path``,
 never against this checkout's state. A live ``/graphql/`` request has no wire
 shape for generated plans or git listings, so none of these rows can move.
 There is no live sibling in ``examples/fakeshop/test_query/``.
@@ -120,7 +121,20 @@ def test_plan_renders_review_shape_in_order(repo: Path, tmp_path: Path) -> None:
     ]
     assert "Clean tree at generation." in text
     assert "CYCLE_BASELINE=<Worker 0 fills" in text
-    assert text.count('| `uv run --directory "$WS" ') == 3
+    bench = text.split("## Bench baseline", 1)[1].split("## How to work one item", 1)[0]
+    rows = [line for line in bench.splitlines() if line.startswith("| `")]
+    assert [row.split("`")[1] for row in rows] == [
+        'uv run --directory "$WS" python scripts/bench_plan_cache.py '
+        "--json <scratch>/bench/<phase>/plan_cache.json",
+        'uv run --directory "$WS" python scripts/bench_optimizer_walk.py '
+        "--json <scratch>/bench/<phase>/optimizer_walk.json",
+        "FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop "
+        'uv run --directory "$WS" --group pg python scripts/bench_nested_fetch.py '
+        "--json <scratch>/bench/<phase>/nested_fetch.json",
+        'uv run --directory "$WS" python scripts/importtime_report.py --rounds 5 '
+        "--json <scratch>/bench/<phase>/importtime.json",
+    ]
+    assert "importtime -c" not in text
     assert "| Path | Item | Axis | Symbols changed |" in text
 
     checkboxes = [line for line in text.splitlines() if line.startswith("- [ ] ")]
@@ -141,9 +155,15 @@ def test_plan_renders_review_shape_in_order(repo: Path, tmp_path: Path) -> None:
         "rev-sub__deep__gamma.mechanics.md, rev-sub__deep__gamma.comments.md\n"
     )
     assert gamma_item in text
-    assert "Artifacts: rev-sub.md, rev-sub.performance.md" in text
+    assert (
+        "- [ ] sub/ integration\n"
+        "    - Status: pending\n"
+        "    - Init files: `sub/__init__.py`\n"
+        "    - Artifacts: rev-sub.md, rev-sub.performance.md"
+    ) in text
+    assert "- [ ] sub/deep/ integration\n    - Status: pending\n    - Init files: none\n" in text
+    assert "    - Init files: `__init__.py` (defines `__getattr__`)\n" in text
     assert "Artifacts: rev-project.md, rev-project.performance.md" in text
-    assert "`__init__.py` (defines `__getattr__`), `sub/__init__.py`" in text
     assert "## Out of scope this run" not in text
 
     parsed = {item.label: item for item in review_plan.parse_plan(text)}
@@ -155,6 +175,10 @@ def test_plan_renders_review_shape_in_order(repo: Path, tmp_path: Path) -> None:
         "rev-project.comments.md",
     )
     assert parsed["Final gate"].artifacts == ()
+    assert {label: item.inits for label, item in parsed.items() if item.inits} == {
+        "sub/ integration": ("sub/__init__.py",),
+        "Project integration": ("__init__.py",),
+    }
 
 
 def test_plan_scope_lists_the_rest_as_out_of_scope(repo: Path, tmp_path: Path) -> None:
@@ -177,10 +201,70 @@ def test_plan_scope_lists_the_rest_as_out_of_scope(repo: Path, tmp_path: Path) -
 
 
 @pytest.mark.parametrize(
+    (
+        "scope",
+        "label",
+        "in_run",
+        "out_of_run",
+    ),
+    [
+        (
+            "sub",
+            "sub/",
+            [
+                "sub/beta.py",
+                "sub/deep/gamma.py",
+                "sub/deep/ integration",
+                "sub/ integration",
+            ],
+            ["alpha.py", "Project integration"],
+        ),
+        (
+            f"{PACKAGE}/sub/__init__.py",
+            "sub/__init__.py",
+            ["sub/ integration"],
+            [
+                "alpha.py",
+                "sub/beta.py",
+                "sub/deep/ integration",
+                "Project integration",
+            ],
+        ),
+        (
+            "__init__.py",
+            "__init__.py",
+            ["Project integration"],
+            ["alpha.py", "sub/beta.py", "sub/ integration"],
+        ),
+    ],
+)
+def test_plan_scope_covers_each_init_with_its_owning_item(
+    repo: Path,
+    tmp_path: Path,
+    scope: str,
+    label: str,
+    in_run: list[str],
+    out_of_run: list[str],
+) -> None:
+    output = tmp_path / "review.md"
+
+    assert _plan(repo, output, "--scope", scope) == 0
+    text = output.read_text(encoding="utf-8")
+
+    assert f"Scope: {label}\n" in text
+    parsed = {item.label: item for item in review_plan.parse_plan(text)}
+    assert [name for name in in_run if parsed[name].status == "pending"] == in_run
+    assert [name for name in out_of_run if parsed[name].status == "out-of-scope"] == out_of_run
+    assert parsed["Final gate"].status == "pending"
+    assert parsed["sub/ integration"].inits == ("sub/__init__.py",)
+    assert parsed["Project integration"].inits == ("__init__.py",)
+
+
+@pytest.mark.parametrize(
     "scope",
     [
         f"{PACKAGE}/missing",
-        "sub/__init__.py",
+        "sub/deep/__init__.py",
         "alph",
         "README.md",
     ],
@@ -209,7 +293,7 @@ def test_plan_ignores_untracked_sources(repo: Path, tmp_path: Path) -> None:
     assert f"?? {PACKAGE}/scratch.py" in text
 
 
-def test_plan_refuses_overwrite_and_force_continues_run_numbering(
+def test_plan_on_an_existing_plan_points_at_resume_and_force_continues_run_numbering(
     repo: Path,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -219,11 +303,48 @@ def test_plan_refuses_overwrite_and_force_continues_run_numbering(
     first = output.read_text(encoding="utf-8")
 
     assert _plan(repo, output) == 2
-    assert "pass --force to replace it" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "a plan is resumed, never replaced" in err
+    assert "review_plan.py resume --plan" in err
     assert output.read_text(encoding="utf-8") == first
 
     assert _plan(repo, output, "--force") == 0
     assert "Run: 0.1.2 2026-01-02-2" in output.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("anchor", "row", "heading"),
+    [
+        (
+            "| Path | Item | Axis | Symbols changed |\n|---|---|---|---|\n",
+            "| `django_strawberry_framework/alpha.py` | alpha.py | mechanics | `ALPHA` |\n",
+            "## Owned changes",
+        ),
+        ('"Scope of this run".\n', "\nalpha.py: 1 finding implemented (0/1/0).\n", "## Outcomes"),
+    ],
+)
+def test_plan_force_refuses_a_plan_whose_ledger_or_outcomes_hold_content(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    anchor: str,
+    row: str,
+    heading: str,
+) -> None:
+    output = tmp_path / "review.md"
+    assert _plan(repo, output) == 0
+    text = output.read_text(encoding="utf-8")
+    assert text.count(anchor) == 1
+    worked = text.replace(anchor, anchor + row)
+    output.write_text(worked, encoding="utf-8")
+
+    assert _plan(repo, output, "--force") == 2
+    err = capsys.readouterr().err
+    assert (
+        f"refusing --force: {output.resolve().as_posix()} records content under {heading};" in err
+    )
+    assert "review_plan.py resume --plan" in err
+    assert output.read_text(encoding="utf-8") == worked
 
 
 def test_plan_defaults_output_to_the_release_path(repo: Path) -> None:
@@ -268,6 +389,7 @@ def test_scope_groups_committed_dirty_and_renamed(
     package = repo / PACKAGE
     _write(package / "alpha.py", "ALPHA = 2\n")
     _write(package / "__init__.py", '__version__ = "0.1.2"\n')
+    _write(package / "sub" / "__init__.py", "SUB = 1\n")
     _write(package / "sub" / "fresh.py", "FRESH = 1\n")
     _git(repo, "mv", f"{PACKAGE}/sub/beta.py", f"{PACKAGE}/sub/beta_renamed.py")
     _commit_all(repo, "change")
@@ -282,11 +404,18 @@ def test_scope_groups_committed_dirty_and_renamed(
     assert {path: entry["status"] for path, entry in committed.items()} == {
         f"{PACKAGE}/__init__.py": "M",
         f"{PACKAGE}/alpha.py": "M",
+        f"{PACKAGE}/sub/__init__.py": "M",
         f"{PACKAGE}/sub/fresh.py": "A",
     }
     alpha = f"{PACKAGE}/alpha.py"
     assert committed[alpha]["blob"] == _git(repo, "rev-parse", f"HEAD:{alpha}").strip()
     assert committed[f"{PACKAGE}/__init__.py"]["init"] is True
+    assert {path: entry["item"] for path, entry in committed.items()} == {
+        f"{PACKAGE}/__init__.py": "Project integration",
+        f"{PACKAGE}/alpha.py": "alpha.py",
+        f"{PACKAGE}/sub/__init__.py": "sub/ integration",
+        f"{PACKAGE}/sub/fresh.py": "sub/fresh.py",
+    }
     assert [(entry["old"], entry["new"], entry["where"]) for entry in report.renames] == [
         (f"{PACKAGE}/sub/beta.py", f"{PACKAGE}/sub/beta_renamed.py", "committed"),
     ]
@@ -310,7 +439,23 @@ def test_scope_groups_committed_dirty_and_renamed(
         == 0
     )
     data = json.loads(capsys.readouterr().out)
-    assert (len(data["committed"]), len(data["dirty"]), len(data["renames"])) == (3, 2, 1)
+    assert (len(data["committed"]), len(data["dirty"]), len(data["renames"])) == (4, 2, 1)
+    assert data["renames"][0]["item"] == "sub/beta_renamed.py"
+    assert {entry["path"]: entry["item"] for entry in data["dirty"]} == {
+        f"{PACKAGE}/sub/deep/gamma.py": "sub/deep/gamma.py",
+        f"{PACKAGE}/sub/untracked.py": "sub/untracked.py",
+    }
+
+    assert review_plan.main(["--root", str(repo), "scope"]) == 0
+    text = capsys.readouterr().out
+    assert f"  M  {PACKAGE}/sub/__init__.py  HEAD " in text
+    sub_init_line = next(line for line in text.splitlines() if "sub/__init__.py" in line)
+    assert sub_init_line.endswith("  (sub/ integration)")
+    root_init_line = next(
+        line for line in text.splitlines() if line.startswith(f"  M  {PACKAGE}/__init__.py")
+    )
+    assert root_init_line.endswith("  (Project integration)")
+    assert "(project)" not in text
     assert data["folders"] == ["(package root)", "sub/", "sub/deep/"]
 
     assert (
@@ -441,3 +586,179 @@ def test_reconcile_skips_closed_items(repo: Path, tmp_path: Path) -> None:
     plan.write_text(text, encoding="utf-8")
 
     assert review_plan.build_reconcile(repo, plan).clean
+
+
+def test_reconcile_checks_each_init_against_its_owning_item(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan = tmp_path / "review.md"
+    assert _plan(repo, plan) == 0
+    text = plan.read_text(encoding="utf-8")
+    project_line = "    - Init files: `__init__.py` (defines `__getattr__`)\n"
+    assert text.count(project_line) == 1
+    plan.write_text(
+        text.replace(
+            project_line,
+            "    - Init files: `__init__.py` (defines `__getattr__`), `sub/deep/__init__.py`\n",
+        ),
+        encoding="utf-8",
+    )
+    package = repo / PACKAGE
+    _write(package / "sub" / "deep" / "__init__.py", "")
+    _git(repo, "rm", "-q", f"{PACKAGE}/sub/__init__.py")
+    _write(package / "extra" / "__init__.py", "")
+    _write(package / "extra" / "loose.py", "LOOSE = 1\n")
+    _commit_all(repo, "move inits")
+
+    report = review_plan.build_reconcile(repo, plan)
+
+    assert report.folders_added == ["extra"]
+    assert report.inits_unlisted == [("sub/deep/__init__.py", "sub/deep/ integration")]
+    assert report.inits_misplaced == [
+        ("sub/deep/__init__.py", "Project integration", "sub/deep/ integration"),
+    ]
+    assert report.inits_gone == [("sub/ integration", "sub/__init__.py")]
+    assert (
+        review_plan.main(
+            [
+                "--root",
+                str(repo),
+                "reconcile",
+                "--plan",
+                str(plan),
+            ],
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "  sub/deep/__init__.py: sub/deep/ integration" in out
+    assert "  sub/ integration: sub/__init__.py" in out
+
+
+def _fill_cycle_baseline(plan: Path, revision: str) -> str:
+    text = plan.read_text(encoding="utf-8")
+    placeholder = "CYCLE_BASELINE=<Worker 0 fills: `git stash create`, empty -> the `git rev-parse HEAD` sha>"
+    assert text.count(placeholder) == 1
+    text = text.replace(placeholder, f"CYCLE_BASELINE={revision}")
+    plan.write_text(text, encoding="utf-8")
+    return text
+
+
+def _resume(
+    root: Path,
+    plan: Path,
+    date: str,
+    *extra: str,
+) -> int:
+    return review_plan.main(
+        [
+            "--root",
+            str(root),
+            "resume",
+            "--plan",
+            str(plan),
+            "--generated-date",
+            date,
+            *extra,
+        ],
+    )
+
+
+def test_resume_appends_a_run_and_never_rewrites_existing_bytes(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write(repo / "README.md", "concurrent edit\n")
+    plan = tmp_path / "review.md"
+    assert _plan(repo, plan, "--scope", "sub") == 0
+    first_head = _git(repo, "rev-parse", "HEAD").strip()
+    stash = _git(repo, "stash", "create").strip()
+    assert stash
+    _fill_cycle_baseline(plan, stash)
+    ledger_anchor = "| Path | Item | Axis | Symbols changed |\n|---|---|---|---|\n"
+    text = plan.read_text(encoding="utf-8").replace(
+        ledger_anchor,
+        ledger_anchor + f"| `{PACKAGE}/sub/beta.py` | sub/beta.py | comments | `BETA_0` |\n",
+    )
+    plan.write_text(text, encoding="utf-8")
+    original = plan.read_bytes()
+
+    _write(repo / PACKAGE / "sub" / "fresh.py", "FRESH = 1\n")
+    _git(repo, "add", f"{PACKAGE}/sub/fresh.py")
+    _git(repo, "commit", "-q", "-m", "fresh")
+    second_head = _git(repo, "rev-parse", "HEAD").strip()
+    _write(repo / "notes.txt", "concurrent\n")
+    _write(repo / PACKAGE / "sub" / "beta.py", "BETA = 0\n")
+
+    assert _resume(repo, plan, "2026-01-03", "--scope", "sub") == 0
+    assert "1 new item(s)" in capsys.readouterr().out
+    resumed = plan.read_bytes()
+    assert resumed.startswith(original)
+    appended = resumed[len(original) :].decode("utf-8")
+    assert appended == (
+        "\n"
+        "## Run 0.1.2 2026-01-03-2\n"
+        "\n"
+        "Scope: sub/\n"
+        f"Drift: 2026-01-03 HEAD {first_head[:12]}..{second_head[:12]}; dirty + notes.txt\n"
+        "\n"
+        "Already itemized above, worked this run:\n"
+        "\n"
+        "- `sub/beta.py`\n"
+        "- `sub/deep/gamma.py`\n"
+        "- `sub/deep/ integration`\n"
+        "- `sub/ integration`\n"
+        "- `Final gate`\n"
+        "\n"
+        "New items this run:\n"
+        "\n"
+        "- [ ] sub/fresh.py\n"
+        "    - Status: pending\n"
+        "    - Path class:\n"
+        "    - Artifacts: rev-sub__fresh.md, rev-sub__fresh.performance.md, "
+        "rev-sub__fresh.mechanics.md, rev-sub__fresh.comments.md\n"
+    )
+
+    assert _resume(repo, plan, "2026-01-04", "--scope", "sub") == 0
+    assert "0 new item(s)" in capsys.readouterr().out
+    again = plan.read_bytes()
+    assert again.startswith(resumed)
+    tail = again[len(resumed) :].decode("utf-8")
+    assert tail.startswith("\n## Run 0.1.2 2026-01-04-3\n\nScope: sub/\n\nAlready itemized")
+    assert "Drift:" not in tail
+    assert "- `sub/fresh.py`\n" in tail
+    assert "- [ ] " not in tail
+
+    assert review_plan.build_reconcile(repo, plan).clean
+
+
+def test_resume_records_an_unrecorded_head_and_names_plan_when_missing(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan = tmp_path / "review.md"
+    assert _resume(repo, plan, "2026-01-03") == 2
+    assert "run `review_plan.py plan` to write one" in capsys.readouterr().err
+    assert not plan.exists()
+
+    assert _plan(repo, plan, "--scope", "alpha.py") == 0
+    original = plan.read_bytes()
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    assert _resume(repo, plan, "2026-01-03") == 0
+    resumed = plan.read_bytes()
+    assert resumed.startswith(original)
+    appended = resumed[len(original) :].decode("utf-8")
+    assert appended.startswith(
+        f"\n## Run 0.1.2 2026-01-03-2\n\nScope: package\nDrift: 2026-01-03 HEAD unrecorded..{head[:12]}\n",
+    )
+    assert "- [ ] " not in appended
+    assert "- `Project integration`\n" in appended
+
+    assert _resume(repo, plan, "2026-01-03", "--target-release", "0.9.0") == 2
+    assert "plans release 0.1.2, not --target-release 0.9.0" in capsys.readouterr().err
+    assert plan.read_bytes() == resumed

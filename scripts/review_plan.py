@@ -11,26 +11,48 @@ settings are loaded.
     ``__version__`` unless ``--target-release`` names it). The inventory is
     ``git ls-files 'django_strawberry_framework/*.py'`` minus every
     ``__init__.py``: one file item per module, one folder integration item per
-    package folder, the project integration item (which carries every
-    ``__init__.py`` and names the ones holding definitions), and the final
-    gate. ``--scope`` (repeatable; a package folder or module, repo- or
-    package-relative) limits the run; every item outside it is listed under
-    ``## Out of scope this run`` so an unticked box never reads as examined.
-    A scope entry that matches no inventory file fails the run. An existing
-    plan is never overwritten without ``--force``; its run ids carry forward so
-    the new ``Run:`` number follows the highest recorded one.
+    package folder (carrying that folder's ``__init__.py`` on its
+    ``Init files:`` line), the project integration item (carrying the
+    package-root ``__init__.py``, public exports and the cross-folder
+    lifecycle), and the final gate. ``--scope`` (repeatable; a package folder,
+    module or ``__init__.py``, repo- or package-relative) limits the run: a
+    folder covers its modules, its subfolders and their folder items; a
+    folder's ``__init__.py`` selects that folder's item; the project item is in
+    scope only for the whole package or the package-root ``__init__.py``. Every
+    item outside the scope is listed under ``## Out of scope this run`` so an
+    unticked box never reads as examined. A scope entry that matches no
+    inventory file fails the run. An existing plan is resumed, never replaced:
+    ``plan`` refuses it and names ``resume``; ``--force`` replaces it only
+    while ``## Owned changes`` and ``## Outcomes`` still hold nothing beyond
+    the generated text, and carries its run ids forward.
+
+``resume``
+    Append one run to an existing plan and nothing else: a
+    ``## Run <release> <date>-<n>`` heading numbered after the highest recorded
+    run, its ``Scope:`` line, a ``Drift:`` line when ``HEAD`` moved past the
+    last recorded one or ``git status --short`` names a path neither the
+    ``## Cycle baseline`` block nor an earlier ``Drift:`` line records (the
+    plan's own directory and ``## Owned changes`` paths excluded), the
+    already-itemized items this run works, and a new pending item for every
+    in-scope file, folder or project item the plan lacks. Every existing byte
+    stays in place; the file is opened for append only.
 
 ``scope``
     Print the package ``.py`` files changed between ``--since`` (default: the
     latest tag reachable from ``HEAD``) and the working tree, in three groups:
     committed changes with their ``HEAD`` blob ids, dirty or untracked paths
     (concurrent work, with working-tree ``git hash-object`` ids), and renames.
-    ``--json`` emits the same data machine-readably.
+    Every path names the plan item that covers it: a module its own file item,
+    a folder's ``__init__.py`` that folder's integration item, the
+    package-root ``__init__.py`` the project item. ``--json`` emits the same
+    data machine-readably.
 
 ``reconcile --plan PATH``
     Read-only. Compare a plan's items with the current inventory and report
     tracked or untracked ``.py`` files without an item, items whose file is
-    gone or renamed, folders without an item, and items whose status requires
+    gone or renamed, folders without an item, ``__init__.py`` files missing
+    from their owning item's ``Init files:`` line, listed on an item that does
+    not own them, or listed but gone, and items whose status requires
     artifacts that are missing beside the plan. Exit 1 when anything is off,
     0 when clean.
 
@@ -38,6 +60,8 @@ Usage::
 
     uv run python scripts/review_plan.py plan [--scope PATH ...] [--mode MODE]
         [--target-release RELEASE] [--output PATH] [--force]
+    uv run python scripts/review_plan.py resume [--plan PATH] [--scope PATH ...]
+        [--target-release RELEASE]
     uv run python scripts/review_plan.py scope [--since REV] [--json]
     uv run python scripts/review_plan.py reconcile --plan docs/review/review-0_0_15.md
 """
@@ -74,8 +98,20 @@ _RUN_ID = re.compile(
 )
 _ITEM_LINE = re.compile(r"^- \[(?P<mark>[ xX])\] (?P<label>.+?)\s*$")
 _FIELD_LINE = re.compile(r"^ {4}- (?P<key>[A-Za-z][A-Za-z ]*):(?P<value>.*)$")
-_CYCLE_BASELINE_LINE = re.compile(r"CYCLE_BASELINE=(?P<rev>[0-9a-fA-F]{7,64}|HEAD)\b")
+_CYCLE_BASELINE_LINE = re.compile(r"CYCLE_BASELINE=(?P<rev>[0-9a-fA-F]{7,64})\b")
 _NO_ARTIFACT_STATUSES = frozenset({"pending", "out-of-scope"})
+_PLAN_TITLE = re.compile(r"^# REVIEW plan: (?P<release>\S+)\s*$", re.MULTILINE)
+_DRIFT_LINE = re.compile(
+    r"^Drift: \S+ HEAD (?P<old>\S+)\.\.(?P<new>[0-9a-fA-F]{7,64})\b"
+    r"(?:.*?; dirty \+ (?P<paths>.*)|.*)$",
+)
+_INIT_ENTRY = re.compile(r"`(?P<path>[^`]*__init__\.py)`")
+_STASH_SUBJECT = re.compile(r"^(?:WIP on|On) ")
+PROJECT_LABEL = "Project integration"
+FOLDER_SUFFIX = "/ integration"
+INIT_FIELD = "Init files"
+LEDGER_HEADING = "## Owned changes"
+OUTCOMES_HEADING = "## Outcomes"
 
 
 # ---------------------------------------------------------------------------
@@ -199,25 +235,54 @@ def _init_definitions(root: Path, path: str) -> tuple[str, ...]:
     return tuple(node.name for node in tree.body if isinstance(node, kinds))
 
 
-def _project_item(root: Path, init_paths: Sequence[str]) -> Item:
-    """Build the project integration item naming every ``__init__.py``."""
-    inits = []
-    for path in init_paths:
-        names = _init_definitions(root, path)
-        entry = f"`{_package_relative(path)}`"
+def _init_owner(relative: str) -> str:
+    """Return the label of the item covering a package-relative ``__init__.py``."""
+    folder = relative.rpartition("/")[0]
+    return f"{folder}{FOLDER_SUFFIX}" if folder else PROJECT_LABEL
+
+
+def _covering_item(path: str) -> str:
+    """Return the label of the plan item covering a repo-relative package ``.py`` path."""
+    relative = _package_relative(path)
+    return _init_owner(relative) if _is_init(relative) else relative
+
+
+def _init_field(root: Path, relatives: Sequence[str]) -> str:
+    """Render the ``Init files:`` line naming each ``__init__.py`` and its definitions."""
+    entries = []
+    for relative in relatives:
+        names = _init_definitions(root, f"{PACKAGE_DIR}/{relative}")
+        entry = f"`{relative}`"
         if names:
             entry += f" (defines {', '.join(f'`{name}`' for name in names)})"
-        inits.append(entry)
+        entries.append(entry)
+    return f"{INIT_FIELD}: {', '.join(entries) if entries else 'none'}"
+
+
+def _folder_item(root: Path, folder: str, inits: Sequence[str]) -> Item:
+    """Build one folder integration item carrying the folder's own ``__init__.py``."""
+    own = [relative for relative in inits if relative.rpartition("/")[0] == folder]
+    return Item(
+        kind="folder",
+        key=folder,
+        label=f"{folder}{FOLDER_SUFFIX}",
+        artifacts=_artifact_set(folder),
+        extra=(_init_field(root, own),),
+    )
+
+
+def _project_item(root: Path, inits: Sequence[str]) -> Item:
+    """Build the project integration item carrying the package-root ``__init__.py``."""
     extra = (
         "Covers: package-root modules as one component; public exports; import-time cost vs "
-        "`## Bench baseline`; end-to-end lifecycle; every `__init__.py` (no file item "
-        "reviews them)",
-        f"`__init__.py` files: {', '.join(inits) if inits else 'none'}",
+        "`## Bench baseline`; end-to-end lifecycle across folders; the package-root "
+        "`__init__.py` (each folder's `__init__.py` is on its folder item)",
+        _init_field(root, [relative for relative in inits if "/" not in relative]),
     )
     return Item(
         kind="project",
         key="project",
-        label="Project integration",
+        label=PROJECT_LABEL,
         artifacts=_artifact_set("project"),
         extra=extra,
     )
@@ -230,7 +295,9 @@ _GATE_ITEM = Item(
     artifacts=(),
     extra=(
         "Runs: `uv run pytest`; every `## Pending execution` command from every artifact; the "
-        "`## Bench baseline` commands in a fresh workspace copy, delta recorded",
+        "`## Bench baseline` commands in a fresh workspace copy, delta recorded; "
+        "`FAKESHOP_SHARDED=1` and `FAKESHOP_PG_DSN` suites in a fresh gate copy that keeps "
+        '`.git` (REVIEW.md "Final gate and closeout"), each w/ its own counts',
     ),
 )
 
@@ -250,7 +317,7 @@ def _scope_matches(scope: str, relative: str) -> bool:
     return not scope or relative == scope or relative.startswith(f"{scope}/")
 
 
-def _resolve_scope(entries: Sequence[str], files: Sequence[str]) -> tuple[str, ...] | None:
+def _resolve_scope(entries: Sequence[str], paths: Sequence[str]) -> tuple[str, ...] | None:
     """Return the normalized scope, ``None`` for the whole package; fail closed."""
     if not entries:
         return None
@@ -259,21 +326,91 @@ def _resolve_scope(entries: Sequence[str], files: Sequence[str]) -> tuple[str, .
         scope = _normalize_scope(entry)
         if not scope:
             return None
-        if not any(_scope_matches(scope, relative) for relative in files):
+        if not any(_scope_matches(scope, relative) for relative in paths):
             raise ValueError(
-                f"--scope {entry!r} matches no inventory file under {PACKAGE_DIR}/ "
-                "(tracked, non-__init__ .py)",
+                f"--scope {entry!r} matches no inventory file under {PACKAGE_DIR}/ (tracked .py)",
             )
         if scope not in normalized:
             normalized.append(scope)
     return tuple(normalized)
 
 
-def _scope_label(scope: tuple[str, ...] | None, files: Sequence[str]) -> str:
-    """Render the ``Scope:`` value: folders end in ``/``, modules do not."""
-    if scope is None:
-        return "package"
-    return ", ".join(entry if entry in files else f"{entry}/" for entry in scope)
+@dataclass(frozen=True)
+class _Inventory:
+    """The tracked package inventory, its items in plan order, and one run's scope."""
+
+    files: tuple[str, ...]
+    inits: tuple[str, ...]
+    folders: tuple[str, ...]
+    scope: tuple[str, ...] | None
+    ordered: tuple[Item, ...]
+
+    def in_scope(self, item: Item) -> bool:
+        """Return whether the run's scope covers ``item``."""
+        if self.scope is None or item.kind == "gate":
+            return True
+        if item.kind == "file":
+            return any(_scope_matches(entry, item.key) for entry in self.scope)
+        if item.kind == "folder":
+            return any(
+                _scope_matches(entry, item.key) or entry == f"{item.key}/__init__.py"
+                for entry in self.scope
+            )
+        return "__init__.py" in self.scope
+
+    @property
+    def scope_label(self) -> str:
+        """Render the ``Scope:`` value: folders end in ``/``, modules do not."""
+        if self.scope is None:
+            return "package"
+        modules = {*self.files, *self.inits}
+        return ", ".join(entry if entry in modules else f"{entry}/" for entry in self.scope)
+
+
+def _build_inventory(root: Path, scope_entries: Sequence[str]) -> _Inventory:
+    """Collect the tracked inventory, build every item and resolve the scope."""
+    tracked = _tracked_python(root)
+    files = tuple(_package_relative(path) for path in tracked if not _is_init(path))
+    if not files:
+        raise ValueError(f"no tracked non-__init__ .py files under {PACKAGE_DIR}/")
+    inits = tuple(_package_relative(path) for path in tracked if _is_init(path))
+    scope = _resolve_scope(scope_entries, (*files, *inits))
+    folders = tuple(_package_folders(tracked))
+    file_items = {
+        relative: Item(
+            kind="file",
+            key=relative,
+            label=relative,
+            artifacts=_artifact_set(relative),
+        )
+        for relative in files
+    }
+    ordered: list[Item] = []
+
+    def walk(folder: str) -> None:
+        ordered.extend(file_items[r] for r in files if r.rpartition("/")[0] == folder)
+        for child in folders:
+            if child.rpartition("/")[0] == folder:
+                walk(child)
+        if folder:
+            ordered.append(_folder_item(root, folder, inits))
+
+    walk("")
+    ordered.append(_project_item(root, inits))
+    _assert_unique_artifacts(ordered)
+    return _Inventory(
+        files=files,
+        inits=inits,
+        folders=folders,
+        scope=scope,
+        ordered=tuple(ordered),
+    )
+
+
+def _run_max(text: str, release: str) -> int:
+    """Return the highest run number ``text`` records for ``release``."""
+    runs = [int(match["n"]) for match in _RUN_ID.finditer(text) if match["release"] == release]
+    return max(runs, default=0)
 
 
 def _existing_run_max(path: Path, release: str) -> int:
@@ -282,8 +419,7 @@ def _existing_run_max(path: Path, release: str) -> int:
         text = path.read_text(encoding="utf-8")
     except (FileNotFoundError, IsADirectoryError):
         return 0
-    runs = [int(match["n"]) for match in _RUN_ID.finditer(text) if match["release"] == release]
-    return max(runs, default=0)
+    return _run_max(text, release)
 
 
 def _assert_unique_artifacts(items: Sequence[Item]) -> None:
@@ -299,25 +435,34 @@ def _assert_unique_artifacts(items: Sequence[Item]) -> None:
             owners[name] = item.label
 
 
+_BENCH_COMMANDS = (
+    'uv run --directory "$WS" python scripts/bench_plan_cache.py '
+    "--json <scratch>/bench/<phase>/plan_cache.json",
+    'uv run --directory "$WS" python scripts/bench_optimizer_walk.py '
+    "--json <scratch>/bench/<phase>/optimizer_walk.json",
+    "FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop "
+    'uv run --directory "$WS" --group pg python scripts/bench_nested_fetch.py '
+    "--json <scratch>/bench/<phase>/nested_fetch.json",
+    'uv run --directory "$WS" python scripts/importtime_report.py --rounds 5 '
+    "--json <scratch>/bench/<phase>/importtime.json",
+)
+
+
 def _bench_baseline_block() -> list[str]:
     """Render the empty bench table Worker 0 fills at cycle entry and at the gate."""
-    commands = (
-        'uv run --directory "$WS" python scripts/bench_plan_cache.py',
-        'uv run --directory "$WS" python scripts/bench_optimizer_walk.py',
-        'uv run --directory "$WS" python -X importtime -c "import django_strawberry_framework"',
-    )
     return [
         "## Bench baseline",
         "",
-        'Bound to `CYCLE_BASELINE`; `$WS` is a fresh workspace copy (REVIEW.md "Workspace"). '
-        "Worker 0",
-        "fills Baseline at cycle entry, Gate and Delta at the final gate. "
-        "`scripts/bench_nested_fetch.py`",
-        "joins only when Rio authorizes a Postgres cell.",
+        "Each figure is bound by the package digest and instrument ids in its provenance",
+        "header; `CYCLE_BASELINE` is recorded beside it. `$WS` is a fresh workspace copy",
+        '(REVIEW.md "Workspace"), `<scratch>` the absolute session scratchpad, `<phase>` either',
+        "`baseline` or `gate`. The nested-fetch row runs against the cycle's Postgres container",
+        '(REVIEW.md "Database cells"; DSN in `## Cycle baseline`).',
+        "Worker 0 fills Baseline at cycle entry, Gate and Delta at the final gate.",
         "",
         "| Command | Baseline | Gate | Delta |",
         "|---|---|---|---|",
-        *(f"| `{command}` | | | |" for command in commands),
+        *(f"| `{command}` | | | |" for command in _BENCH_COMMANDS),
     ]
 
 
@@ -343,7 +488,7 @@ def _closing_blocks() -> list[str]:
         "Maintainer decisions the run surfaced: ruff rules to enable, trade-offs, contracts "
         "nobody could cite.",
         "",
-        "## Owned changes",
+        LEDGER_HEADING,
         "",
         "One row per tracked edit or new file a verified item landed. A later item may build on a "
         "path",
@@ -352,12 +497,58 @@ def _closing_blocks() -> list[str]:
         "| Path | Item | Axis | Symbols changed |",
         "|---|---|---|---|",
         "",
-        "## Outcomes",
+        OUTCOMES_HEADING,
         "",
         "Filled by Worker 0 at closeout before any scratch is removed; a scoped run adds "
         '"Scope of this run".',
         "",
     ]
+
+
+def _section_bodies(text: str) -> dict[str, list[str]]:
+    """Return every ``## `` heading's non-blank body lines, repeated headings merged."""
+    bodies: dict[str, list[str]] = {}
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = bodies.setdefault(line.rstrip(), [])
+        elif current is not None and line.strip():
+            current.append(line.rstrip())
+    return bodies
+
+
+def _recorded_closing_content(text: str) -> list[str]:
+    """Return the ledger and outcomes headings holding more than the generated text."""
+    generated = _section_bodies("\n".join(_closing_blocks()))
+    existing = _section_bodies(text)
+    return [
+        heading
+        for heading in (LEDGER_HEADING, OUTCOMES_HEADING)
+        if any(line not in generated[heading] for line in existing.get(heading, ()))
+    ]
+
+
+def _in_scope_sections(inventory: _Inventory) -> list[tuple[str, list[Item]]]:
+    """Group the in-scope items under their plan headings, in plan order."""
+    sections: list[tuple[str, list[Item]]] = []
+    for item in inventory.ordered:
+        if item.kind == "project" or not inventory.in_scope(item):
+            continue
+        if item.kind == "file":
+            folder = item.key.rpartition("/")[0]
+            heading = f"{folder}/" if folder else "Package root"
+            if sections and sections[-1][0] == heading:
+                sections[-1][1].append(item)
+                continue
+        else:
+            heading = item.label
+        sections.append((heading, [item]))
+    project = inventory.ordered[-1]
+    if inventory.in_scope(project):
+        sections.append(("Project", [project, _GATE_ITEM]))
+    else:
+        sections.append(("Final gate", [_GATE_ITEM]))
+    return sections
 
 
 def _render_plan(
@@ -371,69 +562,10 @@ def _render_plan(
     status_output: str | None,
 ) -> tuple[str, dict[str, int]]:
     """Render the plan text and its item counts."""
-    tracked = _tracked_python(root)
-    files = [_package_relative(path) for path in tracked if not _is_init(path)]
-    if not files:
-        raise ValueError(f"no tracked non-__init__ .py files under {PACKAGE_DIR}/")
-    scope = _resolve_scope(scope_entries, files)
-    folders = _package_folders(tracked)
-
-    file_items = {
-        relative: Item(
-            kind="file",
-            key=relative,
-            label=relative,
-            artifacts=_artifact_set(relative),
-        )
-        for relative in files
-    }
-    folder_items = {
-        folder: Item(
-            kind="folder",
-            key=folder,
-            label=f"{folder}/ integration",
-            artifacts=_artifact_set(folder),
-        )
-        for folder in folders
-    }
-    project = _project_item(root, [path for path in tracked if _is_init(path)])
-    _assert_unique_artifacts([*file_items.values(), *folder_items.values(), project])
-
-    def in_scope_file(relative: str) -> bool:
-        return scope is None or any(_scope_matches(entry, relative) for entry in scope)
-
-    def in_scope_folder(folder: str) -> bool:
-        return scope is None or any(_scope_matches(entry, folder) for entry in scope)
-
-    ordered: list[Item] = []
-    sections: list[tuple[str, list[Item]]] = []
-
-    def walk(folder: str) -> None:
-        members = [
-            file_items[relative]
-            for relative in files
-            if relative.rpartition("/")[0] == folder and in_scope_file(relative)
-        ]
-        ordered.extend(file_items[r] for r in files if r.rpartition("/")[0] == folder)
-        if members:
-            sections.append((f"{folder}/" if folder else "Package root", members))
-        for child in folders:
-            if child.rpartition("/")[0] == folder:
-                walk(child)
-        if folder:
-            ordered.append(folder_items[folder])
-            if in_scope_folder(folder):
-                sections.append((f"{folder}/ integration", [folder_items[folder]]))
-
-    walk("")
-    ordered.append(project)
-    project_in_scope = scope is None
-    if project_in_scope:
-        sections.append(("Project", [project, _GATE_ITEM]))
-    else:
-        sections.append(("Final gate", [_GATE_ITEM]))
+    inventory = _build_inventory(root, scope_entries)
+    sections = _in_scope_sections(inventory)
     in_scope = {id(item) for _, members in sections for item in members}
-    out_of_scope = [item for item in ordered if id(item) not in in_scope]
+    out_of_scope = [item for item in inventory.ordered if id(item) not in in_scope]
 
     lines = [
         f"# REVIEW plan: {release}",
@@ -441,7 +573,7 @@ def _render_plan(
         "Status: planned",
         f"Mode: {mode}",
         f"Run: {release} {generated_date}-{run_number}",
-        f"Scope: {_scope_label(scope, files)}",
+        f"Scope: {inventory.scope_label}",
         "",
         "Method: `docs/review/REVIEW.md`. Fresh source review; findings from prior build, review, "
         "DRY or",
@@ -449,7 +581,7 @@ def _render_plan(
         "",
         *_plan_common.cycle_baseline_block(status_output),
         "",
-        "CYCLE_BASELINE=<Worker 0 fills: `git stash create`, empty -> HEAD>",
+        "CYCLE_BASELINE=<Worker 0 fills: `git stash create`, empty -> the `git rev-parse HEAD` sha>",
         f"Untracked under {PACKAGE_DIR}/: <Worker 0 fills>",
         "",
         *_bench_baseline_block(),
@@ -466,7 +598,7 @@ def _render_plan(
                 "",
                 "## Out of scope this run",
                 "",
-                f"Not examined under `Scope: {_scope_label(scope, files)}`; an unticked box here "
+                f"Not examined under `Scope: {inventory.scope_label}`; an unticked box here "
                 "is not a pending",
                 "review of this run. A later run moves an item into its scope under its own "
                 "`## Run` heading.",
@@ -477,8 +609,12 @@ def _render_plan(
             lines.extend(item.render("out-of-scope"))
     lines.extend(["", *_closing_blocks()])
     counts = {
-        "file": sum(1 for relative in files if in_scope_file(relative)),
-        "folder": sum(1 for folder in folders if in_scope_folder(folder)),
+        "file": sum(
+            1 for item in inventory.ordered if item.kind == "file" and id(item) in in_scope
+        ),
+        "folder": sum(
+            1 for item in inventory.ordered if item.kind == "folder" and id(item) in in_scope
+        ),
         "out_of_scope": len(out_of_scope),
     }
     return "\n".join(lines), counts
@@ -489,17 +625,35 @@ def _default_output(release: str) -> Path:
     return REVIEW_DIR / f"review-{release.replace('.', '_')}.md"
 
 
-def _run_plan(args: argparse.Namespace) -> int:
-    """Write a fresh plan; refuse to overwrite without ``--force``."""
-    root = args.root.resolve()
-    release = args.target_release or _plan_common.package_version(root / PACKAGE_DIR)
-    if not RELEASE_PATTERN.fullmatch(release):
+def _validated_release(value: str) -> str:
+    """Return ``value`` when it is a dotted-digit release, else fail."""
+    if not RELEASE_PATTERN.fullmatch(value):
         raise ValueError(
-            f"invalid --target-release {release!r}; expected dotted digits such as 0.0.15",
+            f"invalid --target-release {value!r}; expected dotted digits such as 0.0.15",
         )
+    return value
+
+
+def _run_plan(args: argparse.Namespace) -> int:
+    """Write a fresh plan; an existing one is resumed, and replaced only while unworked."""
+    root = args.root.resolve()
+    release = _validated_release(
+        args.target_release or _plan_common.package_version(root / PACKAGE_DIR),
+    )
     output = _plan_common.resolve_path(args.output or _default_output(release), root)
-    if output.exists() and not args.force:
-        raise FileExistsError(_plan_common.overwrite_error(output))
+    shown = _plan_common.display_path(output, root).as_posix()
+    if output.exists():
+        if not args.force:
+            raise FileExistsError(
+                f"plan already exists: {shown}; a plan is resumed, never replaced: run "
+                f"`review_plan.py resume --plan {shown}` to add a run to it",
+            )
+        held = _recorded_closing_content(output.read_text(encoding="utf-8"))
+        if held:
+            raise ValueError(
+                f"refusing --force: {shown} records content under {' and '.join(held)}; run "
+                f"`review_plan.py resume --plan {shown}` to add a run instead",
+            )
     content, counts = _render_plan(
         root,
         release=release,
@@ -511,8 +665,199 @@ def _run_plan(args: argparse.Namespace) -> int:
     )
     _plan_common.atomic_write(output, content, force=args.force)
     print(
-        f"Wrote {_plan_common.display_path(output, root)} ({counts['file']} file item(s), "
-        f"{counts['folder']} folder item(s) in scope, {counts['out_of_scope']} out of scope)",
+        f"Wrote {shown} ({counts['file']} file item(s), {counts['folder']} folder item(s) in "
+        f"scope, {counts['out_of_scope']} out of scope)",
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# resume
+
+
+def _status_paths(line: str) -> list[str]:
+    """Return the path, or both rename paths, of one ``git status --short`` line."""
+    body = line[3:].strip() if len(line) > 3 else ""
+    return [part.strip().strip('"') for part in body.split(" -> ") if part.strip()]
+
+
+def _split_paths(text: str) -> list[str]:
+    """Split a comma- or space-separated path list, dropping backticks."""
+    return [token.strip("`") for token in re.split(r"[,\s]+", text) if token.strip("`")]
+
+
+def _recorded_dirty(text: str) -> set[str]:
+    """Return every path the cycle baseline block or a ``Drift:`` line already records."""
+    paths: set[str] = set()
+    in_baseline = in_fence = in_drift = False
+    untracked_prefix = f"Untracked under {PACKAGE_DIR}/:"
+    for line in text.splitlines():
+        if line.startswith("## "):
+            in_baseline, in_fence, in_drift = line.rstrip() == "## Cycle baseline", False, False
+            continue
+        if in_drift and line.startswith("  ") and not line.startswith("    ") and line.strip():
+            paths.update(_split_paths(line))
+            continue
+        in_drift = False
+        drift = _DRIFT_LINE.match(line)
+        if drift:
+            in_drift = True
+            if drift["paths"]:
+                paths.update(_split_paths(drift["paths"]))
+            continue
+        if not in_baseline:
+            continue
+        if line.startswith("```"):
+            in_fence = not in_fence
+        elif in_fence:
+            paths.update(_status_paths(line))
+        elif line.startswith(untracked_prefix):
+            paths.update(_split_paths(line.removeprefix(untracked_prefix)))
+    return paths
+
+
+def _ledger_paths(text: str) -> set[str]:
+    """Return the ``Path`` cell of every ``## Owned changes`` row."""
+    paths = set()
+    for row in _section_bodies(text).get(LEDGER_HEADING, []):
+        if not row.startswith("|"):
+            continue
+        cell = row.strip().strip("|").split("|")[0].strip().strip("`")
+        if cell and cell != "Path" and not set(cell) <= {"-", ":"}:
+            paths.add(cell)
+    return paths
+
+
+def _recorded_head(root: Path, text: str) -> str | None:
+    """Return the ``HEAD`` the plan last recorded: latest ``Drift:``, else ``CYCLE_BASELINE``."""
+    drifts = [match["new"] for line in text.splitlines() if (match := _DRIFT_LINE.match(line))]
+    if drifts:
+        return drifts[-1]
+    baseline = _CYCLE_BASELINE_LINE.search(text)
+    if baseline is None:
+        return None
+    rev = baseline["rev"]
+    try:
+        commits = _git(root, "rev-list", "--parents", "-n", "1", rev).split()
+        subject = _git(root, "log", "-1", "--format=%s", rev).strip()
+    except ValueError:
+        return rev
+    if len(commits) >= 3 and _STASH_SUBJECT.match(subject):
+        return commits[1]
+    return commits[0] if commits else rev
+
+
+def _drift_line(
+    root: Path,
+    text: str,
+    date: str,
+    plan_dir: Path,
+) -> str | None:
+    """Return the ``Drift:`` line for this run, or ``None`` when nothing moved."""
+    head = _git(root, "rev-parse", "HEAD").strip()
+    old = _recorded_head(root, text)
+    moved = True
+    if old is not None:
+        try:
+            moved = _git(root, "rev-parse", "--verify", f"{old}^{{commit}}").strip() != head
+        except ValueError:
+            moved = True
+    excluded = _ledger_paths(text) | _recorded_dirty(text)
+    shown_dir = _plan_common.display_path(plan_dir, root)
+    own_prefix = None if shown_dir.is_absolute() else f"{shown_dir.as_posix().rstrip('/')}/"
+    fresh: list[str] = []
+    for line in (_plan_common.git_status_short(root) or "").splitlines():
+        for path in _status_paths(line):
+            if path in excluded or path in fresh:
+                continue
+            if own_prefix is not None and f"{path.rstrip('/')}/".startswith(own_prefix):
+                continue
+            fresh.append(path)
+    if not moved and not fresh:
+        return None
+    line = f"Drift: {date} HEAD {old[:12] if old else 'unrecorded'}..{head[:12]}"
+    if fresh:
+        line += f"; dirty + {', '.join(fresh)}"
+    return line
+
+
+def _render_resume(
+    root: Path,
+    text: str,
+    *,
+    release: str,
+    run_number: int,
+    generated_date: str,
+    scope_entries: Sequence[str],
+    plan_dir: Path,
+) -> tuple[str, dict[str, int]]:
+    """Render the lines one resumed run appends, and their counts."""
+    inventory = _build_inventory(root, scope_entries)
+    itemized = {item.label for item in parse_plan(text) if _status_word(item.status) != "closed"}
+    in_scope = [item for item in (*inventory.ordered, _GATE_ITEM) if inventory.in_scope(item)]
+    carried = [item.label for item in in_scope if item.label in itemized]
+    added = [item for item in in_scope if item.label not in itemized]
+    drift = _drift_line(root, text, generated_date, plan_dir)
+    lines = [
+        f"## Run {release} {generated_date}-{run_number}",
+        "",
+        f"Scope: {inventory.scope_label}",
+        *([drift] if drift else []),
+    ]
+    if carried:
+        lines.extend(
+            [
+                "",
+                "Already itemized above, worked this run:",
+                "",
+                *(f"- `{label}`" for label in carried),
+            ],
+        )
+    if added:
+        lines.extend(["", "New items this run:", ""])
+        for item in added:
+            lines.extend(item.render("pending"))
+    lead = "" if text.endswith("\n\n") else "\n" if text.endswith("\n") else "\n\n"
+    counts = {"added": len(added), "carried": len(carried), "drift": int(drift is not None)}
+    return lead + "\n".join(lines) + "\n", counts
+
+
+def _run_resume(args: argparse.Namespace) -> int:
+    """Append one run to an existing plan without touching a byte already in it."""
+    root = args.root.resolve()
+    wanted = _validated_release(args.target_release) if args.target_release else None
+    if args.plan is not None:
+        plan_path = _plan_common.resolve_path(args.plan, root)
+    else:
+        release = wanted or _plan_common.package_version(root / PACKAGE_DIR)
+        plan_path = _plan_common.resolve_path(_default_output(release), root)
+    shown = _plan_common.display_path(plan_path, root).as_posix()
+    if not plan_path.is_file():
+        raise ValueError(f"no plan at {shown}; run `review_plan.py plan` to write one")
+    text = plan_path.read_bytes().decode("utf-8")
+    title = _PLAN_TITLE.search(text)
+    if title is None:
+        raise ValueError(f"{shown} has no `# REVIEW plan: <release>` title")
+    release = title["release"]
+    if wanted is not None and wanted != release:
+        raise ValueError(f"{shown} plans release {release}, not --target-release {wanted}")
+    run_number = _run_max(text, release) + 1
+    generated_date = _plan_common.validate_date(args.generated_date)
+    addition, counts = _render_resume(
+        root,
+        text,
+        release=release,
+        run_number=run_number,
+        generated_date=generated_date,
+        scope_entries=args.scope,
+        plan_dir=plan_path.parent,
+    )
+    with plan_path.open("ab") as stream:
+        stream.write(addition.encode("utf-8"))
+    print(
+        f"Appended run {release} {generated_date}-{run_number} to {shown} "
+        f"({counts['added']} new item(s), {counts['carried']} already itemized, "
+        f"{'drift recorded' if counts['drift'] else 'no drift'})",
     )
     return 0
 
@@ -654,6 +999,7 @@ def build_scope(root: Path, since: str | None) -> ScopeReport:
                     "similarity": code,
                     "where": "committed",
                     "blob": head_blobs.get(target),
+                    "item": _covering_item(target),
                 },
             )
             continue
@@ -663,6 +1009,7 @@ def build_scope(root: Path, since: str | None) -> ScopeReport:
                 "path": path,
                 "blob": head_blobs.get(path),
                 "init": _is_init(path),
+                "item": _covering_item(path),
                 "also_dirty": path in dirty_paths,
             },
         )
@@ -676,6 +1023,7 @@ def build_scope(root: Path, since: str | None) -> ScopeReport:
                     "similarity": code.strip(),
                     "where": "index",
                     "blob": worktree.get(path),
+                    "item": _covering_item(path),
                 },
             )
         report.dirty.append(
@@ -684,6 +1032,7 @@ def build_scope(root: Path, since: str | None) -> ScopeReport:
                 "path": path,
                 "worktree_blob": worktree.get(path),
                 "init": _is_init(path),
+                "item": _covering_item(path),
             },
         )
     return report
@@ -694,22 +1043,21 @@ def _render_scope(report: ScopeReport) -> str:
     lines = [
         f"Package .py changes since {report.since} ({report.since_sha[:12]}) to HEAD "
         f"{report.head_sha[:12]}, plus the working tree.",
-        "`__init__.py` paths belong to the project integration item.",
+        "A folder's `__init__.py` belongs to that folder's integration item, the package-root "
+        "`__init__.py` to the project integration item.",
         "",
         f"Committed ({report.since}..HEAD): {len(report.committed)}",
     ]
     for entry in report.committed:
-        notes = [
-            note
-            for flag, note in (("init", "project"), ("also_dirty", "also dirty"))
-            if entry[flag]
-        ]
+        notes = [str(entry["item"])] if entry["init"] else []
+        if entry["also_dirty"]:
+            notes.append("also dirty")
         suffix = f"  ({', '.join(notes)})" if notes else ""
         blob = entry["blob"] or "-"
         lines.append(f"  {entry['status']:<2} {entry['path']}  HEAD {blob}{suffix}")
     lines.extend(["", f"Dirty or untracked (concurrent work, not committed): {len(report.dirty)}"])
     for entry in report.dirty:
-        suffix = "  (project)" if entry["init"] else ""
+        suffix = f"  ({entry['item']})" if entry["init"] else ""
         blob = entry["worktree_blob"] or "-"
         lines.append(f"  {entry['status']} {entry['path']}  worktree {blob}{suffix}")
     lines.extend(["", f"Renames: {len(report.renames)}"])
@@ -744,6 +1092,7 @@ class PlanItem:
     ticked: bool
     status: str
     artifacts: tuple[str, ...]
+    inits: tuple[str, ...] = ()
 
 
 def parse_plan(text: str) -> list[PlanItem]:
@@ -764,6 +1113,7 @@ def parse_plan(text: str) -> list[PlanItem]:
                 "ticked": item["mark"] != " ",
                 "status": "",
                 "artifacts": (),
+                "inits": (),
             }
             continue
         entry = _FIELD_LINE.match(line)
@@ -775,6 +1125,8 @@ def parse_plan(text: str) -> list[PlanItem]:
                 current["artifacts"] = tuple(
                     name.strip() for name in value.split(",") if name.strip()
                 )
+            elif key == INIT_FIELD:
+                current["inits"] = tuple(match["path"] for match in _INIT_ENTRY.finditer(value))
             continue
         if current is not None and line.strip() and not line.startswith("    "):
             flush()
@@ -830,6 +1182,9 @@ class ReconcileReport:
     renamed: list[tuple[str, str, float]] = field(default_factory=list)
     folders_added: list[str] = field(default_factory=list)
     folders_gone: list[str] = field(default_factory=list)
+    inits_unlisted: list[tuple[str, str]] = field(default_factory=list)
+    inits_misplaced: list[tuple[str, str, str]] = field(default_factory=list)
+    inits_gone: list[tuple[str, str]] = field(default_factory=list)
     missing_artifacts: list[tuple[str, str]] = field(default_factory=list)
 
     @property
@@ -842,9 +1197,34 @@ class ReconcileReport:
                 self.renamed,
                 self.folders_added,
                 self.folders_gone,
+                self.inits_unlisted,
+                self.inits_misplaced,
+                self.inits_gone,
                 self.missing_artifacts,
             ),
         )
+
+
+def _reconcile_inits(
+    report: ReconcileReport,
+    items: Sequence[PlanItem],
+    paths: Sequence[str],
+) -> None:
+    """Record every ``__init__.py`` whose ``Init files:`` listing disagrees with the tree."""
+    actual = {_package_relative(path) for path in paths if _is_init(path)}
+    listed: dict[str, list[str]] = {}
+    for item in items:
+        for init in item.inits:
+            listed.setdefault(init, []).append(item.label)
+    new_folders = {f"{folder}{FOLDER_SUFFIX}" for folder in report.folders_added}
+    for init in sorted(actual):
+        owner = _init_owner(init)
+        on = listed.get(init, [])
+        if owner not in on and owner not in new_folders:
+            report.inits_unlisted.append((init, owner))
+        report.inits_misplaced.extend((init, label, owner) for label in on if label != owner)
+    for init in sorted(set(listed) - actual):
+        report.inits_gone.extend((label, init) for label in listed[init])
 
 
 def build_reconcile(root: Path, plan_path: Path) -> ReconcileReport:
@@ -861,9 +1241,9 @@ def build_reconcile(root: Path, plan_path: Path) -> ReconcileReport:
     }
     planned_files = {item.label for item in items if item.label.endswith(".py")}
     planned_folders = {
-        item.label.removesuffix("/ integration")
+        item.label.removesuffix(FOLDER_SUFFIX)
         for item in items
-        if item.label.endswith("/ integration")
+        if item.label.endswith(FOLDER_SUFFIX)
     }
     report = ReconcileReport()
     added = sorted(path for path in inventory if path not in planned_files)
@@ -888,6 +1268,7 @@ def build_reconcile(root: Path, plan_path: Path) -> ReconcileReport:
     folders = set(_package_folders([*tracked, *untracked]))
     report.folders_added = sorted(folders - planned_folders)
     report.folders_gone = sorted(planned_folders - folders)
+    _reconcile_inits(report, items, [*tracked, *untracked])
     for item in items:
         for name in _required_artifacts(item):
             if not (plan_path.parent / name).is_file():
@@ -908,6 +1289,21 @@ def _render_reconcile(report: ReconcileReport, plan_path: Path) -> str:
         ),
         ("Folders without an integration item", [f"{name}/" for name in report.folders_added]),
         ("Folder items whose folder is gone", [f"{name}/" for name in report.folders_gone]),
+        (
+            "`__init__.py` files missing from their item's Init files line",
+            [f"{init}: {owner}" for init, owner in report.inits_unlisted],
+        ),
+        (
+            "`__init__.py` files listed on an item that does not own them",
+            [
+                f"{init}: listed on {on}, owned by {owner}"
+                for init, on, owner in report.inits_misplaced
+            ],
+        ),
+        (
+            "Items listing an `__init__.py` that is gone",
+            [f"{label}: {init}" for label, init in report.inits_gone],
+        ),
         (
             "Items missing artifacts on disk",
             [f"{label}: {name}" for label, name in report.missing_artifacts],
@@ -936,7 +1332,7 @@ def _run_reconcile(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the three-subcommand parser."""
+    """Build the ``plan`` / ``resume`` / ``scope`` / ``reconcile`` parser."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument(
         "--root",
@@ -961,7 +1357,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="plan path (default: docs/review/review-<rel>.md)",
     )
     plan.add_argument("--generated-date", help="ISO date for the Run: id (default: today)")
-    plan.add_argument("--force", action="store_true", help="replace an existing plan")
+    plan.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing plan whose ledger and outcomes are still empty",
+    )
+
+    resume = commands.add_parser("resume", help="append one run to an existing plan")
+    resume.add_argument(
+        "--plan",
+        type=Path,
+        help="plan to resume (default: docs/review/review-<rel>.md)",
+    )
+    resume.add_argument(
+        "--scope",
+        action="append",
+        default=[],
+        help="package folder or module this run works (repeatable; default: package)",
+    )
+    resume.add_argument("--target-release", help="release the plan must be for")
+    resume.add_argument("--generated-date", help="ISO date for the run id (default: today)")
 
     scope = commands.add_parser("scope", help="print changed package .py files since a revision")
     scope.add_argument("--since", help="base revision (default: latest tag reachable from HEAD)")
@@ -975,7 +1390,12 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected subcommand and return a process exit code."""
     args = _build_parser().parse_args(sys.argv[1:] if argv is None else argv)
-    runners = {"plan": _run_plan, "scope": _run_scope, "reconcile": _run_reconcile}
+    runners = {
+        "plan": _run_plan,
+        "resume": _run_resume,
+        "scope": _run_scope,
+        "reconcile": _run_reconcile,
+    }
     try:
         return runners[args.command](args)
     except (

@@ -33,7 +33,10 @@ The optional manifest fields have rows of their own: a declared
 fail), several sites mutate and restore together, a ``pre_image`` or
 ``reverse_patch`` reverts a file without git, the probe plugin reports the
 package ``__file__`` and database ``NAME`` from inside pytest, ``--workspace``
-refuses a root outside the copy, and ``--json`` carries the whole record. The
+refuses a root outside the copy, ``--json`` carries the whole record, and
+two runs never share scratch state: without ``--scratch-root`` each run makes a
+fresh directory, and under one explicit root each repository root gets its own
+namespace whose live marker or run lock refuses a second run against that tree. The
 original single-anchor shape reads and grades exactly as it did.
 
 ``REPO_ROOT`` is monkeypatched to a ``tmp_path`` fake repo (as
@@ -46,6 +49,7 @@ import difflib
 import json
 import os
 import types
+from pathlib import Path
 
 import pytest
 
@@ -416,6 +420,171 @@ def test_a_scratch_root_outside_the_repository_is_created(fake_repo, tmp_path):
     resolved = prove_failability._resolve_scratch_root(str(tmp_path / "outside-scratch"))
 
     assert (resolved / prove_failability.PRISTINE_DIRECTORY_NAME).is_dir()
+
+
+def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_or_probe_paths(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+):
+    # Two verifiers proving one manifest against their own workspace copies, sharing one
+    # --scratch-root: B's whole proof runs while A's mutation is live, which is how two
+    # parallel runs interleave. Each tree must be restored from its OWN pre-mutation bytes.
+    given = tmp_path / "outside-scratch"
+    other_repo = tmp_path / "repo-b"
+    (other_repo / "package").mkdir(parents=True)
+    other_source = SOURCE.replace("    return value", "    return value  # workspace b")
+    (other_repo / "package" / "views.py").write_text(other_source, encoding="utf-8")
+    entry_a = _single_entry(tmp_path)
+    directory_a = prove_failability._resolve_scratch_root(str(given))
+    monkeypatch.setattr(prove_failability, "REPO_ROOT", other_repo)
+    entry_b = _single_entry(tmp_path)
+    directory_b = prove_failability._resolve_scratch_root(str(given))
+    monkeypatch.setattr(prove_failability, "REPO_ROOT", fake_repo)
+    calls = []
+    probes = {"a": [], "b": []}
+    seen = {}
+
+    def fake_run_scope(entry, capture=None):
+        calls.append(entry)
+        name = "a" if entry is entry_a else "b"
+        probes[name].append(capture.probe_output)
+        directory = directory_a if name == "a" else directory_b
+        if calls.count(entry) == 2:
+            marker = directory / prove_failability.ACTIVE_MARKER_NAME
+            seen[f"marker_{name}"] = json.loads(marker.read_text(encoding="utf-8"))
+        if name == "a" and calls.count(entry) == 2:
+            monkeypatch.setattr(prove_failability, "REPO_ROOT", other_repo)
+            try:
+                seen["result_b"] = prove_failability.execute_entry(entry_b, directory_b)
+            finally:
+                monkeypatch.setattr(prove_failability, "REPO_ROOT", fake_repo)
+        return prove_failability.RunOutcome((), (), "stubbed", 0)
+
+    monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
+
+    result_a = prove_failability.execute_entry(entry_a, directory_a)
+
+    assert directory_a.parent == directory_b.parent == given
+    assert directory_a != directory_b
+    assert len(calls) == 4
+    assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
+    assert (other_repo / "package" / "views.py").read_text(encoding="utf-8") == other_source
+    assert seen["result_b"].failure is None
+    restore_a = seen["marker_a"]["restore_from"]
+    restore_b = seen["marker_b"]["restore_from"]
+    assert restore_a != restore_b
+    assert restore_a.startswith(str(directory_a))
+    assert restore_b.startswith(str(directory_b))
+    assert result_a.files[0].pristine == restore_a
+    assert seen["result_b"].files[0].pristine == restore_b
+    assert len(probes["a"]) == len(probes["b"]) == 2
+    assert not set(probes["a"]) & set(probes["b"])
+    assert all(directory_a in path.parents for path in probes["a"])
+    assert all(directory_b in path.parents for path in probes["b"])
+    for directory in (directory_a, directory_b):
+        assert not (directory / prove_failability.ACTIVE_MARKER_NAME).exists()
+
+
+@pytest.mark.parametrize(
+    ("writer", "reading"),
+    [("running", "still running"), ("gone", "no longer running")],
+)
+def test_a_live_marker_for_the_same_repository_root_refuses_the_run_and_is_kept(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    writer,
+    reading,
+):
+    seen = _stub_run(monkeypatch)
+    given = tmp_path / "outside-scratch"
+    directory = prove_failability._resolve_scratch_root(str(given))
+    marker = directory / prove_failability.ACTIVE_MARKER_NAME
+    pid = os.getppid() if writer == "running" else None
+    restore = f"cp {directory}/pristine/x {fake_repo}/package/views.py"
+    marker.write_text(
+        json.dumps({"pid": pid, "files": [{"restore_with": restore}]}),
+        encoding="utf-8",
+    )
+    before = marker.read_bytes()
+
+    code = prove_failability.main([str(_manifest(tmp_path)), "--scratch-root", str(given)])
+
+    assert code == 1
+    assert seen == []
+    error = capsys.readouterr().err
+    assert "scratch root refused" in error
+    assert str(marker) in error
+    assert restore in error
+    assert reading in error
+    assert marker.read_bytes() == before
+    assert not (directory / prove_failability.RUN_LOCK_NAME).exists()
+    assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
+
+
+@pytest.mark.parametrize(("holder", "expected_code"), [("running", 1), ("gone", 0)])
+def test_a_run_lock_held_by_a_running_process_refuses_and_a_stale_one_is_replaced(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+    capsys,
+    holder,
+    expected_code,
+):
+    _four_failing_rows(monkeypatch)
+    given = tmp_path / "outside-scratch"
+    directory = prove_failability._resolve_scratch_root(str(given))
+    lock = directory / prove_failability.RUN_LOCK_NAME
+    lock.write_text(
+        json.dumps({"pid": os.getppid() if holder == "running" else None}),
+        encoding="utf-8",
+    )
+
+    code = prove_failability.main([str(_manifest(tmp_path)), "--scratch-root", str(given)])
+
+    assert code == expected_code
+    if holder == "running":
+        assert "locked by running process" in capsys.readouterr().err
+        assert lock.exists()
+    else:
+        assert not lock.exists()
+
+
+def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header_and_json(
+    fake_repo,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    system_tmp = tmp_path / "system-tmp"
+    system_tmp.mkdir()
+    monkeypatch.setattr(prove_failability.tempfile, "tempdir", str(system_tmp))
+    documents = []
+    for run in range(2):
+        _four_failing_rows(monkeypatch)
+        output = tmp_path / f"run-{run}.json"
+
+        assert prove_failability.main([str(_manifest(tmp_path)), "--json", str(output)]) == 0
+
+        documents.append(json.loads(output.read_text(encoding="utf-8")))
+        directory = documents[-1]["scratch_root"]
+        header = capsys.readouterr().err
+        assert f"scratch root: {directory}" in header
+        assert "fresh for this run" in header
+    first, second = (document["scratch_root"] for document in documents)
+    assert first != second
+    for document in documents:
+        directory = Path(document["scratch_root"])
+        assert directory.parent == system_tmp.resolve()
+        assert directory.name.startswith(prove_failability.DEFAULT_SCRATCH_PREFIX)
+        assert document["scratch_root_given"] is None
+        assert document["active_marker"] == str(
+            directory / prove_failability.ACTIVE_MARKER_NAME,
+        )
+        assert (directory / prove_failability.PRISTINE_DIRECTORY_NAME).is_dir()
+        assert not (directory / prove_failability.RUN_LOCK_NAME).exists()
 
 
 @pytest.mark.parametrize(

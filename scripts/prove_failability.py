@@ -29,8 +29,21 @@ Deliberate properties, each one a hand-run failure mode this encodes away:
   proved by byte comparison before the next entry starts. A restore that cannot
   be proved stops the run loudly instead of continuing.
 * **A crash leaves evidence.** While a mutation is live, an
-  ``ACTIVE-MUTATION.json`` marker in the scratch directory names the mutated
-  file and the pristine copy that restores it.
+  ``ACTIVE-MUTATION.json`` marker in the run's scratch directory names the
+  mutated file and the pristine copy that restores it. The run header, the
+  markdown record and ``--json`` all name that directory.
+* **Two runs never share scratch state.** Without ``--scratch-root`` every run
+  gets a fresh ``failability-*`` directory under the system temporary directory
+  (``TMPDIR``), so parallel runs against separate workspace copies cannot
+  overwrite each other's pristine copies, markers or probe logs; a crashed
+  run's marker stays in that directory, which the header printed. With
+  ``--scratch-root`` (or the manifest's ``scratch_root``) the run works in
+  ``<root>/tree-<digest>``, the digest naming the repository root the run
+  mutates: workspace copies sharing one root stay disjoint, and a rerun against
+  the same tree lands in the same directory, so a marker a crashed run left
+  there refuses the run until it is resolved instead of being clobbered. A
+  ``RUN.lock`` held for the whole run in that directory refuses a second
+  concurrent run against the same tree.
 * **The pre-mutation baseline is not optional.** ``BUILD.md`` "What gets
   recorded" requires the pre-mutation state of the same scope, so every scope is
   run unmutated first and already-failing rows are differenced out. In a tree
@@ -83,7 +96,7 @@ Manifest format (JSON; every string field may also be given as a list of
 lines, which is joined with newlines so multi-line blocks stay readable)::
 
     {
-      "scratch_root": "/tmp/failability-proofs",       // optional
+      "scratch_root": "<scratch>/failability-proofs",  // optional
       "proofs": [
         {
           "label": "package/views.py::Mixin.method",   // symbol-qualified path; a
@@ -199,9 +212,12 @@ from itertools import takewhile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SCRATCH_DIRECTORY_NAME = "failability-proofs"
+DEFAULT_SCRATCH_PREFIX = "failability-"
+TREE_NAMESPACE_PREFIX = "tree-"
+TREE_NAMESPACE_DIGEST_LENGTH = 16
 PRISTINE_DIRECTORY_NAME = "pristine"
 ACTIVE_MARKER_NAME = "ACTIVE-MUTATION.json"
+RUN_LOCK_NAME = "RUN.lock"
 RESTORE_FAILED_MARKER_NAME = "RESTORE-FAILED.json"
 # ``--no-cov`` is mandatory: pytest.ini's addopts turn coverage on, and coverage
 # gating belongs to the full-suite run, not to this tool. ``--color=no`` and
@@ -400,6 +416,10 @@ NO_NEWLINE_MARKER = "\\ No newline at end of file"
 
 class ManifestError(Exception):
     """The manifest is not a usable set of proof entries."""
+
+
+class ScratchRootError(ManifestError):
+    """The scratch root is unusable: inside the repository, locked, or holding a live marker."""
 
 
 class RestoreProofError(Exception):
@@ -1001,19 +1021,133 @@ def _refuse_unusable_scope_argument(argument: str, label: str) -> None:
         )
 
 
-def _resolve_scratch_root(raw_root: str | None) -> Path:
-    """Return the scratch root, refusing any location inside the repository."""
-    if raw_root:
-        resolved = Path(raw_root).expanduser().resolve()
-    else:
-        resolved = Path(tempfile.gettempdir()).resolve() / DEFAULT_SCRATCH_DIRECTORY_NAME
-    if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
-        raise ManifestError(
-            f"scratch root {resolved} is inside the repository {REPO_ROOT}; "
+def _given_scratch_root(raw_root: str | None) -> Path | None:
+    """Return the explicitly given scratch root, resolved, or ``None`` when none was given."""
+    return Path(raw_root).expanduser().resolve() if raw_root else None
+
+
+def _tree_namespace() -> str:
+    """Return the scratch subdirectory name owned by the repository root this run mutates."""
+    digest = hashlib.sha256(str(REPO_ROOT).encode("utf-8")).hexdigest()
+    return f"{TREE_NAMESPACE_PREFIX}{digest[:TREE_NAMESPACE_DIGEST_LENGTH]}"
+
+
+def _refuse_inside_repository(directory: Path) -> None:
+    """Raise when ``directory`` is the repository root or lies under it."""
+    if _is_within(directory, REPO_ROOT):
+        raise ScratchRootError(
+            f"scratch root {directory} is inside the repository {REPO_ROOT}; "
             "pristine copies must live outside the tree under proof",
         )
+
+
+def _resolve_scratch_root(raw_root: str | None) -> Path:
+    """Return this run's scratch directory, refusing any location inside the repository.
+
+    Without ``raw_root`` the directory is a fresh ``failability-*`` directory
+    under the system temporary directory, so no two runs share one. With
+    ``raw_root`` it is ``<raw_root>/tree-<digest>`` for the repository root this
+    run mutates: runs against different workspace copies get disjoint
+    directories, and a rerun against the same tree gets the one a crashed run
+    left its marker in.
+    """
+    given = _given_scratch_root(raw_root)
+    if given is None:
+        parent = Path(tempfile.gettempdir()).resolve()
+        _refuse_inside_repository(parent)
+        resolved = Path(tempfile.mkdtemp(prefix=DEFAULT_SCRATCH_PREFIX, dir=parent)).resolve()
+    else:
+        resolved = given / _tree_namespace()
+        _refuse_inside_repository(resolved)
     (resolved / PRISTINE_DIRECTORY_NAME).mkdir(parents=True, exist_ok=True)
     return resolved
+
+
+def _process_is_running(pid: object) -> bool:
+    """Return whether ``pid`` names a process that exists on this host."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_json_marker(path: Path) -> dict[str, object]:
+    """Return a marker's JSON object, or an empty one when it is unreadable."""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return document if isinstance(document, dict) else {}
+
+
+def _describe_live_marker(marker: Path) -> str:
+    """Return why ``marker`` stops a run: the mutation it names and whether its writer runs."""
+    payload = _read_json_marker(marker)
+    pid = payload.get("pid")
+    if _process_is_running(pid) and pid != os.getpid():
+        writer = f"process {pid} wrote it and is still running, so its mutation is live"
+    else:
+        writer = (
+            "the run that wrote it is no longer running, so it crashed with the mutation "
+            "possibly still in the tree; restore each file with its `restore_with` command, "
+            "then delete the marker"
+        )
+    restores = [
+        str(item.get("restore_with"))
+        for item in payload.get("files", ())
+        if isinstance(item, dict) and item.get("restore_with")
+    ]
+    restore_text = f" ({'; '.join(restores)})" if restores else ""
+    return f"live-mutation marker {marker} exists{restore_text}: {writer}"
+
+
+def _claim_scratch_directory(directory: Path) -> Path:
+    """Take this run's lock on ``directory`` and refuse it when it holds a live marker.
+
+    The lock is held for the whole run, so a second run against the same tree
+    is refused before it copies a pristine file over the first run's. A lock
+    whose writing process is gone is stale and is replaced. An
+    ``ACTIVE-MUTATION.json`` marker refuses the run whoever wrote it: a live
+    one means another run is mutating this tree, a stale one means a crashed
+    run may have left a mutation that the marker alone says how to restore.
+    Returns the lock path, which :func:`_release_scratch_directory` removes.
+    """
+    lock = directory / RUN_LOCK_NAME
+    payload = json.dumps({"pid": os.getpid(), "repo_root": str(REPO_ROOT)}) + "\n"
+    for _attempt in range(2):
+        try:
+            with lock.open("x", encoding="utf-8") as handle:
+                handle.write(payload)
+            break
+        except FileExistsError:
+            holder = _read_json_marker(lock).get("pid")
+            if _process_is_running(holder):
+                raise ScratchRootError(
+                    f"scratch directory {directory} is locked by running process {holder} "
+                    f"({lock}); another run is proving against the same repository root "
+                    f"{REPO_ROOT}",
+                ) from None
+            lock.unlink(missing_ok=True)
+    else:
+        raise ScratchRootError(f"scratch directory {directory}: could not take {lock}")
+    marker = directory / ACTIVE_MARKER_NAME
+    if marker.exists():
+        _release_scratch_directory(lock)
+        raise ScratchRootError(
+            f"{_describe_live_marker(marker)}. Nothing was run; the marker is left in place",
+        )
+    return lock
+
+
+def _release_scratch_directory(lock: Path) -> None:
+    """Remove this run's lock when this process still holds it."""
+    if _read_json_marker(lock).get("pid") == os.getpid():
+        lock.unlink(missing_ok=True)
 
 
 def _resolve_input_file(
@@ -1814,7 +1948,12 @@ def _marker_payload(
         }
         for planned, pristine in zip(plan, pristines, strict=True)
     ]
-    return {"label": entry.label, **files[0], "files": files}
+    return {
+        "label": entry.label,
+        "pid": os.getpid(),
+        **files[0],
+        "files": files,
+    }
 
 
 def _restore_every_file(
@@ -1947,18 +2086,43 @@ def _expectation_verdict(expectation: Expectation, failed_count: int) -> str:
 
 @dataclass(frozen=True)
 class ReportContext:
-    """Where the run happened: the tree mutated, the declared workspace, the scratch root."""
+    """Where the run happened: the tree mutated, the declared workspace, the scratch directory.
+
+    ``scratch_root`` is the directory this run wrote its pristine copies, probe
+    logs and markers to; ``scratch_root_given`` is the explicit root it was
+    namespaced under, or ``None`` when the run made a fresh directory.
+    """
 
     repo_root: Path
     workspace: Path | None
     scratch_root: Path
+    scratch_root_given: Path | None = None
+
+    @property
+    def active_marker(self) -> Path:
+        """Return where a live mutation's marker sits while the mutation is live."""
+        return self.scratch_root / ACTIVE_MARKER_NAME
+
+    def describe_scratch(self) -> str:
+        """Return where this run's scratch state lives and how it was chosen."""
+        if self.scratch_root_given is None:
+            origin = "fresh for this run (no scratch root given)"
+        else:
+            origin = (
+                f"this repository root's namespace under the given scratch root "
+                f"`{self.scratch_root_given}`"
+            )
+        return (
+            f"scratch directory `{self.scratch_root}`, {origin}; a crashed run's live-mutation "
+            f"marker is `{self.active_marker}`"
+        )
 
     def describe(self) -> str:
         """Return the record's workspace line."""
         workspace = f"`{self.workspace}`" if self.workspace is not None else "not given"
         return (
             f"Workspace: repository root mutated `{self.repo_root}`; `--workspace` {workspace}; "
-            f"scratch root `{self.scratch_root}`."
+            f"{self.describe_scratch()}."
         )
 
 
@@ -2295,6 +2459,10 @@ def build_json_report(
         "repo_root": str(context.repo_root),
         "workspace": None if context.workspace is None else str(context.workspace),
         "scratch_root": str(context.scratch_root),
+        "scratch_root_given": (
+            None if context.scratch_root_given is None else str(context.scratch_root_given)
+        ),
+        "active_marker": str(context.active_marker),
         "manifest": str(manifest_path.resolve()),
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "pytest_command": list(PYTEST_COMMAND),
@@ -2369,7 +2537,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--scratch-root",
         default=None,
-        help="directory for pristine copies and markers; must be OUTSIDE the repository",
+        help=(
+            "directory for pristine copies, probe logs and markers; must be OUTSIDE the "
+            "repository. The run works in <root>/tree-<digest of the repository root>, and a "
+            "live ACTIVE-MUTATION.json there refuses the run. Default: a fresh failability-* "
+            "directory under the system temporary directory, named in the run header"
+        ),
     )
     parser.add_argument(
         "--baseline",
@@ -2449,14 +2622,47 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         entries, manifest_scratch_root = load_manifest(arguments.manifest)
         selected = select_entries(entries, arguments.only)
-        scratch_root = _resolve_scratch_root(arguments.scratch_root or manifest_scratch_root)
+        raw_scratch_root = arguments.scratch_root or manifest_scratch_root
+        scratch_root = _resolve_scratch_root(raw_scratch_root)
+        lock = _claim_scratch_directory(scratch_root)
+    except ScratchRootError as error:
+        print(f"scratch root refused: {error}", file=sys.stderr)
+        return 1
     except ManifestError as error:
         print(f"manifest error: {error}", file=sys.stderr)
         return 1
-    selection = describe_selection(entries, selected, arguments.only)
-    context = ReportContext(repo_root=REPO_ROOT, workspace=workspace, scratch_root=scratch_root)
+    context = ReportContext(
+        repo_root=REPO_ROOT,
+        workspace=workspace,
+        scratch_root=scratch_root,
+        scratch_root_given=_given_scratch_root(raw_scratch_root),
+    )
+    try:
+        return _run_selected(
+            arguments,
+            selected,
+            describe_selection(entries, selected, arguments.only),
+            context,
+            capture_baseline=capture_baseline,
+        )
+    finally:
+        _release_scratch_directory(lock)
+
+
+def _run_selected(
+    arguments: argparse.Namespace,
+    selected: Sequence[ProofEntry],
+    selection: ManifestSelection,
+    context: ReportContext,
+    *,
+    capture_baseline: bool,
+) -> int:
+    """Prove every selected entry in ``context``'s scratch directory and emit the records."""
+    scratch_root = context.scratch_root
+    workspace = context.workspace
     print(f"repository root: {REPO_ROOT}", file=sys.stderr)
     print(f"scratch root: {scratch_root}", file=sys.stderr)
+    print(f"  {context.describe_scratch()}", file=sys.stderr)
     if selection.is_partial:
         print(
             f"PARTIAL RUN: --only selected {selection.selected_total} of "
@@ -2487,6 +2693,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("RESTORE FAILED - THE WORKING TREE MAY STILL HOLD A MUTATION", file=sys.stderr)
             print(f"  {error}", file=sys.stderr)
             print(f"  marker: {marker}", file=sys.stderr)
+            print(f"  live-mutation marker: {context.active_marker}", file=sys.stderr)
             print("Run aborted; remaining entries were not attempted.", file=sys.stderr)
             print("!" * 78 + "\n", file=sys.stderr)
             abort = f"Entry `{entry.label}`: {error} Marker: `{marker}`."

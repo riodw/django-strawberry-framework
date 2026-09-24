@@ -12,11 +12,27 @@ carry no ``e.g. `` / ``i.e. `` (a dot followed by a space reads as a sentence
 break; interior dots such as ``Meta.cursor_field`` or ``0.0.14`` are fine). A
 summary wrapped onto a second physical line therefore fails the render.
 
+The trees render the files git tracks (``git ls-files --cached``: every
+committed path plus every path staged with ``git add``), never the raw
+directory listing. CI renders from a clean checkout, whose population is
+exactly that index, so a file on disk that is untracked (another session's
+work in progress, local scratch) or ignored would publish a row CI cannot
+reproduce. Untracked-but-not-ignored files are deliberately excluded as well:
+unlike a linter, which must read content a commit could still pick up, this
+render must equal what the committed tree regenerates, so a new module appears
+once it is staged. Dotfiles (``.DS_Store``, editor state) are never rendered,
+tracked or not. When git cannot answer for the repository root (no ``.git``,
+the root is not the checkout's top level, git absent), the trees fall back to
+the filesystem listing, still skipping dotfiles. Paths outside the repository
+root always use the filesystem listing.
+
 ``--list-docstrings [PATH ...]`` prints that line for every package module
-(default) or for the named files/directories, flags each rule violation by rule
-name, and needs neither Django nor the board database; ``--json`` emits the same
-rows as JSON. ``--check`` on a stale file names every tree row that differs and
-prints a unified diff of ``docs/TREE.md`` (``--max-hunks`` bounds it).
+(default; the same tracked population the render walks) or for the named
+files/directories (read from disk, so an untracked module can be checked before
+it is staged), flags each rule violation by rule name, and needs neither Django
+nor the board database; ``--json`` emits the same rows as JSON. ``--check`` on
+a stale file names every tree row that differs and prints a unified diff of
+``docs/TREE.md`` (``--max-hunks`` bounds it).
 
 Exit codes: ``0`` fresh / written / every listed line passes; ``1`` stale file
 (``--check``) or a module whose description breaks the first-line rule (the
@@ -29,8 +45,10 @@ from __future__ import annotations
 import argparse
 import ast
 import difflib
+import functools
 import json
 import re
+import subprocess
 import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -109,13 +127,88 @@ TREE_PIPE = "\u2502   "
 TREE_SPACE = "    "
 
 
+@dataclass(frozen=True)
+class TrackedPaths:
+    """Repo-relative posix paths of the tracked files and every directory above them."""
+
+    files: frozenset[str]
+    directories: frozenset[str]
+
+
+def _run_git(repo_root: Path, *args: str) -> str | None:
+    """Return the stdout of ``git -C repo_root <args>``, or ``None`` when git cannot answer."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                *args,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, ValueError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+@functools.cache
+def git_tracked_paths(repo_root: Path) -> TrackedPaths | None:
+    """Return the index population of the checkout rooted at ``repo_root``.
+
+    ``None`` when git is absent, ``repo_root`` is not inside a checkout, or the
+    checkout's top level is some other directory (a copy without ``.git`` placed
+    inside an unrelated repository): the render then reads the filesystem. A
+    checkout that answers with no tracked files is trusted as empty rather than
+    treated as unavailable, so a misread index cannot silently widen the trees
+    back to the raw directory listing.
+    """
+    toplevel = _run_git(repo_root, "rev-parse", "--show-toplevel")
+    if toplevel is None or Path(toplevel.strip()).resolve() != repo_root.resolve():
+        return None
+    listing = _run_git(repo_root, "ls-files", "-z", "--cached")
+    if listing is None:
+        return None
+    files = frozenset(path for path in listing.split("\0") if path)
+    directories = frozenset(
+        "/".join(parts[:depth])
+        for parts in (path.split("/") for path in files)
+        for depth in range(1, len(parts))
+    )
+    return TrackedPaths(files, directories)
+
+
+def is_tree_member(path: Path) -> bool:
+    """Return whether ``path`` exists and belongs to the population the trees render.
+
+    A dotfile never belongs. Inside the repository root, membership is the git
+    index (``git_tracked_paths``); outside it, or when git cannot answer, it is
+    presence on disk.
+    """
+    if path.name.startswith("."):
+        return False
+    tracked = git_tracked_paths(REPO_ROOT.resolve())
+    if tracked is not None:
+        try:
+            relative = path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+        except ValueError:
+            relative = None
+        if relative is not None:
+            if path.is_dir():
+                return relative in tracked.directories
+            return path.is_file() and relative in tracked.files
+    return path.exists()
+
+
 def fakeshop_app_names(apps_dir: Path) -> tuple[str, ...]:
     """Return the fakeshop app packages under ``apps_dir`` in rendered order.
 
-    Discovered from the filesystem (every child directory carrying an
-    ``__init__.py``, minus the ignored tree names) rather than echoed from a
-    curated tuple, so a newly installed app cannot be silently left out of the
-    project tree while the freshness check stays green.
+    Discovered from the tree population (every rendered child directory carrying
+    a rendered ``__init__.py``, minus the ignored tree names) rather than echoed
+    from a curated tuple, so a newly installed app cannot be silently left out of
+    the project tree while the freshness check stays green.
     """
     return tuple(
         sorted(
@@ -123,7 +216,8 @@ def fakeshop_app_names(apps_dir: Path) -> tuple[str, ...]:
             for child in apps_dir.iterdir()
             if child.is_dir()
             and child.name not in IGNORED_TREE_DIRNAMES
-            and (child / "__init__.py").is_file()
+            and is_tree_member(child)
+            and is_tree_member(child / "__init__.py")
         ),
     )
 
@@ -574,7 +668,7 @@ def folder_description(path: Path) -> str:
     reach this function.
     """
     init_path = path / "__init__.py"
-    if not init_path.exists():
+    if not is_tree_member(init_path):
         if is_description_exempt(path):
             return ""
         raise ModuleDescriptionError(
@@ -650,12 +744,17 @@ def iter_tree_positions(items: Sequence[T], prefix: str = "") -> Iterator[tuple[
 
 
 def sorted_children(path: Path, *, ignored_dirnames: frozenset[str] = frozenset()) -> list[Path]:
-    """Return visible child paths in deterministic tree order."""
+    """Return the rendered child paths of ``path`` in deterministic tree order.
+
+    Only ``is_tree_member`` children qualify, so an untracked or ignored file,
+    and any dotfile, never reaches a tree row or its description extractor.
+    """
     excluded_dirnames = IGNORED_TREE_DIRNAMES | ignored_dirnames
     children = [
         child
         for child in path.iterdir()
-        if (
+        if is_tree_member(child)
+        and (
             (child.is_dir() and child.name not in excluded_dirnames)
             or (child.is_file() and child.name not in IGNORED_TREE_FILENAMES)
         )
@@ -873,15 +972,17 @@ def fetch_planned_paths() -> list[PlannedPath]:
 
 
 def _planned_paths_from_rows(rows: Iterable[Any]) -> list[PlannedPath]:
-    """Build planned entries from TrackedPath rows, skipping paths already on disk.
+    """Build planned entries from TrackedPath rows, skipping paths already rendered.
 
-    A row whose path already exists in the working tree has effectively shipped -
-    only its card status lags - so it must not be annotated as a planned entry.
-    The lowest-numbered ``wip``/``todo`` card owns each surviving entry.
+    A row whose path is already in the tree population (``is_tree_member``) has
+    effectively shipped - only its card status lags - so it must not be
+    annotated as a planned entry. An untracked file at that path has not
+    shipped: the clean checkout CI renders from does not carry it. The
+    lowest-numbered ``wip``/``todo`` card owns each surviving entry.
     """
     planned = []
     for row in rows:
-        if (REPO_ROOT / row.path).exists():
+        if is_tree_member(REPO_ROOT / row.path):
             continue
         owner = min(
             (card for card in row.cards.all() if card.status.key in ("wip", "todo")),
@@ -1077,7 +1178,11 @@ def render_app_test_tree(apps_dir: Path) -> list[str]:
     if not apps_dir.is_dir():
         raise TreeRenderError(f"Fakeshop apps directory does not exist: {apps_dir}")
 
-    app_dirs = sorted(path for path in apps_dir.iterdir() if (path / "tests").is_dir())
+    app_dirs = sorted(
+        path
+        for path in apps_dir.iterdir()
+        if is_tree_member(path) and (path / "tests").is_dir() and is_tree_member(path / "tests")
+    )
     root_lines = [
         directory_entry(
             "",
@@ -1258,12 +1363,29 @@ def render_tree_doc(md_path: Path, package_dir: Path) -> str:
 def docstring_module_paths(targets: Sequence[Path], package_dir: Path) -> list[Path]:
     """Return the ``.py`` modules ``--list-docstrings`` reports, deduplicated and sorted.
 
-    No targets means every package module, ``__init__.py`` included (its first
-    line is the folder row). A directory expands to its ``.py`` files minus the
-    directories the tree walker skips; a named file must be a ``.py`` module.
+    No targets means every package module the render walks, ``__init__.py``
+    included (its first line is the folder row): the tracked population of
+    ``is_tree_member``, minus dotted paths and the directories the tree walker
+    skips. A named directory expands to every ``.py`` file on disk under it minus
+    those same directories, and a named file must be a ``.py`` module, so an
+    untracked module can be checked by naming it.
     """
+    if not targets:
+        package_dir = package_dir.resolve()
+        return sorted(
+            (
+                module
+                for module in package_dir.rglob("*.py")
+                if not any(
+                    part.startswith(".") or part in IGNORED_TREE_DIRNAMES
+                    for part in module.relative_to(package_dir).parts
+                )
+                and is_tree_member(module)
+            ),
+            key=display_path,
+        )
     modules: set[Path] = set()
-    for target in targets or (package_dir,):
+    for target in targets:
         resolved = target.resolve()
         if resolved.is_file():
             if resolved.suffix != ".py":

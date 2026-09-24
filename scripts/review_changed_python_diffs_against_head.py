@@ -47,10 +47,13 @@ Diff lens options (all default off, so the default output is unchanged):
   and comments stop producing blank-only hunks. Hunk line numbers then count
   non-blank lines only.
 - ``--prose`` additionally writes ``diff/<stem>.prose.diff`` per file: every
-  change region whose code (comments stripped, docstrings blanked) is identical
-  on both sides, as raw old vs new source lines, each hunk headed by its
-  enclosing ``path::QualifiedName``. Regions that change code and prose together
-  are in the code diff, not here.
+  change region that changes a comment or docstring, as raw old vs new source
+  lines, each hunk headed by its enclosing ``path::QualifiedName``. A region
+  whose code (comments stripped, docstrings blanked) is identical on both sides
+  is a pure-prose hunk. A region that changes code as well carries
+  ``MIXED_HUNK_NOTE`` after the name in its header; its raw lines include the
+  changed code, and the code diff remains the authoritative view of that code.
+  A region that changes code alone is not written here.
 
 List mode: ``--list`` prints only the changed-file inventory -- status (``M``,
 ``A``, ``D``, ``R old -> new``), the HEAD blob id, and a separate group of paths
@@ -115,7 +118,12 @@ if __package__:
         _stem_for,
         _validate_commit,
     )
-    from scripts.review_inspect import _remove_docstring_statements, _strip_comments
+    from scripts.review_inspect import (
+        _comments,
+        _docstring_statement_ranges,
+        _remove_docstring_statements,
+        _strip_comments,
+    )
 else:
     from review_historical_package_snapshot_at_commit import (
         _clear_shadow_output,
@@ -127,12 +135,18 @@ else:
         _stem_for,
         _validate_commit,
     )
-    from review_inspect import _remove_docstring_statements, _strip_comments
+    from review_inspect import (
+        _comments,
+        _docstring_statement_ranges,
+        _remove_docstring_statements,
+        _strip_comments,
+    )
 
 OUTPUT_OLD = Path("docs/shadow/old")
 OUTPUT_NEW = Path("docs/shadow/new")
 OUTPUT_DIFF = Path("docs/shadow/diff")
 WORKTREE_HEADER = "# new side: working tree (uncommitted and untracked files included), not HEAD\n"
+MIXED_HUNK_NOTE = "[code changed too]"
 
 
 @dataclass(frozen=True)
@@ -333,6 +347,23 @@ def _code_view(source: str) -> str:
     return _remove_docstring_statements(_strip_comments(source), ast.parse(source))
 
 
+def _prose_view(source: str, tree: ast.AST) -> list[str]:
+    """Return, per line of ``source``, the comment or docstring text it carries (``""`` if none).
+
+    A docstring line contributes its whole stripped text; any other line contributes its
+    comment token, so a code change on a line whose comment is unchanged keeps an equal view.
+    """
+    lines = source.splitlines()
+    prose = [""] * len(lines)
+    for record in _comments(source):
+        if record.lineno <= len(prose):
+            prose[record.lineno - 1] = record.text
+    for line_range in _docstring_statement_ranges(tree):
+        for index in range(line_range.start - 1, min(line_range.end, len(prose))):
+            prose[index] = lines[index].strip()
+    return prose
+
+
 def _source(rev: str | None, path: str, repo_root: Path) -> str | None:
     """Return ``path`` at ``rev`` (``None`` = working tree), or ``None`` when absent."""
     if rev is None:
@@ -393,13 +424,21 @@ def _prose_diff(
     old_path: str,
     path: str,
 ) -> str:
-    """Return a unified diff restricted to the comment/docstring-only change regions."""
+    """Return a unified diff of every change region that changes a comment or docstring.
+
+    A region whose code view is identical on both sides is a pure-prose hunk; a region that
+    changes code as well is headed with ``MIXED_HUNK_NOTE``; a region whose comment and
+    docstring text is identical on both sides is omitted.
+    """
     old_src, new_src = old_src or "", new_src or ""
     old_raw, new_raw = old_src.splitlines(), new_src.splitlines()
+    old_tree, new_tree = ast.parse(old_src), ast.parse(new_src)
     old_code = _code_view(old_src).split("\n")
     new_code = _code_view(new_src).split("\n")
-    old_spans = _symbol_spans(ast.parse(old_src))
-    new_spans = _symbol_spans(ast.parse(new_src))
+    old_prose = _prose_view(old_src, old_tree)
+    new_prose = _prose_view(new_src, new_tree)
+    old_spans = _symbol_spans(old_tree)
+    new_spans = _symbol_spans(new_tree)
     hunks: list[str] = []
     matcher = difflib.SequenceMatcher(a=old_raw, b=new_raw, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
@@ -408,15 +447,18 @@ def _prose_diff(
         old_chunk, new_chunk = old_raw[i1:i2], new_raw[j1:j2]
         if not _nonblank([*old_chunk, *new_chunk]):
             continue
+        note = ""
         if _nonblank(old_code[i1:i2]) != _nonblank(new_code[j1:j2]):
-            continue
+            if _nonblank(old_prose[i1:i2]) == _nonblank(new_prose[j1:j2]):
+                continue
+            note = f" {MIXED_HUNK_NOTE}"
         symbol = (
             _enclosing_symbol(new_spans, j1 + 1)
             if new_chunk
             else _enclosing_symbol(old_spans, i1 + 1)
         )
         where = f"{path}::{symbol}" if symbol else path
-        hunks.append(f"@@ -{_range(i1, i2 - i1)} +{_range(j1, j2 - j1)} @@ {where}\n")
+        hunks.append(f"@@ -{_range(i1, i2 - i1)} +{_range(j1, j2 - j1)} @@ {where}{note}\n")
         hunks.extend(f"-{line}\n" for line in old_chunk)
         hunks.extend(f"+{line}\n" for line in new_chunk)
     if not hunks:
@@ -597,7 +639,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--prose",
         action="store_true",
-        help="Also write diff/<stem>.prose.diff with the comment/docstring-only change regions.",
+        help="Also write diff/<stem>.prose.diff with every comment/docstring change region.",
     )
     parser.add_argument(
         "--list",

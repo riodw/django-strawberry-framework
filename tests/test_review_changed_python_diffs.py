@@ -255,6 +255,7 @@ def test_prose_captures_a_docstring_only_change_and_skips_code_changes(
 
     prose = (out / "diff" / "pkg__mod.prose.diff").read_text()
     assert "@@ -5,1 +5,1 @@ pkg/mod.py::load\n" in prose
+    assert diffs.MIXED_HUNK_NOTE not in prose
     assert '-    """Load related rows."""\n' in prose
     assert '+    """Load the author row."""\n' in prose
     assert "editor" not in prose
@@ -262,3 +263,66 @@ def test_prose_captures_a_docstring_only_change_and_skips_code_changes(
     assert '+    return queryset.select_related("editor")\n' in code
     assert "Load" not in code
     assert "\n+\n" not in code
+
+
+def test_prose_carries_every_prose_line_of_a_region_that_also_changes_code(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    _write(repo, "pkg/mod.py", BASE_MODULE)
+    base = _commit(repo, "base")
+    edited = (
+        BASE_MODULE.replace("Load related rows.", "Load the author row.")
+        .replace("Follow the author relation.", "Prefetch the author relation.")
+        .replace("select_related", "prefetch_related")
+    )
+    _write(repo, "pkg/mod.py", edited)
+    _commit(repo, "edit")
+    out = tmp_path / "out"
+
+    assert (
+        diffs.main(
+            [
+                base,
+                "--output-dir",
+                str(out),
+                "--prose",
+            ],
+        )
+        == 0
+    )
+
+    prose = (out / "diff" / "pkg__mod.prose.diff").read_text()
+    assert f"@@ -5,3 +5,3 @@ pkg/mod.py::load {diffs.MIXED_HUNK_NOTE}\n" in prose
+    assert '-    """Load related rows."""\n' in prose
+    assert '+    """Load the author row."""\n' in prose
+    assert "-    # Follow the author relation.\n" in prose
+    assert "+    # Prefetch the author relation.\n" in prose
+    code = (out / "diff" / "pkg__mod.diff").read_text()
+    assert "+    return queryset.prefetch_related(...)\n" in code
+    assert "Load" not in code
+    assert "relation." not in code
+
+
+def test_prose_is_empty_for_a_change_that_touches_code_alone(repo: Path, tmp_path: Path) -> None:
+    _write(repo, "pkg/mod.py", BASE_MODULE)
+    base = _commit(repo, "base")
+    _write(repo, "pkg/mod.py", BASE_MODULE.replace("select_related", "prefetch_related"))
+    _commit(repo, "edit")
+    out = tmp_path / "out"
+
+    assert (
+        diffs.main(
+            [
+                base,
+                "--output-dir",
+                str(out),
+                "--prose",
+            ],
+        )
+        == 0
+    )
+
+    assert (out / "diff" / "pkg__mod.prose.diff").read_text() == ""
+    code = (out / "diff" / "pkg__mod.diff").read_text()
+    assert "+    return queryset.prefetch_related(...)\n" in code

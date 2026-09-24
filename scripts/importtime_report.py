@@ -18,6 +18,12 @@ package outside the tree holding this script, the same rule
 ``_bench_common.bootstrap_fakeshop_django`` enforces for the benches. Django
 is never configured, so the figure is the package import alone.
 
+The provenance header and the ``--json`` report carry the
+``_bench_common.package_digest`` of that imported package and the git blob
+ids of this script and ``_bench_common.py``; two reports measured the same
+package with the same instrument only when all of them match (the git HEAD
+beside them is supplementary).
+
 Usage::
 
     uv run python scripts/importtime_report.py
@@ -34,7 +40,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from _bench_common import REPO_ROOT, assert_package_in_tree, build_report, git_head, write_report
+from _bench_common import (
+    REPO_ROOT,
+    assert_package_in_tree,
+    build_report,
+    git_head,
+    instrument_ids,
+    package_digest,
+    write_report,
+)
 
 PACKAGE = "django_strawberry_framework"
 _CHILD_CODE = f"import {PACKAGE} as package; print(package.__file__)"
@@ -188,17 +202,23 @@ def main() -> int:
         raise RuntimeError(msg)
     package_file = package_files.pop()
     repo_root = REPO_ROOT
+    resolved_package = Path(package_file).resolve()
     provenance = {
         "git_head": git_head(repo_root),
+        "instrument_ids": instrument_ids(Path(__file__), repo_root),
         "interpreter": sys.executable,
-        "package_file": str(Path(package_file).resolve()),
+        "package_digest": package_digest(resolved_package.parent),
+        "package_file": str(resolved_package),
         "platform": platform.platform(),
         "python": platform.python_version(),
         "repo_root": str(repo_root),
     }
     print("provenance")
     print(f"  package      {provenance['package_file']}")
-    print(f"  tree         {repo_root} (git HEAD {provenance['git_head']})")
+    print(f"  digest       {provenance['package_digest']}")
+    for path, blob in provenance["instrument_ids"].items():
+        print(f"  script       {path} blob {blob}")
+    print(f"  tree         {repo_root} (git HEAD {provenance['git_head']}, supplementary)")
     print(f"  interpreter  {sys.executable} (python {provenance['python']})")
     print(f"  platform     {provenance['platform']}")
     assert_package_in_tree(package_file, repo_root)

@@ -18,8 +18,10 @@ REAL ``walker.plan_optimizations`` on those FIXED inputs in a tight loop. Holdin
 the inputs constant strips DB, parse, and conversion cost, so the measured time
 is the selection-tree walk and plan build, and nothing else.
 
-The plan cache is cleared before each capture, so a shape the shared
-extension already planned still reaches the walker. The walk cost is
+``_bench_common.reset_plan_cache`` clears the plan cache and the
+document-key memo before each capture, so a shape the shared extension
+already planned still reaches the walker; the timed replay calls the walker
+directly and reads neither cache. The walk cost is
 row-count-independent (it is a function of the selection tree, not the result
 set), so seeding is only needed to make one real execution run its resolvers;
 the glossary candidates run on ``--glossary-terms`` seeded terms. Each query
@@ -150,9 +152,10 @@ def _capture_walk_inputs(
     (``apply_connection_optimization`` -> ``apply_to`` -> ``_get_or_build_plan``)
     route through this single call site, so one recorder covers both.
 
-    ``optimizer`` is the schema's extension instance; its plan cache is
-    cleared first, because a cache hit skips the walker and would read as a
-    query with nothing to optimize.
+    ``optimizer`` is the schema's extension instance; its plan cache and the
+    document-key memo are cleared first (``reset_plan_cache``), because a
+    plan-cache hit skips the walker and would read as a query with nothing to
+    optimize.
 
     Returns ``None`` when the query triggers no walk (nothing to optimize).
     """

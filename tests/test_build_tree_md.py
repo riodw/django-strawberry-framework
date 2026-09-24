@@ -2,9 +2,10 @@
 
 Repo tooling: these rows pin ``scripts/build_tree_md.py`` module first-line
 rule, ``--list-docstrings`` output, the stale ``--check`` report and exit
-codes, planned-path annotations, target-layout replacements, and fakeshop
-source discovery, which run at render time against the working tree and an
-in-process card snapshot.
+codes, planned-path annotations, target-layout replacements, fakeshop source
+discovery, and the tracked-file population the trees walk (a throwaway git
+checkout stands in for the repository root), which run at render time against
+the checkout and an in-process card snapshot.
 A live ``/graphql/`` request has no wire shape for TREE.md markdown, a
 curated planned-path sentence, or a filesystem inventory the renderer walks,
 so none of these rows can move. There is no live sibling in
@@ -13,6 +14,8 @@ so none of these rows can move. There is no live sibling in
 
 import json
 import re
+import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,10 +43,12 @@ from scripts.build_tree_md import (
     fakeshop_app_names,
     first_line_violations,
     first_python_docstring_sentence,
+    git_tracked_paths,
     main,
     remove_target_replacements,
     render_fakeshop_project_tree,
     render_target_tree,
+    render_tree,
     render_tree_doc,
     stale_report,
     tree_row_paths,
@@ -612,3 +617,152 @@ def test_missing_tree_file_exits_2_through_cli_exit(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as raised:
         build_tree_md.cli_exit(lambda: main(["--check", "--md", str(tmp_path / "absent.md")]))
     assert raised.value.code == 2
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            *args,
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.fixture
+def tree_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """A throwaway git checkout, set as the repository root, with one staged package."""
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    repo = (tmp_path / "checkout").resolve()
+    _write_module(repo / "pkg" / "__init__.py", '"""Checkout package."""\n')
+    _write_module(repo / "pkg" / "tracked.py", '"""Tracked module."""\n')
+    _git(repo, "init", "-q")
+    _git(repo, "add", "pkg")
+    monkeypatch.setattr(build_tree_md, "REPO_ROOT", repo)
+    git_tracked_paths.cache_clear()
+    yield repo
+    git_tracked_paths.cache_clear()
+
+
+def _render(package: Path) -> str:
+    return "\n".join(render_tree(package))
+
+
+def test_untracked_module_is_not_rendered(tree_checkout: Path) -> None:
+    """A file on disk that git does not track never becomes a tree row."""
+    package = tree_checkout / "pkg"
+    _write_module(package / "zz_probe.py", '"""Untracked probe."""\n')
+
+    rendered = _render(package)
+
+    assert "tracked.py" in rendered
+    assert "zz_probe.py" not in rendered
+
+
+def test_staged_new_module_is_rendered(tree_checkout: Path) -> None:
+    """A new module joins the tree once it is staged, before any commit."""
+    package = tree_checkout / "pkg"
+    _write_module(package / "staged.py", '"""Staged module."""\n')
+    _git(tree_checkout, "add", "pkg/staged.py")
+
+    rendered = _render(package)
+
+    assert "# Staged module." in rendered
+    assert "staged.py" in rendered
+
+
+def test_tracked_dotfile_and_dotted_directory_are_skipped(tree_checkout: Path) -> None:
+    """Dotted names never render, even when tracked, so none reaches a description rule."""
+    package = tree_checkout / "pkg"
+    (package / ".DS_Store").write_bytes(b"\x00\x01")
+    _write_module(package / ".cache" / "stray.py", "VALUE = 1\n")
+    _git(tree_checkout, "add", "-f", "pkg/.DS_Store", "pkg/.cache/stray.py")
+
+    rendered = _render(package)
+
+    assert ".DS_Store" not in rendered
+    assert ".cache" not in rendered
+    assert "tracked.py" in rendered
+
+
+def test_untracked_app_package_is_not_discovered(tree_checkout: Path) -> None:
+    """Fakeshop app discovery reads the same tracked population as the tree rows."""
+    apps = tree_checkout / "apps"
+    _write_module(apps / "tracked_app" / "__init__.py", '"""Tracked app."""\n')
+    _write_module(apps / "wip_app" / "__init__.py", '"""Untracked app."""\n')
+    _git(tree_checkout, "add", "apps/tracked_app/__init__.py")
+
+    assert fakeshop_app_names(apps) == ("tracked_app",)
+
+
+def test_planned_row_at_an_untracked_path_stays_planned(tree_checkout: Path) -> None:
+    """Only a tracked path counts as shipped; an untracked file at a planned path does not."""
+    _write_module(tree_checkout / "pkg" / "zz_planned.py", '"""Untracked planned module."""\n')
+    rows = [
+        _row("pkg/tracked.py", is_directory=False, cards=[_card(1, "wip", "WIP-1", "shipped")]),
+        _row("pkg/zz_planned.py", is_directory=False, cards=[_card(2, "todo", "TODO-2", "next")]),
+    ]
+
+    assert [entry.path for entry in _planned_paths_from_rows(rows)] == ["pkg/zz_planned.py"]
+
+
+def test_list_docstrings_default_walk_is_the_tracked_population(tree_checkout: Path) -> None:
+    """The default listing reports exactly the modules the render walks."""
+    package = tree_checkout / "pkg"
+    _write_module(package / "zz_probe.py", '"""Untracked probe."""\n')
+    _write_module(package / ".cache" / "stray.py", '"""Dotted directory."""\n')
+
+    assert docstring_module_paths([], package) == [package / "__init__.py", package / "tracked.py"]
+
+
+def test_list_docstrings_explicit_paths_read_untracked_modules(tree_checkout: Path) -> None:
+    """A named file or directory is read from disk, so an unstaged module can be checked."""
+    package = tree_checkout / "pkg"
+    probe = _write_module(package / "zz_probe.py", '"""Untracked probe."""\n')
+
+    assert docstring_module_paths([probe], package) == [probe]
+    assert probe in docstring_module_paths([package], package)
+
+
+def test_directory_without_git_falls_back_to_the_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no checkout at the repository root, the tree is the disk listing minus dotfiles."""
+    root = (tmp_path / "copy").resolve()
+    package = root / "pkg"
+    _write_module(package / "__init__.py", '"""Copied package."""\n')
+    _write_module(package / "on_disk.py", '"""On-disk module."""\n')
+    (package / ".DS_Store").write_bytes(b"\x00\x01")
+    monkeypatch.setattr(build_tree_md, "REPO_ROOT", root)
+    git_tracked_paths.cache_clear()
+    try:
+        assert git_tracked_paths(root) is None
+        rendered = _render(package)
+    finally:
+        git_tracked_paths.cache_clear()
+
+    assert "on_disk.py" in rendered
+    assert ".DS_Store" not in rendered
+
+
+def test_absent_git_binary_falls_back_to_the_filesystem(
+    tree_checkout: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When git cannot run, even a checkout renders from disk, still skipping dotfiles."""
+    package = tree_checkout / "pkg"
+    _write_module(package / "zz_probe.py", '"""Untracked probe."""\n')
+    (package / ".DS_Store").write_bytes(b"\x00\x01")
+    monkeypatch.setenv("PATH", str(tmp_path / "no-git-here"))
+
+    assert git_tracked_paths(tree_checkout) is None
+    rendered = _render(package)
+
+    assert "zz_probe.py" in rendered
+    assert ".DS_Store" not in rendered

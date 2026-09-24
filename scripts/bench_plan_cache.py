@@ -12,15 +12,18 @@ against the *same* seeded database:
 
 * **warm** - the default behaviour: the plan cache persists across requests, so
   only the first request walks and the rest are cache hits.
-* **cold** - the plan cache (and its counters) are cleared before *every*
-  request, forcing a full walk each time. This is the behaviour upstream has by
-  construction (no cross-request plan cache exists to clear).
+* **cold** - ``_bench_common.reset_plan_cache`` runs before *every* request:
+  it clears the plan cache (and its counters) and the module-level
+  document-key memo in ``optimizer/extension.py``, so each request prints its
+  operation into a cache key, collects its cache-relevant variable names and
+  walks the full selection tree.
 
 Because both modes execute identical SQL against identical data, DB time and
-GraphQL parse time cancel in the difference: ``cold - warm`` isolates exactly
-the per-request selection-tree walk that the cache eliminates. ``cache_info()``
-reports the realised hit/miss/size counters as independent proof the cache is
-serving hits.
+GraphQL parse time cancel in the difference: ``cold - warm`` is the
+per-request work the two caches eliminate together, the document-key
+computation plus the selection-tree walk. ``bench_optimizer_walk.py`` sizes
+the walk alone. ``cache_info()`` reports the realised hit/miss/size counters as
+independent proof the cache is serving hits.
 
 The walk cost is row-count-independent (it is a function of the selection tree,
 not the result set), so the headline delta holds regardless of how much data is
@@ -28,8 +31,9 @@ seeded. A query whose plan is marked non-cacheable (a relation into a type with
 a custom ``get_queryset``, a consumer ``Prefetch``, etc.) shows zero hits - the
 script reports that honestly rather than hiding it.
 
-"Cold" is this package's walker with the plan cache cleared, not upstream:
-the module-level document-key memo in ``optimizer/extension.py`` is retained.
+"Cold" is this package with both caches cleared, not upstream:
+``strawberry-graphql-django`` walks every request but computes no document
+key, so a cold figure carries a cost upstream never pays.
 
 Each query runs ``--rounds`` rounds (warm and cold order alternating per round
 so drift does not land on one mode); every figure is reported as the fastest
@@ -359,8 +363,9 @@ def main() -> int:
         "\ncacheable = the built plan is cached (the cache holds an entry after the run), "
         "independent of how many hits this run observed.\n"
         "warm = plan cache persists (this package's default).\n"
-        "cold = plan cache cleared before every request (document-key memo retained).\n"
-        "walk = cold - warm = the selection-tree walk the cache eliminates per cached request "
+        "cold = plan cache and document-key memo cleared before every request.\n"
+        "walk = cold - warm = the document-key computation plus the selection-tree walk the "
+        "caches eliminate per cached request "
         f"(n/a below {_MIN_RELIABLE_ITERATIONS} iterations or when noise-dominated; "
         "never computed for a non-cacheable plan, which walks in both modes).\n"
         "us = median of per-round medians; min = fastest sample; +-% = spread of the "

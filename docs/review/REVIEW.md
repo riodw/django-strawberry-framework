@@ -78,11 +78,25 @@ requires, their tests, the ledger rows the item lands.
   [SECURITY.md][security] maintainer path before its reproducer lands in any tracked file: item
   `blocked`, defect named abstractly, evidence held in scratch.
 - **Test runs.** The entry command authorizes any run inside a workspace copy, a focused permanent
-  test w/ `--no-cov` in the shared tree, the bench scripts inside a workspace copy, and the final
-  gate `uv run pytest`. Nothing else converts into a test run. `FAKESHOP_SHARDED=1` and Postgres
-  cells need Rio's separate word; without it a cell is `unverified` and listed, or
-  `inapplicable by construction` when the target reaches no database, alias or dialect decision
-  (the reviewer states the reason, the verifier judges it).
+  test w/ `--no-cov` in the shared tree, the bench scripts inside a workspace copy, the sharded and
+  Postgres cells ("Database cells"), and the final gate `uv run pytest`. Nothing else converts
+  into a test run. A cell is `inapplicable by construction` when the target reaches no database,
+  alias or dialect decision (the reviewer states the reason, the verifier judges it); a cell the
+  environment cannot run is `unverified`, listed w/ the failing command.
+- **Database cells.** Three modes, mutually exclusive: default single SQLite; `FAKESHOP_SHARDED=1`
+  (`default` + `shard_b` on the workspace's own `db_shard_*.sqlite3`); `FAKESHOP_PG_DSN` against
+  the throwaway `docker-compose.postgres.yml` server (tmpfs, `pg` dependency group). A finding
+  whose target reaches an alias or dialect decision runs its Proof in every mode it reaches.
+  Worker 0 owns the Postgres container: starts it once per cycle, records the DSN in
+  `## Cycle baseline`, stops it (`down`) at closeout. Both modes run only inside `$WS`, since
+  `seed_shards` and `bench_nested_fetch.py` rewrite the database they target:
+
+  ```shell
+  FAKESHOP_SHARDED=1 uv run --directory "$WS" pytest <node> --no-cov
+  docker compose -f docker-compose.postgres.yml up -d --wait
+  FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop \
+      uv run --directory "$WS" --group pg pytest <node> --no-cov
+  ```
 - Only Rio commits, branches, pushes, edits the changelog. Concurrent work is preserved
   ("Baseline and ownership").
 
@@ -108,7 +122,8 @@ Instrument: `django.test.utils.CaptureQueriesContext` or the `django_assert_num_
 at two cardinalities plus the absolute count; `QuerySet.explain()` for shape; `timeit` median over
 a stated iteration count; the repo benches [bench_plan_cache.py][bench-plan-cache] (steady-state
 plan cache), [bench_optimizer_walk.py][bench-optimizer-walk] (cold walk),
-[bench_nested_fetch.py][bench-nested-fetch] (Postgres, needs Rio's word), all bootstrapped through
+[bench_nested_fetch.py][bench-nested-fetch] (Postgres; `--sqlite-smoke` for a vendor-free
+run whose figures never compare to Postgres), all bootstrapped through
 [_bench_common.py][bench-common]; `python -X importtime -c "import django_strawberry_framework"`.
 Every measurement runs inside a workspace copy ("Workspace"), before and after, same command.
 
@@ -152,15 +167,32 @@ Grades every docstring and comment in the file, and in every test the item touch
   "moved from", "now", "no longer" ([AGENTS.md][agents]); delete or rewrite as the present-tense
   rule.
 
-Also: a public symbol w/o a docstring; a first line that is not imperative; a docstring restating
-the signature or the type hints; "we" / "you" / "I"; a test docstring beginning "Tests that" or
-"Ensures" instead of stating the expected behavior; a source reference by line number or by a
-name that no longer exists; a stated reason for a design that the body contradicts (DRY principle
-10: wrong stated reason is worse than none); an intentional separation or a rejected
-consolidation that is NOT recorded at the owner when the trace shows it should be.
+First lines, by kind:
+
+- **Module** (and a folder's `__init__.py`) — names what the module is, as a description, not an
+  imperative ("Shared connection contracts for ...", "``DjangoSchema`` - the schema whose ...").
+  It is the module's row in [docs/TREE.md][tree], so it must satisfy
+  [build_tree_md.py][build-tree-md]: one physical line, exactly one sentence, ending `.`, no
+  `e.g.` / `i.e.`. Provenance here is doubly wrong: it renders into TREE.md as a description.
+- **Function, method, class** — imperative for a function or method ("Return ...", "Build ..."),
+  a description for a class; ruff's Google pydocstyle convention leaves mood (D401) unchecked, so
+  the reviewer is the gate.
+
+A module first-line edit is a TREE.md edit: Worker 2 runs
+`uv run python scripts/build_tree_md.py` in the same change; nothing regenerates it locally and
+CI's `build_tree_md.py --check` goes red on a stale file.
+
+Also: a public symbol w/o a docstring; a docstring restating the signature or the type hints; "we"
+/ "you" / "I"; a test docstring beginning "Tests that" or "Ensures" instead of stating the expected
+behavior; a source reference by line number or by a name that no longer exists; a stated reason for
+a design that the body contradicts (DRY principle 10: wrong stated reason is worse than none); an
+intentional separation or a rejected consolidation that is NOT recorded at the owner when the trace
+shows it should be.
 
 Instrument: reading each docstring against its body and against one real caller;
-`rg -n '::[A-Za-z_]+' <path>` to check every symbol citation resolves; `rg -n -i
+`uv run python scripts/build_tree_md.py --list-docstrings <path>` for the module first line (flags
+each rule violation by name, needs no Django); `rg -n '::[A-Za-z_]+' <path>` to check every
+symbol citation resolves; `rg -n -i
 'spec-|card|round|worker|legacy|moved from|no longer|previously' <path>` as orientation for
 provenance (a hit is a lead, the grade is the finding).
 
@@ -257,11 +289,11 @@ through Worker 0. It blocks the gate row, never the item.
 Performance verdicts need a per-release reference. At cycle entry Worker 0 takes a workspace copy
 and records under `## Bench baseline` the command and output of
 [bench_plan_cache.py][bench-plan-cache] and [bench_optimizer_walk.py][bench-optimizer-walk] plus
-`python -X importtime` for the package import, each bound to `CYCLE_BASELINE`.
-[bench_nested_fetch.py][bench-nested-fetch] joins only when Rio authorizes a Postgres cell. The
-final gate reruns the same commands in a fresh copy and records the delta. A Performance record
-cites the baseline figure it moves; a file item whose change moves no bench figure pins its claim
-w/ a query-count test instead.
+[bench_nested_fetch.py][bench-nested-fetch] against the cycle's Postgres container, plus
+`python -X importtime` for the package import, each bound to `CYCLE_BASELINE`. The final gate
+reruns the same commands in a fresh copy and records the delta. A Performance record cites the
+baseline figure it moves; a file item whose change moves no bench figure pins its claim w/ a
+query-count test instead.
 
 ## Workspace
 
@@ -549,8 +581,9 @@ Every item but the gate verified + inventory re-reconciled → Worker 0 runs the
 pytest` (full suite, package coverage 100%), every `## Pending execution` command from every
 artifact as listed, the bench baseline commands in a fresh workspace copy w/ the delta recorded.
 Record failures, coverage, skips, xfails, collected/selected counts, `FAKESHOP_SHARDED` mode
-(sharded-only tests skip by default and stay `unverified` unless Rio authorizes a
-`FAKESHOP_SHARDED=1` run). Bind the result: `git stash create` at gate time + blob ids of
+(sharded-only tests skip by default, so the gate runs twice more in a fresh workspace copy:
+`FAKESHOP_SHARDED=1 uv run pytest` and the `FAKESHOP_PG_DSN` suite, each recorded w/ its own
+counts). Bind the result: `git stash create` at gate time + blob ids of
 `pyproject.toml` and `uv.lock` + mode. A change to package source, tests, fixtures, pytest or
 coverage config, dependencies or mode invalidates it; prose does not. Failure in a path an item
 touched, or of a `proof:` command → that item back to Worker 2 and its verifiers; a failing
@@ -571,7 +604,8 @@ role files, the plan, or any `rev-*.md`. Do not commit.
 
 Under [MUSE.md][muse], a REVIEW Worker 0 running beside a hunt or DRY Worker 0 states the
 production files its open items own in the sibling prompts, and honours theirs: a path another
-flow's ledger names is concurrent work here.
+flow's ledger names is concurrent work here. Sibling flows share one Postgres container on port
+5432; the Worker 0 that started it stops it, and only after every sibling's gate has run.
 
 <!-- LINK DEFINITIONS -->
 
@@ -586,6 +620,7 @@ flow's ledger names is concurrent work here.
 [dry]: ../dry/DRY.md
 [glossary]: ../GLOSSARY.md
 [hunt]: ../bug_hunt/HUNT.md
+[tree]: ../TREE.md
 [worker-0]: worker-0.md
 [worker-1]: worker-1.md
 [worker-2]: worker-2.md
@@ -606,6 +641,7 @@ flow's ledger names is concurrent work here.
 [bench-nested-fetch]: ../../scripts/bench_nested_fetch.py
 [bench-optimizer-walk]: ../../scripts/bench_optimizer_walk.py
 [bench-plan-cache]: ../../scripts/bench_plan_cache.py
+[build-tree-md]: ../../scripts/build_tree_md.py
 
 <!-- .venv/ -->
 

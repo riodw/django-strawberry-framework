@@ -37,11 +37,6 @@ TRACKED_DB = FAKESHOP / "db.sqlite3"
 BootstrapMode = Literal["sqlite-memory", "pg"]
 BOOTSTRAP_MODES: tuple[str, ...] = get_args(BootstrapMode)
 
-# The plan-cache state ``reset_plan_cache`` rewrites. There is no public reset
-# on the extension, so the names are checked before every write: a renamed
-# counter must fail the bench instead of leaving ``cache_info()`` stale.
-_PLAN_CACHE_ATTRS = ("_plan_cache", "_cache_hits", "_cache_misses")
-
 
 def memory_db_name(alias: str) -> str:
     """Return the shared-cache in-memory SQLite name for ``alias``.
@@ -280,21 +275,16 @@ def capture_queries(alias: str = "default") -> Iterator[Any]:
 
 
 def reset_plan_cache(optimizer: Any) -> None:
-    """Empty a ``DjangoOptimizerExtension`` plan cache and zero its counters.
+    """Return the optimizer to a cold start: no cached plan, no cached document key.
 
-    The extension exposes ``cache_info()`` but no reset, so this writes its
-    private state and first checks every name still exists.
-
-    Raises:
-        AttributeError: the extension lacks one of the attributes.
+    ``cache_clear`` empties the extension's plan cache and counters;
+    ``clear_document_key_cache`` empties the module-level memo every extension
+    shares, without which a "cold" request still skips printing its document.
     """
-    missing = [name for name in _PLAN_CACHE_ATTRS if not hasattr(optimizer, name)]
-    if missing:
-        msg = f"{type(optimizer).__name__} has no {missing}; the plan-cache reset is stale"
-        raise AttributeError(msg)
-    optimizer._plan_cache.clear()
-    optimizer._cache_hits = 0
-    optimizer._cache_misses = 0
+    from django_strawberry_framework.optimizer.extension import clear_document_key_cache
+
+    optimizer.cache_clear()
+    clear_document_key_cache()
 
 
 def seed_glossary_terms(count: int) -> dict[str, int]:

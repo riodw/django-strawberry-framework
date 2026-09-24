@@ -1546,7 +1546,7 @@ Properties:
 - **Named-fragment safety.** Directives inside named fragments are tracked into the cache key.
 - **Request-scope safety.** Plans that embed request-scoped [`get_queryset`](#get_queryset-visibility-hook) results are marked uncacheable.
 - **Cache immutability.** Cached plans are copied before queryset-specific diffing, so one resolver's queryset shape cannot mutate a plan reused by another request.
-- **Introspection.** `DjangoOptimizerExtension.cache_info()` exposes hit / miss / size counts.
+- **Introspection and reset.** `DjangoOptimizerExtension.cache_info()` exposes hit / miss / size counts; `cache_clear()` empties the instance's plan cache and zeroes both counters, so the next request per selection shape builds its plan again. The module-level document-key memo every instance shares is emptied by `registry.clear()`.
 - **Low per-request overhead.** `DjangoType` precomputes optimizer field metadata at class creation.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Queryset diffing](#queryset-diffing) · [FK-id elision](#fk-id-elision).

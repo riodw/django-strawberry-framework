@@ -12,7 +12,6 @@ that measures the package, so there is no live sibling in
 import importlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -129,23 +128,25 @@ def test_bootstrap_refuses_an_unknown_mode_before_touching_django():
         _bench_common.bootstrap_fakeshop_django("sqlite")
 
 
-def test_reset_plan_cache_clears_the_cache_and_zeroes_counters():
-    """The reset empties the cache and both counters on an extension-shaped object."""
-    optimizer = SimpleNamespace(_plan_cache={"k": "plan"}, _cache_hits=4, _cache_misses=2)
+def test_reset_plan_cache_clears_the_plan_cache_and_the_document_key_cache(monkeypatch):
+    """The reset leaves both optimizer caches empty and the counters zeroed."""
+    from collections import OrderedDict
+
+    from graphql import parse
+
+    import django_strawberry_framework.optimizer.extension as extension_module
+    from django_strawberry_framework import DjangoOptimizerExtension
+
+    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
+    extension_module._doc_cache_entry(parse("query Q { field }").definitions[0], {})
+    optimizer = DjangoOptimizerExtension()
+    optimizer._plan_cache["k"] = "plan"
+    optimizer._cache_hits, optimizer._cache_misses = 4, 2
 
     _bench_common.reset_plan_cache(optimizer)
 
-    assert optimizer._plan_cache == {}
-    assert (optimizer._cache_hits, optimizer._cache_misses) == (0, 0)
-
-
-def test_reset_plan_cache_refuses_an_extension_missing_a_counter():
-    """A renamed counter fails loudly instead of being recreated under its old name."""
-    optimizer = SimpleNamespace(_plan_cache={}, _cache_hits=0)
-
-    with pytest.raises(AttributeError, match="_cache_misses"):
-        _bench_common.reset_plan_cache(optimizer)
-    assert not hasattr(optimizer, "_cache_misses")
+    assert optimizer.cache_info() == (0, 0, 0)
+    assert len(extension_module._doc_key_cache) == 0
 
 
 @pytest.mark.parametrize(

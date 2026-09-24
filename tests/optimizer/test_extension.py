@@ -46,8 +46,9 @@ from django_strawberry_framework.optimizer.extension import (
     _named_children,
     _node_children_with_runtime_prefix,
     _resolve_model_from_return_type,
+    clear_document_key_cache,
 )
-from django_strawberry_framework.registry import registry
+from django_strawberry_framework.registry import iter_subsystem_clears, registry
 
 
 @pytest.fixture(autouse=True)
@@ -1133,6 +1134,59 @@ def test_doc_key_cache_evicts_when_full(monkeypatch):
     assert ops[0].loc.source.body not in cached_bodies
     assert ops[1].loc.source.body in cached_bodies
     assert ops[2].loc.source.body in cached_bodies
+
+
+@pytest.mark.django_db
+def test_cache_clear_makes_the_next_request_build_its_plan_again():
+    """``cache_clear`` empties the plan cache and zeroes both counters.
+
+    A warm hit before the clear, zeroed ``cache_info`` after it, and a miss
+    with a rebuilt entry on the next identical request. Package tier: the
+    project schema does not expose its extension instance.
+    """
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()  # type: ignore[return-value]
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    query = "{ allItems { name } }"
+    assert schema.execute_sync(query).errors is None
+    assert schema.execute_sync(query).errors is None
+    assert ext.cache_info() == (1, 1, 1)
+
+    ext.cache_clear()
+
+    assert ext.cache_info() == (0, 0, 0)
+    assert schema.execute_sync(query).errors is None
+    assert ext.cache_info() == (0, 1, 1)
+
+
+def test_registry_clear_empties_the_document_key_cache(monkeypatch):
+    """The document-key memo is registered with ``registry.clear()`` and empties on it."""
+    from graphql import parse
+
+    import django_strawberry_framework.optimizer.extension as extension_module
+
+    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
+    extension_module._doc_cache_entry(parse("query Q { field }").definitions[0], {})
+    assert len(extension_module._doc_key_cache) == 1
+
+    assert clear_document_key_cache in iter_subsystem_clears()
+    clear_document_key_cache()
+
+    assert len(extension_module._doc_key_cache) == 0
 
 
 def test_stash_union_skips_restash_when_subset():

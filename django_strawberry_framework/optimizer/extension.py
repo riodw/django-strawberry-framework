@@ -53,7 +53,7 @@ from ..extensions.operation_state import (
 from ..extensions.operation_state import (
     operation_is_nested as _operation_is_nested,
 )
-from ..registry import registry
+from ..registry import register_subsystem_clear, registry
 from ..utils.private_state import PrivateAuthority
 from ..utils.querysets import (
     normalize_query_source,
@@ -568,6 +568,19 @@ _MAX_DOC_KEY_CACHE_SIZE = 256
 _doc_key_cache: "OrderedDict[tuple[str, str | None], tuple[str, frozenset[str]]]" = OrderedDict()
 
 
+def clear_document_key_cache() -> None:
+    """Empty the cross-request document-key memo shared by every extension instance.
+
+    Registered with ``registry.clear()`` so a registry-clearing test also drops
+    it. Correctness-neutral like the memo itself: the next request per document
+    recomputes its key and variable-name set.
+    """
+    _doc_key_cache.clear()
+
+
+register_subsystem_clear(clear_document_key_cache, owner="optimizer.document_key_cache")
+
+
 def _doc_cache_entry(operation: Any, fragments: dict[str, Any]) -> tuple[str, frozenset[str]]:
     """Return ``(doc_key, cache_relevant_var_names)``, memoized cross-request by source text.
 
@@ -1025,6 +1038,19 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
             misses=self._cache_misses,
             size=len(self._plan_cache),
         )
+
+    def cache_clear(self) -> None:
+        """Empty this instance's plan cache and zero its hit and miss counters.
+
+        The next request per selection shape builds its plan again. The
+        module-level document-key memo is shared across instances and stays
+        warm; ``clear_document_key_cache`` empties it. Safe beside concurrent
+        requests for the reason ``cache_info`` gives: a request racing the
+        clear only loses a hit or a count, never gets a wrong plan.
+        """
+        self._plan_cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
 
     def on_execute(self) -> Any:  # type: ignore[override]
         """Open this execution's frame, and close it however the operation ends.

@@ -95,7 +95,7 @@ Five optimizer wins over `strawberry-graphql-django`:
 - **Class-creation-time metadata.** Frozen when the type is created, not memoized on first request.
 - **Postgres lateral nested pagination.** Nested connection pages via `CROSS JOIN LATERAL`, paging per parent instead of numbering every child. Opt-in; measured 6.4× on dense count-free pages in one local run (the benchmark runs the `totalCount` shape separately).
 
-Benchmarks: [`bench_plan_cache.py`][bench-plan-cache] and [`bench_nested_fetch.py`][bench-nested-fetch] (needs `FAKESHOP_PG_DSN`). Numbers are from one machine; run them on yours.
+Benchmarks: [`bench_plan_cache.py`][bench-plan-cache], [`bench_optimizer_walk.py`][bench-optimizer-walk], [`bench_nested_fetch.py`][bench-nested-fetch] (needs `FAKESHOP_PG_DSN`) and [`importtime_report.py`][importtime-report]. Numbers are from one machine; run them on yours.
 
 ## Is this for you?
 
@@ -160,7 +160,9 @@ Install, quick start, reading and writing data, transport, and deployment all li
 
 <!-- scripts/ -->
 [bench-nested-fetch]: scripts/bench_nested_fetch.py
+[bench-optimizer-walk]: scripts/bench_optimizer_walk.py
 [bench-plan-cache]: scripts/bench_plan_cache.py
+[importtime-report]: scripts/importtime_report.py
 
 <!-- .venv/ -->
 

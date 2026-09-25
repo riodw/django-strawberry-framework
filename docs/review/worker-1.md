@@ -93,7 +93,8 @@ as `uv run python scripts/<name>.py` from the repo root; `workspace.py` is that 
    - **Comments:** grade every docstring and comment Worker-2 wrote or moved, each as the whole
      docstring it sits in; `--list-docstrings` and `check_citations.py --paths ... --substrings`
      on changed files; `review_inspect.py --code-digest <ITEM_BASELINE>:<path> <path>` equal on
-     every file whose change is prose-only; a changed module first line has its TREE.md row in
+     every file a prose-only finding changed (against a reconstruction, "Comments", where another
+     axis also changed its code); a changed module first line has its TREE.md row in
      the diff; the prose diff comes from the command in "Comments". Pre-image rebuilds go under
      `<root>/<role>/`.
 6. A new problem on your axis, or a `Routed gap` that rides on the item's change (the change made

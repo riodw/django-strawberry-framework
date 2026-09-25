@@ -1,20 +1,12 @@
 """Pending relation records for definition-order-independent ``DjangoType`` finalization.
 
-This module owns the two scaffolding objects that carry a relation from
-collection to finalization (spec-010): ``PendingRelation`` (a frozen dataclass
-capturing a relation field whose target ``DjangoType`` was not yet registered
-at collection time) and ``PendingRelationAnnotation`` (the sentinel installed
-in ``cls.__annotations__`` until the target type registers). Routing every
-auto-synthesized relation through them unconditionally is what closes the
-import-order trap (spec-018). The producer is
-``_build_annotations`` (``types/base.py::_build_annotations``), which records a
-``PendingRelation`` and installs the sentinel for every auto-synthesized
-relation. The consumer is ``finalize_django_types``
-(``types/finalizer.py::finalize_django_types``), which rewrites the sentinel via
-``resolved_relation_annotation`` and hands the original ``PendingRelation``
-record instance back to ``TypeRegistry.discard_pending()``. ``discard_pending``
-uses identity (``id()``) rather than equality or hash, so callers may pass back
-the same object even when ``django_field`` is non-hashable.
+``_build_annotations`` (``types/base.py::_build_annotations``) records a ``PendingRelation``
+for every auto-synthesized relation field and installs ``PendingRelationAnnotation`` as its
+annotation, whether or not the target ``DjangoType`` is registered yet, so the relation binds
+to the target model's primary type whatever order the types are declared in.
+``finalize_django_types`` (``types/finalizer.py::finalize_django_types``) replaces each
+sentinel with ``resolved_relation_annotation`` and hands the resolved records back to
+``TypeRegistry.discard_pending``.
 """
 
 from __future__ import annotations
@@ -23,38 +15,23 @@ from dataclasses import dataclass
 
 from django.db import models
 
-from ..utils.relations import RelationKind
 
-
-def _hash_component(value: object) -> int:
-    """Return a stable hash component even for malformed unhashable metadata."""
-    try:
-        return hash(value)
-    except BaseException:
-        try:
-            return hash(type(value))
-        except BaseException:
-            return id(type(value))
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class PendingRelation:
-    """Relation field whose target ``DjangoType`` was not registered during collection.
+    """Auto-synthesized relation field awaiting its target ``DjangoType`` at finalization.
 
-    Constructed by ``_build_annotations`` (``types/base.py::_build_annotations``)
-    when a relation target type is not yet registered; resolved by
-    ``finalize_django_types`` (``types/finalizer.py::finalize_django_types``)
-    after every ``DjangoType`` has registered.
+    Constructed by ``_build_annotations`` (``types/base.py::_build_annotations``) for every
+    auto-synthesized relation field, registered target or not; resolved by
+    ``finalize_django_types`` (``types/finalizer.py::finalize_django_types``) after every
+    ``DjangoType`` has registered.
 
-    Finalization passes the original record instances back to
-    ``TypeRegistry.discard_pending()``, which removes resolved records by
-    identity rather than equality or hash semantics.
+    Records compare and hash by identity (``eq=False``): two records built from the same
+    values stay distinct, a record hashes whatever ``django_field`` holds, and
+    ``TypeRegistry.discard_pending()`` removes exactly the instances finalization hands back.
 
-    ``field_name`` is the raw Django ``field.name`` as stored on the model, the
-    same string that keys ``DjangoTypeDefinition.field_map``. ``nullable`` and
-    ``relation_kind`` are snapshot fields kept for self-contained record
-    introspection; the production consumer reads the live ``FieldMeta`` from
-    ``DjangoTypeDefinition.field_map`` instead.
+    ``field_name`` is the raw Django ``field.name`` as stored on the model, the same string
+    that keys ``DjangoTypeDefinition.field_map``; finalization reads the relation's
+    ``FieldMeta`` (cardinality, nullability) from that map, so the record carries none of it.
     """
 
     source_type: type
@@ -62,35 +39,10 @@ class PendingRelation:
     field_name: str
     django_field: models.Field | models.ForeignObjectRel
     related_model: type[models.Model]
-    relation_kind: RelationKind
-    nullable: bool
-
-    def __hash__(self) -> int:
-        """Hash equal records alike without requiring a hashable Django field."""
-        return hash(
-            tuple(
-                _hash_component(value)
-                for value in (
-                    self.source_type,
-                    self.source_model,
-                    self.field_name,
-                    self.django_field,
-                    self.related_model,
-                    self.relation_kind,
-                    self.nullable,
-                )
-            ),
-        )
 
 
 class _PendingRelationAnnotationMeta(type):
     """Metaclass that gives the sentinel a useful schema-construction error repr."""
-
-    # The sentinel exists only to be rewritten by ``finalize_django_types()`` in
-    # ``types/finalizer.py`` (see ``resolved_relation_annotation`` rewrite of
-    # ``source_type.__annotations__``) before ``strawberry.type`` ever sees the
-    # class. This __repr__ shapes the Strawberry-side schema-construction
-    # ``TypeError`` message that fires when that rewrite was skipped.
 
     def __repr__(cls) -> str:
         return (
@@ -100,10 +52,10 @@ class _PendingRelationAnnotationMeta(type):
 
 
 class PendingRelationAnnotation(metaclass=_PendingRelationAnnotationMeta):
-    """Sentinel annotation rewritten before ``strawberry.type`` sees the class.
+    """Sentinel annotation ``finalize_django_types()`` replaces before ``strawberry.type`` runs.
 
-    Carries ``_PendingRelationAnnotationMeta`` so the schema-construction
-    ``TypeError`` (raised when ``finalize_django_types()`` was skipped and
-    Strawberry sees the un-rewritten sentinel) reports a useful class repr
-    instead of ``<class '...PendingRelationAnnotation'>``.
+    Strawberry meets it only when a ``DjangoType`` is decorated with ``strawberry.type`` before
+    finalization ran; ``_PendingRelationAnnotationMeta`` then makes the schema-construction
+    ``TypeError`` name the missing ``finalize_django_types()`` call instead of printing
+    ``<class '...PendingRelationAnnotation'>``.
     """

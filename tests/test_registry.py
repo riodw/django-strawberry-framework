@@ -45,7 +45,6 @@ from django_strawberry_framework.registry import (
 )
 from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
-from django_strawberry_framework.utils.relations import relation_kind
 
 
 @pytest.fixture
@@ -622,24 +621,13 @@ def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_
         assert definition is not None
         assert definition.consumer_authored_fields == frozenset({"items"})
 
-        field = Category._meta.get_field("items")
-        kind = relation_kind(field)
         registry.add_pending_relation(
             PendingRelation(
                 source_type=ManualPendingCategoryType,
                 source_model=Category,
                 field_name="items",
-                django_field=field,
+                django_field=Category._meta.get_field("items"),
                 related_model=Item,
-                relation_kind=kind,
-                # Many-side cardinalities (reverse FK / M2M) force ``False``;
-                # matches the cardinality-gated rule in
-                # ``FieldMeta.from_django_field`` and ``_record_pending_relation``.
-                nullable=(
-                    False
-                    if kind in ("many", "reverse_many_to_one")
-                    else kind == "reverse_one_to_one" or bool(getattr(field, "null", False))
-                ),
             ),
         )
 
@@ -965,32 +953,26 @@ def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure
 def test_discard_pending_uses_identity_match_with_real_pending_relation(fresh_registry):
     """``discard_pending`` removes the exact records handed back by the caller.
 
-    Pins the identity-based contract so this module does not couple to ``PendingRelation``'s
-    ``__eq__``/``__hash__`` semantics. Builds two equal-by-value records and asserts that
-    discarding one leaves the other in place.
+    Builds two records from the same values and asserts that discarding one leaves the other in
+    place.
 
     Registry lifecycle: isolated ``TypeRegistry`` maps. A live request cannot show map identity. No
     live sibling.
     """
-    field = Category._meta.get_field("items")
-    kind = relation_kind(field)
     source_type = type("SharedSource", (), {})
     common_kwargs = {
         "source_type": source_type,
         "source_model": Category,
         "field_name": "items",
-        "django_field": field,
+        "django_field": Category._meta.get_field("items"),
         "related_model": Item,
-        "relation_kind": kind,
-        "nullable": False,
     }
     record_a = PendingRelation(**common_kwargs)
     record_b = PendingRelation(**common_kwargs)
-    # Sanity-check: distinct objects, equal by dataclass value. This is
-    # the shape that would let an equality-based ``discard_pending`` drop
-    # both - the identity contract drops only the exact instance passed.
+    # Sanity-check: distinct objects built from the same values, and unequal,
+    # since records compare by identity.
     assert record_a is not record_b
-    assert record_a == record_b
+    assert record_a != record_b
     fresh_registry.add_pending_relation(record_a)
     fresh_registry.add_pending_relation(record_b)
     fresh_registry.discard_pending([record_a])
@@ -1015,8 +997,6 @@ def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry):
         field_name="items",
         django_field=_NonHashableField(),  # type: ignore[arg-type]
         related_model=Item,
-        relation_kind="reverse_many_to_one",
-        nullable=False,
     )
 
     fresh_registry.add_pending_relation(pending)
@@ -1043,15 +1023,12 @@ def test_mutators_reject_calls_after_mark_finalized(fresh_registry):
         ACTIVE = "active"
 
     fresh_registry.mark_finalized()
-    field = Category._meta.get_field("items")
     pending = PendingRelation(
         source_type=CategoryType,
         source_model=Category,
         field_name="items",
-        django_field=field,
+        django_field=Category._meta.get_field("items"),
         related_model=Item,
-        relation_kind=relation_kind(field),
-        nullable=False,
     )
 
     with pytest.raises(ConfigurationError, match="finalized"):
@@ -1802,16 +1779,12 @@ def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry):
 
     fresh_registry.register(Category, CategoryType)
     fresh_registry.register(Item, ItemType)
-    field = Category._meta.get_field("items")
-    kind = relation_kind(field)
     pending_keep = PendingRelation(
         source_type=CategoryType,
         source_model=Category,
         field_name="items",
-        django_field=field,
+        django_field=Category._meta.get_field("items"),
         related_model=Item,
-        relation_kind=kind,
-        nullable=False,
     )
     pending_drop = PendingRelation(
         source_type=ItemType,
@@ -1819,8 +1792,6 @@ def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry):
         field_name="category",
         django_field=Item._meta.get_field("category"),
         related_model=Category,
-        relation_kind=relation_kind(Item._meta.get_field("category")),
-        nullable=False,
     )
     fresh_registry.add_pending_relation(pending_keep)
     fresh_registry.add_pending_relation(pending_drop)

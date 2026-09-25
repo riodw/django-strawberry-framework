@@ -20,7 +20,6 @@ from strawberry import relay
 
 from django_strawberry_framework import DjangoType, conf, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import base as types_base
 from django_strawberry_framework.types import finalizer as types_finalizer
@@ -45,11 +44,6 @@ from django_strawberry_framework.utils.querysets import model_for
 def _isolate_registry(isolate_global_registry):
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
-
-
-def _field_map_for(fields):
-    """Build the definition-style field map expected by _build_annotations."""
-    return {field.name: FieldMeta.from_django_field(field) for field in fields}
 
 
 def _meta(**attrs):
@@ -389,7 +383,6 @@ def test_relay_node_strips_django_id_annotation():
         _Host,
         fields,
         source_model=Category,
-        field_map=_field_map_for(fields),
         interfaces=(relay.Node,),
     )
     assert "id" not in synthesized
@@ -430,7 +423,6 @@ def test_extended_node_interface_subclass_suppresses_id_annotation():
         _Host,
         fields,
         source_model=Category,
-        field_map=_field_map_for(fields),
         interfaces=(CustomNode,),
     )
     assert "id" not in synthesized
@@ -453,7 +445,6 @@ def test_non_relay_type_keeps_id_int():
         _Host,
         fields,
         source_model=Category,
-        field_map=_field_map_for(fields),
         interfaces=(),
     )
     assert "id" in synthesized
@@ -1483,7 +1474,6 @@ def test_direct_relay_node_inheritance_suppresses_id_annotation():
         _Host,
         fields,
         source_model=Category,
-        field_map=_field_map_for(fields),
         interfaces=(),
     )
     assert "id" not in synthesized

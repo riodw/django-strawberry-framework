@@ -308,7 +308,9 @@ docstring the changed line sits in. A prose-only change proves it moved no code 
 `uv run python scripts/review_inspect.py --code-digest <ITEM_BASELINE>:<path> <path>` (exit 0,
 two equal digests; exit 1 when code moved; START.md "Instruments that lie" names this inverse
 proof), and owes nothing else:
-no before / after, no permanent test, no failability.
+no before / after, no permanent test, no failability. On a file another axis's finding also changed
+in code, the digest compares the live file against a reconstruction under `<root>/<role>/`:
+`ITEM_BASELINE`'s text plus only those code hunks.
 
 ## Severity
 
@@ -588,7 +590,9 @@ Each finding record:
   defined elsewhere in the record), `<n>` for the verify pass number in an address or path, the
   node count the run must report (`3 passed`), a test that does not exist yet named in plain text
   (`test_mixed_case_field in tests/optimizer/test_extension.py`), since `path::Symbol` to a missing
-  symbol fails `check_citations.py`.
+  symbol fails `check_citations.py`. A failability Proof names the rows that must fail; the
+  verifier's manifest declares the exact set the revert fails, and its Verification says why each
+  row beyond the Proof's fails.
 - **Freshness** — `git hash-object` of every file inspected, including files excluded from the
   finding on the strength of their body.
 
@@ -609,7 +613,7 @@ Mechanically, before Worker-2 reads anything:
 | a Performance finding w/o `Path class` or w/o a before number | back to that Worker-1 |
 | a finding w/o a runnable Proof line | back to that Worker-1 |
 | a defect w/o a contract row or a reachable input | `rejected as defect`; may stand as Mechanics |
-| a Recommendation or text after that would land a line-number citation in code, tests or a standing doc, or a symbol `check_citations.py --paths <record>` cannot resolve | back to that Worker-1 |
+| a Recommendation or text after that would land a line-number citation in code, tests or a standing doc, or a symbol `check_citations.py --paths <record>` cannot resolve (checked on the review pass; a symbol the item later deletes stays in that text as written) | back to that Worker-1 |
 | a list entry neither discharged nor rejected | back to that Worker-1 |
 
 Twice back on the same row → `blocked` for Rio. All three records pass → Worker-0 copies

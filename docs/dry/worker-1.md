@@ -28,7 +28,8 @@ another worker's `worker-memory/`.
   one a consolidation depends on is named in that finding's Coupling.
 - **Folder and project items:** audit the unassigned remainder and the families that cross
   ownership boundaries. Do not summarize prior artifacts.
-- **Final gate:** run `uv run python scripts/workspace.py gate dry` and every `## Pending
+- **Final gate:** run `uv run python scripts/workspace.py gate dry --suites lint,default` (plus
+  `sharded`, `pg` only when Rio authorized them) and every `## Pending
   execution` command (`proof:` and `gate:` alike); record result, coverage, skips, xfails, counts,
   mode, and the input bindings. A failure in a path no item touched is checked against `git show
   HEAD:` and reported pre-existing when it reproduces.

@@ -159,9 +159,8 @@ def test_relation_kind_classifies_auto_created_one_to_many_as_reverse_many_to_on
 def test_relation_kind_reverse_many_to_one_is_in_literal():
     """The ``RelationKind`` alias enumerates ``"reverse_many_to_one"``.
 
-    ``tests/test_registry.py`` constructs a ``PendingRelation`` with this
-    value against the typed ``relation_kind`` field; the alias must list
-    it so the contract and the call sites agree.
+    ``relation_kind`` returns this value for a reverse foreign key, so the
+    alias that types its return must list it.
     """
     import typing
 

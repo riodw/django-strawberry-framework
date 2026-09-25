@@ -786,7 +786,6 @@ class DjangoType:
             cls,
             fields,
             source_model=meta.model,
-            field_map=field_map,
             consumer_authored_fields=consumer_authored_fields,
             interfaces=validated.interfaces,
             nullable_overrides=validated.nullable_overrides,
@@ -1830,7 +1829,6 @@ def _build_annotations(
     fields: tuple[Any, ...],
     *,
     source_model: type[models.Model],
-    field_map: dict[str, FieldMeta],
     consumer_authored_fields: frozenset[str] = frozenset(),
     interfaces: tuple[type, ...] = (),
     nullable_overrides: frozenset[str] = frozenset(),
@@ -1941,7 +1939,6 @@ def _build_annotations(
         if field.is_relation:
             if field.name in consumer_authored_fields:
                 continue
-            field_meta = field_map[field.name]
             if getattr(field, "related_model", None) is None:
                 raise ConfigurationError(
                     f"{source_model.__name__}.{field.name} is a GenericForeignKey or other "
@@ -1966,8 +1963,6 @@ def _build_annotations(
                     field_name=field.name,
                     django_field=field,
                     related_model=field.related_model,
-                    relation_kind=field_meta.relation_kind,
-                    nullable=field_meta.nullable,
                 ),
             )
             annotations[field.name] = PendingRelationAnnotation

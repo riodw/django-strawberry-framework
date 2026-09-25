@@ -589,7 +589,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup, GraphQL naming, and Relay ID detection.
 │   ├── test_finalizer.py         # Finalizer malformed-state and hostile-metadata boundaries.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
-│   ├── test_relations.py         # PendingRelation tests for hash consistency and dataclass field contracts.
+│   ├── test_relations.py         # PendingRelation tests for identity semantics, frozen fields and the sentinel annotation repr.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
 │   ├── test_resolvers.py         # Relation resolver tests for FK-id elision, N+1 strictness, and multi-database routing.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
@@ -844,7 +844,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related-target lookup, GraphQL naming, and Relay ID detection.
 │   ├── test_finalizer.py         # Finalizer malformed-state and hostile-metadata boundaries.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
-│   ├── test_relations.py         # PendingRelation tests for hash consistency and dataclass field contracts.
+│   ├── test_relations.py         # PendingRelation tests for identity semantics, frozen fields and the sentinel annotation repr.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
 │   ├── test_resolvers.py         # Relation resolver tests for FK-id elision, N+1 strictness, and multi-database routing.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.

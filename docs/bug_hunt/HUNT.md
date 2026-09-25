@@ -361,9 +361,10 @@ divergent public flavors, gaps between implementation, tests, examples, docs. Re
 `.py` added/removed/renamed since baseline (`git ls-files` + untracked) each get an item or a
 closing note; verified items whose digests moved go `stale`.
 
-Final gate (Worker-0): `uv run python scripts/workspace.py gate hunt --suites default`, the full
-suite in a gate copy carrying its own git index (`--suites default,sharded,pg` once Rio authorized
-those cells). Passes when the suite passes + package coverage stays 100%. Record failures,
+Final gate (Worker-0): `uv run python scripts/workspace.py gate hunt --suites lint,default`, CI's
+lint job then the full suite in a gate copy carrying its own git index
+(`--suites lint,default,sharded,pg` once Rio authorized those cells). Passes when lint and the
+suite pass + package coverage stays 100%. Record failures,
 coverage, skips, xfails, collected/selected counts, cell. The gate's result file binds it to `git
 stash create` at gate time + blob ids of `pyproject.toml`, `uv.lock`. Product failure → the owning
 item back to Worker-1; environment/concurrent failure → recorded precisely, `blocked`. Sharded and

@@ -1,6 +1,6 @@
 # REVIEW plan: 0.0.15
 
-Status: partial (utils/strings.py)
+Status: partial (utils/strings.py, types/relations.py)
 Mode: autonomous
 Run: 0.0.15 2026-09-24-1
 Scope: utils/strings.py
@@ -40,6 +40,15 @@ Baseline: package digest `sha256:df761b8225865985fd218f13f3288212bb3e0a5cf4ec546
 | `uv run python scripts/workspace.py run review/bench/<phase> --cell pg -- python scripts/bench_nested_fetch.py --json <scratch>/bench/<phase>/nested_fetch.json` | `review-20260925T033421-9c27d5`; pg 16.15, median ms count-free windowed 19.40 / lateral 17.51 / per-parent 68.41; totalCount 18.98 / 19.31 / 99.78; queries 2/2/101 and 2/2/201; instrument blob d7f8c39e | `review-20260925T042517-f3e320`; median ms count-free windowed 19.06 / lateral 17.52 / per-parent 66.93; totalCount 19.02 / 18.41 / 97.77; queries 2/2/101 and 2/2/201 | query counts identical; timings within spread |
 | `uv run python scripts/workspace.py run review/bench/<phase> -- python scripts/importtime_report.py --rounds 5 --json <scratch>/bench/<phase>/importtime.json` | `review-20260925T033429-12e0bd`; package cumulative 177.4 ms, self 22.4 ms over 67 modules; instrument blob bfce84b9 | `review-20260925T042524-088936`; package cumulative 175.4 ms, self 22.1 ms over 67 modules | -2.0 ms cumulative, same module count; noise |
 
+Gate, run 0.0.15 2026-09-25-2: package digest `sha256:181e02bcfb9a8ec93b85171b380acaf58a7988f625cbc5abfd5212add0a0b9ed` (this run's item plus the walker and fixture changes beside it), copy `review/bench/gate-2` synced after the item closed; `bench_plan_cache.py`, `bench_optimizer_walk.py`, `bench_nested_fetch.py`, `_bench_common.py` blobs identical to the baseline's; `importtime_report.py` blob 15f679c9 (changed in 4cc95b77), so its row compares nothing.
+
+| Command (`<phase>` = `gate-2`) | Gate run 2 | Delta vs baseline |
+|---|---|---|
+| `bench_plan_cache.py` row | `review-20260925T174759-fef1f7`; warm/cold us median: glossary scalar 716.6/789.0, nested 4085.8/4355.2, deep 6908.1/7442.4, products scalar 1220.2/1317.1, products nested 1763.7/1859.4 | warm +0.8%, +0.6%, +1.1%, +1.3%, -4.2%: within spread, as at gate 1 |
+| `bench_optimizer_walk.py` row | `review-20260925T174954-ec78d4`; min/median us: glossary scalar 5.29/5.58, nested 77.00/83.67, deep 141.00/151.88, products connection 4.42/4.62; plan shapes identical | medians +1.5%, +2.9%, -1.6%, -1.9%; nested +2.0% vs gate 1 is cross-session drift: the walker change measured interleaved before/after on the same copy pair gave nested 85.79 -> 84.33 us |
+| `bench_nested_fetch.py` row (`--cell pg`) | `review-20260925T175006-70e564`; median ms count-free windowed 19.30 / lateral 17.49 / per-parent 65.33; totalCount 19.01 / 19.51 / 99.65; queries 2/2/101 and 2/2/201 | query counts identical; timings within spread |
+| `importtime_report.py` row | `review-20260925T175014-d0ee46`; package cumulative 179.8 ms, self 22.6 ms over 67 modules | instrument id differs from the baseline's: compares nothing |
+
 ## How to work one item
 
 `docs/review/REVIEW.md` is the method; this section only points into it.
@@ -68,6 +77,7 @@ Baseline: package digest `sha256:df761b8225865985fd218f13f3288212bb3e0a5cf4ec546
 
 - [x] Final gate
     - Status: verified
+    - Run 0.0.15 2026-09-25-2: `gate-review-20260925T174743-8d66b3.json`, bound to `git stash create` a92a7fcee0f63d8cef957e48856a0ff5dbb1542d. lint `review-20260925T174040-4992e9` exit 0 (the nine `django.yml` lint commands); default `review-20260925T174056-b47518` exit 0, 8863 passed, 40 skipped, coverage 100%; sharded `review-20260925T174303-038b7a` exit 0, 8884 passed, 37 skipped; pg `review-20260925T174501-47dd81` exit 0, 2346 passed, 3 skipped. No `## Pending execution` commands. Inventory re-reconciled: `reconcile` exit 0.
     - Runs: `uv run python scripts/workspace.py gate review` (default, `FAKESHOP_SHARDED=1` and Postgres suites in a gate copy that keeps a git index, REVIEW.md "Final gate and closeout"), each w/ its own counts; every `## Pending execution` command from every artifact; the `## Bench baseline` commands at `<phase>` `gate`, delta recorded
     - Result: `gate-review-20260925T042258-72d2fd.json`, bound to `git stash create` 49456066d336cbedbedaeab24ab842d1b33752ee. default `review-20260925T041601-4e904e` exit 0, 8854 passed, 40 skipped, package coverage 100.00% (18636 statements); sharded `review-20260925T041812-70749d` exit 0, 8875 passed, 37 skipped; pg `review-20260925T042013-26eea0` exit 0, 2342 passed, 3 skipped. No `## Pending execution` commands (none recorded). Bench gate rows filled; no figure moves.
     - Inventory re-reconciled before the gate: `reconcile` exit 0.
@@ -437,10 +447,14 @@ review of this run. A later run moves an item into its scope under its own `## R
     - Status: out-of-scope
     - Path class:
     - Artifacts: rev-types__finalizer.md, rev-types__finalizer.performance.md, rev-types__finalizer.mechanics.md, rev-types__finalizer.comments.md
-- [ ] types/relations.py
-    - Status: out-of-scope
-    - Path class:
+- [x] types/relations.py
+    - Status: verified
+    - Item baseline: b43e2f2fb07e4c13ee93056c09a5a94ede07065f (`git stash create`); untracked under the package: none; dirty: docs/bug_hunt/HUNT.md, docs/dry/DRY.md, docs/dry/worker-1.md, docs/review/review-0_0_15.md (none under the package)
+    - Path class: cold - records are built once per relation field at `DjangoType` declaration and read once per `finalize_django_types()`; nothing runs per request, resolver or row
     - Artifacts: rev-types__relations.md, rev-types__relations.performance.md, rev-types__relations.mechanics.md, rev-types__relations.comments.md
+    - Result: 9 findings implemented (0/4/5: F1-F3, V1, V2 Medium; M1, M2, F4 Low; F5 discharged by M1), rejected Performance 4, Mechanics 6, Comments 9 with triggers; 0 deferred. Files: types/relations.py, types/base.py, registry.py, tests/types/test_relations.py, tests/test_registry.py, tests/types/test_finalizer.py, tests/types/test_definition_order.py, tests/types/test_relay_interfaces.py, tests/utils/test_relations.py, docs/TREE.md.
+    - Verification: Passed. Performance pass 1 (cold; record build ~850 -> ~690 ns, hash 565-947 -> ~18 ns, 0 hash/eq calls per fakeshop build; no bench figure moves); Mechanics pass 1 (M1 `eq=False` pinned by `tests/types/test_relations.py::test_equal_valued_pending_relations_stay_distinct`, prove exact 4 rows; value-eq-with-guarded-hash mutant fails exactly 2; copy suite 8861 passed, the 2 git-census rows by construction); Comments pass 2 (pass 1 revision-needed: V1, V2 prose M1 falsified; code-digest identity on every prose-only file).
+    - Cleanup: Removed docs/review/temp-tests/types__relations; copies released; unrelated work preserved.
 - [ ] types/relay.py
     - Status: out-of-scope
     - Path class:
@@ -550,8 +564,13 @@ Maintainer decisions the run surfaced: ruff rules to enable, trade-offs, contrac
 - utils/strings.py (M1): missing fakeshop fixture, a model with a mixed-case scalar, a mixed-case forward FK and a reverse `related_name`, so `tests/optimizer/test_extension.py::test_mixed_case_model_field_selection_projects_its_real_column` and `::test_mixed_case_relation_selections_plan_through_their_django_names` can move to `examples/fakeshop/test_query/`. An item adds no example model.
 - Pre-existing, blocks the gate row's CI parity only: `build_tree_md.py --check` is red at HEAD 6ac69870 because `tests/test_workspace.py` (committed in cd6a74aa) has no `docs/TREE.md` row; not this run's item. Fix = render TREE.md in its own change.
 - `scripts/prove_failability.py` counts pytest captured-log `ERROR <logger>` lines as collection/setup errors (run `review-20260925T035307-0da5c6` INVALID COUNT); workaround `--show-capture=no` in the scope. Script defect outside the package, no item owns it.
-- utils/strings.py (Performance verifier gap, no in-scope owner): a mixed-case or digit-boundary selection costs 7.5-8.4 us per plan build in `optimizer/walker.py::_resolve_selection_target` (reverse miss rebuilds `_graphql_names_by_python_name` and scans via `_field_by_graphql_name`) vs ~150 ns for a lowercase field (`review-20260925T040111-52f3c0`, `-040057-e51263`). Owner: a Performance pass on `optimizer/walker.py`, outside this run's scope; candidate fixes and reopen trigger in `rev-utils__strings.performance.md` `## Verification (Performance)`.
-- utils/strings.py (Mechanics, rejected): generated input field names are pinned camelCase and ignore `auto_camel_case=False`; no contract source says they follow the naming config. Decide whether they should.
+- utils/strings.py (Performance verifier gap, no in-scope owner): a mixed-case or digit-boundary selection costs 7.5-8.4 us per plan build in `optimizer/walker.py::_resolve_selection_target` (reverse miss rebuilds `_graphql_names_by_python_name` and scans via `_field_by_graphql_name`) vs ~150 ns for a lowercase field (`review-20260925T040111-52f3c0`, `-040057-e51263`). Owner: a Performance pass on `optimizer/walker.py`, outside this run's scope; candidate fixes and reopen trigger in `rev-utils__strings.performance.md` `## Verification (Performance)`. Closed 2026-09-25 by a maintainer-approved change beside this run: `optimizer/walker.py` builds one GraphQL-name table per (finalized type, name converter) in `_forward_names_memo`, emptied by `registry.clear()`; a miss costs ~0.53 us (from 8.4-9.4 us; lowercase ~0.23 us), `bench_optimizer_walk.py` digit query 42.25 -> 30.71 us, explicit-name query 15.12 -> 10.25 us, built-in set flat; three new `tests/optimizer/test_walker.py` rows, four failability mutations pinned (evidence under the session scratchpad; the `perfwalk` flow was gc'd, so its run ids no longer audit).
+- utils/strings.py (Mechanics, rejected): generated input field names are pinned camelCase and ignore `auto_camel_case=False`; no contract source says they follow the naming config. Decide whether they should. Decided 2026-09-25: they should (upstream strawberry-graphql-django and this package's own list arguments follow the config); card-sized, homed on `TODO-BETA-077-0.1.7` "Generated input field names follow the schema naming config" (probe `camel-20260925T170213-b85bf2`).
+- types/relations.py (Comments, routed; owner: the `types/base.py` item): `django_strawberry_framework/types/base.py::_build_annotations` relation-branch comment narrates history ("closed by spec-018", "The earlier eager-bind branch"); the `types/base.py` module docstring step 4 "records unresolved relations" is stale the same way as the relations module docstring (every relation is recorded).
+- types/relations.py (Comments, routed; owner: the `utils/relations.py` item): `django_strawberry_framework/utils/relations.py::relation_kind` calls `PendingRelation` "the registry's typed sentinel".
+- types/relations.py (Mechanics, rejected, new card candidate): a skipped `finalize_django_types()` surfaces as Strawberry's generic "Unexpected type" `TypeError` under both `strawberry.Schema` and `DjangoSchema`; `DjangoSchema` could re-raise it as a `ConfigurationError` naming `finalize_django_types()`. No contract promises the diagnosis.
+- types/relations.py (Comments verify 1, routed; owner: the item whose tests these are, `tests/types/test_relay_interfaces.py` rides with `types/relay.py`): provenance wording in the docstrings of `test_non_relay_type_keeps_id_int` and `test_extended_node_interface_subclass_suppresses_id_annotation`; pre-existing, outside this item's hunks.
+- Closed 2026-09-25 (utils/strings.py M1 fixture gap): library `Distributor.displayName`, `Consignment.distributorRef` and `related_name="consignmentItems"` (migration `0008_distributor_consignment.py`) carry the mixed-case shapes; `examples/fakeshop/test_query/test_library_shapes_api.py` pins them live (redundancy proof `fixture-20260925T170318-907f54`, pinned) and the two `tests/optimizer/test_extension.py` stand-ins are deleted. Outside this run's items; landed by a maintainer-approved change beside it.
 
 ## Owned changes
 
@@ -573,6 +592,16 @@ listed here; any other dirty hunk is external.
 | `tests/optimizer/test_multi_db.py` | utils/strings.py | Mechanics, Comments | `_register_type_definition`; `snake_case` import removed; module docstring (AGENTS.md citation) |
 | `tests/types/test_relay_interfaces.py` | utils/strings.py | Mechanics | `_field_map_for`; `snake_case` import removed |
 | `tests/types/test_finalizer.py` | utils/strings.py | Mechanics | `test_malformed_pending_field_name_is_rejected_before_relation_lookup` docstring |
+| `django_strawberry_framework/types/relations.py` | types/relations.py | Mechanics, Comments | `PendingRelation` (`eq=False`; fields `relation_kind`, `nullable` removed; `__hash__` removed; docstring); `_hash_component` removed; `RelationKind` import removed; `_PendingRelationAnnotationMeta` comment removed; `PendingRelationAnnotation` docstring; module docstring |
+| `django_strawberry_framework/types/base.py` | types/relations.py | Mechanics | `_build_annotations` (`field_map` parameter, `field_meta` local and the two snapshot kwargs removed); `DjangoType.__init_subclass__` (`field_map` argument removed) |
+| `tests/types/test_relations.py` | types/relations.py | Mechanics, Comments | module docstring (first line); `_NonHashableField` docstring; `_build_pending`; `test_pending_relation_hash_supports_non_hashable_django_field` docstring; `test_equal_valued_pending_relations_stay_distinct` (new); `test_pending_relation_equality_still_works_with_non_hashable_django_field`, `test_equal_pending_relations_have_equal_hashes`, `test_pending_relation_hash_falls_back_when_value_and_type_hashing_fail` removed |
+| `django_strawberry_framework/registry.py` | types/relations.py | Comments | `TypeRegistry.discard_pending` (docstring) |
+| `tests/test_registry.py` | types/relations.py | Mechanics, Comments | `test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation`, `test_discard_pending_uses_identity_match_with_real_pending_relation` (docstring, comment, sanity assert), `test_discard_pending_tolerates_non_hashable_django_field`, `test_mutators_reject_calls_after_mark_finalized`, `test_unregister_removes_pending_relations_sourced_from_type`; `relation_kind` import removed; `test_discard_pending_uses_identity_match_with_real_pending_relation` docstring (Comments, pass 2) |
+| `tests/types/test_finalizer.py` | types/relations.py | Mechanics | `test_unresolved_relation_diagnostic_survives_hostile_model_name`, `test_malformed_pending_field_name_is_rejected_before_relation_lookup`, `test_pending_relation_without_source_definition_is_typed` |
+| `tests/types/test_definition_order.py` | types/relations.py | Mechanics | `test_annotation_only_scalar_override_does_not_emit_synthesized_annotation`, `test_auto_annotation_emits_synthesized_annotation` |
+| `tests/types/test_relay_interfaces.py` | types/relations.py | Mechanics | `_field_map_for` removed; `FieldMeta` import removed; `test_relay_node_strips_django_id_annotation`, `test_extended_node_interface_subclass_suppresses_id_annotation`, `test_non_relay_type_keeps_id_int`, `test_direct_relay_node_inheritance_suppresses_id_annotation` (`field_map=` argument removed) |
+| `tests/utils/test_relations.py` | types/relations.py | Comments | `test_relation_kind_reverse_many_to_one_is_in_literal` docstring |
+| `docs/TREE.md` | types/relations.py | Comments | `tests/types/test_relations.py` rows (two) |
 
 ## Outcomes
 
@@ -595,3 +624,34 @@ Filled by Worker-0 at closeout before any scratch is removed; a scoped run adds 
 - Gate record: `gate-review-20260925T042258-72d2fd.json`, all three suites exit 0, coverage 100%.
 - Concurrent work untouched: the cycle baseline held only `output/`; no drift during the run.
 - Scope of this run: `utils/strings.py` and the final gate. Every other file, folder and the project item were out of scope and not examined; their boxes stay unticked. The M1 fix edited files outside the target as its root-cause owner (13 ledger rows); those files' own items were not reviewed.
+
+## Run 0.0.15 2026-09-25-2
+
+Scope: types/relations.py
+Drift: 2026-09-25 HEAD 6ac698704402..4cc95b771ecd; dirty + docs/bug_hunt/HUNT.md, docs/dry/DRY.md, docs/dry/worker-1.md
+Drift: 2026-09-25 HEAD 4cc95b771ecd (unmoved); dirty + django_strawberry_framework/optimizer/walker.py, tests/optimizer/test_extension.py, examples/fakeshop/README.md, examples/fakeshop/apps/library/{filters,models,orders,schema}.py,
+  examples/fakeshop/apps/library/tests/test_models.py, examples/fakeshop/test_query/README.md, examples/fakeshop/test_query/test_library_shapes_api.py; untracked + examples/fakeshop/apps/library/migrations/0008_distributor_consignment.py (maintainer-approved changes beside this run, not this item's)
+
+Already itemized above, worked this run:
+
+- `types/relations.py`
+- `Final gate`
+
+### types/relations.py
+
+- Performance: no findings; path class cold (records built once per relation field at declaration, read once per finalize). Rejected with triggers: the per-call `__hash__` tuple, frozen-dataclass construction cost, the module's import cost, the `registry.py` pending-list rebuilds. Verify measured record build ~850 -> ~690 ns and hash 565-947 -> ~18 ns after M1; 0 hash / eq calls per fakeshop build before and after; no bench figure moves.
+- Mechanics: M1 Low, `PendingRelation` value equality and the guarded `__hash__` / `_hash_component` (which swallowed `BaseException`) had no production reader (every consumer matches by identity); now `@dataclass(frozen=True, eq=False)`, helpers deleted, pinned by `tests/types/test_relations.py::test_equal_valued_pending_relations_stay_distinct` (prove: reverting `eq=False` fails exactly 4 rows; value equality behind a guarded hash fails exactly 2). M2 Low, the `relation_kind` / `nullable` snapshot fields copied `FieldMeta` and were never read; removed with `_build_annotations`'s now-dead `field_map` parameter (Worker-2 went past the Recommendation; the verifier upheld it). Rejected with triggers: diagnosing a skipped `finalize_django_types()` (new-card candidate in `## Decisions`), the sentinel error string, deleting its metaclass, the `related_model` / `source_model` copies, the `TYPE_CHECKING` import, the finalizer's defense branch.
+- Comments: F1-F3 Medium (module and `PendingRelation` docstrings claimed records exist only for unregistered targets; the test module gave a false reason, unhashable Django relations, for the guarded hash: 303 of 303 real relations hash), F4 Low (sentinel repr docstring named the wrong trigger), F5 Low discharged by M1. Verify 1 revision-needed: V1, V2 Medium, prose M1 made false (`tests/test_registry.py` identity-test docstring; `registry.py::TypeRegistry.discard_pending` "identity is a stronger contract than `__eq__`"); pass 2 prose-only, Comments alone re-verified. Every prose-only file carries a `--code-digest` identity; where M1 / M2 changed a file's code, against a reconstruction of the baseline plus those hunks. TREE.md: the two `tests/types/test_relations.py` rows.
+- Routed out of the item into `## Decisions`: `types/base.py` comment and docstring, `utils/relations.py::relation_kind` wording, `tests/types/test_relay_interfaces.py` provenance, the skipped-finalize diagnosis.
+- Board: `TODO-ALPHA-053-0.0.15` item (c) marked resolved (M2 deleted the comment it named).
+
+### Run 0.0.15 2026-09-25-2
+
+- Bench baseline vs gate 2: plan cache, walk and nested fetch within spread, query counts and plan shapes identical; importtime compares nothing (instrument changed in 4cc95b77).
+- Decisions owed: none newly blocking. Closed this run beside the item (maintainer-approved): the mixed-case fakeshop fixture gap, the walker mixed-case slow path, and the `auto_camel_case` question (decided: follow the config; homed on `TODO-BETA-077-0.1.7`). Open and routed: the `types/base.py`, `utils/relations.py` and `types/relay.py` leads, the skipped-finalize diagnosis card candidate.
+- Cells unverified: none; sharded and pg inapplicable by construction for the item, all three suites green at the gate.
+- Blocked items: none.
+- Net source change vs cycle baseline this run: the item's 10 ledger rows, plus concurrent maintainer-approved changes (Drift lines) to `optimizer/walker.py`, `tests/optimizer/test_walker.py`, `tests/optimizer/test_extension.py`, the library app, its live tests and READMEs, and the board (`KANBAN.md`, `KANBAN.html`, `examples/fakeshop/db.sqlite3`).
+- Gate record: `gate-review-20260925T174743-8d66b3.json`, all four suites exit 0, coverage 100%.
+- Concurrent work untouched: the item's attribution matched every hunk; `docs/bug_hunt/`, `docs/dry/` edits were this session's, outside the item.
+- Scope of this run: `types/relations.py` and the final gate. Every other file, folder and the project item were out of scope and not examined; the item's edits to `types/base.py`, `registry.py` and six test modules were root-cause and prose owners, their own items not reviewed.

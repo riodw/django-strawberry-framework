@@ -526,11 +526,11 @@ class TypeRegistry:
     def discard_pending(self, resolved: Iterable[PendingRelation]) -> None:
         """Drop pending records that have been resolved successfully.
 
-        Identity-matched (``id()``) rather than equality-matched: the
-        finalizer hands back the very ``PendingRelation`` instances it
-        received from ``iter_pending_relations``, so identity is a
-        stronger contract than ``__eq__`` and avoids coupling this
-        module to ``PendingRelation``'s hashability.
+        Identity-matched (``id()``): the finalizer hands back the very
+        ``PendingRelation`` instances it received from
+        ``iter_pending_relations``, and matching by ``id()`` keeps this
+        module independent of ``PendingRelation``'s equality and
+        hashability.
         """
         self._check_mutable()
         resolved_ids = {id(record) for record in resolved}

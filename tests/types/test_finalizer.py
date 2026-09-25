@@ -68,8 +68,6 @@ def test_unresolved_relation_diagnostic_survives_hostile_model_name():
             field_name="books",
             django_field=object(),
             related_model=_HostileName,
-            relation_kind="many",
-            nullable=False,
         ),
     )
 
@@ -151,8 +149,6 @@ def test_malformed_pending_field_name_is_rejected_before_relation_lookup():
             field_name=123,
             django_field=field,
             related_model=Genre,
-            relation_kind="many",
-            nullable=False,
         ),
     )
 
@@ -267,8 +263,6 @@ def test_pending_relation_without_source_definition_is_typed():
             field_name="genres",
             django_field=Book._meta.get_field("genres"),
             related_model=Genre,
-            relation_kind="many",
-            nullable=False,
         ),
     )
 

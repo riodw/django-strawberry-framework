@@ -802,7 +802,6 @@ def test_annotation_only_scalar_override_does_not_emit_synthesized_annotation():
         CategoryType,
         definition.selected_fields,
         source_model=Category,
-        field_map=definition.field_map,
         consumer_authored_fields=definition.consumer_authored_fields,
         interfaces=definition.interfaces,
     )
@@ -861,7 +860,6 @@ def test_auto_annotation_emits_synthesized_annotation():
         CategoryType,
         definition.selected_fields,
         source_model=Category,
-        field_map=definition.field_map,
         consumer_authored_fields=definition.consumer_authored_fields,
         interfaces=definition.interfaces,
     )

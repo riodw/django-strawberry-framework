@@ -49,9 +49,10 @@ only; this doc is canonical.
   plan), and the docstrings of everything it changed. Never approves anything.
 
 Worker-0 alone edits the plan and sets the main artifact's `Status:`; each Worker-1 alone writes
-its axis record, bar the `## Cross-axis` section other reviewers fill; Worker-2 writes the main
-artifact's `## Implementation (Worker-2)`, `## Defects`, `## Pending execution` and
-`## Iterations` entries ("Artifacts").
+its axis record, and nobody writes into another's: parallel reviewers rewrite their own records
+whole, so a section placed in someone else's record is lost; Worker-2 writes the main artifact's
+`## Implementation (Worker-2)`, `## Defects`, `## Pending execution` and `## Iterations`
+entries ("Artifacts").
 
 **Every dispatch is a fresh agent, carried forward by its record.** No worker is continued w/ its
 old context: a harness cannot compact a subagent, and an agent id dies w/ the session. Every
@@ -70,7 +71,8 @@ effort; that is an accepted fallback, never a reason to stop.
 file leads: callers, consumers, sibling flavors, tests at every tier, examples, docs, the
 installed Django / Strawberry / DRF sources in `.venv`. A review that stayed inside the target's
 own module has not been done. Only the edit is scoped: the target, the owner a root-cause fix
-requires, their tests, the ledger rows the item lands.
+requires (a caller outside the target when the defect lives there; its hunks are ledgered under
+this item like the target's), their tests, the ledger rows the item lands.
 
 ## Ground rules
 
@@ -134,9 +136,9 @@ docstring is the manual. "Shared" = the shared tree; "copy" = through
 
 | Script | Run by | Where | For |
 |---|---|---|---|
-| [workspace.py][workspace] | `run`, `prove`, `path`: every role; `baseline`, `release`, `audit`, `gate`, `gc`: Worker-0 | shared; runs everything else in copies | copies, cells, provenance, run ids, gate ("Workspace") |
+| [workspace.py][workspace] | `run`, `prove`, `path`, `audit` (read-only; Worker-0's is the binding check): every role; `baseline`, `release`, `gate`, `gc`: Worker-0 | shared; runs everything else in copies | copies, cells, provenance, run ids, gate ("Workspace") |
 | [review_plan.py][review-plan] | Worker-0 | shared (needs git) | `scope`, `plan`, `resume`, `reconcile` ("Plan") |
-| [review_inspect.py][review-inspect] | every Worker-1 | shared; `--output-dir <scratch>` | AST orientation, never imports ("Worker-1 reviews") |
+| [review_inspect.py][review-inspect] | every Worker-1; `--code-digest`: Comments roles, Worker-2 | shared; `--output-dir <scratch>` | AST orientation, never imports ("Worker-1 reviews"); prose-only identity ("Comments") |
 | [count_queries.py][count-queries] | Performance roles | copy | queries per cardinality + verdict ("Performance") |
 | [bench_plan_cache.py][bench-plan-cache] | Worker-0, Performance roles | copy | plan cache warm vs cleared ("Bench baseline") |
 | [bench_optimizer_walk.py][bench-optimizer-walk] | Worker-0, Performance roles | copy | the walk alone ("Bench baseline") |
@@ -184,7 +186,9 @@ Instrument, every one run through `workspace.py run` ("Workspace"), before and a
   `--compare <earlier.json>` the before/after delta. The permanent test pins the same shape w/
   `CaptureQueriesContext` or the `django_assert_num_queries` fixture; `QuerySet.explain()` for plan
   shape;
-- time: `timeit` median over a stated iteration count, or the repo benches
+- time: `timeit` median over a stated iteration count (the instrument for a pure-CPU saving
+  below bench spread that no query count shows: a scratch probe, median of N repeats, the
+  threshold in the Proof), or the repo benches
   [bench_plan_cache.py][bench-plan-cache] (plan cache warm vs cleared: cold clears the plan cache
   and the document-key memo), [bench_optimizer_walk.py][bench-optimizer-walk] (the walk alone),
   [bench_nested_fetch.py][bench-nested-fetch] (nested-connection strategies, w/ `--cell pg` in the
@@ -192,6 +196,9 @@ Instrument, every one run through `workspace.py run` ("Workspace"), before and a
   `--json`;
 - import time: [importtime_report.py][importtime-report] `--rounds 5 --json <scratch>/...`, each
   module's minimum across the rounds, never a single `python -X importtime` reading.
+
+A timing comparison on a shared machine interleaves its runs (before, after, before, after, the
+same count each) and compares medians; two back-to-back batches measure the machine's drift.
 
 The benches and `count_queries.py` bootstrap Django through [_bench_common.py][bench-common] and
 print its provenance header: package path, database `NAME` (the in-memory SQLite name for every
@@ -221,7 +228,9 @@ establish the rule applies before it is a defect; otherwise a rejection w/ trigg
 
 Instrument: the trace (`rg` for callers, importers, registrations, tests, docs; `check_citations.py
 --cited-by <path>::<Symbol>` for every standing doc and code comment citing a symbol a move would
-rename); a workspace probe for any behavior the reader is unsure of; for a suspected defect, HUNT's
+rename); a workspace probe for any behavior the reader is unsure of (the error policy masks a resolver's
+exception as `An unexpected error occurred`; `-o log_cli=true --log-cli-level=ERROR` on the
+pytest command shows the real one); for a suspected defect, HUNT's
 evidence record (the workspace run id, whose header carries copy, package `__file__` and database
 `NAME`; command, digests, collected/executed counts, reach assertion, positive control); for
 suspected duplication, DRY's finding record (contract + variation, sites + roles, challenges w/
@@ -233,12 +242,20 @@ fields and the negative control its gate passes.
 
 ### Comments
 
-Grades every docstring and comment in the file, and in every test the item touches, as one of:
+A review pass grades every docstring and comment in the target and in its own test modules
+(those named for it, graded whole), plus the prose any other test module holds about the target's
+symbols; stale prose about them in another package module is a lead for that module's item, in the
+report as `Routed: <path::Symbol> - <why>`, which Worker-0 carries into that item's dispatch or
+`## Decisions` when it is out of scope. A verify pass
+grades what the item-scoped diff wrote or moved, plus any docstring or comment in a touched
+symbol the change made false. Pre-existing prose elsewhere in a file the diff touches is not
+graded. Each is one of:
 
 - **true** — matches the body and its callers today;
 - **stale** — described a body that has since changed (the worst grade: it misleads);
 - **duplicates the code** — says what the next line says; delete it;
-- **process provenance** — names a spec, card, round, worker, review, "fix for", "legacy",
+- **process provenance** — names a spec (a pointer to a spec Decision is kept, START.md
+  "Style"; a bare `(spec-NNN)` is provenance), card, round, worker, review, "fix for", "legacy",
   "moved from", "now", "no longer" ([AGENTS.md][agents]); delete or rewrite as the present-tense
   rule.
 
@@ -254,7 +271,7 @@ First lines, by kind:
   the reviewer is the gate.
 
 A module first-line edit is a TREE.md edit, and that holds for test modules too (the `tests/` and
-fakeshop test trees render there): Worker-2 runs `uv run python scripts/build_tree_md.py` in the
+fakeshop test trees render there, each module in two rows): Worker-2 runs `uv run python scripts/build_tree_md.py` in the
 same change, since nothing regenerates it locally and CI's `build_tree_md.py --check` goes red on
 a stale file. The render takes its rows from the files git tracks (a new module renders once it
 is `git add`-ed) but each row's text from the working tree, so Worker-2 attributes every TREE.md
@@ -286,14 +303,21 @@ uv run python scripts/review_changed_python_diffs_against_head.py <ITEM_BASELINE
 ```
 
 Record carries: the symbol; the grade; the text before; the text after. Text after is the
-reviewer's proposal; Worker-2 may improve it and the verifier grades what landed.
+reviewer's proposal; Worker-2 may improve it and the verifier grades what landed, the whole
+docstring the changed line sits in. A prose-only change proves it moved no code w/
+`uv run python scripts/review_inspect.py --code-digest <ITEM_BASELINE>:<path> <path>` (exit 0,
+two equal digests; exit 1 when code moved; START.md "Instruments that lie" names this inverse
+proof), and owes nothing else:
+no before / after, no permanent test, no failability.
 
 ## Severity
 
 By consequence, across all axes:
 
 - **High** — correctness, security, data isolation or public-contract failure; a per-row or N+1
-  query on a hot path; a stale docstring on a public symbol that states the wrong contract.
+  query on a hot path; a stale docstring on a public symbol (exported through an `__all__`, or
+  documented in [docs/README.md][docs-readme] or [docs/GLOSSARY.md][glossary]) that states the
+  wrong contract.
 - **Medium** — a measured cost on a hot path without N+1; a rule enforced at the wrong layer; a
   stale comment on internal code.
 - **Low** — a bounded clarity or maintainability improvement; a cold-path cost; a comment that
@@ -413,9 +437,11 @@ hunk to the ledger, the cycle baseline, or an earlier pass of this item (the ite
 Worker-0 wrote to scratch); a hunk in none = external edit → stop, report to Worker-0, who
 reconciles w/ Rio. Same stop when the item-scoped diff shows hunks the worker didn't make.
 
-A test failing before the item's first edit is pre-existing: reproduce it in the item's `before`
-copy, record it under the artifact's `## Defects` w/ the failing command, route to Rio through
-Worker-0. It blocks the gate row, never the item.
+A test failing before the item's first edit is pre-existing: Worker-2 reproduces it in the item's
+`before` copy and records it under the artifact's `## Defects` w/ the failing command; one Worker-0
+meets outside a pass (at the gate, or in a check) goes to the plan's `## Decisions` instead, since
+Worker-0 writes no artifact section. Either way Worker-0 routes it to Rio. It blocks the gate row,
+never the item.
 
 ### Bench baseline
 
@@ -452,16 +478,22 @@ uv run python scripts/workspace.py path review/<item>/<role>
 pass `<n>`). `<command>` is what follows `uv run` (`pytest <node> --no-cov`,
 `python scripts/count_queries.py ...`); its relative paths resolve inside the copy. An address's
 first run syncs a copy from the shared tree as it stands; later runs reuse that copy as it stands,
-edits included; `--fresh` resyncs it. `path` prints the copy for reading or editing: a verifier
-reverting a hunk edits there, never in the shared tree.
+edits included; `--fresh` resyncs it. `path` prints the copy for reading or editing, syncing it first when
+unbound: a verifier reverting a hunk edits there, never in the shared tree. Reverse-apply a diff
+inside a copy w/ `patch -R -p1 -d <copy> < <diff>`; `git apply` run from inside a checkout
+resolves paths from that checkout's root and skips a hunk it cannot place w/o failing.
 
 Every run prints a provenance header on stderr: run id, copy, the package file it imports and its
 digest, cell and every database `NAME`, whether the copy is `fresh` or `modified`, whether the
 shared tree moved since the sync. The tool refuses to run (exit 125) when the package, the
 interpreter or a database resolves outside the copy, so a measurement cannot read the wrong
 tree. A record cites the run id; the run's full output stays in the flow's evidence folder, and
-`workspace.py audit <record>` binds every id a record cites. A copy holds no `.git`, so provenance
-comes from the header's digests, never a `HEAD` sha. `prove` runs `scripts/prove_failability.py`
+`workspace.py audit <record>` checks every id a record cites: a log entry exists and its package
+and databases lay in its copy. It prints each run's address and `fresh | modified`; whether that
+address is the record's own is Worker-0's reading. A copy holds no `.git`, so provenance
+comes from the header's digests, never a `HEAD` sha, and a full-suite run in a worker copy fails
+the two git-census rows of `tests/test_ci_governance.py` by construction; only the gate copy
+carries an index. `prove` runs `scripts/prove_failability.py`
 in its workspace form (`--workspace` = the copy, `--scratch-root` and `--json` in the evidence
 folder), so a proof never touches the shared tree and parallel verifiers never share pristine
 copies.
@@ -478,8 +510,11 @@ item closes, `gc review` at closeout. Workers never clean up.
 Item scratch root: `docs/review/temp-tests/<stem>/`, untracked, `<stem>` the artifact name w/o
 `rev-` and `.md` (`optimizer__walker`); each pass writes only under `<root>/<role>/` (its address's
 last segment), and Worker-0 writes the item-scoped diff to `<root>/diff/`. Copies exclude
-`temp-tests/`, so a scratch test's source is kept there and it runs from inside a copy
-(`workspace.py path`); a `--json` or other output path a copy command writes is absolute, under
+`temp-tests/`, so a scratch source is kept there. A probe script runs by its absolute path
+(`workspace.py run <address> -- python <root>/<role>/probe.py`), which edits no copy; a scratch
+pytest module needs the conftest and fixtures of the tree it probes, so a copy of it goes under
+the matching `tests/` subfolder of the copy (`workspace.py path`), never while a run in that copy
+is collecting. A `--json` or other output path a copy command writes is absolute, under
 `<root>/<role>/`. Worker-0 removes an item's scratch only after the item is `verified` or
 `blocked`.
 
@@ -519,17 +554,17 @@ leads, the Comments census. It is a lead list, never a finding:
 
 ```shell
 uv run python scripts/review_inspect.py <path> --output-dir <root>/<axis>/inspect \
-    --json <root>/<axis>/inspect.json
+    --json <root>/<axis>/<module stem>.json
 ```
 
 Then reads for its axis as "The three axes" describes, discharging every list entry w/ a finding, a
 `none` w/ the reason, or a rejection w/ its trigger.
 
-A finding that belongs to another axis is appended to THAT axis's record under
-`## Cross-axis (from <axis>)`, the one place a Worker-1 writes outside its own record (the owner
-re-reads its record before closing it); the owning Worker-1 grades it during verification like any
-of its own. A finding that spans axes (a consolidation that also removes a query) lives at the axis
-that owns the proof, cited from the other.
+A finding that belongs to another axis goes in the reviewer's OWN record under
+`## Cross-axis (for <axis>)`, w/ every common field; Worker-2 implements it w/ that axis, and that
+axis's verifier runs its Proof and grades it like one of its own. A finding that spans axes (a
+consolidation that also removes a query) lives at the axis that owns the proof, cited from the
+other.
 
 Each finding record:
 
@@ -546,7 +581,14 @@ Each finding record:
 - **Proof** — the command or check that shows the fix landed, written NOW, before any edit: the
   test node id and the count it asserts, the bench command and the direction the figure moves,
   the ruff select that goes quiet, the grade the rewritten text must earn. Verification runs this
-  line, so a proof that cannot be run is not a proof.
+  line verbatim (a static command, `rg`, `git`, `check_citations.py`, `--code-digest`, in the
+  shared tree; anything that imports the package or opens a database at the verify address; a
+  Comments Proof pairs its static command w/ the grade the text must earn), so a proof that
+  cannot be run is not a proof: self-contained (no shell variable
+  defined elsewhere in the record), `<n>` for the verify pass number in an address or path, the
+  node count the run must report (`3 passed`), a test that does not exist yet named in plain text
+  (`test_mixed_case_field in tests/optimizer/test_extension.py`), since `path::Symbol` to a missing
+  symbol fails `check_citations.py`.
 - **Freshness** — `git hash-object` of every file inspected, including files excluded from the
   finding on the strength of their body.
 
@@ -567,7 +609,7 @@ Mechanically, before Worker-2 reads anything:
 | a Performance finding w/o `Path class` or w/o a before number | back to that Worker-1 |
 | a finding w/o a runnable Proof line | back to that Worker-1 |
 | a defect w/o a contract row or a reachable input | `rejected as defect`; may stand as Mechanics |
-| a site cited by line number, or a symbol `check_citations.py --paths <record>` cannot resolve | back to that Worker-1 |
+| a Recommendation or text after that would land a line-number citation in code, tests or a standing doc, or a symbol `check_citations.py --paths <record>` cannot resolve | back to that Worker-1 |
 | a list entry neither discharged nor rejected | back to that Worker-1 |
 
 Twice back on the same row → `blocked` for Rio. All three records pass → Worker-0 copies
@@ -589,7 +631,8 @@ Per finding: attribute hunks on every dirty path first ("Baseline and ownership"
 in the `before` copy where the record's Proof asks for a number; apply the change to the shared
 tree by hand; measure "after" in `implement` w/ `--fresh`; write the permanent test at the
 strongest reachable tier ([AGENTS.md][agents]: live GraphQL usage against fakeshop first, then
-example tests, then package tests); run it focused w/ `--no-cov`. A live-tier test needing a
+example tests, then package tests); run it focused w/ `--no-cov` (node ids or a module; `-k` and `-n0` may narrow it, no
+other flag). A live-tier test needing a
 fakeshop fixture that does not exist lands at the strongest existing tier and Worker-2 names the
 missing fixture in its report, which Worker-0 records under `## Decisions`; never a new example
 model inside an item. Every gate a finding relies on must be shown able to fail
@@ -628,9 +671,13 @@ handoffs, Performance and Mechanics at once, Comments after those two report.
 ### Worker-1 verifies
 
 Expectation-first: the Proof line written before the edit is the expectation. Each verifier, on
-its own axis:
+its own axis, first confirms the shared tree still carries the change it was sent to grade:
+`git diff <ITEM_BASELINE> -- <paths>` hashes equal to `<root>/diff/pass-<n>.diff` (a mismatch →
+report to Worker-0, grade nothing). Then it:
 
-1. Runs every Proof line in its record in its own copy and records the result beside it; reproduces
+1. Runs every Proof line in its record, those the other records hold for its axis under
+   `## Cross-axis (for <axis>)`, and on a re-pass the ones earlier passes verified, in its own
+   copy, and records the result beside it; reproduces
    every number Worker-2 reported for its axis from the recorded command; a Performance verifier
    also confirms the "before" figure against the bench baseline or a read-only run at the item's
    `before` address (never `--fresh`, never edited).
@@ -640,7 +687,8 @@ its own axis:
    production hunk inside its copy and show the pre-fix behavior was the worse one); the Comments
    verifier grades every docstring and comment Worker-2 wrote or moved.
 3. Attacks the change on its axis: the other cardinality, the other flavor, the other cell, the
-   caller Worker-2 did not name.
+   caller Worker-2 did not name. A passing attack is recorded w/ its run id and owes nothing; a
+   failing one is a new finding.
 4. Judges every `disputed` finding on its reason; a standing disagreement is `blocked` at once w/
    both positions recorded and a `Blocked:` line in the report, whatever the record's `Status:`,
    never a third pass to break it.
@@ -655,14 +703,19 @@ Appends `## Verification (<axis>)` to its record w/ the checks and results, sets
 `Status: verified` or `Status: revision-needed` w/ concrete named gaps, reports to Worker-0.
 Verifiers never edit production code or tests; a verifier that finds a new problem on its axis
 records it under `## Findings` as a new finding labelled `verify <n>` w/ a Proof line and returns
-the record `revision-needed`; one on another axis is a named gap Worker-0 routes to that axis.
+the record `revision-needed`; one on another axis is a named gap Worker-0 routes to that axis's
+next verifier, which makes it a `verify <n>` finding in its own record when it rides on the
+item's change (the change made it false, or it sits in a symbol the item touched). A gap outside
+that reach, a cost the change newly reaches outside the item's fence included, is no revision: it
+goes to the plan's `## Decisions` w/ a named owner.
 
 ### Worker-0 closes the item
 
 Any axis `revision-needed` → the artifact `Status: revision-needed`, a fresh Worker-2 from the
 artifact and its handoffs, then fresh verifiers on the axes that failed and on any axis a verifier
-named a gap on (Comments too whenever the re-pass touches prose); two failed re-passes → `blocked`
-for Rio. All three `verified` → ledger rows (Worker-2's proposal, checked against the item-scoped
+named a gap on (Comments too whenever the re-pass touches prose; a prose-only re-pass owes
+Comments alone, its `--code-digest` identity the evidence the other axes stand); two failed
+re-passes → `blocked` for Rio. All three `verified` → ledger rows (Worker-2's proposal, checked against the item-scoped
 diff), `Result:` and `Verification:` lines on the plan item, tick, remove item scratch by explicit
 path, `workspace.py release review/<item>`, advance (`autonomous`) or report and wait
 (`pause-after-each-item`). Worker-0 never regrades a verifier.
@@ -710,7 +763,7 @@ routes nowhere. Absent when none.
 
 ## Iterations
 
-Later passes append here; nobody erases prior reasoning.
+Created by the first re-pass; later passes append; nobody erases prior reasoning.
 ```
 
 Axis record, written by its Worker-1 only:
@@ -721,9 +774,12 @@ Axis record, written by its Worker-1 only:
 Status: reviewing | findings-recorded | no-findings | verified | revision-needed
 Run: <release> <date>-<n>
 
+Baselines: CYCLE_BASELINE=<sha> ITEM_BASELINE=<sha>
+
 ## Trace
 
-What was read, callers followed, cells covered; fingerprints.
+What was read, callers followed, cells covered; fingerprints (a finding's Freshness then lists
+only files beyond these).
 
 ## Findings
 
@@ -735,9 +791,10 @@ One record each (common fields + axis fields). `None.` under an empty severity.
 
 Each w/ the reason and the trigger that reopens it.
 
-## Cross-axis (from <axis>)
+## Cross-axis (for <axis>)
 
-Findings other reviewers placed here; graded at verification.
+Only when there are any: findings this reviewer made on another axis, one heading per receiving
+axis; that axis's verifier grades them.
 
 ## Verification (<Axis>)
 
@@ -770,7 +827,9 @@ Every item but the gate verified or `blocked` + inventory re-reconciled → Work
 `uv run python scripts/workspace.py gate review`, every `## Pending execution` command from every
 artifact as listed, and the bench baseline commands w/ `<phase>` = `gate`, delta recorded. `gate`
 syncs a gate copy carrying its own git index of `HEAD` (the suite's CI-governance tests ask git for
-the committable file list) and runs the suite three times, as CI's jobs do: the full default suite
+the committable file list) and runs CI's jobs: the `lint` job's commands in the workflow's order
+(`workspace.py`'s `LINT_COMMANDS`, held to `django.yml` by a test), then the suite three times: the
+full default suite
 (package coverage 100%); the `sharded` cell w/o coverage, since sharded-only tests skip by default
 and the default run owns the floor; the `pg` cell, only the database-touching tests, on the gate
 copy's own database. It writes `gate-<run id>.json` to the evidence folder, bound to
@@ -782,10 +841,11 @@ Record, per suite, failures, coverage, skips, xfails, collected/selected counts 
 change to package source, tests, fixtures, pytest or coverage config, dependencies or mode
 invalidates it; prose does not. Failure in a path an item touched, or of a `proof:` command → that
 item back to Worker-2 and its verifiers; a failing `gate:` command reopens no item; a failure
-reproduced against `git show HEAD:` of its test and target → pre-existing, `## Defects`, gate row
-`blocked` for Rio; environment failure → recorded precisely, `blocked`.
+reproduced against `git show HEAD:` of its test and target → pre-existing, `## Decisions`, gate
+row `blocked` for Rio; environment failure → recorded precisely, `blocked`.
 
-Worker-0 fills `## Outcomes` BEFORE deleting anything. Per item: findings per axis w/ severity and
+Worker-0 fills `## Outcomes` BEFORE `gc`: an item's scratch is gone once it closes, but its
+plan fields and the evidence folder (run logs, proofs, gate results) stand until `gc`. Per item: findings per axis w/ severity and
 disposition; every number before / after w/ its command; owner moves; consolidations w/ their
 challenge counts; comments regraded; defects fixed w/ their permanent tests; rejections w/
 triggers; deferred Lows. Per run: bench baseline vs gate figures; decisions owed to Rio

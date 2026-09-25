@@ -16,6 +16,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts import workspace
 
@@ -722,6 +723,33 @@ def test_gate_copy_git_lists_what_the_shared_tree_lists_and_reports_its_changes(
         "--exclude-standard",
     )
     assert _git(gate_dir, "status", "--short") == _git(repo, "status", "--short")
+
+
+def test_the_lint_gate_suite_runs_the_ci_lint_job_commands_in_order() -> None:
+    """``gate``'s lint suite is the ``lint`` job of ``django.yml``, command for command.
+
+    Every ``run:`` line of that job past its setup (``uv python install``,
+    ``uv sync``) is a ``uv run`` command, and the suite runs each one without the
+    prefix, in the workflow's order; a step added to the workflow and not here
+    would let a gate pass that CI fails.
+    """
+    workflow = workspace.REPO_ROOT / ".github" / "workflows" / "django.yml"
+    job = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]["lint"]
+    lines = [
+        line.strip()
+        for step in job["steps"]
+        for line in str(step.get("run", "")).splitlines()
+        if line.strip()
+    ]
+    setup = [line for line in lines if line.startswith("uv python install") or line == "uv sync"]
+    commands = [line for line in lines if line not in setup]
+
+    assert len(setup) == 2
+    assert all(line.startswith("uv run ") for line in commands)
+    assert tuple(line.removeprefix("uv run ") for line in commands) == workspace.LINT_COMMANDS
+    arguments, cell = workspace.GATE_SUITES["lint"]
+    assert arguments == ("sh", "-exc", "\n".join(workspace.LINT_COMMANDS))
+    assert cell == "default"
 
 
 def test_summarize_suite_reads_summary_collected_and_coverage() -> None:

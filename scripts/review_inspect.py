@@ -46,6 +46,16 @@ Usage::
     uv run python scripts/review_inspect.py --all --output-dir <scratch>/inspect \
         --json <scratch>/inspect/package.json
 
+``--code-digest SOURCE...`` prints one ``sha256:<hex>  <source>`` line per
+source and writes nothing: the digest of the source's AST with every docstring
+statement removed and no line or column attributes, so it moves with executable
+code and never with a docstring, a comment or layout. A ``<rev>:<path>`` source
+is read from git (``git show``). With two or more sources the exit code is ``1``
+when their digests differ, so a prose-only change proves itself with one command
+that fails when code moved::
+
+    uv run python scripts/review_inspect.py --code-digest <ITEM_BASELINE>:<path> <path>
+
 Row caps apply only to the single-file text overview; ``--no-cap`` lifts them and
 ``--all`` never caps. A capped section prints the hidden and total row counts.
 Exit code ``0`` on success, ``1`` on a SyntaxError, ``2`` on a caller-correctable
@@ -634,6 +644,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Inspect every .py file under django_strawberry_framework/ recursively (never capped).",
     )
     parser.add_argument(
+        "--code-digest",
+        nargs="+",
+        metavar="SOURCE",
+        default=None,
+        help="Print the docstring-stripped AST digest of each file or <rev>:<path>; write nothing.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("docs/shadow"),
@@ -806,6 +823,68 @@ def _remove_docstring_statements(source: str, tree: ast.AST) -> str:
             if 0 <= index < len(lines):
                 lines[index] = "\n" if lines[index].endswith("\n") else ""
     return "".join(lines)
+
+
+def code_digest(source: str) -> str:
+    """Return ``sha256:<hex>`` of ``source``'s AST without docstrings or positions.
+
+    Raises:
+        SyntaxError: ``source`` does not parse.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        documented = isinstance(
+            node,
+            ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+        )
+        if documented and _docstring_expr(node) is not None:
+            node.body = node.body[1:]
+    dumped = ast.dump(tree, include_attributes=False)
+    return f"sha256:{hashlib.sha256(dumped.encode('utf-8')).hexdigest()}"
+
+
+def _read_digest_source(source: str) -> str:
+    """Return a ``--code-digest`` source's text: a file, else ``<rev>:<path>`` from git."""
+    path = Path(source)
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    if ":" not in source:
+        msg = f"{source} is neither a file nor <rev>:<path>"
+        raise FileNotFoundError(msg)
+    completed = subprocess.run(
+        ["git", "show", source],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        msg = f"git show {source} failed: {completed.stderr.strip()}"
+        raise FileNotFoundError(msg)
+    return completed.stdout
+
+
+def _print_code_digests(sources: Sequence[str]) -> int:
+    """Print one digest line per source.
+
+    Returns:
+        ``0`` when every digest is equal, ``1`` when two differ or a source fails
+        to parse, ``2`` on a missing source.
+    """
+    digests: set[str] = set()
+    for source in sources:
+        try:
+            text = _read_digest_source(source)
+        except FileNotFoundError as error:
+            print(error, file=sys.stderr)
+            return 2
+        try:
+            digest = code_digest(text)
+        except SyntaxError as error:
+            print(f"{source}: SyntaxError: {error}", file=sys.stderr)
+            return 1
+        print(f"{digest}  {source}")
+        digests.add(digest)
+    return 0 if len(digests) == 1 else 1
 
 
 def _docstring_statement_ranges(tree: ast.AST) -> list[_LineRange]:
@@ -2163,6 +2242,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         caller-correctable error.
     """
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if args.code_digest is not None:
+        if args.all or args.target is not None:
+            print(
+                "--code-digest takes its sources alone, without a target or --all.",
+                file=sys.stderr,
+            )
+            return 2
+        return _print_code_digests(args.code_digest)
     if args.all and args.target is not None:
         print("Pass either --all or a single target file, not both.", file=sys.stderr)
         return 2

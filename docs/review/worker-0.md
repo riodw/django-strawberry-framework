@@ -21,7 +21,9 @@ command at each; a quoted section name is REVIEW.md's and owns the command's for
 4. First run of the plan: fill `CYCLE_BASELINE` and the untracked listing, once. Later runs: the
    `Drift:` line `resume` wrote stands ("Baseline and ownership").
 5. `## Bench baseline` holds no figures → run its rows at `<phase>` = `baseline` before any item
-   binds a copy, fill them ("Bench baseline"), then `workspace.py release review/bench`.
+   binds a copy, fill them ("Bench baseline"), then `workspace.py release review/bench`. Each row
+   runs as its own literal command line: a shell variable holding the `workspace.py run` prefix
+   is one word to zsh, so every row exits 127.
 6. Plan `Status: in-progress`. Items carried into this run with `Status: out-of-scope` →
    `pending`. Drive the run's in-scope items in plan order by "Resume".
 
@@ -107,8 +109,13 @@ blocked ones ("Integration passes").
   `Returned: <axis | Worker-2> - <row>; handoffs <count in the file it writes>` on the item. The
   same row failing twice, or a second failed re-pass → `blocked`.
 - An unattributed hunk stops the item until Rio reconciles it; `autonomous` records it `blocked`
-  and advances. A pre-existing failure goes under the artifact's `## Defects` and into
-  `## Decisions`; it blocks the gate row, never the item.
+  and advances. A pre-existing failure goes into `## Decisions` (Worker-2 also records one it
+  reports under the artifact's `## Defects`); it blocks the gate row, never the item.
+- A reviewer's `Routed:` lead for another item → a `Routed:` line in that item's dispatch, or
+  `## Decisions` w/ its owner when the item is out of this run's scope.
+- A verifier's named gap on another axis → that axis owes a verify pass, dispatched w/ a
+  `Routed gap:` line; a gap the receiving verifier puts outside the item's reach →
+  `## Decisions` w/ its named owner.
 - A sensitive finding ("Ground rules") is `blocked` at once and its scratch root stays until Rio
   clears it. `blocked` → `Blocked:` on the item, the decision into `## Decisions`,
   `workspace.py release review/<item>`, advance.
@@ -131,6 +138,7 @@ Verify:    record docs/review/rev-<stem>.<axis>.md, item diff <root>/diff/pass-<
 ```
 
 Add a line only when due: `Blocked siblings: <items>`; `Reopened: <moved paths>`;
+`Routed gap: <gap> (from <axis> verify <n>)`;
 `Re-dispatch: interrupted | returned: <row> | revision-needed, gaps in pass <n-1>`;
 `Cut-off pass hunks: <root>/diff/interrupted.diff`; `Before copy lost: take "before" figures in
 your own copy after reverse-applying <latest item diff>`.

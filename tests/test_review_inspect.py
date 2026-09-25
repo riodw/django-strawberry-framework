@@ -135,6 +135,64 @@ def test_text_mode_writes_only_the_overview_and_a_line_preserving_stripped_copy(
     assert "not canonical" not in overview
 
 
+def test_code_digest_moves_with_code_and_never_with_prose(tmp_path: Path, capsys) -> None:
+    """A docstring, comment or layout edit keeps the digest; an executable edit moves it."""
+    original = 'def f(x):\n    """Return x."""\n    return x  # plain\n'
+    reworded = 'def f(x):\n    """Return ``x``\n\n    unchanged.\n    """\n\n    return x\n'
+    changed = 'def f(x):\n    """Return x."""\n    return x + 1\n'
+    paths = []
+    for name, text in (("a.py", original), ("b.py", reworded), ("c.py", changed)):
+        paths.append(tmp_path / name)
+        paths[-1].write_text(text, encoding="utf-8")
+
+    assert review_inspect.main(["--code-digest", *map(str, paths[:2])]) == 0
+    assert review_inspect.main(["--code-digest", *map(str, paths)]) == 1
+
+    digests = [line.split()[0] for line in capsys.readouterr().out.splitlines()[2:]]
+    assert len(digests) == 3
+    assert digests[0] == digests[1]
+    assert digests[0] != digests[2]
+
+
+def test_code_digest_reads_a_revision_path_from_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``<rev>:<path>`` is the committed text, digested like a file."""
+    committed = "X = 1\n"
+    (tmp_path / "m.py").write_text(committed, encoding="utf-8")
+    for command in (
+        ["init", "-q"],
+        ["add", "m.py"],
+        [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "m",
+        ],
+    ):
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                *command,
+            ],
+            check=True,
+        )
+    (tmp_path / "m.py").write_text("X = 2\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert review_inspect._read_digest_source("HEAD:m.py") == committed
+    with pytest.raises(FileNotFoundError):
+        review_inspect._read_digest_source("HEAD:missing.py")
+    with pytest.raises(FileNotFoundError):
+        review_inspect._read_digest_source("no-such-file.py")
+
+
 def test_every_row_names_its_enclosing_symbol_or_module_line(tmp_path: Path) -> None:
     _target, out_dir = _run(tmp_path)
     overview = (out_dir / f"{STEM}.overview.md").read_text(encoding="utf-8")

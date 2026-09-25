@@ -18,6 +18,10 @@ package outside the tree holding this script, the same rule
 ``_bench_common.bootstrap_fakeshop_django`` enforces for the benches. Django
 is never configured, so the figure is the package import alone.
 
+``--top`` limits the printed tables only. The ``--json`` report's ``rows`` hold
+every package module by cumulative time, so a record can cite the module it
+changed however far down the ranking it sits.
+
 The provenance header and the ``--json`` report carry the
 ``_bench_common.package_digest`` of that imported package and the git blob
 ids of this script and ``_bench_common.py``; two reports measured the same
@@ -121,7 +125,7 @@ def min_across_rounds(rounds: list[list[ImportRow]]) -> dict[str, dict[str, int]
 
 
 def summarize(merged: dict[str, dict[str, int]], top: int) -> dict[str, Any]:
-    """Build the report body: package totals, top package modules, top-level groups."""
+    """Build the report body: package totals, every and top package modules, top-level groups."""
     package_rows = {name: times for name, times in merged.items() if is_package_module(name)}
     groups: dict[str, int] = {}
     for name, times in merged.items():
@@ -130,14 +134,19 @@ def summarize(merged: dict[str, dict[str, int]], top: int) -> dict[str, Any]:
         top_level = name.split(".", 1)[0]
         groups[top_level] = groups.get(top_level, 0) + times["self_us"]
 
-    def _rows(items: dict[str, dict[str, int]], key: str) -> list[dict[str, Any]]:
+    def _rows(
+        items: dict[str, dict[str, int]],
+        key: str,
+        limit: int | None = top,
+    ) -> list[dict[str, Any]]:
         ordered = sorted(items.items(), key=lambda item: (-item[1][key], item[0]))
-        return [{"module": name, **times} for name, times in ordered[:top]]
+        return [{"module": name, **times} for name, times in ordered[:limit]]
 
     return {
         "package_cumulative_us": package_rows.get(PACKAGE, {}).get("cumulative_us"),
         "package_modules": len(package_rows),
         "package_self_us": sum(times["self_us"] for times in package_rows.values()),
+        "all_by_cumulative": _rows(package_rows, "cumulative_us", None),
         "top_by_cumulative": _rows(package_rows, "cumulative_us"),
         "top_by_self": _rows(package_rows, "self_us"),
         "top_level_self": [
@@ -250,7 +259,7 @@ def main() -> int:
                 tool="importtime_report",
                 provenance=provenance,
                 params={"rounds": args.rounds, "top": args.top, "warmup": args.warmup},
-                rows=body["top_by_cumulative"],
+                rows=body["all_by_cumulative"],
                 failures=[],
             )
             | {"summary": body},

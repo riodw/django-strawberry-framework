@@ -306,10 +306,11 @@ _GATE_ITEM = Item(
     label="Final gate",
     artifacts=(),
     extra=(
-        "Runs: `uv run python scripts/workspace.py gate review` (default, `FAKESHOP_SHARDED=1` "
-        'and Postgres suites in a gate copy that keeps a git index, REVIEW.md "Final gate and '
-        'closeout"), each w/ its own counts; every `## Pending execution` command from every '
-        "artifact; the `## Bench baseline` commands at `<phase>` `gate`, delta recorded",
+        "Runs: `uv run python scripts/workspace.py gate review` (CI's lint job, then default, "
+        "`FAKESHOP_SHARDED=1` and Postgres suites in a gate copy that keeps a git index, "
+        'REVIEW.md "Final gate and closeout"), each w/ its own counts; every '
+        "`## Pending execution` command from every artifact; the `## Bench baseline` "
+        "commands at `<phase>` `gate`, delta recorded",
     ),
 )
 

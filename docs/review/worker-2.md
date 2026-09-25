@@ -31,8 +31,10 @@ Worker-0 names the target, the main artifact, the three axis records, the plan, 
    section's last paragraph); it never stops the item.
 3. **Implement Performance, then Mechanics, then Comments; per finding:**
    1. "Before", when the Proof needs a number:
-      `workspace.py run review/<item>/before [--cell <cell>] -- <the Proof's command>`. Before copy
-      lost: before your first edit, reverse-apply the item diff (`git apply -R`) inside the copy
+      `workspace.py run review/<item>/before [--cell <cell>] -- <the Proof's command>`; a scratch
+      probe runs by its absolute path under `<root>/implement/`, never copied in. Before copy
+      lost: before your first edit, reverse-apply the item diff
+      (`patch -R -p1 -d <copy> < <diff>`) inside the copy
       `workspace.py path review/<item>/implement` prints, take every "before" there w/o `--fresh`;
       the first `--fresh` run restores it.
    2. Edit the shared tree by hand, at the owner. Before renaming, moving or rewording a cited
@@ -42,7 +44,8 @@ Worker-0 names the target, the main artifact, the three axis records, the plan, 
       command>`, in every cell the Proof reaches ("Database cells").
    4. Permanent test at the strongest reachable tier ([AGENTS.md][agents] test placement; the
       missing-fixture rule in "Worker-2 implements"), at the node id the Proof names when it names
-      one; then `uv run pytest <node> --no-cov` in the shared tree.
+      one; then `uv run pytest <node> --no-cov` in the shared tree (node ids or a module; `-k`
+      and `-n0` may narrow it, no other flag).
    5. Failability for every gate the finding relies on: a manifest under `<root>/implement/`
       (format: [prove_failability.py][prove-failability] docstring; usually a `pre_image` of
       `git show <ITEM_BASELINE>:<path>` w/ `expect_failing` = the Proof's nodes), run by
@@ -54,6 +57,9 @@ Worker-0 names the target, the main artifact, the three axis records, the plan, 
       Low whose file no higher finding changes, "Severity"); `disputed: <reason>` (implement
       nothing; the verifier judges). A better shape than the Recommendation is implemented and
       recorded w/ why; the Proof line still governs. No silent skip.
+   7. A prose-only finding (a docstring or comment) owes steps 2 and 6 and the inverse proof
+      alone: `uv run python scripts/review_inspect.py --code-digest <ITEM_BASELINE>:<path> <path>`,
+      both digests equal ("Comments"); no before / after, permanent test or failability.
 4. **Lint the touched paths**, named explicitly, in this order, repeated until every gate in
    "Worker-2 implements" passes:
    ```shell
@@ -72,8 +78,8 @@ Worker-0 names the target, the main artifact, the three axis records, the plan, 
    `## Iterations` entry headed `Implement pass <n>` that answers each named gap first. Fields:
    "Worker-2 implements" last paragraph, every run id w/ its exact command, and a
    `Proposed owned changes` table (Path | Item | Axis | Symbols changed; one row per tracked edit
-   or new file). Defects fixed or pre-existing go under `## Defects` ("Artifacts"). End w/
-   `Handoff:`.
+   or new file; on a re-pass only the rows this pass adds or changes). Defects fixed or
+   pre-existing go under `## Defects` ("Artifacts"). End w/ `Handoff:`.
 8. **Report to Worker-0**, one line each: dispositions per axis per finding; files changed; before
    and after run ids; permanent test node ids w/ focused results; proofs w/ verdicts and run ids;
    the lint gate results; where the proposed ledger rows sit; bench deltas for `## Bench baseline`;
@@ -85,7 +91,8 @@ Worker-0 names the target, the main artifact, the three axis records, the plan, 
 - Run pytest beyond a focused `--no-cov` node in the shared tree; everything else goes through
   `workspace.py run` or `prove` at your two addresses.
 - Run ruff or `check_trailing_commas.py` on `.` or w/o paths.
-- Run `baseline`, `release`, `audit`, `gate` or `gc`; delete any scratch or copy.
+- Run `baseline`, `release`, `gate` or `gc` (`audit` is read-only, yours to check your run ids);
+  delete any scratch or copy.
 - Touch a hunk you cannot attribute; stash, revert or restore anything in the shared tree.
 - Add a fakeshop model inside an item; weaken a correctness or authorization boundary to buy a
   number; land a client-reachable isolation or authorization reproducer in a tracked file (stop,

@@ -807,6 +807,7 @@ def test_only_refuses_a_selector_that_matches_nothing(selector):
 def test_xdist_progress_lines_are_not_mistaken_for_failing_node_ids():
     stdout = (
         "[gw3] [ 50%] FAILED tests/test_x.py::test_progress_line_only\n"
+        "=========================== short test summary info ============================\n"
         "FAILED tests/test_x.py::test_real - AssertionError: boom\n"
         "FAILED tests/test_x.py::test_real - a duplicate summary line\n"
         "ERROR tests/test_y.py - collection blew up\n"
@@ -818,6 +819,25 @@ def test_xdist_progress_lines_are_not_mistaken_for_failing_node_ids():
     assert failed == ("tests/test_x.py::test_real",)
     assert errored == ("tests/test_y.py",)
     assert "1 failed, 1 error, 40 passed" in summary
+
+
+def test_captured_log_records_above_the_short_summary_are_not_counted_as_errors():
+    stdout = (
+        "F.                                                                       [100%]\n"
+        "=================================== FAILURES ===================================\n"
+        "------------------------------ Captured log call -------------------------------\n"
+        "ERROR    django.request:log.py:241 Internal Server Error: /graphql/\n"
+        "FAILED    a logger named FAILED:x.py:1 a record, not a row\n"
+        "=========================== short test summary info ============================\n"
+        "FAILED tests/test_x.py::test_real - assert False\n"
+        "1 failed, 1 passed in 0.04s\n"
+    )
+
+    failed, errored, summary = prove_failability._parse_run_output(stdout)
+
+    assert failed == ("tests/test_x.py::test_real",)
+    assert errored == ()
+    assert summary == "1 failed, 1 passed in 0.04s"
 
 
 @pytest.mark.parametrize(
@@ -2481,7 +2501,10 @@ def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
             encoding="utf-8",
         )
         return types.SimpleNamespace(
-            stdout=f"FAILED {COUNT_ROW} - assert 6 == 1\n1 failed in 0.1s\n",
+            stdout=(
+                "=========================== short test summary info ============================\n"
+                f"FAILED {COUNT_ROW} - assert 6 == 1\n1 failed in 0.1s\n"
+            ),
             stderr="",
             returncode=1,
         )

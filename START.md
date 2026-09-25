@@ -162,8 +162,8 @@ CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruf
 | `check_spec_glossary.py --spec <path>` | spec's `-terms.csv` → real glossary anchors; `--auto-link` rewrites inline mentions (NEXT.md) |
 | `check_alpha_parity.py` | every non-internal Alpha card carries parity link + justification |
 | `prove_failability.py <manifest.json>` | mutate boundary, run, restore, prove by byte compare. THE way to prove a test can fail |
-| `workspace.py run <flow>/<item>/<role> [--cell] -- <cmd>` | agentflow workspace copies (REVIEW, HUNT, DRY): reusable per-flow pool outside the tree, exact mirror of the shared tree + own `.venv` + own databases (per-copy Postgres DB), clean env, observed provenance header + run id; `prove`, `path`; Worker-0's `baseline`/`release`/`audit`/`gate`/`gc`. Never copy the tree by hand |
-| `review_inspect.py <file> --output-dir <scratch>/inspect` | AST-only overview + stripped source (`--all` = package); never imports. Always pass `--output-dir` into the session scratchpad: the script's default writes flat into `docs/shadow/`, whose four subfolders each have one owner (AGENTS.md) |
+| `workspace.py run <flow>/<item>/<role> [--cell] -- <cmd>` | agentflow workspace copies (REVIEW, HUNT, DRY): reusable per-flow pool outside the tree, exact mirror of the shared tree + own `.venv` + own databases (per-copy Postgres DB), clean env, observed provenance header + run id; `prove`, `path`, read-only `audit`; Worker-0's `baseline`/`release`/`gate` (CI's lint job + the three suites)/`gc`. Never copy the tree by hand |
+| `review_inspect.py <file> --output-dir <scratch>/inspect` | AST-only overview + stripped source (`--all` = package); never imports. `--code-digest <rev>:<path> <path>` = docstring-stripped AST digest, the one-command inverse proof for a prose-only edit. Always pass `--output-dir` into the session scratchpad: the script's default writes flat into `docs/shadow/`, whose four subfolders each have one owner (AGENTS.md) |
 | `review_historical_package_snapshot_at_commit.py <sha>` | package snapshot at commit → `docs/shadow/current/` |
 | `review_changed_python_diffs_against_head.py <sha>` | stripped per-file diffs commit→HEAD → `docs/shadow/old|new|diff/` |
 | `bug_hunt.py` | generates `docs/bug_hunt/bug_hunt-<ver>.md` progress file (HUNT.md) |
@@ -255,7 +255,7 @@ Shared mechanics:
 
 Each produced a clean-looking pass while measuring nothing. Check instrument before reading.
 
-- **zsh word-splitting.** `for f in $FILES` = ONE iteration, whole string; grep errs to stderr; sweep prints nothing ≡ clean repo. Array: `files=(${(f)"$(...)"})`. Quote globs (unmatched glob aborts). Always print population size. No `timeout` here. Multi-file sweeps: `uv run python - <<'PY'` heredoc, assert the count.
+- **zsh word-splitting.** `for f in $FILES` = ONE iteration, whole string; grep errs to stderr; sweep prints nothing ≡ clean repo. Array: `files=(${(f)"$(...)"})`. Quote globs (unmatched glob aborts). Always print population size. No `timeout` here. A word starting `=` is a command lookup (`echo ======` errors: "= not found"); quote it. Multi-file sweeps: `uv run python - <<'PY'` heredoc, assert the count.
 - **Shared sqlite cursor.** One cursor for outer `sqlite_master` loop + inner query → outer result set discarded after table 1 → "no hits, 0 skipped". `.fetchall()` outer first; print tables/columns examined; positive control (rendered artifact carries the string ⇒ DB does).
 - **Positive-vocabulary census.** Sweep for `only`/`sole`/`no other` misses `every`/`all`/`each`. Both polarities. Don't swap a rotted census for a fresh one: quantify over the file's own closed set (`_meta.local_fields`), not a population it can't see.
 - **`git log -S<symbol>`** fail-open for "when did this ship" if symbol had an earlier name. Attribution from it = hypothesis.

@@ -43,10 +43,11 @@ Worker-0 commands
         the copy had been edited or the shared tree had moved. An id with no
         log entry, or whose package or database lay outside its copy, fails
         the audit.
-    ``gate <flow> [--suites default,sharded,pg]``
+    ``gate <flow> [--suites lint,default,sharded,pg]``
         Run the final gate suites in a gate copy that carries a git index, as
-        CI's jobs do: the full default suite (coverage floor), the sharded
-        suite and the Postgres database-touching suite. The result is written
+        CI's jobs do: the lint job's commands in its order, the full default
+        suite (coverage floor), the sharded suite and the Postgres
+        database-touching suite. The result is written
         to ``evidence/gate-<run id>.json`` and bound to the ``git stash
         create`` sha, the blob ids of ``pyproject.toml`` and ``uv.lock`` and
         each suite's cell.
@@ -222,8 +223,26 @@ PG_PASSWORD = "fakeshop"  # the throwaway compose container's documented credent
 PG_PORT = "5432/tcp"
 COMPOSE_PROJECT = "dsf-ws-postgres"
 
-#: Each gate suite: pytest arguments and the cell it runs in (REVIEW.md "Final gate").
+#: The ``lint`` job of ``.github/workflows/django.yml``, one command per ``run:`` line and in
+#: its order, each without its ``uv run`` prefix. A package change that passes every pytest
+#: suite still reddens CI through a stale generated doc or a layout rewrite, so the gate runs
+#: these too; ``tests/test_workspace.py`` holds this list to the workflow.
+LINT_COMMANDS = (
+    "ruff check .",
+    "ruff format --check .",
+    "python scripts/check_trailing_commas.py --check",
+    "python scripts/check_citations.py --check",
+    "python scripts/build_kanban_tracked_path_constants.py --check",
+    "python scripts/build_kanban_md.py --check",
+    "python scripts/build_kanban_html.py --check",
+    "python scripts/build_glossary_md.py --check",
+    "python scripts/build_tree_md.py --check",
+)
+
+#: Each gate suite: the command after ``uv run`` and the cell it runs in (REVIEW.md "Final
+#: gate"). ``sh -ex`` stops the lint suite at the first failing command and echoes each one.
 GATE_SUITES: dict[str, tuple[tuple[str, ...], str]] = {
+    "lint": (("sh", "-exc", "\n".join(LINT_COMMANDS)), "default"),
     "default": (("pytest",), "default"),
     "sharded": (("pytest", "-o", "addopts=-v -n auto --dist loadscope"), "sharded"),
     "pg": (
@@ -1618,7 +1637,8 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
         _write_json(result_path, result)
     print(f"gate {layout.flow}: bound to {bound_to}; result {result_path}")
     for suite, entry in result["suites"].items():
-        verdict = entry.get("unverified") or f"exit {entry['exit']}: {entry.get('summary')}"
+        summary = entry.get("summary") or ("passed" if entry["exit"] == 0 else "failed")
+        verdict = entry.get("unverified") or f"exit {entry['exit']}: {summary}"
         print(f"  {suite:<8} {entry['run_id']}  {verdict}")
         for line in entry.get("coverage", []):
             print(f"           {line}")
@@ -1738,7 +1758,10 @@ def _cmd_baseline(args: argparse.Namespace) -> int:
         state["items"][ref.item] = {"item_baseline": sha, "at": _now()}
         _write_json(layout.state_path, state)
     print(f"ITEM_BASELINE={sha}")
-    print(f"before: {address} -> {binding.directory} ({manifest['tree_digest']})")
+    print(
+        f"before: {address} -> {binding.directory} "
+        f"(tree {manifest['tree_digest']}, package {manifest['package_digest']})",
+    )
     return 0
 
 

@@ -339,6 +339,8 @@ def test_importtime_summary_takes_per_module_minimum_and_groups_by_top_level(imp
         "django_strawberry_framework",
         "django_strawberry_framework.keyset",
     ]
+    assert len(body["all_by_cumulative"]) == body["package_modules"]
+    assert body["all_by_cumulative"][:2] == body["top_by_cumulative"]
     assert body["top_by_self"][0] == {
         "cumulative_us": 3242,
         "module": "django_strawberry_framework.keyset",

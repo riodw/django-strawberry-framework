@@ -237,6 +237,9 @@ PYTEST_COMMAND = (
     "-q",
     "-rfE",
 )
+# ``-rfE`` prints its FAILED / ERROR rows under this header, after every captured
+# output section.
+SHORT_SUMMARY_HEADER = re.compile(r"=+ short test summary info =+")
 PACKAGE_NAME = "django_strawberry_framework"
 PROBE_DIRECTORY_NAME = "probe"
 RUNS_DIRECTORY_NAME = "runs"
@@ -1683,13 +1686,25 @@ def _read_probe(path: Path) -> tuple[tuple[tuple[str, str], ...], tuple[Provenan
 
 
 def _parse_run_output(stdout: str) -> tuple[tuple[str, ...], tuple[str, ...], str]:
-    """Return failing node ids, erroring node ids, and the summary line."""
+    """Return failing node ids, erroring node ids, and the summary line.
+
+    Node ids are read only below pytest's ``short test summary info`` header. A
+    captured-log section above it prints records as ``ERROR    <logger>:...``, and
+    reading those as rows would count a logged error as a setup error and void a
+    valid count.
+    """
     failed: list[str] = []
     errored: list[str] = []
     summary = ""
+    in_short_summary = False
     for raw_line in stdout.splitlines():
         line = raw_line.rstrip()
-        if line.startswith("FAILED "):
+        if SHORT_SUMMARY_HEADER.fullmatch(line):
+            in_short_summary = True
+        elif not in_short_summary:
+            if line.strip():
+                summary = line.strip()
+        elif line.startswith("FAILED "):
             node_id = line[len("FAILED ") :].split(" - ", 1)[0].strip()
             if node_id and node_id not in failed:
                 failed.append(node_id)

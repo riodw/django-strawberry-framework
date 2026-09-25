@@ -456,6 +456,40 @@ class Annotation(models.Model):
         return self.body
 
 
+class Distributor(models.Model):
+    """A trade distributor whose field names follow the camelCase feed it is mirrored from.
+
+    Django keeps a mixed-case field name as written and names its column the
+    same, and Strawberry publishes ``displayName`` unchanged, so reversing the
+    published name gives ``display_name``, which names no field. The reverse
+    relation ``consignmentItems`` carries the same shape on a relation.
+    """
+
+    displayName = models.TextField(unique=True)  # noqa: N815
+
+    def __str__(self):
+        return self.displayName
+
+
+class Consignment(models.Model):
+    """A batch of stock sent to a distributor through the mixed-case key ``distributorRef``.
+
+    The key's column is ``distributorRef_id`` and its reverse accessor is the
+    mixed-case ``consignmentItems``; neither name survives a reversal of its
+    published spelling.
+    """
+
+    label = models.TextField()
+    distributorRef = models.ForeignKey(  # noqa: N815
+        Distributor,
+        related_name="consignmentItems",
+        on_delete=models.CASCADE,
+    )
+
+    def __str__(self):
+        return self.label
+
+
 class Venue(models.Model):
     """A place the library lends from, the root of a multi-table inheritance chain.
 

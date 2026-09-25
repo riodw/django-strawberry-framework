@@ -572,6 +572,31 @@ class AnnotationType(DjangoType):
         orderset_class = orders.AnnotationOrder
 
 
+class DistributorType(DjangoType):
+    """A distributor, publishing the mixed-case ``displayName`` and ``consignmentItems`` as named.
+
+    Strawberry keeps a mixed-case Django name as its GraphQL name, so a
+    selection resolves to its field by that exact name; reversing it
+    (``display_name``, ``consignment_items``) names nothing on the model.
+    """
+
+    class Meta:
+        model = models.Distributor
+        fields = ("id", "displayName", "consignmentItems")
+        filterset_class = filters.DistributorFilter
+        orderset_class = orders.DistributorOrder
+
+
+class ConsignmentType(DjangoType):
+    """A consignment, the forward side of the mixed-case ``distributorRef`` key."""
+
+    class Meta:
+        model = models.Consignment
+        fields = ("id", "label", "distributorRef")
+        filterset_class = filters.ConsignmentFilter
+        orderset_class = orders.ConsignmentOrder
+
+
 class VenueType(DjangoType):
     """A venue, the parent of the multi-table inheritance chain.
 
@@ -809,6 +834,10 @@ class Query:
     all_library_patron_profiles_connection: DjangoConnection[PatronProfileType] = (
         DjangoConnectionField(PatronProfileType)
     )
+    # The mixed-case surface: a scalar, a forward key and its reverse relation,
+    # each published under the Django name it was declared with.
+    all_library_distributors: list[DistributorType] = DjangoListField(DistributorType)
+    all_library_consignments: list[ConsignmentType] = DjangoListField(ConsignmentType)
 
     # The inheritance and relation-shape surface.
     # Acceptance surface for the nullable Venue/RepairTicket cycle and three reverse relations

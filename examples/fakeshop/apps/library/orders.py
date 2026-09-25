@@ -1,6 +1,6 @@
 """OrderSet declarations for library relation-graph and keyset-cursor acceptance coverage.
 
-Twenty-four ordersets mirror the relation shape ``apps.library.schema`` exposes
+Twenty-six ordersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint; ``PeriodicalOrder`` and
 ``IssueOrder`` are the keyset-cursor ``orderBy:`` substrate: a root
 ``orderBy: {title: ASC}`` page over ``IssueOrder`` mints value cursors
@@ -236,6 +236,22 @@ class AnnotationOrder(OrderSet):
         fields = ["id", "body"]
 
 
+class DistributorOrder(OrderSet):
+    """Distributor orderset bound to ``DistributorType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.Distributor
+        fields = ["id"]
+
+
+class ConsignmentOrder(OrderSet):
+    """Consignment orderset bound to ``ConsignmentType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.Consignment
+        fields = ["id", "label"]
+
+
 class VenueOrder(OrderSet):
     """Venue orderset bound to ``VenueType`` at finalize phase 2.5."""
 
@@ -359,8 +375,10 @@ __all__ = (
     "BranchOrder",
     "BranchSignageOrder",
     "CirculationDeskOrder",
+    "ConsignmentOrder",
     "DeskProfileOrder",
     "DeskShiftOrder",
+    "DistributorOrder",
     "EditionOrder",
     "IssueOrder",
     "LendingDeskOrder",

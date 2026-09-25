@@ -25,6 +25,11 @@ One shape per planner rule, each read off the wire and off the SQL the request e
 - A child default manager no strategy can window: ``AnnotationManager`` returns a
   distinct queryset, so ``PatronProfileType.annotationsConnection`` is left
   unplanned by ``optimizer/nested_planner.py`` and resolves per parent.
+- Mixed-case Django names, whose published spelling reverses to a name the model
+  lacks: ``Distributor.displayName`` projects its own column, the forward key
+  ``Consignment.distributorRef`` plans one ``JOIN``, and its reverse
+  ``consignmentItems`` loads through one prefetch on ``distributorRef_id``, the
+  relation counts held at one and three parents.
 """
 
 import pytest
@@ -400,3 +405,88 @@ def test_patron_profile_annotations_connection_is_left_unplanned_and_fetched_per
     annotation_sql = _sql_from_table(captured, "library_annotation")
     assert len(annotation_sql) == len(nodes), annotation_sql
     assert not any("OVER (" in sql.upper() for sql in annotation_sql), annotation_sql
+
+
+def _seed_distributors(count: int) -> list[models.Distributor]:
+    """``count`` distributors with one consignment each, both numbered from zero."""
+    distributors = []
+    for index in range(count):
+        distributor = models.Distributor.objects.create(displayName=f"Distributor {index}")
+        models.Consignment.objects.create(label=f"Consignment {index}", distributorRef=distributor)
+        distributors.append(distributor)
+    return distributors
+
+
+@pytest.mark.django_db
+def test_distributor_mixed_case_scalar_projects_its_own_column():
+    """``displayName`` is served by one statement projecting the ``displayName`` column.
+
+    Strawberry publishes the Django name unchanged; reversing it gives
+    ``display_name``, which names no field, so the selection resolves by its exact
+    published name and the root projection carries the real column.
+    """
+    distributors = _seed_distributors(2)
+
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success("{ allLibraryDistributors { id displayName } }")
+
+    assert sorted(data["allLibraryDistributors"], key=lambda row: row["id"]) == [
+        {"id": distributor.pk, "displayName": distributor.displayName}
+        for distributor in distributors
+    ], data
+    distributor_sql = _sql_touching(captured, "library_distributor")
+    assert len(distributor_sql) == 1, captured.captured_queries
+    assert '"displayName"' in distributor_sql[0], distributor_sql[0]
+
+
+@pytest.mark.parametrize("distributor_count", [1, 3])
+@pytest.mark.django_db
+def test_consignment_mixed_case_forward_key_joins_its_target_in_one_statement(distributor_count):
+    """``distributorRef { displayName }`` is one ``JOIN`` at every parent cardinality.
+
+    ``distributorRef`` reverses to ``distributor_ref``, which names no relation;
+    resolved by its published name, the key plans a ``select_related`` whose
+    joined projection carries the target's mixed-case ``displayName`` column.
+    """
+    _seed_distributors(distributor_count)
+
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            "{ allLibraryConsignments { label distributorRef { displayName } } }",
+        )
+
+    assert sorted(
+        (row["label"], row["distributorRef"]["displayName"])
+        for row in data["allLibraryConsignments"]
+    ) == [(f"Consignment {index}", f"Distributor {index}") for index in range(distributor_count)]
+    distributor_sql = _sql_touching(captured, "library_distributor")
+    assert len(distributor_sql) == 1, captured.captured_queries
+    assert _sql_from_table(captured, "library_consignment") == distributor_sql
+    assert 'JOIN "library_distributor"' in distributor_sql[0], distributor_sql[0]
+    assert '"displayName"' in distributor_sql[0], distributor_sql[0]
+
+
+@pytest.mark.parametrize("distributor_count", [1, 3])
+@pytest.mark.django_db
+def test_distributor_mixed_case_reverse_relation_loads_through_one_prefetch(distributor_count):
+    """``consignmentItems`` loads every parent's rows in one statement at every cardinality.
+
+    The ``related_name`` ``consignmentItems`` reverses to ``consignment_items``,
+    which names no relation; resolved by its published name it plans one prefetch
+    filtered on the mixed-case ``distributorRef_id`` column.
+    """
+    _seed_distributors(distributor_count)
+
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            "{ allLibraryDistributors { displayName consignmentItems { label } } }",
+        )
+
+    assert sorted(
+        (row["displayName"], [item["label"] for item in row["consignmentItems"]])
+        for row in data["allLibraryDistributors"]
+    ) == [(f"Distributor {index}", [f"Consignment {index}"]) for index in range(distributor_count)]
+    assert len(_sql_from_table(captured, "library_distributor")) == 1, captured.captured_queries
+    consignment_sql = _sql_from_table(captured, "library_consignment")
+    assert len(consignment_sql) == 1, captured.captured_queries
+    assert '"distributorRef_id" IN (' in consignment_sql[0], consignment_sql[0]

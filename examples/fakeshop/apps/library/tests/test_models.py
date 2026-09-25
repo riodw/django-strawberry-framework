@@ -15,8 +15,10 @@ from apps.library.models import (
     BranchNote,
     BranchSignage,
     CirculationDesk,
+    Consignment,
     DeskProfile,
     DeskShift,
+    Distributor,
     Genre,
     LendingDesk,
     Loan,
@@ -190,3 +192,16 @@ def test_book_archive_genres_is_not_editable():
     assert Book._meta.get_field("archive_genres").editable is False
     assert list(book.archive_genres.all()) == [genre]
     assert list(genre.books.all()) == []
+
+
+@pytest.mark.django_db
+def test_distributor_mixed_case_names_are_its_django_names_and_columns():
+    """``displayName``, ``distributorRef`` and ``consignmentItems`` keep their mixed case."""
+    distributor = Distributor.objects.create(displayName="Northern Books")
+    consignment = Consignment.objects.create(label="Spring list", distributorRef=distributor)
+
+    assert (str(distributor), str(consignment)) == ("Northern Books", "Spring list")
+    assert Distributor._meta.get_field("displayName").column == "displayName"
+    assert Consignment._meta.get_field("distributorRef").column == "distributorRef_id"
+    assert list(distributor.consignmentItems.all()) == [consignment]
+    assert Consignment.objects.get(pk=consignment.pk).distributorRef == distributor

@@ -929,9 +929,10 @@ slice ships the demonstration is one uncomment away.
   overrides, `FilterSet` / `OrderSet` on every type, root `node` / `nodes` refetch.
   The publishing surface beneath it carries the shapes a query planner has to
   resolve rather than assume: a relation primary key, a text primary key not named
-  `id`, `<word>_<digit>` field and relation names, a `to_field` foreign key, a Relay
-  id built off the primary key, explicitly named fields, and a child model whose
-  default manager cannot be windowed. The venue surface beside it carries the
+  `id`, `<word>_<digit>` field and relation names, mixed-case field, key and
+  reverse-relation names (`Distributor`, `Consignment`), a `to_field` foreign
+  key, a Relay id built off the primary key, explicitly named fields, and a child
+  model whose default manager cannot be windowed. The venue surface beside it carries the
   model shapes a visibility cascade and a write input have to read correctly: a
   three-level multi-table inheritance chain (`Venue` -> `LendingDesk` ->
   `SelfServeDesk`), reverse FK / OneToOne / M2M relations declared without

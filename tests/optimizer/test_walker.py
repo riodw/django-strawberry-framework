@@ -497,6 +497,164 @@ def test_name_resolution_defensively_skips_unusable_metadata():
     ) == ("connection", "line_2", None)
 
 
+def _converter_info(name_converter=None):
+    """Build a plan-time ``info`` whose schema config carries a name converter."""
+    from strawberry.schema.config import StrawberryConfig
+
+    config = StrawberryConfig()
+    if name_converter is not None:
+        config.name_converter = name_converter
+    return SimpleNamespace(
+        schema=SimpleNamespace(config=config),
+        path=None,
+        variable_values={},
+    )
+
+
+def _declare_edition_node():
+    """Declare and finalize a type over ``Edition``'s digit-boundary scalars.
+
+    ``apps/library/models.py::Edition`` keys on ``isbn_13`` and carries
+    ``isbn_10``; both publish as ``isbn13`` / ``isbn10``, which ``snake_case``
+    cannot reverse, so every selection of them takes the forward-name path.
+    """
+    from apps.library.models import Edition
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class EditionNode(DjangoType):
+        class Meta:
+            model = Edition
+            fields = ("isbn_13", "isbn_10")
+
+    finalize_django_types()
+    return Edition, EditionNode
+
+
+def test_forward_name_maps_build_once_per_type_and_converter(monkeypatch):
+    """Plan builds that miss the reversal share one name table per type and converter.
+
+    Rebuilding the type's GraphQL-name table on every reverse miss made a
+    digit-boundary or mixed-case selection cost a full table build per plan.
+    The second plan under one converter builds nothing; another converter
+    builds its own table once; ``registry.clear()`` drops every table.
+    """
+    from django_strawberry_framework.optimizer import walker as walker_mod
+
+    registry.clear()
+    try:
+        edition, edition_node = _declare_edition_node()
+        builds = []
+        real = walker_mod._graphql_names_by_python_name
+
+        def spy(type_cls, info):
+            builds.append(type_cls)
+            return real(type_cls, info)
+
+        monkeypatch.setattr(walker_mod, "_graphql_names_by_python_name", spy)
+        info = _converter_info()
+        for _ in range(2):
+            plan = plan_optimizations(
+                [_sel("isbn13"), _sel("isbn10")],
+                edition,
+                info=info,
+                source_type=edition_node,
+            )
+            assert plan.only_fields == ("isbn_13", "isbn_10")
+        assert builds == [edition_node]
+
+        plan_optimizations(
+            [_sel("isbn13")],
+            edition,
+            info=_converter_info(),
+            source_type=edition_node,
+        )
+        assert builds == [edition_node, edition_node]
+
+        registry.clear()
+        assert walker_mod._forward_names_memo == {}
+    finally:
+        registry.clear()
+
+
+def test_forward_name_maps_answer_per_schema_converter():
+    """Each schema converter resolves the names it publishes, whichever planned first.
+
+    A converter that publishes ``isbn_13`` as ``bookNumber`` resolves
+    ``bookNumber`` and not the default ``isbn13``; the default converter,
+    planned first on the same type, keeps resolving ``isbn13`` and not
+    ``bookNumber``.
+    """
+    from strawberry.schema.name_converter import NameConverter
+
+    class BookNumberConverter(NameConverter):
+        def get_graphql_name(self, field):
+            if field.python_name == "isbn_13":
+                return "bookNumber"
+            return super().get_graphql_name(field)
+
+    registry.clear()
+    try:
+        edition, edition_node = _declare_edition_node()
+        default_info = _converter_info()
+        custom_info = _converter_info(BookNumberConverter())
+
+        def only(name, info):
+            return plan_optimizations(
+                [_sel(name)],
+                edition,
+                info=info,
+                source_type=edition_node,
+            ).only_fields
+
+        assert only("isbn13", default_info) == ("isbn_13",)
+        assert only("bookNumber", custom_info) == ("isbn_13",)
+        assert only("isbn13", custom_info) == ()
+        assert only("bookNumber", default_info) == ()
+    finally:
+        registry.clear()
+
+
+def test_forward_name_maps_wait_for_finalization():
+    """A plan built before ``finalize_django_types`` leaves no names behind.
+
+    Before finalization the type has no Strawberry definition, so an explicit
+    ``strawberry.field(name=...)`` is not yet published and the selection
+    resolves nothing. After finalization the same selection resolves to its
+    column: nothing the early plan saw outlives it.
+    """
+    import strawberry
+    from apps.library.models import PatronProfile
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class PatronProfileNode(DjangoType):
+            address_2: str = strawberry.field(name="secondaryAddress")
+
+            class Meta:
+                model = PatronProfile
+                fields = ("address_2",)
+
+        info = _converter_info()
+
+        def only():
+            return plan_optimizations(
+                [_sel("secondaryAddress")],
+                PatronProfile,
+                info=info,
+                source_type=PatronProfileNode,
+            ).only_fields
+
+        assert only() == ()
+        finalize_django_types()
+        assert only() == ("address_2",)
+    finally:
+        registry.clear()
+
+
 def test_plan_empty_selections_produces_empty_plan():
     """An empty selection list produces an empty plan."""
     plan = plan_optimizations([], Category)

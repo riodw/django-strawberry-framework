@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 from django.db import models
 from django.db.models import Prefetch
@@ -12,7 +12,7 @@ from strawberry import relay
 from strawberry.utils.str_converters import to_camel_case
 
 from ..exceptions import ConfigurationError
-from ..registry import registry
+from ..registry import register_subsystem_clear, registry
 from ..utils.querysets import (
     _LIST_RELATION_CHILD_POLICY,
     _PREFETCH_CHILD_POLICY,
@@ -261,24 +261,58 @@ def _graphql_names_by_python_name(type_cls: type | None, info: Any | None) -> di
     return names
 
 
-def _field_by_graphql_name(
-    graphql_name: str,
-    field_map: dict[str, Any],
-    *,
-    type_cls: type | None = None,
-    info: Any | None = None,
-    graphql_names: dict[str, str] | None = None,
-) -> tuple[str, Any] | None:
-    """Forward-resolve a GraphQL name to its real Django field after a reverse miss.
+class _ForwardNames(NamedTuple):
+    """One type's forward GraphQL-name maps, as the active schema publishes them.
 
-    Strawberry's default camelizer is lossy at digit boundaries
-    (``address_2`` -> ``address2``), and explicit field names or custom schema
-    converters need not be reversible at all. Compare the selection against the
-    authoritative Strawberry field name when available, falling back to the
-    default converter for unregistered models and synthetic planner calls.
+    ``connections`` maps a synthesized connection's GraphQL name to its
+    underlying relation field name; ``fields`` maps a model field's GraphQL
+    name to ``(django_name, field)``. The first declaration of a name wins in
+    both, matching a scan in declaration order. ``converter`` is the schema
+    name converter the names came from.
     """
-    if graphql_names is None:
-        graphql_names = _graphql_names_by_python_name(type_cls, info)
+
+    converter: Any
+    connections: dict[str, str]
+    fields: dict[str, tuple[str, Any]]
+
+
+# Memo of ``_ForwardNames`` per ``(type_cls, id(name converter))``. Every
+# selection the ``snake_case`` reversal cannot recover (a mixed-case Django
+# name, a digit boundary, an explicit ``name=``, an unknown name) otherwise
+# rebuilds the type's whole name table on every plan build. An entry holds its
+# converter, so the ``id`` in its key cannot be reused while it lives.
+# Correctness-neutral under concurrency like the plan cache: the value is
+# deterministic, so a dropped or double insert only changes the hit rate.
+_forward_names_memo: dict[tuple[type | None, int], _ForwardNames] = {}
+
+
+def clear_forward_names() -> None:
+    """Empty the forward GraphQL-name memo.
+
+    Registered with ``registry.clear()`` so a registry-clearing test drops the
+    entries of the types it discards; the next plan rebuilds each map once.
+    """
+    _forward_names_memo.clear()
+
+
+register_subsystem_clear(clear_forward_names, owner="optimizer.forward_names")
+
+
+def _build_forward_names(
+    field_map: dict[str, Any],
+    relation_connections: dict[str, str],
+    graphql_names: dict[str, str],
+    *,
+    converter: Any,
+) -> _ForwardNames:
+    """Map each field's and connection's GraphQL name to its target, first declaration winning."""
+    connections: dict[str, str] = {}
+    for generated, relation_name in relation_connections.items():
+        candidate = graphql_names.get(generated)
+        if candidate is None:
+            candidate = to_camel_case(generated)
+        connections.setdefault(candidate, relation_name)
+    fields: dict[str, tuple[str, Any]] = {}
     for field in field_map.values():
         django_name = getattr(field, "name", None)
         if django_name is None:
@@ -286,9 +320,76 @@ def _field_by_graphql_name(
         candidate = graphql_names.get(django_name)
         if candidate is None:
             candidate = to_camel_case(django_name)
-        if candidate == graphql_name:
-            return django_name, field
-    return None
+        fields.setdefault(candidate, (django_name, field))
+    return _ForwardNames(converter, connections, fields)
+
+
+def _forward_names(
+    field_map: dict[str, Any],
+    relation_connections: dict[str, str],
+    *,
+    type_cls: type | None,
+    info: Any | None,
+    definition: Any | None = None,
+) -> _ForwardNames:
+    """Return the forward GraphQL-name maps for one type's fields and connections.
+
+    Strawberry's default camelizer is lossy at digit boundaries
+    (``address_2`` -> ``address2``), and explicit field names or custom schema
+    converters need not be reversible at all. Names come from the
+    authoritative Strawberry field name when available, falling back to the
+    default converter for unregistered models and synthetic planner calls.
+
+    Memoized only when ``definition`` (the one ``_resolve_field_map`` took
+    ``field_map`` from) is FINALIZED and ``info`` carries a schema name
+    converter. ``finalize_django_types`` sets ``finalized`` right after
+    ``strawberry.type`` builds the type, once ``relation_connections`` is
+    settled; from then on the registry refuses every mutator until
+    ``registry.clear()``, which empties this memo, so a type's definition and
+    published names cannot change under an entry. Any other call (an
+    unregistered model's fresh map, a type still being declared, no ``info``)
+    builds the maps uncached.
+    """
+    converter = _schema_name_converter(info)
+    cacheable = converter is not None and getattr(definition, "finalized", False) is True
+    if not cacheable:
+        return _build_forward_names(
+            field_map,
+            relation_connections,
+            _graphql_names_by_python_name(type_cls, info),
+            converter=converter,
+        )
+    key = (type_cls, id(converter))
+    cached = _forward_names_memo.get(key)
+    if cached is not None:
+        return cached
+    built = _build_forward_names(
+        field_map,
+        definition.relation_connections or {},
+        _graphql_names_by_python_name(type_cls, info),
+        converter=converter,
+    )
+    _forward_names_memo[key] = built
+    return built
+
+
+def _field_by_graphql_name(
+    graphql_name: str,
+    field_map: dict[str, Any],
+    *,
+    type_cls: type | None = None,
+    info: Any | None = None,
+    definition: Any | None = None,
+) -> tuple[str, Any] | None:
+    """Forward-resolve a GraphQL name to its real Django field after a reverse miss."""
+    names = _forward_names(
+        field_map,
+        {},
+        type_cls=type_cls,
+        info=info,
+        definition=definition,
+    )
+    return names.fields.get(graphql_name)
 
 
 def _resolve_selection_target(
@@ -298,8 +399,14 @@ def _resolve_selection_target(
     *,
     type_cls: type | None,
     info: Any | None,
+    definition: Any | None = None,
 ) -> tuple[str, str, Any | None] | None:
-    """Resolve a selection across model-field and synthesized-connection namespaces."""
+    """Resolve a selection across model-field and synthesized-connection namespaces.
+
+    The exact ``snake_case`` reversal answers first; a miss reads the forward
+    maps (``_forward_names``), where a connection outranks a model field of the
+    same GraphQL name.
+    """
     snake = snake_case(graphql_name)
     relation_field_name = relation_connections.get(snake)
     if relation_field_name is not None:
@@ -307,20 +414,17 @@ def _resolve_selection_target(
     field = field_map.get(snake)
     if field is not None:
         return "field", snake, field
-    graphql_names = _graphql_names_by_python_name(type_cls, info)
-    for generated, relation_name in relation_connections.items():
-        candidate = graphql_names.get(generated)
-        if candidate is None:
-            candidate = to_camel_case(generated)
-        if candidate == graphql_name:
-            return "connection", relation_name, None
-    resolved = _field_by_graphql_name(
-        graphql_name,
+    names = _forward_names(
         field_map,
+        relation_connections,
         type_cls=type_cls,
         info=info,
-        graphql_names=graphql_names,
+        definition=definition,
     )
+    relation_name = names.connections.get(graphql_name)
+    if relation_name is not None:
+        return "connection", relation_name, None
+    resolved = names.fields.get(graphql_name)
     if resolved is not None:
         real, real_field = resolved
         return "field", real, real_field
@@ -619,7 +723,7 @@ def _walk_selections(
     relation_connections = getattr(definition, "relation_connections", None) or {}
     for sel in merged:
         # Resolve the selection name through the ONE consolidated resolver
-        # (fast-path exact reversal, forward-camelization scan on a miss). It
+        # (fast-path exact reversal, memoized forward name maps on a miss). It
         # recognizes a synthesized nested connection BEFORE the field namespace
         # and BEFORE the unknown-name guard below: ``booksConnection`` /
         # ``line2Connection`` match no model field, so without this branch the
@@ -638,6 +742,7 @@ def _walk_selections(
             relation_connections,
             type_cls=type_cls,
             info=info,
+            definition=definition,
         )
         if resolved is not None and resolved[0] == "connection":
             _plan_connection_relation(
@@ -1293,7 +1398,7 @@ def _selected_scalar_names(
     # call already does. The scalar-only secondary-type regression is
     # exercised through the root _walk_selections path, not through this
     # helper. (An audit invariant.)
-    type_cls, _definition, field_map = _resolve_field_map(model)
+    type_cls, definition, field_map = _resolve_field_map(model)
     # TODO(BACKLOG polymorphic_interface_connections - the abstract-return
     # optimizer entry card): audit this FK-id-elision helper as the walker's
     # second ``included_field_selections`` consumer. This is that card's
@@ -1330,6 +1435,7 @@ def _selected_scalar_names(
                 field_map,
                 type_cls=type_cls,
                 info=info,
+                definition=definition,
             )
             if resolved is not None:
                 django_name, django_field = resolved

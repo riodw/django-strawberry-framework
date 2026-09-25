@@ -1,10 +1,12 @@
 # REVIEW: three axes on every package file
 
-Entry: `Execute docs/review/REVIEW.md (You are Worker-0)`. Worker-0 reads [AGENTS.md][agents] +
-[START.md][start], generates or resumes the plan, then runs every item, revision and the final
-gate autonomously until the plan says `Status: complete` or a genuine maintainer decision blocks
-it; `pause-after-each-item` only when the command names that mode. Nothing here self-starts.
-[AGENTS.md][agents] governs safety, tests, formatting, commits.
+Entry: `Execute docs/review/REVIEW.md (You are Worker-0)`, optionally followed by
+`scope: <folders or modules>` and the mode word `pause-after-each-item`. Worker-0 reads
+[AGENTS.md][agents] + [START.md][start], generates or resumes the plan over the named scope (no
+scope named: the release's own committed changes, "Plan"), then runs every item, revision and the
+final gate autonomously until the plan's run is closed; a `blocked` item is recorded and passed,
+never a halt. `pause-after-each-item` only when the command names that mode. Nothing here
+self-starts. [AGENTS.md][agents] governs safety, tests, formatting, commits.
 
 Population: package source under `django_strawberry_framework/`. Tests, examples and docs are read
 wherever the trace leads and edited only as the media of a package change.
@@ -39,12 +41,17 @@ only; this doc is canonical.
   production code. Reviews the file as it stands and writes finding records, each carrying the
   proof that will show its fix landed, BEFORE any edit exists. After Worker-2 implements, a fresh
   Worker-1 on the same axis verifies the combined change, starting from that record. A Worker-1
-  never edits production code or tests; its scratch lives under `docs/review/temp-tests/<scope>/`
-  or in a workspace copy.
+  never edits production code or tests; its scratch lives under its item's scratch root
+  ("Workspace") or in a workspace copy.
 - **Worker-2 — implementer.** One per file item. Implements every accepted finding from all three
   axis records in axis order, with permanent tests and instrument numbers where the axis demands
-  them, in the shared tree. Owns ruff, the ledger rows, and the docstrings of everything it
-  changed. Never approves anything.
+  them, in the shared tree. Owns ruff, the ledger rows it proposes (Worker-0 copies them into the
+  plan), and the docstrings of everything it changed. Never approves anything.
+
+Worker-0 alone edits the plan and sets the main artifact's `Status:`; each Worker-1 alone writes
+its axis record, bar the `## Cross-axis` section other reviewers fill; Worker-2 writes the main
+artifact's `## Implementation (Worker-2)`, `## Defects`, `## Pending execution` and
+`## Iterations` entries ("Artifacts").
 
 **Every dispatch is a fresh agent, carried forward by its record.** No worker is continued w/ its
 old context: a harness cannot compact a subagent, and an agent id dies w/ the session. Every
@@ -136,8 +143,8 @@ docstring is the manual. "Shared" = the shared tree; "copy" = through
 | [bench_nested_fetch.py][bench-nested-fetch] | Worker-0, Performance roles | copy, `--cell pg` | nested-connection strategies ("Database cells") |
 | [importtime_report.py][importtime-report] | Worker-0, Performance roles | copy | per-module import-time minimum ("Performance") |
 | [prove_failability.py][prove-failability] | Worker-2, Performance + Mechanics verifiers | `workspace.py prove` only | a gate can fail ("Workspace") |
-| [build_tree_md.py][build-tree-md] | `--list-docstrings`: Comments roles; render: Worker-2 | shared | module first lines; TREE.md ("Comments") |
-| [check_citations.py][check-citations] | `--paths` / `--cited-by`: Worker-0, Worker-1; `--check`: Worker-2, Mechanics verifier | shared, read-only | `path::Symbol` resolution ("Mechanics", "Comments") |
+| [build_tree_md.py][build-tree-md] | `--list-docstrings`: Comments roles, Worker-2; render: Worker-2 | shared | module first lines; TREE.md ("Comments") |
+| [check_citations.py][check-citations] | `--paths`: Worker-0, Worker-1; `--cited-by`: Worker-1, Worker-2; `--check`: Worker-2, Mechanics verifier | shared, read-only | `path::Symbol` resolution ("Mechanics", "Comments") |
 | [check_trailing_commas.py][check-trailing-commas] | Worker-2, Mechanics verifier | shared; `--check <paths>` | layout gate ("Worker-2 implements") |
 | [review_changed_python_diffs_against_head.py][review-diffs] | Comments verifier | shared; `--output-dir <scratch>` | the item's prose diff ("Comments") |
 | [_bench_common.py][bench-common], [_plan_common.py][plan-common] | nobody | n/a | plumbing the scripts above import |
@@ -196,8 +203,8 @@ number.
 
 Record carries: `Path class: hot | cold` w/ the reason (which caller runs it per what); the
 instrument; before; after; delta; the permanent test that pins the shape (query count at two
-cardinalities + absolute, or the bench delta recorded under the plan's `## Bench baseline` when
-no test can pin it).
+cardinalities + absolute, or, when no test can pin it, the bench delta, which Worker-0 records
+under the plan's `## Bench baseline` from Worker-2's report).
 
 ### Mechanics
 
@@ -269,12 +276,13 @@ each rule violation by name, needs no Django);
 [review_inspect.py][review-inspect] and
 `rg -n -i 'spec-|card|round|worker|legacy|moved from|no longer|previously|\bnow\b|fix for' <path>`
 as orientation for provenance (a hit is a lead, the grade is the finding). The verifier reads the
-item's prose changes w/ the command below; a prose hunk marked `[code changed too]` changed code
-beside the prose:
+item's prose changes w/ the command below, one `--path` per file in the item-scoped diff so
+concurrent edits stay out; a prose hunk marked `[code changed too]` changed code beside the prose:
 
 ```shell
 uv run python scripts/review_changed_python_diffs_against_head.py <ITEM_BASELINE> \
-    --against worktree --prose --include-tests --include-init --output-dir <scratch>/diff/<item>
+    --against worktree --prose --include-tests --include-init --path <each item path> \
+    --output-dir <root>/verify-comments-<n>/diff
 ```
 
 Record carries: the symbol; the grade; the text before; the text after. Text after is the
@@ -300,50 +308,58 @@ preference, and speculative risk w/o a reachable input, are not findings.
 
 One plan per release, `docs/review/review-<release>.md` (`0.0.15` → `review-0_0_15.md`), release
 read from the package `__version__`. Existing plan for the release → resume: validate `Status:`,
-`Run:` and `## Cycle baseline` against the tree (a `Status:` line alone is never trusted),
-continue under `## Run <release> <date>-<n>`, never replace (`review_plan.py resume` appends that
-heading, `Scope:`, a computed `Drift:` line and items for inventory the plan lacks; it never
-rewrites a line). Worker-0 alone edits the plan; nobody
-erases prior lines. A plan w/o `## Cycle baseline` predates this flow: its ticks are history and
-every item is re-verified under the new run.
+`Run:` and `## Cycle baseline` against the tree (a `Status:` line alone is never trusted), continue
+under `## Run <release> <date>-<n>`, never replace (`review_plan.py resume` appends that heading,
+`Scope:`, a computed `Drift:` line and items for inventory the plan lacks; it never rewrites a
+line; an item it carries w/ `Status: out-of-scope` is set `pending` by Worker-0). Worker-0 alone
+edits the plan; nobody erases prior lines. A plan w/o `## Cycle baseline` predates this flow: its
+ticks are history and every item is re-verified under the new run.
 
 [review_plan.py][review-plan] owns the plan's shape and inventory; Worker-0 runs it from the repo
 root in the shared tree (it needs git) and never hand-builds an inventory:
 
 ```shell
-uv run python scripts/review_plan.py scope --json
+uv run python scripts/review_plan.py plan --changed
 uv run python scripts/review_plan.py plan --scope <folder or module> ...
-uv run python scripts/review_plan.py resume --plan docs/review/review-<release>.md --scope <...>
+uv run python scripts/review_plan.py resume --plan docs/review/review-<release>.md --changed
 uv run python scripts/review_plan.py reconcile --plan docs/review/review-<release>.md
+uv run python scripts/review_plan.py scope --json
 ```
 
-`scope` lists the package `.py` files changed since the latest tag (`--since <rev>` overrides):
-committed changes w/ their `HEAD` blob ids, dirty or untracked paths (concurrent work), renames;
-each path names the item covering it (a module its file item, a folder's `__init__.py` that
-folder's integration item, the package-root `__init__.py` the project item). It is how a run
-chooses its `--scope`. `plan` writes the plan: one file item per module minus `__init__.py`, one
-folder item per package folder carrying that folder's `__init__.py` on its `Init files:` line,
-the project item carrying the package-root `__init__.py`, the final gate, and
+The run's scope: the entry command's `scope:` entries, each passed as `--scope` to `plan` or
+`resume`, else `--changed`. `--changed` works the release's own changes: every module whose
+committed content changed since the latest tag (`--since <rev>` overrides), the folder integration
+item of the folder each sits in, the folder item of a changed folder `__init__.py`, the project
+item for a changed package-root `__init__.py`. Dirty and untracked paths are concurrent work, never
+scope. Each resumed run recomputes it; an item the plan already holds is carried, never re-added.
+When nothing changed, `plan` writes `Status: complete` w/ a `Nothing in scope:` line, every item
+out of scope and no gate, `resume` appends the run w/ that line, both print `nothing in scope`, and
+Worker-0 reports and stops. `scope` lists the same changes for reading: committed w/ their `HEAD`
+blob ids, dirty or untracked (concurrent work), renames, each path w/ the item covering it (a
+module its file item, a folder's `__init__.py` that folder's integration item, the package-root
+`__init__.py` the project item). `plan` writes the plan: one file item per module minus
+`__init__.py`, one folder item per package folder carrying that folder's `__init__.py` on its
+`Init files:` line, the project item carrying the package-root `__init__.py`, the final gate, and
 `## Out of scope this run` for everything the scope leaves out. `--scope` also takes a folder's
-`__init__.py` (that folder item) or the package-root `__init__.py` (the project item, otherwise
-in scope only for the whole package). On an existing plan `plan` refuses and names `resume`;
-`--force` replaces a plan only while its `## Owned changes` and `## Outcomes` hold nothing beyond
-the generated text. `reconcile` is read-only and exits 1 when the plan and the inventory
-disagree: a `.py` w/o an item, an item whose file is gone or renamed, a folder w/o an item, an
-`__init__.py` missing from, misplaced on or gone from an `Init files:` line, an item whose status
-needs artifacts that are missing. It reports untracked `.py` files too, while `plan` and
-`resume` itemize tracked files only: a new module gets its item once it is `git add`-ed, and an
-untracked one no ledger row names is concurrent work. It checks no fingerprint and no `HEAD`
-drift (it reads `HEAD` only to spot renames); those are Worker-0's checks below.
+`__init__.py` (that folder item) or the package-root `__init__.py` (the project item, otherwise in
+scope only for the whole package). On an existing plan `plan` refuses and names `resume`; `--force`
+replaces a plan only while its `## Owned changes` and `## Outcomes` hold nothing beyond the
+generated text. `reconcile` is read-only and exits 1 when the plan and the inventory disagree: a
+`.py` w/o an item, an item whose file is gone or renamed, a folder w/o an item, an `__init__.py`
+missing from, misplaced on or gone from an `Init files:` line, an item whose status needs artifacts
+that are missing. It reports untracked `.py` files too, while `plan` and `resume` itemize tracked
+files only: a new module gets its item once it is `git add`-ed, and an untracked one no ledger row
+names is concurrent work. It checks no fingerprint and no `HEAD` drift (it reads `HEAD` only to
+spot renames); those are Worker-0's checks below.
 
-Plan header: `Status: planned | in-progress | complete | partial (<scope>) | blocked`; `Mode:
-autonomous | pause-after-each-item`; `Run: <release> <date>-<n>` (repeated on every artifact);
-`Scope: package | <folder or path list>` (the entry command's scope, package-relative as
-`review_plan.py` normalizes it: `optimizer/`); `## Cycle baseline`;
-`## Bench baseline`; `## How to work one item`; one file item per inventory line; one folder
-integration item per package folder; the project integration item; the final gate;
-`## Decisions` (maintainer decisions the run surfaced: ruff rules to enable, trade-offs, contracts
-nobody could cite); `## Owned changes` (ledger); `## Outcomes` (closeout).
+Plan header: `Status: planned | in-progress | complete | partial (<scope>) | blocked`;
+`Mode: autonomous | pause-after-each-item`; `Run: <release> <date>-<n>` (repeated on every
+artifact); `Scope: package | <folder or path list> | changed since <rev> (<sha>)` (the entry
+command's scope, package-relative as `review_plan.py` normalizes it: `optimizer/`; or the
+`--changed` rule); `## Cycle baseline`; `## Bench baseline`; `## How to work one item`; one file
+item per inventory line; one folder integration item per package folder; the project integration
+item; the final gate; `## Decisions` (maintainer decisions the run surfaced: ruff rules to enable,
+trade-offs, contracts nobody could cite); `## Owned changes` (ledger); `## Outcomes` (closeout).
 
 Item shape:
 
@@ -384,17 +400,18 @@ lines indented two spaces. `resume` writes a run's first `Drift:` line; drift fo
 run is appended by hand.
 
 Per item: `uv run python scripts/workspace.py baseline review/<item>` prints `ITEM_BASELINE`
-(`git stash create`; empty → the `git rev-parse HEAD` sha, since an empty value would send the
-diff tooling back to the latest tag) and takes the item's `before` copy ("Workspace"); Worker-0
-records it + the same listings. Item-scoped diff = `git diff <item baseline> -- <paths touched>`
-PLUS every file the item added (`git diff --no-index /dev/null <new>`).
+(`git stash create`; empty → the `git rev-parse HEAD` sha, since an empty value would send the diff
+tooling back to the latest tag) and takes the item's `before` copy ("Workspace"); Worker-0 records
+it + the same listings as `Item baseline:` fields on the plan item. Item-scoped diff =
+`git diff <item baseline> -- <paths touched>` PLUS every file the item added
+(`git diff --no-index /dev/null <new>`).
 
 Each item landing tracked edits or new files appends to `## Owned changes`: path, item, axis,
 symbols changed. A later item may build on a ledgered path. Attribute by content, never by dirty
 status: before editing a dirty path, Worker-2 diffs vs `git show HEAD:<path>` and matches every
-hunk to the ledger or the cycle baseline; a hunk in neither = external edit → stop, report to
-Worker-0, who reconciles w/ Rio. Same stop when the item-scoped diff shows hunks the worker
-didn't make.
+hunk to the ledger, the cycle baseline, or an earlier pass of this item (the item-scoped diff
+Worker-0 wrote to scratch); a hunk in none = external edit → stop, report to Worker-0, who
+reconciles w/ Rio. Same stop when the item-scoped diff shows hunks the worker didn't make.
 
 A test failing before the item's first edit is pre-existing: reproduce it in the item's `before`
 copy, record it under the artifact's `## Defects` w/ the failing command, route to Rio through
@@ -403,8 +420,8 @@ Worker-0. It blocks the gate row, never the item.
 ### Bench baseline
 
 Performance verdicts need a per-release reference. At cycle entry Worker-0 runs the four commands
-`plan` writes under `## Bench baseline` w/ `<phase>` = `baseline`, each through `workspace.py run
-review/bench/baseline`, recording command, run id, provenance header and figures:
+`plan` writes under `## Bench baseline` w/ `<phase>` = `baseline`, each through
+`workspace.py run review/bench/baseline`, recording command, run id, provenance header and figures:
 [bench_plan_cache.py][bench-plan-cache], [bench_optimizer_walk.py][bench-optimizer-walk],
 [bench_nested_fetch.py][bench-nested-fetch] (`--cell pg`) and
 [importtime_report.py][importtime-report] `--rounds 5`, each w/ `--json` into scratch. The package
@@ -412,7 +429,8 @@ digest in each header is the baseline's binding; `CYCLE_BASELINE` is recorded be
 gate reruns them w/ `<phase>` = `gate` (a copy synced then) and records the delta; a gate figure
 whose instrument ids differ from the baseline's compares nothing. A Performance record cites the
 baseline figure it moves; a file item whose change moves no bench figure pins its claim w/ a
-query-count test instead.
+query-count test instead. Worker-0 then runs `workspace.py release review/bench`, since items need
+the pool.
 
 ## Workspace
 
@@ -428,13 +446,14 @@ uv run python scripts/workspace.py prove review/<item>/<role> <manifest.json>
 uv run python scripts/workspace.py path review/<item>/<role>
 ```
 
-`<item>` is the target path (`optimizer/walker.py`); `<role>` is `before` (taken by Worker-0's
-`baseline`, never edited), `performance`, `mechanics` or `comments` (reviewers), `implement`
-(Worker-2), `verify-<axis>-<n>` (verifiers of pass `<n>`). `<command>` is what follows `uv run`
-(`pytest <node> --no-cov`, `python scripts/count_queries.py ...`); its relative paths resolve
-inside the copy. An address's first run syncs a copy from the shared tree as it stands; later runs
-reuse that copy as it stands, edits included; `--fresh` resyncs it. `path` prints the copy for
-reading or editing: a verifier reverting a hunk edits there, never in the shared tree.
+`<item>` is the target path (`optimizer/walker.py`), a folder item's folder (`optimizer`), or
+`project`; `<role>` is `before` (taken by Worker-0's `baseline`, never edited), `performance`,
+`mechanics` or `comments` (reviewers), `implement` (Worker-2), `verify-<axis>-<n>` (verifiers of
+pass `<n>`). `<command>` is what follows `uv run` (`pytest <node> --no-cov`,
+`python scripts/count_queries.py ...`); its relative paths resolve inside the copy. An address's
+first run syncs a copy from the shared tree as it stands; later runs reuse that copy as it stands,
+edits included; `--fresh` resyncs it. `path` prints the copy for reading or editing: a verifier
+reverting a hunk edits there, never in the shared tree.
 
 Every run prints a provenance header on stderr: run id, copy, the package file it imports and its
 digest, cell and every database `NAME`, whether the copy is `fresh` or `modified`, whether the
@@ -456,9 +475,13 @@ Worker-0 alone manages the pool: `baseline` before the item's first edit, `relea
 --keep before` between phases so the next phase's copies fit, `release review/<item>` when the
 item closes, `gc review` at closeout. Workers never clean up.
 
-Read-only scratch (a probe that imports the live package and writes nothing) may live under
-`docs/review/temp-tests/<scope>/`, untracked; Worker-0 removes item scratch only after the item
-is `verified`.
+Item scratch root: `docs/review/temp-tests/<stem>/`, untracked, `<stem>` the artifact name w/o
+`rev-` and `.md` (`optimizer__walker`); each pass writes only under `<root>/<role>/` (its address's
+last segment), and Worker-0 writes the item-scoped diff to `<root>/diff/`. Copies exclude
+`temp-tests/`, so a scratch test's source is kept there and it runs from inside a copy
+(`workspace.py path`); a `--json` or other output path a copy command writes is absolute, under
+`<root>/<role>/`. Worker-0 removes an item's scratch only after the item is `verified` or
+`blocked`.
 
 ## Cycle per file item
 
@@ -481,9 +504,9 @@ Worker-0: all three axes verified → ledger, tick, cleanup, advance
 Runs `workspace.py baseline review/<item>` and records `ITEM_BASELINE`; writes the skeleton
 `rev-<path>.md` (header, `Status: reviewing`, `Run:`, `Path class:` blank) and nothing else in it;
 spawns three fresh Worker-1s at once, each w/ its axis, the target, the plan path, run id, both
-baselines, the ledger, its axis record path, its address `review/<item>/<axis>`, required reading.
-Every Worker-1 reads the plan and the other axes' records when they exist; edits only its own axis
-record.
+baselines, the ledger, its axis record path, its address `review/<item>/<axis>`, the item scratch
+root, required reading. Every Worker-1 reads the plan and the other axes' records when they exist;
+edits only its own axis record.
 
 ### Worker-1 reviews
 
@@ -495,18 +518,18 @@ orientation every axis starts from: per-symbol `path::Symbol` cites and blob ids
 leads, the Comments census. It is a lead list, never a finding:
 
 ```shell
-uv run python scripts/review_inspect.py <path> --output-dir <scratch>/inspect \
-    --json <scratch>/inspect/<item>.json
+uv run python scripts/review_inspect.py <path> --output-dir <root>/<axis>/inspect \
+    --json <root>/<axis>/inspect.json
 ```
 
 Then reads for its axis as "The three axes" describes, discharging every list entry w/ a finding, a
 `none` w/ the reason, or a rejection w/ its trigger.
 
-A finding that belongs to another axis is written into THAT axis's record under
-`## Cross-axis (from <axis>)`, the one place a Worker-1 writes outside its own record; the owning
-Worker-1 grades it during verification like any of its own. A finding that spans axes (a
-consolidation that also removes a query) lives at the axis that owns the proof, cited from the
-other.
+A finding that belongs to another axis is appended to THAT axis's record under
+`## Cross-axis (from <axis>)`, the one place a Worker-1 writes outside its own record (the owner
+re-reads its record before closing it); the owning Worker-1 grades it during verification like any
+of its own. A finding that spans axes (a consolidation that also removes a query) lives at the axis
+that owns the proof, cited from the other.
 
 Each finding record:
 
@@ -547,47 +570,50 @@ Mechanically, before Worker-2 reads anything:
 | a site cited by line number, or a symbol `check_citations.py --paths <record>` cannot resolve | back to that Worker-1 |
 | a list entry neither discharged nor rejected | back to that Worker-1 |
 
-Twice back on the same row → `blocked` for Rio. All three records pass → Worker-0 copies `Path
-class` into the plan item and the artifact header, sets the artifact `Status:
-ready-for-implementation`, runs `workspace.py release review/<item> --keep before`, spawns a fresh
-Worker-2 w/ the target, all three records, the plan, run id, both baselines, the ledger, its
-address `review/<item>/implement`.
+Twice back on the same row → `blocked` for Rio. All three records pass → Worker-0 copies
+`Path class` into the plan item and the artifact header, sets the artifact
+`Status: ready-for-implementation`, runs `workspace.py release review/<item> --keep before`, sets
+`Status: implementing` and spawns a fresh Worker-2 w/ the target, the main artifact, all three
+records, the plan, run id, both baselines, the ledger, its address `review/<item>/implement`, the
+`before` address, the item scratch root.
 
 ### Worker-2 implements
 
 Reads all three records, then the target and its neighbours until it can hold the whole change in
 mind. Implements in axis order: Performance first because it may restructure; Mechanics next
 because a rule moves to its owner on the code as Performance left it; Comments last so the prose
-describes the result. A later axis's finding may be discharged
-by an earlier axis's change; Worker-2 records that under the finding instead of applying it
-twice.
+describes the result. A later axis's finding may be discharged by an earlier axis's change;
+Worker-2 records that in its `## Implementation (Worker-2)` instead of applying it twice.
 
 Per finding: attribute hunks on every dirty path first ("Baseline and ownership"); measure "before"
 in the `before` copy where the record's Proof asks for a number; apply the change to the shared
 tree by hand; measure "after" in `implement` w/ `--fresh`; write the permanent test at the
 strongest reachable tier ([AGENTS.md][agents]: live GraphQL usage against fakeshop first, then
 example tests, then package tests); run it focused w/ `--no-cov`. A live-tier test needing a
-fakeshop fixture that does not exist lands at the strongest existing tier and the missing fixture
-goes to `## Decisions`; never a new example model inside an item. Every gate a finding relies on
-must be shown able to fail (`workspace.py prove`).
+fakeshop fixture that does not exist lands at the strongest existing tier and Worker-2 names the
+missing fixture in its report, which Worker-0 records under `## Decisions`; never a new example
+model inside an item. Every gate a finding relies on must be shown able to fail
+(`workspace.py prove`).
 
-Worker-2 may dispute a finding: it records `disputed: <reason>` under the finding, implements
-nothing for it, and the owning verifier judges. It may improve a Recommendation's shape or text
-when the trace shows a better one, recording what it did instead and why; the Proof line still
-governs. It never silently skips a finding.
+Worker-2 may dispute a finding: it records `disputed: <reason>` against the finding in its
+`## Implementation (Worker-2)`, implements nothing for it, and the owning verifier judges. It may
+improve a Recommendation's shape or text when the trace shows a better one, recording there what it
+did instead and why; the Proof line still governs. It never silently skips a finding and never
+edits an axis record.
 
-After the last axis, on the paths touched (explicit paths, never `.`, which rewrites files no
-item owns): `uv run ruff check --fix <paths>`, then `uv run ruff format <paths>` last, until
-`uv run ruff check <paths>`, `uv run ruff format --check <paths>` and
+After the last axis, on the paths touched (explicit paths, never `.`, which rewrites files no item
+owns): `uv run ruff check --fix <paths>`, then
+`uv run python scripts/check_trailing_commas.py <paths>`, then `uv run ruff format <paths>` last,
+until `uv run ruff check <paths>`, `uv run ruff format --check <paths>` and
 `uv run python scripts/check_trailing_commas.py --check <paths>` pass, and
 `uv run python scripts/check_citations.py --check` passes on the whole tree (a rename rots
 citations in files the item never opened). These are the CI lint gates; ruff alone passes a file
-the layout gate rejects.
-Then appends `## Implementation (Worker-2)` to `rev-<path>.md`: per axis, per finding, what
-landed (`implemented | discharged by <finding> | disputed | deferred`), files changed and why each
-moved, before / after numbers w/ their run ids, permanent tests and their focused
-results, failability proofs, formatter result, every scratch path and run id, fingerprints of
-every file touched or read for the change. Reports to Worker-0.
+the layout gate rejects. Then appends `## Implementation (Worker-2)` to `rev-<path>.md`: per axis,
+per finding, what landed (`implemented | discharged by <finding> | disputed | deferred`), files
+changed and why each moved, before / after numbers w/ their run ids, permanent tests and their
+focused results, failability proofs, formatter result, every scratch path and run id, fingerprints
+of every file touched or read for the change, and the `## Owned changes` rows it proposes (path,
+item, axis, symbols changed). Reports to Worker-0.
 
 ### Worker-0 checks the report
 
@@ -606,7 +632,8 @@ its own axis:
 
 1. Runs every Proof line in its record in its own copy and records the result beside it; reproduces
    every number Worker-2 reported for its axis from the recorded command; a Performance verifier
-   also confirms the "before" figure against the bench baseline or its own pre-edit copy.
+   also confirms the "before" figure against the bench baseline or a read-only run at the item's
+   `before` address (never `--fresh`, never edited).
 2. Re-reads the WHOLE item-scoped diff through its axis, not only its own findings: the Performance
    verifier measures a Mechanics move that touched a hot path; the Mechanics verifier checks a
    Performance rewrite or a consolidation preserved observable behavior (temporarily revert the
@@ -615,7 +642,8 @@ its own axis:
 3. Attacks the change on its axis: the other cardinality, the other flavor, the other cell, the
    caller Worker-2 did not name.
 4. Judges every `disputed` finding on its reason; a standing disagreement is `blocked` at once w/
-   both positions recorded, never a third pass to break it.
+   both positions recorded and a `Blocked:` line in the report, whatever the record's `Status:`,
+   never a third pass to break it.
 5. Confirms permanent tests exercise real usage at the mandated tier and fail w/o the change
    (Mechanics and Performance verifiers), and that the item-scoped diff carries no process
    provenance, no line-number citation, no `we` (Comments verifier).
@@ -625,17 +653,19 @@ its own axis:
 
 Appends `## Verification (<axis>)` to its record w/ the checks and results, sets the record
 `Status: verified` or `Status: revision-needed` w/ concrete named gaps, reports to Worker-0.
-Verifiers never edit production code or tests; a verifier that finds a new problem records it as a
-new finding w/ a Proof line and returns the record `revision-needed`.
+Verifiers never edit production code or tests; a verifier that finds a new problem on its axis
+records it under `## Findings` as a new finding labelled `verify <n>` w/ a Proof line and returns
+the record `revision-needed`; one on another axis is a named gap Worker-0 routes to that axis.
 
 ### Worker-0 closes the item
 
 Any axis `revision-needed` → the artifact `Status: revision-needed`, a fresh Worker-2 from the
-artifact and its handoffs, then fresh verifiers on the axes that failed; two failed re-passes →
-`blocked` for Rio. All three `verified` → ledger rows, `Result:` and `Verification:` lines on the
-plan item, tick, remove item scratch by explicit path, `workspace.py release review/<item>`,
-advance (`autonomous`) or report and wait (`pause-after-each-item`). Worker-0 never regrades a
-verifier.
+artifact and its handoffs, then fresh verifiers on the axes that failed and on any axis a verifier
+named a gap on (Comments too whenever the re-pass touches prose); two failed re-passes → `blocked`
+for Rio. All three `verified` → ledger rows (Worker-2's proposal, checked against the item-scoped
+diff), `Result:` and `Verification:` lines on the plan item, tick, remove item scratch by explicit
+path, `workspace.py release review/<item>`, advance (`autonomous`) or report and wait
+(`pause-after-each-item`). Worker-0 never regrades a verifier.
 
 Plan item result lines:
 
@@ -660,7 +690,7 @@ Main artifact, written by Worker-0 and Worker-2 only:
 # Review: `path/to/target.py`
 
 Status: reviewing | ready-for-implementation | implementing | ready-for-verification/<n> |
-        revision-needed | verified
+        revision-needed | verified | blocked
 Run: <release> <date>-<n>
 Path class: hot | cold — <reason>
 
@@ -711,7 +741,8 @@ Findings other reviewers placed here; graded at verification.
 
 ## Verification (<Axis>)
 
-Proof results, numbers reproduced, whole-diff reading, attacks, disputes judged, verdict.
+Proof results, numbers reproduced, whole-diff reading, attacks, disputes judged, verdict. A later
+pass appends `## Verification (<Axis>) pass <n>`.
 
 Each pass ends w/ its `Handoff:` paragraph.
 ```
@@ -735,14 +766,14 @@ package behavior and its tests, examples and docs. Re-inventory first. `rev-proj
 
 ## Final gate and closeout
 
-Every item but the gate verified + inventory re-reconciled → Worker-0 runs the gate:
+Every item but the gate verified or `blocked` + inventory re-reconciled → Worker-0 runs the gate:
 `uv run python scripts/workspace.py gate review`, every `## Pending execution` command from every
 artifact as listed, and the bench baseline commands w/ `<phase>` = `gate`, delta recorded. `gate`
-syncs a gate copy carrying its own git index of `HEAD` (the suite's CI-governance tests ask git
-for the committable file list) and runs the suite three times, as CI's jobs do: the full default
-suite (package coverage 100%); the `sharded` cell w/o coverage, since sharded-only tests skip by
-default and the default run owns the floor; the `pg` cell, only the database-touching tests, on
-the gate copy's own database. It writes `gate-<run id>.json` to the evidence folder, bound to
+syncs a gate copy carrying its own git index of `HEAD` (the suite's CI-governance tests ask git for
+the committable file list) and runs the suite three times, as CI's jobs do: the full default suite
+(package coverage 100%); the `sharded` cell w/o coverage, since sharded-only tests skip by default
+and the default run owns the floor; the `pg` cell, only the database-touching tests, on the gate
+copy's own database. It writes `gate-<run id>.json` to the evidence folder, bound to
 `git stash create` at gate time, the blob ids of `pyproject.toml` and `uv.lock` and each suite's
 cell, and prints per suite the run id, exit, summary and coverage lines; a cell that cannot run is
 `unverified` w/ the reason.
@@ -757,13 +788,14 @@ reproduced against `git show HEAD:` of its test and target → pre-existing, `##
 Worker-0 fills `## Outcomes` BEFORE deleting anything. Per item: findings per axis w/ severity and
 disposition; every number before / after w/ its command; owner moves; consolidations w/ their
 challenge counts; comments regraded; defects fixed w/ their permanent tests; rejections w/
-triggers; deferred Lows. Per run: bench baseline vs gate figures; decisions owed to Rio (`##
-Decisions`); cells unverified; blocked items; net source change vs cycle baseline; gate record;
-concurrent work untouched; "Scope of this run" for a scoped run. Then `Status: complete` (`partial
-(<scope>)`; `blocked` w/ the decision Rio owes). Remove only this run's
-`docs/review/temp-tests/<scope>/` dirs and `docs/review/worker-memory/` contents, by explicit path,
-then `uv run python scripts/workspace.py gc review`: copies, gate copy, evidence, databases, and
-the Postgres container once no flow holds a database. Never recursively clear `docs/review/`; never
+triggers; deferred Lows. Per run: bench baseline vs gate figures; decisions owed to Rio
+(`## Decisions`); cells unverified; blocked items; net source change vs cycle baseline; gate
+record; concurrent work untouched; "Scope of this run" for a scoped run. Then `Status: complete`
+(`partial (<scope>)`; `blocked` w/ the decision Rio owes). Remove only this run's
+`docs/review/temp-tests/<stem>/` dirs, bar a sensitive `blocked` item's evidence, and
+`docs/review/worker-memory/` contents, by explicit path, then
+`uv run python scripts/workspace.py gc review`: copies, gate copy, evidence, databases, and the
+Postgres container once no flow holds a database. Never recursively clear `docs/review/`; never
 remove `REVIEW.md`, the role files, the plan, or any `rev-*.md`. Do not commit.
 
 Under [MUSE.md][muse], a REVIEW Worker-0 running beside a hunt or DRY Worker-0 states the

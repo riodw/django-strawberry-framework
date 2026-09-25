@@ -24,7 +24,17 @@ settings are loaded.
     inventory file fails the run. An existing plan is resumed, never replaced:
     ``plan`` refuses it and names ``resume``; ``--force`` replaces it only
     while ``## Owned changes`` and ``## Outcomes`` still hold nothing beyond
-    the generated text, and carries its run ids forward.
+    the generated text, and carries its run ids forward. ``--changed``
+    replaces ``--scope`` with the release's own changes: every module whose
+    committed content changed between ``--since`` (default: the latest tag
+    reachable from ``HEAD``) and ``HEAD``, the folder integration item of the
+    folder each such module sits in, the folder item of a changed folder
+    ``__init__.py`` and the project item for a changed package-root
+    ``__init__.py``. Dirty and untracked paths are concurrent work, never
+    scope; the plan's ``## Cycle baseline`` records them. The ``Scope:`` line
+    reads ``changed since <rev> (<sha>)``. When nothing changed the plan is
+    written with ``Status: complete``, a ``Nothing in scope:`` line, every
+    item out of scope and no final gate.
 
 ``resume``
     Append one run to an existing plan and nothing else: a
@@ -34,8 +44,10 @@ settings are loaded.
     ``## Cycle baseline`` block nor an earlier ``Drift:`` line records (the
     plan's own directory and ``## Owned changes`` paths excluded), the
     already-itemized items this run works, and a new pending item for every
-    in-scope file, folder or project item the plan lacks. Every existing byte
-    stays in place; the file is opened for append only.
+    in-scope file, folder or project item the plan lacks. ``--changed``
+    recomputes that scope as ``plan`` does; an empty one appends a
+    ``Nothing in scope:`` line and no item. Every existing byte stays in
+    place; the file is opened for append only.
 
 ``scope``
     Print the package ``.py`` files changed between ``--since`` (default: the
@@ -58,10 +70,10 @@ settings are loaded.
 
 Usage::
 
-    uv run python scripts/review_plan.py plan [--scope PATH ...] [--mode MODE]
-        [--target-release RELEASE] [--output PATH] [--force]
-    uv run python scripts/review_plan.py resume [--plan PATH] [--scope PATH ...]
-        [--target-release RELEASE]
+    uv run python scripts/review_plan.py plan [--scope PATH ... | --changed [--since REV]]
+        [--mode MODE] [--target-release RELEASE] [--output PATH] [--force]
+    uv run python scripts/review_plan.py resume [--plan PATH]
+        [--scope PATH ... | --changed [--since REV]] [--target-release RELEASE]
     uv run python scripts/review_plan.py scope [--since REV] [--json]
     uv run python scripts/review_plan.py reconcile --plan docs/review/review-0_0_15.md
 """
@@ -336,6 +348,15 @@ def _resolve_scope(entries: Sequence[str], paths: Sequence[str]) -> tuple[str, .
 
 
 @dataclass(frozen=True)
+class _Changed:
+    """The ``--changed`` scope: the labels of the items covering committed changes."""
+
+    since: str
+    since_sha: str
+    labels: frozenset[str]
+
+
+@dataclass(frozen=True)
 class _Inventory:
     """The tracked package inventory, its items in plan order, and one run's scope."""
 
@@ -344,10 +365,20 @@ class _Inventory:
     folders: tuple[str, ...]
     scope: tuple[str, ...] | None
     ordered: tuple[Item, ...]
+    changed: _Changed | None = None
+
+    @property
+    def nothing_in_scope(self) -> bool:
+        """Return whether a ``--changed`` scope found no committed change."""
+        return self.changed is not None and not self.changed.labels
 
     def in_scope(self, item: Item) -> bool:
         """Return whether the run's scope covers ``item``."""
-        if self.scope is None or item.kind == "gate":
+        if item.kind == "gate":
+            return not self.nothing_in_scope
+        if self.changed is not None:
+            return item.label in self.changed.labels
+        if self.scope is None:
             return True
         if item.kind == "file":
             return any(_scope_matches(entry, item.key) for entry in self.scope)
@@ -361,13 +392,38 @@ class _Inventory:
     @property
     def scope_label(self) -> str:
         """Render the ``Scope:`` value: folders end in ``/``, modules do not."""
+        if self.changed is not None:
+            return f"changed since {self.changed.since} ({self.changed.since_sha[:12]})"
         if self.scope is None:
             return "package"
         modules = {*self.files, *self.inits}
         return ", ".join(entry if entry in modules else f"{entry}/" for entry in self.scope)
 
 
-def _build_inventory(root: Path, scope_entries: Sequence[str]) -> _Inventory:
+def _changed_scope(root: Path, since: str | None, tracked: Iterable[str]) -> _Changed:
+    """Return the labels of the items covering committed package changes since ``since``."""
+    report = build_scope(root, since)
+    present = set(tracked)
+    paths = [str(entry["path"]) for entry in report.committed]
+    paths.extend(str(entry["new"]) for entry in report.renames if entry["where"] == "committed")
+    labels: set[str] = set()
+    for path in paths:
+        if path not in present:
+            continue
+        labels.add(_covering_item(path))
+        folder = _package_relative(path).rpartition("/")[0]
+        if folder and not _is_init(path):
+            labels.add(f"{folder}{FOLDER_SUFFIX}")
+    return _Changed(since=report.since, since_sha=report.since_sha, labels=frozenset(labels))
+
+
+def _build_inventory(
+    root: Path,
+    scope_entries: Sequence[str],
+    *,
+    changed: bool = False,
+    since: str | None = None,
+) -> _Inventory:
     """Collect the tracked inventory, build every item and resolve the scope."""
     tracked = _tracked_python(root)
     files = tuple(_package_relative(path) for path in tracked if not _is_init(path))
@@ -404,6 +460,7 @@ def _build_inventory(root: Path, scope_entries: Sequence[str]) -> _Inventory:
         folders=folders,
         scope=scope,
         ordered=tuple(ordered),
+        changed=_changed_scope(root, since, tracked) if changed else None,
     )
 
 
@@ -544,11 +601,22 @@ def _in_scope_sections(inventory: _Inventory) -> list[tuple[str, list[Item]]]:
             heading = item.label
         sections.append((heading, [item]))
     project = inventory.ordered[-1]
+    gate = [_GATE_ITEM] if inventory.in_scope(_GATE_ITEM) else []
     if inventory.in_scope(project):
-        sections.append(("Project", [project, _GATE_ITEM]))
-    else:
-        sections.append(("Final gate", [_GATE_ITEM]))
+        sections.append(("Project", [project, *gate]))
+    elif gate:
+        sections.append(("Final gate", gate))
     return sections
+
+
+def _nothing_in_scope_lines(inventory: _Inventory) -> list[str]:
+    """Return the ``Nothing in scope:`` line of an empty ``--changed`` run, else nothing."""
+    if not inventory.nothing_in_scope or inventory.changed is None:
+        return []
+    return [
+        f"Nothing in scope: no committed package .py change since {inventory.changed.since}; "
+        "the run stops.",
+    ]
 
 
 def _render_plan(
@@ -560,9 +628,11 @@ def _render_plan(
     mode: str,
     scope_entries: Sequence[str],
     status_output: str | None,
+    changed: bool = False,
+    since: str | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Render the plan text and its item counts."""
-    inventory = _build_inventory(root, scope_entries)
+    inventory = _build_inventory(root, scope_entries, changed=changed, since=since)
     sections = _in_scope_sections(inventory)
     in_scope = {id(item) for _, members in sections for item in members}
     out_of_scope = [item for item in inventory.ordered if id(item) not in in_scope]
@@ -570,10 +640,11 @@ def _render_plan(
     lines = [
         f"# REVIEW plan: {release}",
         "",
-        "Status: planned",
+        f"Status: {'complete' if inventory.nothing_in_scope else 'planned'}",
         f"Mode: {mode}",
         f"Run: {release} {generated_date}-{run_number}",
         f"Scope: {inventory.scope_label}",
+        *_nothing_in_scope_lines(inventory),
         "",
         "Method: `docs/review/REVIEW.md`. Fresh source review; findings from prior build, review, "
         "DRY or",
@@ -616,6 +687,7 @@ def _render_plan(
             1 for item in inventory.ordered if item.kind == "folder" and id(item) in in_scope
         ),
         "out_of_scope": len(out_of_scope),
+        "nothing": int(inventory.nothing_in_scope),
     }
     return "\n".join(lines), counts
 
@@ -634,8 +706,15 @@ def _validated_release(value: str) -> str:
     return value
 
 
+def _check_since(args: argparse.Namespace) -> None:
+    """Refuse ``--since`` without ``--changed``, which alone reads it."""
+    if args.since is not None and not args.changed:
+        raise ValueError("--since applies only with --changed")
+
+
 def _run_plan(args: argparse.Namespace) -> int:
     """Write a fresh plan; an existing one is resumed, and replaced only while unworked."""
+    _check_since(args)
     root = args.root.resolve()
     release = _validated_release(
         args.target_release or _plan_common.package_version(root / PACKAGE_DIR),
@@ -662,11 +741,14 @@ def _run_plan(args: argparse.Namespace) -> int:
         mode=args.mode,
         scope_entries=args.scope,
         status_output=_plan_common.git_status_short(root),
+        changed=args.changed,
+        since=args.since,
     )
     _plan_common.atomic_write(output, content, force=args.force)
     print(
         f"Wrote {shown} ({counts['file']} file item(s), {counts['folder']} folder item(s) in "
-        f"scope, {counts['out_of_scope']} out of scope)",
+        f"scope, {counts['out_of_scope']} out of scope"
+        f"{'; nothing in scope' if counts['nothing'] else ''})",
     )
     return 0
 
@@ -790,9 +872,11 @@ def _render_resume(
     generated_date: str,
     scope_entries: Sequence[str],
     plan_dir: Path,
+    changed: bool = False,
+    since: str | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Render the lines one resumed run appends, and their counts."""
-    inventory = _build_inventory(root, scope_entries)
+    inventory = _build_inventory(root, scope_entries, changed=changed, since=since)
     itemized = {item.label for item in parse_plan(text) if _status_word(item.status) != "closed"}
     in_scope = [item for item in (*inventory.ordered, _GATE_ITEM) if inventory.in_scope(item)]
     carried = [item.label for item in in_scope if item.label in itemized]
@@ -803,6 +887,7 @@ def _render_resume(
         "",
         f"Scope: {inventory.scope_label}",
         *([drift] if drift else []),
+        *_nothing_in_scope_lines(inventory),
     ]
     if carried:
         lines.extend(
@@ -818,12 +903,18 @@ def _render_resume(
         for item in added:
             lines.extend(item.render("pending"))
     lead = "" if text.endswith("\n\n") else "\n" if text.endswith("\n") else "\n\n"
-    counts = {"added": len(added), "carried": len(carried), "drift": int(drift is not None)}
+    counts = {
+        "added": len(added),
+        "carried": len(carried),
+        "drift": int(drift is not None),
+        "nothing": int(inventory.nothing_in_scope),
+    }
     return lead + "\n".join(lines) + "\n", counts
 
 
 def _run_resume(args: argparse.Namespace) -> int:
     """Append one run to an existing plan without touching a byte already in it."""
+    _check_since(args)
     root = args.root.resolve()
     wanted = _validated_release(args.target_release) if args.target_release else None
     if args.plan is not None:
@@ -851,13 +942,16 @@ def _run_resume(args: argparse.Namespace) -> int:
         generated_date=generated_date,
         scope_entries=args.scope,
         plan_dir=plan_path.parent,
+        changed=args.changed,
+        since=args.since,
     )
     with plan_path.open("ab") as stream:
         stream.write(addition.encode("utf-8"))
     print(
         f"Appended run {release} {generated_date}-{run_number} to {shown} "
         f"({counts['added']} new item(s), {counts['carried']} already itemized, "
-        f"{'drift recorded' if counts['drift'] else 'no drift'})",
+        f"{'drift recorded' if counts['drift'] else 'no drift'}"
+        f"{'; nothing in scope' if counts['nothing'] else ''})",
     )
     return 0
 
@@ -1331,6 +1425,26 @@ def _run_reconcile(args: argparse.Namespace) -> int:
 # CLI
 
 
+def _add_scope_arguments(parser: argparse.ArgumentParser, scope_help: str) -> None:
+    """Add the mutually exclusive ``--scope`` / ``--changed`` pair and ``--since``."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--scope",
+        action="append",
+        default=[],
+        help=f"{scope_help} (repeatable; default: package)",
+    )
+    group.add_argument(
+        "--changed",
+        action="store_true",
+        help="work the items covering committed package changes since --since",
+    )
+    parser.add_argument(
+        "--since",
+        help="base revision for --changed (default: latest tag reachable from HEAD)",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build the ``plan`` / ``resume`` / ``scope`` / ``reconcile`` parser."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
@@ -1344,12 +1458,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     plan = commands.add_parser("plan", help="write docs/review/review-<release>.md")
     plan.add_argument("--mode", choices=MODES, default="autonomous")
-    plan.add_argument(
-        "--scope",
-        action="append",
-        default=[],
-        help="package folder or module to work this run (repeatable; default: package)",
-    )
+    _add_scope_arguments(plan, "package folder or module to work this run")
     plan.add_argument("--target-release", help="release to plan (default: package __version__)")
     plan.add_argument(
         "--output",
@@ -1369,12 +1478,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="plan to resume (default: docs/review/review-<rel>.md)",
     )
-    resume.add_argument(
-        "--scope",
-        action="append",
-        default=[],
-        help="package folder or module this run works (repeatable; default: package)",
-    )
+    _add_scope_arguments(resume, "package folder or module this run works")
     resume.add_argument("--target-release", help="release the plan must be for")
     resume.add_argument("--generated-date", help="ISO date for the run id (default: today)")
 

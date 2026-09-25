@@ -282,6 +282,179 @@ def test_plan_scope_fails_closed_on_unmatched_path(
     assert "matches no inventory file" in capsys.readouterr().err
 
 
+def test_plan_changed_works_committed_changes_and_their_folder_items(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _git(repo, "tag", "0.1.1")
+    package = repo / PACKAGE
+    _write(package / "sub" / "deep" / "gamma.py", "GAMMA = 4\n")
+    _write(package / "sub" / "__init__.py", "SUB = 1\n")
+    _commit_all(repo, "change")
+    _write(package / "alpha.py", "ALPHA = 2\n")
+    _write(package / "sub" / "untracked.py", "UNTRACKED = 1\n")
+    output = tmp_path / "review.md"
+
+    assert _plan(repo, output, "--changed") == 0
+    assert "nothing in scope" not in capsys.readouterr().out
+    text = output.read_text(encoding="utf-8")
+
+    since = _git(repo, "rev-parse", "0.1.1").strip()
+    assert (
+        "Status: planned\nMode: autonomous\nRun: 0.1.2 2026-01-02-1\n"
+        f"Scope: changed since 0.1.1 ({since[:12]})\n\n"
+    ) in text
+    assert "Nothing in scope:" not in text
+    parsed = {item.label: item.status for item in review_plan.parse_plan(text)}
+    assert parsed == {
+        "sub/deep/gamma.py": "pending",
+        "sub/deep/ integration": "pending",
+        "sub/ integration": "pending",
+        "Final gate": "pending",
+        "alpha.py": "out-of-scope",
+        "sub/beta.py": "out-of-scope",
+        "Project integration": "out-of-scope",
+    }
+    assert f" M {PACKAGE}/alpha.py" in text
+    assert f"?? {PACKAGE}/sub/untracked.py" in text
+
+
+def test_plan_changed_takes_the_project_item_for_the_root_init_only(
+    repo: Path,
+    tmp_path: Path,
+) -> None:
+    _git(repo, "tag", "0.1.1")
+    package = repo / PACKAGE
+    _write(package / "alpha.py", "ALPHA = 2\n")
+    _commit_all(repo, "root module")
+    output = tmp_path / "review.md"
+
+    assert _plan(repo, output, "--changed") == 0
+    parsed = {
+        item.label: item.status
+        for item in review_plan.parse_plan(output.read_text(encoding="utf-8"))
+    }
+    assert [label for label, status in parsed.items() if status == "pending"] == [
+        "alpha.py",
+        "Final gate",
+    ]
+
+    _write(package / "__init__.py", '__version__ = "0.1.2"\n')
+    _commit_all(repo, "root init")
+    assert _plan(repo, output, "--changed", "--force") == 0
+    parsed = {
+        item.label: item.status
+        for item in review_plan.parse_plan(output.read_text(encoding="utf-8"))
+    }
+    assert [label for label, status in parsed.items() if status == "pending"] == [
+        "alpha.py",
+        "Project integration",
+        "Final gate",
+    ]
+
+
+def test_plan_changed_with_nothing_changed_writes_a_complete_plan_without_a_gate(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write(repo / PACKAGE / "alpha.py", "ALPHA = 2\n")
+    output = tmp_path / "review.md"
+
+    assert _plan(repo, output, "--changed", "--since", "HEAD") == 0
+    assert capsys.readouterr().out.rstrip().endswith("; nothing in scope)")
+    text = output.read_text(encoding="utf-8")
+
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    assert text.startswith(
+        "# REVIEW plan: 0.1.2\n\nStatus: complete\nMode: autonomous\nRun: 0.1.2 2026-01-02-1\n"
+        f"Scope: changed since HEAD ({head[:12]})\n"
+        "Nothing in scope: no committed package .py change since HEAD; the run stops.\n",
+    )
+    items = review_plan.parse_plan(text)
+    assert {item.status for item in items} == {"out-of-scope"}
+    assert "Final gate" not in {item.label for item in items}
+    assert "## Final gate" not in text
+    assert review_plan.build_reconcile(repo, output).clean
+
+
+def test_resume_changed_recomputes_the_scope_and_carries_itemized_items(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _git(repo, "tag", "0.1.1")
+    package = repo / PACKAGE
+    _write(package / "alpha.py", "ALPHA = 2\n")
+    _commit_all(repo, "alpha")
+    plan = tmp_path / "review.md"
+    assert _plan(repo, plan, "--changed") == 0
+    original = plan.read_bytes()
+
+    _write(package / "sub" / "beta.py", "BETA = 0\n")
+    _write(package / "sub" / "fresh.py", "FRESH = 1\n")
+    _commit_all(repo, "beta and fresh")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+
+    assert _resume(repo, plan, "2026-01-03", "--changed") == 0
+    assert "1 new item(s), 4 already itemized" in capsys.readouterr().out
+    resumed = plan.read_bytes()
+    assert resumed.startswith(original)
+    appended = resumed[len(original) :].decode("utf-8")
+    since = _git(repo, "rev-parse", "0.1.1").strip()
+    assert appended == (
+        "\n"
+        "## Run 0.1.2 2026-01-03-2\n"
+        "\n"
+        f"Scope: changed since 0.1.1 ({since[:12]})\n"
+        f"Drift: 2026-01-03 HEAD unrecorded..{head[:12]}\n"
+        "\n"
+        "Already itemized above, worked this run:\n"
+        "\n"
+        "- `alpha.py`\n"
+        "- `sub/beta.py`\n"
+        "- `sub/ integration`\n"
+        "- `Final gate`\n"
+        "\n"
+        "New items this run:\n"
+        "\n"
+        "- [ ] sub/fresh.py\n"
+        "    - Status: pending\n"
+        "    - Path class:\n"
+        "    - Artifacts: rev-sub__fresh.md, rev-sub__fresh.performance.md, "
+        "rev-sub__fresh.mechanics.md, rev-sub__fresh.comments.md\n"
+    )
+
+    assert _resume(repo, plan, "2026-01-04", "--changed", "--since", "HEAD") == 0
+    assert capsys.readouterr().out.rstrip().endswith("; nothing in scope)")
+    tail = plan.read_bytes()[len(resumed) :].decode("utf-8")
+    assert tail == (
+        "\n"
+        "## Run 0.1.2 2026-01-04-3\n"
+        "\n"
+        f"Scope: changed since HEAD ({head[:12]})\n"
+        "Nothing in scope: no committed package .py change since HEAD; the run stops.\n"
+    )
+
+
+def test_changed_refuses_scope_and_since_needs_changed(
+    repo: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "review.md"
+
+    with pytest.raises(SystemExit) as exit_info:
+        _plan(repo, output, "--changed", "--scope", "sub")
+    assert exit_info.value.code == 2
+    assert "not allowed with argument --changed" in capsys.readouterr().err
+
+    assert _plan(repo, output, "--since", "HEAD") == 2
+    assert "--since applies only with --changed" in capsys.readouterr().err
+    assert not output.exists()
+
+
 def test_plan_ignores_untracked_sources(repo: Path, tmp_path: Path) -> None:
     _write(repo / PACKAGE / "scratch.py", "SCRATCH = 1\n")
     output = tmp_path / "review.md"

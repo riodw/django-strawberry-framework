@@ -75,10 +75,10 @@ def install_auto_strategy_schema(_reload_project_schema_for_acceptance_tests):
 
 
 @pytest.mark.django_db
-def test_auto_strategy_non_postgres_fallback_is_bounded_over_http(
+def test_auto_strategy_picks_the_vendor_body_and_pages_truthfully_over_http(
     install_auto_strategy_schema,
 ):
-    """SQLite executes the windowed body and returns truthful page metadata."""
+    """Auto runs LATERAL on Postgres, the windowed body elsewhere, with truthful page metadata."""
     branch = Branch.objects.create(name="Auto strategy", city="Boston")
     shelf = Shelf.objects.create(code="AUTO", topic="Routing", branch=branch)
     for title in ("a", "b", "c"):
@@ -114,9 +114,14 @@ def test_auto_strategy_non_postgres_fallback_is_bounded_over_http(
     book_sql = [
         entry["sql"] for entry in captured.captured_queries if "library_book" in entry["sql"]
     ]
-    assert any("OVER (" in sql and "PARTITION BY" in sql for sql in book_sql), book_sql
     windowed = [sql for sql in book_sql if "OVER (" in sql]
     assert len(windowed) == 1, book_sql
+    if connection.vendor == "postgresql":
+        assert "CROSS JOIN LATERAL" in windowed[0], book_sql
+        assert "PARTITION BY" not in windowed[0], book_sql
+    else:
+        assert "PARTITION BY" in windowed[0], book_sql
+        assert "LATERAL" not in windowed[0], book_sql
 
 
 @pytest.fixture

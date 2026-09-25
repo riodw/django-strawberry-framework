@@ -240,7 +240,7 @@ def test_audit_marks_target_parse_failure_as_incomplete(tmp_path: Path) -> None:
 
     assert audit.target_records == []
     assert Path("broken.py") in audit.target_failures
-    assert "**TARGET \N{EM DASH} inventory incomplete**" in dry.render_audit_markdown(
+    assert "**TARGET -- inventory incomplete**" in dry.render_audit_markdown(
         audit,
         generated_date="2026-01-02",
     )

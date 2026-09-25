@@ -297,7 +297,8 @@ def test_nullable_lead_ticket_cycle_cascades_one_way():
             "{ allLibraryVenues { name leadTicket { code venue { name } } } }",
         )
 
-    assert data["allLibraryVenues"] == [
+    # ``Venue`` declares no ordering, so the rows compare by name, never by storage order.
+    assert sorted(data["allLibraryVenues"], key=lambda row: row["name"]) == [
         {"name": "Annex", "leadTicket": {"code": "T-1", "venue": {"name": "Annex"}}},
         {"name": "Depot", "leadTicket": None},
     ], data

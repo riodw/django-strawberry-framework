@@ -1,8 +1,8 @@
 """Permanent behavioral tests for django_strawberry_framework.schema.
 
-Construction, hostile extension matching, mutation-lock identity, rollback
-windows, and the enforcement-seal / WeakKeyDictionary / GC rows a request
-cannot express. ``Schema.stream`` stays here: fakeshop has no ASGI/WS mount.
+Construction, hostile extension matching, rollback windows, and the
+enforcement-seal / WeakKeyDictionary / GC rows a request cannot express.
+``Schema.stream`` stays here: fakeshop has no ASGI/WS mount.
 Consumer-visible policy enforcement and masking live in
 ``examples/fakeshop/test_query/test_resource_policy_api.py`` and
 ``examples/fakeshop/test_query/test_error_policy_api.py``.
@@ -40,8 +40,6 @@ from django_strawberry_framework.schema import (
     SCHEMA_CONFIGURATION_ERROR_CODE,
     DjangoMutationExecutionContext,
     DjangoSchema,
-    _async_mutation_lock,
-    _AsyncAliasLock,
     _consumer_extension_entries,
     _entry_type,
     _extension_entry_matches,
@@ -333,23 +331,6 @@ def test_schema_policy_resolution_and_validation():
         DjangoSchema(query=DummyQuery, error_policy={"enabled": "invalid"})
 
 
-def test_async_mutation_lock_caching_per_alias():
-    lock_default_1 = _async_mutation_lock("default")
-    lock_default_2 = _async_mutation_lock("default")
-    lock_other = _async_mutation_lock("other_alias")
-
-    assert lock_default_1 is lock_default_2
-    assert lock_default_1 is not lock_other
-
-
-@pytest.mark.asyncio
-async def test_async_alias_lock_context_manager():
-    lock = _AsyncAliasLock()
-    async with lock:
-        assert lock._lock.locked()
-    assert not lock._lock.locked()
-
-
 @pytest.mark.django_db
 def test_execute_mutation_field_sync_exception_rolls_back():
     class DummyMutationCls:
@@ -423,7 +404,7 @@ def test_sync_window_hostile_error_container_rolls_back_and_leaks_no_transaction
     ``transaction.set_rollback(True, using=alias)`` call in that method's
     ``except Exception`` arm - the one guarding the ``len`` read - leaves the
     exception propagating and the ``finally`` in
-    ``schema.py::DjangoMutationExecutionContext._execute_mutation_field_sync``
+    ``schema.py::DjangoMutationExecutionContext._exit_window``
     still exiting the atomic, so the transaction closes and
     ``connection.in_atomic_block`` is false exactly as it is now, but the exit
     COMMITS: the probe row written inside the window survives a window the
@@ -450,21 +431,22 @@ async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_tran
     """The async window's clean exit obeys the same containment, rollback included.
 
     The rollback decision raising must not skip the atomic exit, which would
-    release the alias lock over an abandoned open transaction - and the write
-    the window was holding must not survive it either. Deleting the
+    retire the window's thread over an abandoned open transaction - and the
+    write the window was holding must not survive it either. Deleting the
     ``transaction.set_rollback(True, using=alias)`` call in the ``except
     Exception`` arm of
     ``schema.py::DjangoMutationExecutionContext._rollback_for_new_errors``
-    commits the probe row here through ``_exit_clean``'s ``finally``, with the
-    transaction still closed and the alias lock still released; the absence
-    assertion is the only one that notices.
+    commits the probe row here through
+    ``schema.py::DjangoMutationExecutionContext._exit_window``'s ``finally``,
+    with the transaction still closed; the absence assertion is the only one
+    that notices.
 
-    Everything that touches the ORM runs through
-    ``run_in_one_sync_boundary``'s ``thread_sensitive=True`` worker - the same
-    worker the window's ``atomic.__enter__`` / ``__exit__`` run in, and
-    therefore the same Django connection the transaction is open on. Writing or
-    reading from the event-loop thread would be a different connection (and
-    Django's own async-unsafe refusal).
+    The patched resolver writes through ``run_in_one_sync_boundary``, which the
+    window routes onto its own thread - the thread its ``atomic.__enter__`` /
+    ``__exit__`` run on, and therefore the connection the transaction is open
+    on. The absence check runs after the window, on asgiref's shared
+    thread-sensitive worker: a different connection, which sees only what the
+    window committed.
     """
     ctx = DjangoMutationExecutionContext.__new__(DjangoMutationExecutionContext)
     ctx.schema = MagicMock()

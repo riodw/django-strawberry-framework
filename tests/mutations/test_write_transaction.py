@@ -1,11 +1,14 @@
 """The mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 
 Completion-spanning transaction internals: the plain-``strawberry.Schema``
-refusal, concurrent async savepoint isolation, ``BaseException`` unwind,
-alias-lock cancel, disappearing-row ``conflict``, and fingerprint helpers.
-Live HTTP (sync ``/graphql/`` and async ``/graphql-async/``) is
-``examples/fakeshop/test_query/test_mutation_atomicity.py``. A WSGI request
-cannot drive worker-connection savepoint nesting or lock cancellation.
+refusal, concurrent async windows on their own connections, ``BaseException``
+unwind, the async window's private thread (another socket's connection hygiene,
+client cancellation, an outer ``ThreadSensitiveContext``), the closed-connection
+failure rule in both modes, disappearing-row ``conflict``, and fingerprint
+helpers. Live HTTP (sync ``/graphql/`` and async ``/graphql-async/``) is
+``examples/fakeshop/test_query/test_mutation_atomicity.py``. The socket rows sit
+here rather than live because fakeshop has no WebSocket mount, and a WSGI
+request cannot hold two windows open at once or cancel one mid-flight.
 """
 
 from __future__ import annotations
@@ -13,12 +16,28 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
+import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 import pytest
 import strawberry
 from apps.products import models as product_models
-from django.db import DatabaseError, IntegrityError, connections, transaction
+from asgiref.sync import ThreadSensitiveContext, async_to_sync, sync_to_async
+from asgiref.testing import ApplicationCommunicator as AsgirefApplicationCommunicator
+from channels.db import database_sync_to_async
+from channels.testing import WebsocketCommunicator
+from django.db import (
+    DatabaseError,
+    IntegrityError,
+    close_old_connections,
+    connections,
+    transaction,
+)
+from django.db.backends.signals import connection_created
+from django.db.backends.sqlite3 import base as sqlite_base
+from django.db.models.signals import post_save
 from strawberry import relay
 
 from django_strawberry_framework import (
@@ -209,26 +228,35 @@ def test_plain_strawberry_schema_refuses_generated_mutations_before_writing():
 
 
 # ===========================================================================
-# Async execution internals (savepoint nesting, BaseException, lock cancel)
+# Async execution internals (concurrent windows, BaseException)
 # ===========================================================================
+
+
+def _window_observation() -> tuple[int, bool, int]:
+    """(thread, in an atomic block?, savepoint depth) of the calling thread's connection."""
+    connection = connections["default"]
+    return threading.get_ident(), connection.in_atomic_block, len(connection.savepoint_ids)
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_concurrent_async_mutations_do_not_nest_transactions(monkeypatch):
-    """Concurrent async fields cannot share a nested savepoint on the worker connection."""
+async def test_concurrent_async_windows_each_hold_an_outermost_transaction_of_their_own(
+    monkeypatch,
+):
+    """Two windows open at once on one loop never share a connection or a savepoint.
+
+    Each window runs its thread-sensitive work on a thread of its own, so the
+    second opens while the first is still open, and both observe an OUTERMOST
+    atomic block (no savepoint) on two different threads.
+    """
     from asgiref.sync import sync_to_async
     from graphql.execution.execute import ExecutionContext as CoreExecutionContext
 
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
-    first_started = asyncio.Event()
-    second_started = asyncio.Event()
-    release_first = asyncio.Event()
-    release_second = asyncio.Event()
-    observations: list[tuple[bool, int]] = []
-    calls = 0
+    both_open = asyncio.Event()
+    observations: list[tuple[int, bool, int]] = []
 
     async def fake_execute_field(
         self,
@@ -237,43 +265,28 @@ async def test_concurrent_async_mutations_do_not_nest_transactions(monkeypatch):
         field_nodes,
         path,
     ):
-        nonlocal calls
-        calls += 1
-        observations.append(
-            await sync_to_async(
-                lambda: (
-                    connections["default"].in_atomic_block,
-                    len(connections["default"].savepoint_ids),
-                ),
-                thread_sensitive=True,
-            )(),
-        )
-        if calls == 1:
-            first_started.set()
-            await release_first.wait()
-        else:
-            second_started.set()
-            await release_second.wait()
+        observations.append(await sync_to_async(_window_observation, thread_sensitive=True)())
+        if len(observations) == 2:
+            both_open.set()
+        await asyncio.wait_for(both_open.wait(), timeout=2)
         return None
 
     monkeypatch.setattr(CoreExecutionContext, "execute_field", fake_execute_field)
     variables = {"id": _item_gid(1), "d": {"name": "Concurrent"}}
-    first = asyncio.create_task(schema.execute(_UPDATE, variable_values=variables))
-    await asyncio.wait_for(first_started.wait(), timeout=2)
-    second = asyncio.create_task(schema.execute(_UPDATE, variable_values=variables))
-    await asyncio.sleep(0.05)
-    assert not second_started.is_set()
-    release_first.set()
-    await asyncio.wait_for(second_started.wait(), timeout=2)
-    release_second.set()
-    await asyncio.gather(first, second)
+    await asyncio.gather(
+        schema.execute(_UPDATE, variable_values=variables),
+        schema.execute(_UPDATE, variable_values=variables),
+    )
 
-    assert observations == [(True, 0), (True, 0)]
+    assert [(in_atomic, depth) for _, in_atomic, depth in observations] == [(True, 0), (True, 0)]
+    assert observations[0][0] != observations[1][0]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_concurrent_async_mutations_across_event_loops_do_not_nest_transactions(monkeypatch):
-    """Separate event loops still serialize on the shared thread-sensitive worker."""
+def test_concurrent_async_windows_on_two_event_loops_each_hold_their_own_transaction(
+    monkeypatch,
+):
+    """Windows on separate event loops open side by side, each outermost on its own thread."""
     from concurrent.futures import ThreadPoolExecutor
 
     from asgiref.sync import sync_to_async
@@ -282,14 +295,9 @@ def test_concurrent_async_mutations_across_event_loops_do_not_nest_transactions(
     _declare_item_types()
     UpdateItem = _declare_update_mutation()
     schema = _mutation_schema(UpdateItem)
-    first_started = threading.Event()
-    second_started = threading.Event()
-    release_first = threading.Event()
-    release_second = threading.Event()
-    observations: list[tuple[bool, int]] = []
+    both_open = threading.Barrier(2, timeout=2)
+    observations: list[tuple[int, bool, int]] = []
     observation_lock = threading.Lock()
-    calls = 0
-    calls_lock = threading.Lock()
 
     async def fake_execute_field(
         self,
@@ -298,25 +306,10 @@ def test_concurrent_async_mutations_across_event_loops_do_not_nest_transactions(
         field_nodes,
         path,
     ):
-        nonlocal calls
-        with calls_lock:
-            calls += 1
-            call_number = calls
-        observation = await sync_to_async(
-            lambda: (
-                connections["default"].in_atomic_block,
-                len(connections["default"].savepoint_ids),
-            ),
-            thread_sensitive=True,
-        )()
+        observation = await sync_to_async(_window_observation, thread_sensitive=True)()
         with observation_lock:
             observations.append(observation)
-        if call_number == 1:
-            first_started.set()
-            await asyncio.to_thread(release_first.wait)
-        else:
-            second_started.set()
-            await asyncio.to_thread(release_second.wait)
+        await asyncio.to_thread(both_open.wait)
         return None
 
     monkeypatch.setattr(CoreExecutionContext, "execute_field", fake_execute_field)
@@ -327,16 +320,12 @@ def test_concurrent_async_mutations_across_event_loops_do_not_nest_transactions(
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         first = executor.submit(execute)
-        assert first_started.wait(2)
         second = executor.submit(execute)
-        assert not second_started.wait(0.05)
-        release_first.set()
-        assert second_started.wait(2)
-        release_second.set()
         first.result()
         second.result()
 
-    assert observations == [(True, 0), (True, 0)]
+    assert [(in_atomic, depth) for _, in_atomic, depth in observations] == [(True, 0), (True, 0)]
+    assert observations[0][0] != observations[1][0]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -406,6 +395,560 @@ def test_sync_execution_context_exits_transaction_on_raised_base_exception(monke
     assert connections["default"].in_atomic_block is False
 
 
+# ===========================================================================
+# The async window owns its thread and connection
+# ===========================================================================
+
+#: Every row below names its categories under this prefix, and the committed-state
+#: reader counts only these, so a row's assertion is about its own writes.
+_WINDOW_PREFIX = "window-"
+
+#: The field error of a window whose connection was closed inside its transaction.
+#: RE-TYPED rather than imported, so a drift in the package text fails a row.
+_CLOSED_WINDOW_MESSAGE = (
+    "The database connection was closed before the mutation's transaction could "
+    "commit; nothing was written."
+)
+
+_CREATE_CATEGORY = (
+    "mutation($d: CategoryInput!){ write0(data:$d){ node{ id name } errors{ field messages } } }"
+)
+_CREATE_CATEGORY_TOUCHING = (
+    "mutation($d: CategoryInput!){ write0(data:$d){ node{ id name touched } "
+    "errors{ field messages } } }"
+)
+
+
+async def _touch_through_channels_database_sync_to_async(root) -> bool:
+    """A consumer's async node field doing its ORM work the way Channels documents.
+
+    ``channels.db.database_sync_to_async`` is thread-sensitive and runs Django's
+    ``close_old_connections`` before and after its body, on whichever thread it
+    lands - inside a window, the window's own.
+    """
+    del root
+    return await database_sync_to_async(lambda: True)()
+
+
+def _close_old_connections_in_a_resolver(root) -> bool:
+    """A consumer's sync node field that runs Django's connection hygiene mid-request."""
+    del root
+    close_old_connections()
+    return True
+
+
+def _category_create_schema(*, touched=None):
+    """A ``DjangoSchema`` exposing one generated Category create as ``write0``.
+
+    ``touched`` becomes a consumer-authored ``touched`` field on the payload's node
+    type, resolved during completion - inside the window.
+    """
+    body: dict = {
+        "Meta": type(
+            "Meta",
+            (),
+            {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
+        ),
+    }
+    if touched is not None:
+        body["touched"] = strawberry.field(resolver=touched)
+    type("CategoryT", (DjangoType, relay.Node), body)
+    meta_attrs = {
+        "model": product_models.Category,
+        "operation": "create",
+        "permission_classes": [_AllowAll],
+    }
+    CreateCategory = type(
+        "CreateCategory",
+        (DjangoMutation,),
+        {"Meta": type("Meta", (), meta_attrs)},
+    )
+    return _mutation_schema(CreateCategory)
+
+
+def _create_variables(name: str) -> dict:
+    return {"d": {"name": name}}
+
+
+@contextlib.contextmanager
+def _held_in_the_pipeline(name: str):
+    """Park the window whose create writes ``name`` inside its pipeline until released.
+
+    A ``post_save`` receiver - consumer application code, running on the window's
+    thread right after the INSERT - blocks there, so the window's transaction is
+    open and holds a write while the test acts. Yields ``(reached, release)``: an
+    ``asyncio.Event`` set once the pipeline is parked and a ``threading.Event`` the
+    test sets to let it continue.
+    """
+    loop = asyncio.get_running_loop()
+    reached = asyncio.Event()
+    release = threading.Event()
+
+    def _park(sender, instance, **kwargs):
+        del sender, kwargs
+        if instance.name == name:
+            loop.call_soon_threadsafe(reached.set)
+            release.wait(10)
+
+    post_save.connect(_park, sender=product_models.Category, weak=False)
+    try:
+        yield reached, release
+    finally:
+        release.set()
+        post_save.disconnect(_park, sender=product_models.Category)
+
+
+def _committed_window_names() -> set[str]:
+    """The committed ``window-*`` category names, read on a connection no window uses.
+
+    Meant to run on a thread of its own: the read sees only COMMITTED rows, and a
+    write still held open by a stranded transaction makes it fail rather than pass.
+    The thread's connection is closed before returning (its raw handle too, which
+    an in-memory SQLite connection keeps through ``close()``), so nothing is left
+    to the finalizer.
+    """
+    try:
+        return set(
+            product_models.Category.objects.filter(name__startswith=_WINDOW_PREFIX).values_list(
+                "name",
+                flat=True,
+            ),
+        )
+    finally:
+        connection = connections["default"]
+        connection.close()
+        if connection.connection is not None:
+            connection.connection.close()
+            connection.connection = None
+
+
+async def _committed() -> set[str]:
+    return await asyncio.to_thread(_committed_window_names)
+
+
+@contextlib.contextmanager
+def _connections_really_close():
+    """Make a ``close()`` of the test database's connections actually close them.
+
+    A no-op on the Postgres tier, where a close is always real. The default tier's
+    in-memory SQLite backend declines every close request (closing would destroy
+    the database), so a connection closed inside a window could never be observed
+    there. For the duration this lifts that refusal, with a keeper handle holding
+    the shared-cache database alive, so a close does what it does on a file-backed
+    or server database: the handle closes, SQLite rolls its open transaction back,
+    and Django marks the connection ``closed_in_transaction``.
+    """
+    default = connections["default"]
+    if default.vendor != "sqlite" or not default.is_in_memory_db():
+        yield
+        return
+    keeper = sqlite3.connect(default.settings_dict["NAME"], uri=True)
+    try:
+        with patch.object(sqlite_base.DatabaseWrapper, "is_in_memory_db", lambda self: False):
+            yield
+    finally:
+        # The database lives only while some handle holds it. A sync row closes the
+        # calling thread's own connection, so that connection is reopened before
+        # the keeper goes; an async row never closes the loop thread's connection.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            default.ensure_connection()
+        keeper.close()
+
+
+class _HygieneWebsocketCommunicator(WebsocketCommunicator):
+    """A WebSocket communicator that leaves Channels' connection hygiene switched on.
+
+    ``channels.testing``'s communicator replaces ``channels.db.close_old_connections``
+    with a no-op, process-wide, while it sends or receives. A real server runs the
+    real one before every message it dispatches, and that call is the exposure the
+    socket rows measure, so these two methods go straight to asgiref's base.
+    """
+
+    async def send_input(self, message):
+        return await AsgirefApplicationCommunicator.send_input(self, message)
+
+    async def receive_output(self, timeout=1):
+        return await AsgirefApplicationCommunicator.receive_output(self, timeout)
+
+
+async def _no_http_application(scope, receive, send):
+    """The router's required HTTP application; the socket rows never reach it."""
+    raise AssertionError("the window rows serve no HTTP")
+
+
+def _window_router(schema):
+    from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
+
+    return DjangoGraphQLProtocolRouter(schema, django_application=_no_http_application)
+
+
+@contextlib.asynccontextmanager
+async def _socket(router):
+    """One acknowledged ``graphql-transport-ws`` socket on ``router``."""
+    communicator = _HygieneWebsocketCommunicator(
+        router,
+        "/graphql",
+        headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
+        subprotocols=["graphql-transport-ws"],
+    )
+    connected, _subprotocol = await communicator.connect(timeout=10)
+    assert connected, "websocket handshake failed"
+    try:
+        await communicator.send_json_to({"type": "connection_init"})
+        ack = await communicator.receive_json_from(timeout=10)
+        assert ack["type"] == "connection_ack", ack
+        yield communicator
+    finally:
+        await communicator.disconnect()
+
+
+async def _send_create(communicator, name: str, *, op_id: str = "1") -> None:
+    await communicator.send_json_to(
+        {
+            "id": op_id,
+            "type": "subscribe",
+            "payload": {"query": _CREATE_CATEGORY, "variables": _create_variables(name)},
+        },
+    )
+
+
+async def _receive_result(communicator, *, op_id: str = "1") -> dict:
+    """The operation's single result frame, with its ``complete`` drained."""
+    frame = await communicator.receive_json_from(timeout=10)
+    if frame["type"] == "next":
+        assert await communicator.receive_json_from(timeout=10) == {
+            "type": "complete",
+            "id": op_id,
+        }
+    return frame
+
+
+def _reported_name(frame: dict) -> str | None:
+    """The node name a success frame reports, or ``None`` for anything else."""
+    payload = frame.get("payload") or {}
+    if frame.get("type") != "next" or payload.get("errors"):
+        return None
+    node = ((payload.get("data") or {}).get("write0") or {}).get("node") or {}
+    return node.get("name")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_another_sockets_message_mid_window_leaves_the_windows_write_committed():
+    """A message dispatched on an unrelated socket cannot close an open window's connection.
+
+    Channels runs ``close_old_connections`` before dispatching every message, on
+    the thread-sensitive worker the dispatching socket reaches, and Django closes
+    a connection it finds inside a transaction. The window's connection belongs
+    to the window's own thread, so an unauthenticated socket's ``ping`` arriving
+    while the window holds its write cannot reach it: the success payload the
+    window reports is a committed row.
+    """
+    router = _window_router(_category_create_schema())
+    name = "window-pinged"
+    with _connections_really_close(), _held_in_the_pipeline(name) as (reached, release):
+        async with _socket(router) as writer, _socket(router) as pinger:
+            await _send_create(writer, name)
+            await asyncio.wait_for(reached.wait(), timeout=10)
+            await pinger.send_json_to({"type": "ping"})
+            await asyncio.sleep(0.1)  # the ping's dispatch has queued its connection hygiene
+            release.set()
+            frame = await _receive_result(writer)
+            assert (await pinger.receive_json_from(timeout=10))["type"] == "pong"
+
+    assert _reported_name(frame) == name, frame
+    assert name in await _committed()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_client_complete_mid_window_never_strands_its_transaction():
+    """A client ``complete`` while the window is open cannot strand its transaction.
+
+    Channels dispatches the ``complete`` frame only after the connection hygiene
+    it queues on asgiref's shared thread-sensitive worker, and another context's
+    sync call queues there too, so the cancellation lands while the window is
+    finishing and its exit would wait behind that call. Cancelling an operation
+    drops executor work that has not started, and the window's exit must never be
+    such work: a fresh operation on another socket afterwards reports success AND
+    is committed, which a transaction left open under it would prevent.
+    """
+    router = _window_router(_category_create_schema())
+    loop = asyncio.get_running_loop()
+    occupied = asyncio.Event()
+    vacate = threading.Event()
+
+    def _occupy_the_shared_worker() -> None:
+        loop.call_soon_threadsafe(occupied.set)
+        vacate.wait(10)
+
+    name = "window-completed"
+    with _held_in_the_pipeline(name) as (reached, release):
+        async with _socket(router) as completing, _socket(router) as following:
+            await _send_create(completing, name)
+            await asyncio.wait_for(reached.wait(), timeout=10)
+            await completing.send_json_to({"id": "1", "type": "complete"})
+            await asyncio.sleep(0.05)  # the complete's dispatch has queued its hygiene
+            occupant = asyncio.create_task(
+                sync_to_async(_occupy_the_shared_worker, thread_sensitive=True)(),
+            )
+            await asyncio.sleep(0.05)
+            release.set()
+            await asyncio.wait_for(occupied.wait(), timeout=10)
+            await asyncio.sleep(0.1)  # the cancellation has landed
+            vacate.set()
+            await occupant
+            await _send_create(following, "window-following", op_id="2")
+            frame = await _receive_result(following, op_id="2")
+
+    assert _reported_name(frame) == "window-following", frame
+    assert "window-following" in await _committed()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_window_cancelled_twice_while_held_rolls_back_and_the_next_mutation_commits():
+    """Repeated cancellation of an open window still exits its transaction, rolled back.
+
+    The second cancellation lands while the window's exit is queued behind the
+    pipeline it interrupted. The exit still runs once the pipeline finishes, so
+    the held write is rolled back rather than left open, and the next mutation
+    commits on its own.
+    """
+    schema = _category_create_schema()
+    with _held_in_the_pipeline("window-cancelled") as (reached, release):
+        cancelled = asyncio.create_task(
+            schema.execute(
+                _CREATE_CATEGORY,
+                variable_values=_create_variables("window-cancelled"),
+            ),
+        )
+        await asyncio.wait_for(reached.wait(), timeout=10)
+        cancelled.cancel()
+        await asyncio.sleep(0.05)
+        cancelled.cancel()
+        await asyncio.sleep(0.05)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+
+    after = await schema.execute(
+        _CREATE_CATEGORY,
+        variable_values=_create_variables("window-after-cancel"),
+    )
+
+    assert after.errors is None
+    assert await _committed() == {"window-after-cancel"}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_work_on_an_outer_thread_sensitive_contexts_thread_never_sees_the_window_open():
+    """An outer ``ThreadSensitiveContext`` does not put the window on its thread.
+
+    Django's ASGI handler wraps each request in one, and a consumer may share one
+    across a socket's concurrent operations; asgiref's context is re-entrant, so
+    an inner one would be a no-op there. Sync work that context runs while the
+    window holds its write finds no transaction open on that thread's connection.
+    """
+    schema = _category_create_schema()
+    name = "window-under-an-outer-context"
+    with _held_in_the_pipeline(name) as (reached, release):
+        async with ThreadSensitiveContext():
+            window = asyncio.create_task(
+                schema.execute(_CREATE_CATEGORY, variable_values=_create_variables(name)),
+            )
+            await asyncio.wait_for(reached.wait(), timeout=10)
+            sibling = asyncio.create_task(
+                sync_to_async(_window_observation, thread_sensitive=True)(),
+            )
+            await asyncio.sleep(0.05)
+            release.set()
+            _thread, sibling_in_atomic, _depth = await sibling
+            await window
+
+    assert sibling_in_atomic is False
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_connection_closed_inside_an_async_window_fails_the_field_and_writes_nothing():
+    """A window whose connection a node resolver closed reports an error, never the row.
+
+    The consumer's ``touched`` field runs through Channels' ``database_sync_to_async``
+    during completion, whose ``close_old_connections`` closes the window's own
+    connection mid-transaction. Django's atomic then skips the commit without
+    raising, so the field must resolve as an error, with nothing written.
+    """
+    schema = _category_create_schema(touched=_touch_through_channels_database_sync_to_async)
+    with _connections_really_close():
+        result = await schema.execute(
+            _CREATE_CATEGORY_TOUCHING,
+            variable_values=_create_variables("window-closed-async"),
+        )
+
+    assert result.data is None
+    assert [(error.message, error.path) for error in result.errors] == [
+        (_CLOSED_WINDOW_MESSAGE, ["write0"]),
+    ]
+    assert await _committed() == set()
+
+
+@contextlib.contextmanager
+def _the_next_off_thread_connect(action):
+    """Run ``action`` inside the next connect a thread other than the loop's makes.
+
+    Armed on entry, fired once. ``connection_created`` fires inside Django's
+    ``connect()``, which a window's ``atomic.__enter__`` reaches when its thread's
+    connection is not open yet - so ``action`` runs, or raises, in the middle of
+    that enter, as a slow or failing connect would.
+    """
+    armed = [True]
+
+    def _on_connect(sender, connection, **kwargs):
+        del sender, connection, kwargs
+        if armed[0] and threading.current_thread() is not threading.main_thread():
+            armed[0] = False
+            action()
+
+    connection_created.connect(_on_connect, weak=False)
+    try:
+        yield
+    finally:
+        connection_created.disconnect(_on_connect)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_window_cancelled_during_its_enter_still_exits_the_transaction_it_opened():
+    """A cancellation landing while ``atomic.__enter__`` runs cannot leave that atomic open.
+
+    The enter cannot be abandoned once its thread started it, so it completes
+    after the task was cancelled. The window's exit is queued behind it and runs
+    once it finished, so the transaction the enter opened is closed, rolled back,
+    and the next mutation commits on its own.
+    """
+    schema = _category_create_schema()
+    loop = asyncio.get_running_loop()
+    connecting = asyncio.Event()
+    finish_connecting = threading.Event()
+
+    def _slow_connect() -> None:
+        loop.call_soon_threadsafe(connecting.set)
+        finish_connecting.wait(10)
+
+    with _connections_really_close():
+        # A fresh connect on whichever thread the window's enter lands.
+        await sync_to_async(lambda: connections["default"].close(), thread_sensitive=True)()
+        with _the_next_off_thread_connect(_slow_connect):
+            cancelled = asyncio.create_task(
+                schema.execute(_CREATE_CATEGORY, variable_values=_create_variables("window-x")),
+            )
+            await asyncio.wait_for(connecting.wait(), timeout=10)
+            cancelled.cancel()
+            await asyncio.sleep(0.05)
+            finish_connecting.set()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled
+        after = await schema.execute(
+            _CREATE_CATEGORY,
+            variable_values=_create_variables("window-after-enter-cancel"),
+        )
+
+    assert after.errors is None
+    assert await _committed() == {"window-after-enter-cancel"}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_window_whose_transaction_cannot_open_reports_the_failure_and_writes_nothing():
+    """A failed enter leaves nothing to exit: the field reports the connect failure."""
+    schema = _category_create_schema()
+
+    def _refuse_the_connect() -> None:
+        raise DatabaseError("connect refused by the consumer's connection_created receiver")
+
+    with _the_next_off_thread_connect(_refuse_the_connect):
+        result = await schema.execute(
+            _CREATE_CATEGORY,
+            variable_values=_create_variables("window-never-opened"),
+        )
+
+    assert [error.message for error in result.errors] == [
+        "connect refused by the consumer's connection_created receiver",
+    ]
+    assert await _committed() == set()
+
+
+@pytest.mark.django_db
+def test_an_async_window_under_a_blocked_sync_caller_nests_in_the_callers_transaction():
+    """Under ``async_to_sync`` the window runs on the waiting caller's thread and connection.
+
+    asgiref sends thread-sensitive work to a sync caller blocked in
+    ``async_to_sync`` before it consults any context, and that caller's open
+    transaction - a test case's, a sync view's - is the one the window must nest
+    in: the write is visible to the caller inside it and rolls back with it.
+    """
+    schema = _category_create_schema()
+    with transaction.atomic():
+        result = async_to_sync(schema.execute)(
+            _CREATE_CATEGORY,
+            variable_values=_create_variables("window-nested"),
+        )
+        seen_inside = product_models.Category.objects.filter(name="window-nested").exists()
+        transaction.set_rollback(True)
+
+    assert result.errors is None
+    assert seen_inside
+    assert not product_models.Category.objects.filter(name="window-nested").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_connection_closed_inside_a_sync_window_fails_the_field_and_writes_nothing():
+    """The sync mode applies the same closed-connection rule to its calling thread's window."""
+    schema = _category_create_schema(touched=_close_old_connections_in_a_resolver)
+    with _connections_really_close():
+        result = schema.execute_sync(
+            _CREATE_CATEGORY_TOUCHING,
+            variable_values=_create_variables("window-closed-sync"),
+        )
+
+    assert result.data is None
+    assert [(error.message, error.path) for error in result.errors] == [
+        (_CLOSED_WINDOW_MESSAGE, ["write0"]),
+    ]
+    with ThreadPoolExecutor(max_workers=1) as reader:
+        assert reader.submit(_committed_window_names).result() == set()
+
+
+@pytest.mark.pg
+@pytest.mark.django_db(transaction=True)
+async def test_every_success_payload_under_steady_pings_is_a_committed_row():
+    """Under a steady ping stream from another socket, no reported write is lost.
+
+    No timing aid: one socket pings continuously while another runs ordinary
+    sequential mutations, the production shape in which a real close of a shared
+    connection silently discarded committed-looking writes.
+    """
+    router = _window_router(_category_create_schema())
+    names = [f"window-steady-{index}" for index in range(20)]
+    stop = asyncio.Event()
+    async with _socket(router) as writer, _socket(router) as pinger:
+
+        async def _ping_steadily() -> None:
+            while not stop.is_set():
+                await pinger.send_json_to({"type": "ping"})
+                await pinger.receive_json_from(timeout=10)
+
+        pinging = asyncio.create_task(_ping_steadily())
+        try:
+            reported = []
+            for index, name in enumerate(names):
+                await _send_create(writer, name, op_id=str(index))
+                reported.append(_reported_name(await _receive_result(writer, op_id=str(index))))
+        finally:
+            stop.set()
+            await pinging
+
+    assert reported == names
+    assert await _committed() == set(names)
+
+
 def test_execution_errors_reads_both_graphql_core_error_shapes():
     """``_execution_errors`` bridges the graphql-core 3.2.9 errors relocation.
 
@@ -427,80 +970,6 @@ def test_execution_errors_reads_both_graphql_core_error_shapes():
     del context.collected_errors
     context.errors = ["legacy"]
     assert context._execution_errors() == ["legacy"]
-
-
-# ===========================================================================
-# The async alias mutex: a cancelled acquisition must never leave it owned
-# ===========================================================================
-
-
-async def _hold_alias_lock_briefly(lock) -> None:
-    """Enter the alias lock and release it immediately (the window's shape)."""
-    async with lock:
-        pass
-
-
-async def test_async_alias_lock_releases_after_repeated_waiter_cancellation():
-    """A cancellation landing DURING cancellation recovery must not strand the mutex.
-
-    The lock is process-wide per write alias, so an acquisition left owned by a
-    window that no longer exists deadlocks every subsequent async generated
-    mutation on that alias for the life of the process. The recovery path
-    therefore keeps awaiting the hand-off across repeated cancellations instead
-    of escaping between the acquisition and its release.
-    """
-    from django_strawberry_framework.schema import _AsyncAliasLock
-
-    lock = _AsyncAliasLock()
-    assert lock._lock.acquire(timeout=5) is True  # another window owns the alias
-    waiter = asyncio.create_task(_hold_alias_lock_briefly(lock))
-    await asyncio.sleep(0.05)  # the waiter is parked in the executor thread
-
-    waiter.cancel()
-    await asyncio.sleep(0.05)
-    waiter.cancel()  # lands inside the cancellation-recovery await
-    await asyncio.sleep(0.05)
-
-    lock._lock.release()  # the holder finishes; the executor thread wins the mutex
-    with pytest.raises(asyncio.CancelledError):
-        await waiter
-
-    # The abandoned acquisition was handed back rather than leaked.
-    assert lock._lock.acquire(timeout=5) is True
-    lock._lock.release()
-
-
-async def test_async_alias_lock_releases_when_the_acquisition_task_is_cancelled():
-    """Loop teardown cancelling the acquiring task cannot strand the mutex either.
-
-    ``asyncio.to_thread`` cannot stop a thread already blocked in
-    ``threading.Lock.acquire``: that thread WILL take the mutex once the current
-    holder releases, long after its task was cancelled and nothing is left to
-    release it. The hand-off makes the thread give the ownership straight back.
-    """
-    from django_strawberry_framework.schema import _AsyncAliasLock
-
-    lock = _AsyncAliasLock()
-    assert lock._lock.acquire(timeout=5) is True
-    waiter = asyncio.create_task(_hold_alias_lock_briefly(lock))
-    await asyncio.sleep(0.05)
-
-    # ``__aenter__`` parks the blocking acquire in its own ``asyncio.to_thread`` task;
-    # identify it by its coroutine so an unrelated task in the same window cannot be
-    # cancelled instead.
-    acquisitions = [
-        task
-        for task in asyncio.all_tasks()
-        if getattr(task.get_coro(), "__qualname__", None) == "to_thread"
-    ]
-    assert len(acquisitions) == 1
-    acquisitions[0].cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await waiter
-
-    lock._lock.release()  # the uncancellable thread now wins the mutex...
-    assert lock._lock.acquire(timeout=5) is True  # ...and hands it straight back
-    lock._lock.release()
 
 
 @pytest.mark.django_db

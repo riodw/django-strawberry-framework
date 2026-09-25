@@ -38,7 +38,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`DjangoModelFormMutation`](#djangomodelformmutation) — `ModelForm` mutation base subclassing `DjangoMutation`; returns the post-save object in the uniform `node` / `result` slot.
 - [`DjangoModelPermission`](#djangomodelpermission) — default write-authorization class (Django `add` / `change` / `delete` model perms) for `Meta.permission_classes`.
 - [`DjangoMutation`](#djangomutation) — model-driven create / update / delete mutation base configured through a nested `class Meta`.
-- `DjangoMutationExecutionContext` — the graphql-core `ExecutionContext` subclass `DjangoSchema` installs by default, which holds each top-level generated mutation's transaction open until graphql-core has finished completing that field's value. The write pipeline it wraps is [`DjangoMutation`](#djangomutation).
+- `DjangoMutationExecutionContext` — the graphql-core `ExecutionContext` subclass `DjangoSchema` installs by default, which holds each top-level generated mutation's transaction open until graphql-core has finished completing that field's value, runs each such window on a private thread and connection under async execution, and fails the field rather than report a write whose connection was closed before it could commit. The write pipeline it wraps is [`DjangoMutation`](#djangomutation).
 - [`DjangoMutationField`](#djangomutationfield) — write-side field factory exposing a `DjangoMutation` on the schema's `Mutation` type.
 - [`DjangoNodeField`](#djangonodefield) — root Relay `node(id:)` refetch field factory (bare interface and typed forms).
 - [`DjangoNodesField`](#djangonodesfield) — root Relay `nodes(ids:)` batch refetch field factory.

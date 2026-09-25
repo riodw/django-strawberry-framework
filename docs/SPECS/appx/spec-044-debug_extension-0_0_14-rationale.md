@@ -616,8 +616,10 @@ Django's ASGI handler wraps each HTTP request in a
 `ThreadSensitiveContext`, which selects a per-request single-thread
 executor, so worker-thread bracketing **may be viable** for normal ASGI
 HTTP inside the inherited request context. It is still not universal —
-direct `schema.execute()`, batching, and work escaping that context lack
-the per-request executor — so the follow-on must be accepted or rejected
+direct `schema.execute()`, batching, a generated mutation's transaction
+window (which runs on a private thread of its own,
+`django_strawberry_framework/schema.py::DjangoMutationExecutionContext`),
+and work escaping that context lack the per-request executor — so the follow-on must be accepted or rejected
 against a **real ASGI-request prototype**, not this spec's prose. v1's
 honest "async SQL is typically empty" limitation stands either way.)
 

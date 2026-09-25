@@ -42,7 +42,6 @@ from django_strawberry_framework.optimizer.walker import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
-from django_strawberry_framework.utils.strings import snake_case
 
 
 @pytest.fixture(autouse=True)
@@ -142,10 +141,7 @@ def _register_type_definition(
             selected_fields=selected_fields,
             field_map=field_map
             if field_map is not None
-            else {
-                snake_case(field.name): FieldMeta.from_django_field(field)
-                for field in selected_fields
-            },
+            else {field.name: FieldMeta.from_django_field(field) for field in selected_fields},
             optimizer_hints=optimizer_hints or {},
             has_custom_get_queryset=type_cls.has_custom_get_queryset(),
         ),
@@ -2191,7 +2187,7 @@ def test_scalar_only_secondary_resolver_uses_secondary_field_map():
     # Primary's field_map omits ``name``.
     primary_fields = tuple(f for f in Item._meta.get_fields() if f.name != "name")
     primary_field_map = {
-        snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
+        field.name: FieldMeta.from_django_field(field) for field in primary_fields
     }
     _register_type_definition(Item, ItemType, field_map=primary_field_map, primary=True)
     # Secondary's field_map includes ``name``.
@@ -2242,7 +2238,7 @@ def test_optimizer_walker_uses_primary_for_nested_relation_target():
     # detect which type's field_map was used for the nested step.
     primary_fields = tuple(f for f in Item._meta.get_fields() if f.name != "name")
     primary_field_map = {
-        snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
+        field.name: FieldMeta.from_django_field(field) for field in primary_fields
     }
     _register_type_definition(Item, ItemType, field_map=primary_field_map, primary=True)
     _register_type_definition(Item, AdminItemType)

@@ -61,7 +61,8 @@ class FieldMeta:
     """Lightweight snapshot of a Django field's optimizer-relevant attributes.
 
     Attributes:
-        name: The Django field name (snake_case).
+        name: The Django field's ``name`` as declared, in any letter case; the
+            key of ``DjangoTypeDefinition.field_map``.
         is_relation: Whether the field is a relation.
         many_to_many: ``True`` for M2M fields.
         one_to_many: ``True`` for reverse FK fields.

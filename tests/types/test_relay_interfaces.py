@@ -39,7 +39,6 @@ from django_strawberry_framework.types.relay import (
     install_relay_node_resolvers,
 )
 from django_strawberry_framework.utils.querysets import model_for
-from django_strawberry_framework.utils.strings import snake_case
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +49,7 @@ def _isolate_registry(isolate_global_registry):
 
 def _field_map_for(fields):
     """Build the definition-style field map expected by _build_annotations."""
-    return {snake_case(field.name): FieldMeta.from_django_field(field) for field in fields}
+    return {field.name: FieldMeta.from_django_field(field) for field in fields}
 
 
 def _meta(**attrs):

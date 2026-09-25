@@ -62,7 +62,6 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import _PACKAGE_SCALAR_MAP
 from django_strawberry_framework.types.base import DjangoType, _is_relay_shaped
 from django_strawberry_framework.types.converters import SCALAR_MAP, _field_output_type_for
-from django_strawberry_framework.utils.strings import snake_case
 
 _GLOBAL_ID_GRAPHQL_TYPE = "GlobalID!"
 _RELAY_PK_CONVERTER = "relay.Node id"
@@ -260,7 +259,7 @@ class Command(BaseCommand):
            it - the consumer's annotation / ``strawberry.field`` did.
         3. Only then do the auto-synthesized relation / scalar branches apply.
         """
-        field_meta = definition.field_map[snake_case(field.name)]
+        field_meta = definition.field_map[field.name]
         if self._is_suppressed_relay_pk(definition, field):
             return _GLOBAL_ID_GRAPHQL_TYPE, "no", _RELAY_PK_CONVERTER
         if field.name in definition.consumer_authored_fields:

@@ -339,8 +339,9 @@ def _resolve_field_map(
     ``model._meta.get_fields()`` walk stamped through
     ``FieldMeta.from_django_field`` when the model has no registered
     definition. Centralizes the brittle Django-private ``_meta`` access
-    used by the walker. Fallback keys stay raw ``f.name``;
-    ``_resolve_selection_target`` already snake_cases the lookup side.
+    used by the walker. Both paths key the map by the raw Django
+    ``f.name``; ``_resolve_selection_target`` reverses a selection name
+    with ``snake_case`` and forward-resolves it on a miss.
 
     ``source_type`` carries the root resolver's actual return type when
     the call comes from ``plan_optimizations`` - that type's field_map /

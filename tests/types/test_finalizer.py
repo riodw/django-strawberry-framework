@@ -131,7 +131,7 @@ def test_hostile_annotation_mapping_cannot_escape_relation_rewrite():
 
 
 def test_malformed_pending_field_name_is_rejected_before_relation_lookup():
-    """A malformed pending record cannot leak ``snake_case`` AttributeError."""
+    """A pending ``field_name`` outside the field map fails finalize as ``ConfigurationError``."""
 
     class BookType(DjangoType):
         class Meta:

@@ -23,9 +23,9 @@ single sanctioned exception is an in-function lazy read -
 ``types.definition`` inside the function to dodge the package-init cycle - a
 leaf read that does not reintroduce module-load coupling.  Shared primitives
 otherwise belong in ``optimizer/`` or in a sibling utility module.  This
-subpackage also consumes leaf helpers from ``..utils`` (``snake_case``,
-``pascal_case``, ``RelationKind``, ``relation_kind``); the inverse direction
-is bounded by the same rule.
+subpackage also consumes leaf helpers from ``..utils`` (``pascal_case``,
+``RelationKind``, ``relation_kind``); the inverse direction is bounded by the
+same rule.
 """
 
 from .base import DjangoType

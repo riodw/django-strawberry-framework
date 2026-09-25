@@ -65,7 +65,6 @@ from ..optimizer.field_meta import FieldMeta
 from ..registry import GLOBALID_SETTING_UNSET, registry
 from ..utils.imports import loaded_attr
 from ..utils.relations import instance_accessor
-from ..utils.strings import snake_case
 from .converters import resolved_relation_annotation
 from .relations import PendingRelation
 from .relay import (
@@ -679,7 +678,7 @@ def _synthesize_relation_connections() -> None:
             if not field.is_relation:
                 continue
             name = field.name
-            if not definition.field_map[snake_case(name)].is_many_side:
+            if not definition.field_map[name].is_many_side:
                 continue
             if name in definition.consumer_authored_fields:
                 # Implicit-default skip only (the shipped override contract
@@ -929,7 +928,7 @@ def finalize_django_types() -> None:
                 f"{_safe_field_label(pending.field_name)} has no DjangoTypeDefinition.",
             )
         try:
-            field_meta = definition.field_map[snake_case(pending.field_name)]
+            field_meta = definition.field_map[pending.field_name]
         except BaseException as exc:
             raise ConfigurationError(
                 f"Cannot finalize {_safe_class_name(pending.source_type)}: pending relation "

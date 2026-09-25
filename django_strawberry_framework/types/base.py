@@ -56,7 +56,6 @@ from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_t
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
-from ..utils.strings import snake_case
 from ..utils.typing import is_async_callable
 from .converters import _field_output_type_for, convert_field_output
 from .definition import _GRAPHQL_NAME_RE, DjangoTypeDefinition
@@ -635,7 +634,7 @@ class DjangoType:
         fields = _select_fields(meta.model, validated.fields_spec, validated.exclude_spec)
         _validate_optimizer_hints(validated.optimizer_hints, fields, model=meta.model)
 
-        field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
+        field_map = {f.name: FieldMeta.from_django_field(f) for f in fields}
         consumer_annotations = dict(cls.__annotations__)
         # Class-body syntax can only produce string annotation keys, but a
         # metaclass may inject arbitrary keys into the namespace before
@@ -1742,7 +1741,7 @@ def _validate_relation_shape_targets(
                 "only many-side relations (reverse FK, forward/reverse M2M) can take a "
                 "connection shape.",
             )
-        if not field_map[snake_case(name)].is_many_side:
+        if not field_map[name].is_many_side:
             raise ConfigurationError(
                 f"{model.__name__}.Meta.relation_shapes names single-valued relation {_safe_arg_repr(name)} "
                 "(forward FK / OneToOne); there is nothing to paginate. Only many-side "
@@ -1942,7 +1941,7 @@ def _build_annotations(
         if field.is_relation:
             if field.name in consumer_authored_fields:
                 continue
-            field_meta = field_map[snake_case(field.name)]
+            field_meta = field_map[field.name]
             if getattr(field, "related_model", None) is None:
                 raise ConfigurationError(
                     f"{source_model.__name__}.{field.name} is a GenericForeignKey or other "

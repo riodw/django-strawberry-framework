@@ -19,7 +19,7 @@ in ``examples/fakeshop/test_query/test_multi_db.py``: if a future refactor
 caused ``OptimizationPlan.apply`` to drop ``_db``, the resolver's
 ``Book.objects.using("shard_b")`` queryset would route to ``default``,
 return zero rows, and the live test's seeded-titles assertion would fail.
-Per ``AGENTS.md #"Test through real usage and prefer the example project"``, real-world live-HTTP coverage is preferred over
+Per ``AGENTS.md #"Test through real usage, prefer the example project"``, real-world live-HTTP coverage is preferred over
 package-internal mocking when both reach the line.
 
 The five resolver-level tests (FK-id elision branches + strictness
@@ -42,7 +42,6 @@ from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.walker import plan_optimizations
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
-from django_strawberry_framework.utils.strings import snake_case
 
 
 def _sel(name, selections=None):
@@ -76,8 +75,7 @@ def _register_type_definition(model, type_cls, *, optimizer_hints=None):
             exclude_spec=None,
             selected_fields=selected_fields,
             field_map={
-                snake_case(field.name): FieldMeta.from_django_field(field)
-                for field in selected_fields
+                field.name: FieldMeta.from_django_field(field) for field in selected_fields
             },
             optimizer_hints=optimizer_hints or {},
             has_custom_get_queryset=type_cls.has_custom_get_queryset(),

@@ -50,11 +50,10 @@ class PendingRelation:
     ``TypeRegistry.discard_pending()``, which removes resolved records by
     identity rather than equality or hash semantics.
 
-    ``field_name`` is the raw Django ``field.name`` as stored on the model; the
-    snake-cased form used as a ``field_map`` key is rebuilt at the consumer via
-    ``snake_case(pending.field_name)``. ``nullable`` and ``relation_kind`` are
-    snapshot fields kept for self-contained record introspection; the
-    production consumer reads the live ``FieldMeta`` from
+    ``field_name`` is the raw Django ``field.name`` as stored on the model, the
+    same string that keys ``DjangoTypeDefinition.field_map``. ``nullable`` and
+    ``relation_kind`` are snapshot fields kept for self-contained record
+    introspection; the production consumer reads the live ``FieldMeta`` from
     ``DjangoTypeDefinition.field_map`` instead.
     """
 

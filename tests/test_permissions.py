@@ -58,6 +58,7 @@ hidden row must read as not-found with no existence leak, and that is pinned at
 import contextlib
 import datetime
 import os
+import re
 import uuid
 from types import SimpleNamespace
 
@@ -970,8 +971,12 @@ def test_to_field_edge_compares_target_column():
     _profiles_by_genre(visible=visible, hidden=hidden, attack_code="drops")
 
     result = apply_cascade_permissions(profile_type, PatronProfile.objects.all(), _INFO)
-    # The subquery selects the ``name`` column, not ``id``.
-    assert '"favorite_genre_id" IN (SELECT "U0"."name" AS "name"' in str(result.query)
+    # The subquery selects the ``name`` column, not ``id``; whether the ``U0``
+    # alias is quoted depends on the Django version, so either spelling matches.
+    assert re.search(
+        r'"favorite_genre_id" IN \(SELECT "?U0"?\."name" AS "name"',
+        str(result.query),
+    )
     assert sorted(result.values_list("postal_code", flat=True)) == ["keeps"]
     assert PatronProfile.objects.get(postal_code="keeps") in result
 

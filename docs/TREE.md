@@ -506,6 +506,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views.
+├── test_workspace.py             # Repo-tooling tests for the agentflow workspace tool's copies, pool, evidence and cleanup.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem.
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
 │   ├── conftest.py               # Shared fixtures for the auth test modules.
@@ -755,6 +756,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_sets_mixins.py           # Pins for set-family mixins shared by ``FilterSet`` and ``OrderSet``.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── test_views.py                 # Package-tier contracts for the package's Django GraphQL views.
+├── test_workspace.py             # Repo-tooling tests for the agentflow workspace tool's copies, pool, evidence and cleanup.
 ├── aggregates/    # planned by TODO-BETA-062-0.1.3 - Mirrored package tests for the aggregates subsystem.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem.
 │   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.

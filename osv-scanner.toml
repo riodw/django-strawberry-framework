@@ -1,0 +1,11 @@
+# osv-scanner reads this file beside `uv.lock` (.github/workflows/dependency-audit.yml).
+# Every entry names one advisory, why it cannot be fixed in the lock, and a date
+# after which the audit fails on it again so the exemption is re-decided.
+
+[[IgnoredVulns]]
+id = "GHSA-hxp9-w8x3-p566"
+ignoreUntil = 2026-12-31
+reason = """autobahn reaches the lock only through the dev group's `daphne` extra, never \
+through the package's own dependencies. The Python >= 3.11 resolution carries the fix \
+(26.7.1); the Python 3.10 resolution stays on 24.4.2 because 26.7.1 requires Python \
+>= 3.11, so no fixed release exists for that marker while 3.10 is the supported floor."""

@@ -864,6 +864,16 @@ keyset helper mirroring the offset engine's text, not on one owner serving both 
 two cannot answer the same over-cap request with different errors, and a change to either
 message is a change that must be made in both places.
 
+**A `before` cursor never widens an offset page past the cap.** `SliceMetadata` applies its
+default page only when no `before` cursor set the window's end, so a `before` with neither
+`first` nor `last` would slice the whole `start..before` interval. The offset fork hands the
+engine `first = <cap>` whenever neither page argument is an integer, through
+`utils/connections.py::offset_page_first`, which both `::derive_connection_window_bounds`
+and `connection.py::_consume_fallback` call before anything slices, so the planned window
+and the per-parent page are the same bounded page. It is the rule graphene-django's
+`max_limit` applies and the keyset slicer already follows. Every shape the engine already
+bounded is unchanged, and an integer `last: 0` passes through as given.
+
 This keeps the existing precedence intact (an explicit field `max_results` still beats the
 schema config, which still beats Strawberry's default) and adds the policy strictly on top.
 A connection can be narrower than the policy and can never be wider. The package default
@@ -1317,6 +1327,10 @@ Both belong to the surface rather than to a slice; neither is a root package exp
   `ItemType.entries` and `BookType.genres` / `GenreType.books` are explicit `"both"`
   opt-ins so the bounded raw-list surface stays covered, while `CategoryType.properties` is
   left on the new default so the connection-only shape is covered by the same schema.
+- **A `before` cursor with no `first` / `last`**, including a client-minted cursor at
+  `sys.maxsize`, serves the page `first: <cap>` serves on the planned window and on the
+  per-parent fallback alike, never the whole `start..before` interval
+  ([Decision 7](#decision-7--the-policy-is-a-ceiling-over-relay_max_results-never-a-replacement)).
 
 ## Test plan
 
@@ -1371,7 +1385,8 @@ rejected on the bound it is about.
 - **Uploads**: a multipart request rejected by the policy, with the row stating why the
   transport body cap cannot be what rejected it.
 - **Collections**: a raw root list stopping at the maximum; the list sibling bounded so it
-  cannot bypass the connection cap; a connection page wider than the policy refused; the
+  cannot bypass the connection cap; a connection page wider than the policy refused; a
+  `before` cursor with no page argument served one capped page, root and nested; the
   connection-only default leaving no raw sibling in the SDL to select.
 - **Parity**: the sync and async mounts returning byte-identical rejection extensions.
 

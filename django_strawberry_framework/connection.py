@@ -107,6 +107,7 @@ from .utils.connections import (
     has_connection_sidecar_input,
     is_backward_shape,
     is_supplied,
+    offset_page_first,
     resolve_relay_max_results,
     split_window_rows,
     window_range_plan,
@@ -726,7 +727,10 @@ def _consume_fallback(
     value cursor nor mint one, so this is also what keeps fallback cursor
     bytes identical to every windowed path's); an ordinary offset source
     reuses ``ListConnection`` slicing - no second offset-slice implementation
-    - and the ``totalCount`` variant attaches the count when ``want_count``.
+    - with its ``first`` run through ``utils/connections.py::offset_page_first``
+    so the page is bounded by the already-clamped ``max_results`` for every
+    cursor shape, and the ``totalCount`` variant attaches the count when
+    ``want_count``.
     ``super(DjangoConnection, cls)`` reaches ``ListConnection`` even for a
     generated ``<TypeName>Connection`` subclass (the spec-032 concrete-class
     pin): the package override already ran the guard and window probe.
@@ -741,6 +745,14 @@ def _consume_fallback(
             state=keyset_state,
             **slice_kwargs,
         )
+    # The offset page carries the same cap-bounded ``first`` the window
+    # derivation hands the engine, so a ``before`` cursor with no page argument
+    # cannot slice a wider page here than a planned window would serve.
+    slice_kwargs["first"] = offset_page_first(
+        slice_kwargs["first"],
+        slice_kwargs["last"],
+        cap=slice_kwargs["max_results"],
+    )
     try:
         conn = super(DjangoConnection, cls).resolve_connection(nodes, info=info, **slice_kwargs)
     except (

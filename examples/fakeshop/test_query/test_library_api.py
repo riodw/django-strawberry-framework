@@ -4862,6 +4862,68 @@ def test_backward_pagination_last_before():
     assert window["pageInfo"]["hasPreviousPage"] is True
 
 
+#: The page cap every fakeshop connection resolves to: Strawberry's default
+#: ``relay_max_results``, which the project schema keeps, under the package's
+#: default ``ResourcePolicy.max_page_size`` of the same value.
+_DEFAULT_PAGE_CAP = 100
+#: Rows seeded past the cap, so a cursor interval wider than one page exists.
+_PAST_CAP_ROWS = 130
+
+#: ``before:`` cursor shapes that carry no ``first`` / ``last``, each paired with
+#: the 0-based index its page starts at: a ``before`` past the cap, an ``after`` +
+#: ``before`` interval wider than the cap, and the largest offset a cursor holds.
+_CAP_BOUNDED_BEFORE_SHAPES = [
+    pytest.param("before", 0, id="before-past-cap"),
+    pytest.param("after-before", 6, id="after-before-wider-than-cap"),
+    pytest.param("before-maxsize", 0, id="before-maxsize"),
+]
+
+
+def _cap_bounded_before_arguments(shape: str) -> str:
+    """The connection arguments for one ``_CAP_BOUNDED_BEFORE_SHAPES`` row."""
+    return {
+        "before": f'before: "{_array_cursor(120)}"',
+        "after-before": f'after: "{_array_cursor(5)}", before: "{_array_cursor(125)}"',
+        "before-maxsize": f'before: "{_array_cursor(sys.maxsize)}"',
+    }[shape]
+
+
+_CAP_BOUNDED_SELECTION = (
+    "edges { cursor node { %s } } pageInfo { hasNextPage hasPreviousPage startCursor endCursor }"
+)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("shape", "start"), _CAP_BOUNDED_BEFORE_SHAPES)
+def test_genre_connection_before_without_page_argument_serves_one_capped_page(shape, start):
+    """A ``before:`` with no ``first`` / ``last`` serves the page ``first: <cap>`` serves.
+
+    Every offset page is bounded by the effective cap. A ``before`` cursor with
+    neither page argument is therefore the page ``first: <cap>`` over the same
+    cursors returns - the same edges, cursors and ``pageInfo`` - never the whole
+    ``after..before`` interval, and a ``before`` holding the largest offset is a
+    page rather than an error. Identity is asserted, not only the count.
+    """
+    _seed_genres(*[f"Genre-{index:03d}" for index in range(_PAST_CAP_ROWS)])
+    arguments = _cap_bounded_before_arguments(shape)
+    selection = _CAP_BOUNDED_SELECTION % "name"
+    page = range(start, start + _DEFAULT_PAGE_CAP)
+
+    conn = _genres_connection(arguments, selection)
+
+    assert [edge["node"]["name"] for edge in conn["edges"]] == [
+        f"Genre-{index:03d}" for index in page
+    ]
+    assert [edge["cursor"] for edge in conn["edges"]] == [_array_cursor(index) for index in page]
+    assert conn["pageInfo"] == {
+        "hasNextPage": True,
+        "hasPreviousPage": start > 0,
+        "startCursor": _array_cursor(page[0]),
+        "endCursor": _array_cursor(page[-1]),
+    }
+    assert conn == _genres_connection(f"first: {_DEFAULT_PAGE_CAP}, {arguments}", selection)
+
+
 # ---------------------------------------------------------------------------
 # Fakeshop library activation (spec-032 Decision 12): live root
 # node(id:) / nodes(ids:) / typed genre(id:) refetch plus the synthesized
@@ -6241,6 +6303,74 @@ def test_genre_books_connection_backward_pagination_last_before():
     # slice starting past 0 sees "a" / "b".
     assert window["pageInfo"]["hasNextPage"] is True
     assert window["pageInfo"]["hasPreviousPage"] is True
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("shape", "start"), _CAP_BOUNDED_BEFORE_SHAPES)
+def test_genre_books_connection_before_without_page_argument_serves_one_capped_page(shape, start):
+    """A nested ``before:`` with no ``first`` / ``last`` is one capped planned window.
+
+    The relation-seeded colour of
+    ``::test_genre_connection_before_without_page_argument_serves_one_capped_page``:
+    the planned window is bounded by the same cap as the root page, so the served
+    edges, cursors and ``pageInfo`` are those of ``first: <cap>`` over the same
+    cursors, and the page is still served by the window in the fixed two-query
+    cost rather than by a per-parent fallback.
+    """
+    _seed_genre_books(*[f"Book-{index:03d}" for index in range(_PAST_CAP_ROWS)])
+    arguments = _cap_bounded_before_arguments(shape)
+    selection = _CAP_BOUNDED_SELECTION % "title"
+    page = range(start, start + _DEFAULT_PAGE_CAP)
+
+    conn, captured = _genre_books_connection(arguments, selection)
+
+    assert [edge["node"]["title"] for edge in conn["edges"]] == [
+        f"Book-{index:03d}" for index in page
+    ]
+    assert [edge["cursor"] for edge in conn["edges"]] == [_array_cursor(index) for index in page]
+    assert conn["pageInfo"] == {
+        "hasNextPage": True,
+        "hasPreviousPage": start > 0,
+        "startCursor": _array_cursor(page[0]),
+        "endCursor": _array_cursor(page[-1]),
+    }
+    assert len(captured) == 2
+    assert "_dst_row_number" in captured[1]["sql"]
+    explicit, _ = _genre_books_connection(f"first: {_DEFAULT_PAGE_CAP}, {arguments}", selection)
+    assert conn == explicit
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("cursor", ["before", "after"])
+def test_genre_books_connection_last_with_empty_cursor_is_the_planned_tail(cursor):
+    """``last: 2`` beside an empty-string cursor is the backward tail, served by the window.
+
+    The offset engine reads an empty cursor as absent, so ``last: 2, before: ""``
+    and ``last: 2, after: ""`` are both ``last: 2``: the same edges, cursors and
+    ``pageInfo`` on the nested connection, planned as the reversed window in the
+    fixed two-query cost, and the same answer the root connection gives for the
+    same arguments.
+    """
+    _seed_genre_books("a", "b", "c", "d", "e")
+    selection = "edges { cursor node { title } } pageInfo { hasNextPage hasPreviousPage }"
+
+    conn, captured = _genre_books_connection(f'last: 2, {cursor}: ""', selection)
+
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["d", "e"]
+    assert conn["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": True}
+    assert len(captured) == 2
+    assert "_dst_row_number" in captured[1]["sql"]
+    tail, _ = _genre_books_connection("last: 2", selection)
+    assert conn == tail
+
+    # The root connection over the same five cursor positions answers the same page.
+    _seed_genres("f", "g", "h", "i")
+    root = _genres_connection(
+        f'last: 2, {cursor}: ""',
+        "edges { cursor } pageInfo { hasNextPage hasPreviousPage }",
+    )
+    assert root["edges"] == [{"cursor": edge["cursor"]} for edge in conn["edges"]]
+    assert root["pageInfo"] == conn["pageInfo"]
 
 
 @pytest.mark.django_db

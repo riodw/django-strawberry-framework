@@ -143,6 +143,17 @@ def is_backward_shape(first: Any, last: Any) -> bool:
     return isinstance(last, int) and not isinstance(first, int)
 
 
+def offset_page_first(first: Any, last: Any, *, cap: int) -> Any:
+    """Return the ``first`` an offset slice runs with, bounding every offset page by ``cap``.
+
+    ``SliceMetadata`` applies its default page only when no ``before`` cursor set ``end``; with
+    neither page argument an ``int``, the page is ``first = cap`` (graphene-django's rule).
+    """
+    if isinstance(first, int) or isinstance(last, int):
+        return first
+    return cap
+
+
 def has_connection_sidecar_input(*, filter_input: Any, order_by_input: Any) -> bool:
     """Return whether either already-extracted sidecar input is present."""
     return is_supplied(filter_input) or is_supplied(order_by_input)
@@ -622,7 +633,9 @@ def derive_connection_window_bounds(
     and the resolve-time pipeline use. ``max_results`` is passed EXPLICITLY (the
     walker's graphql-core ``info.schema`` has no ``.config`` for the engine to
     read), and is narrowed through the request policy first, so plan-time and
-    resolve-time caps include the same ``max_page_size`` ceiling.
+    resolve-time caps include the same ``max_page_size`` ceiling. The ``first``
+    handed to the engine goes through ``offset_page_first``, so a ``before``
+    cursor with no page argument is bounded by that same cap.
 
     ``SliceMetadata.from_arguments`` raises ``ValueError`` (negative / over-max
     ``first`` / ``last``) or ``TypeError`` (malformed cursor) for invalid
@@ -632,7 +645,8 @@ def derive_connection_window_bounds(
 
     Backward (``last``-only) pagination needs the reversed-row-number window:
     ``last`` set with no ``first`` and no ``before`` bound (``before`` + ``last``
-    resolves to a forward offset window the forward branch already handles). In
+    resolves to a forward offset window the forward branch already handles; an
+    empty-string ``before`` is no bound, exactly as in the engine). In
     that branch ``SliceMetadata`` sets ``end = sys.maxsize`` so ``expected is
     None``, and the row-count bound is the literal ``last`` (the reversed
     ``__lte`` row filter) - passing ``expected`` would never apply the bound and
@@ -663,12 +677,18 @@ def derive_connection_window_bounds(
         info,
         before=before,
         after=after,
-        first=first,
+        first=offset_page_first(first, last, cap=effective_max_results),
         last=last,
         max_results=effective_max_results,
     )
-    before_supplied = is_supplied(before)
-    after_supplied = is_supplied(after)
+    # Cursor presence is the engine's truthiness, deliberately NOT the
+    # package's ``is_supplied`` rule (under which ``""`` is active):
+    # ``SliceMetadata.from_arguments`` reads ``if before:`` / ``if after:``, so
+    # an empty-string cursor is absent from the slice it builds. Reading it as
+    # present here would plan ``last: N, before: ""`` as a forward window while
+    # the engine serves the backward tail.
+    before_supplied = bool(before)
+    after_supplied = bool(after)
     reverse = is_backward_shape(first, last) and not before_supplied
     if slice_meta.start < 0:
         raise TypeError("Argument 'after' contains a non-existing value.")

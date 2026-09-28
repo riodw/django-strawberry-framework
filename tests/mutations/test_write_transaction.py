@@ -668,10 +668,10 @@ async def test_a_client_complete_mid_window_never_strands_its_transaction():
     Channels dispatches the ``complete`` frame only after the connection hygiene
     it queues on asgiref's shared thread-sensitive worker, and another context's
     sync call queues there too, so the cancellation lands while the window is
-    finishing and its exit would wait behind that call. Cancelling an operation
-    drops executor work that has not started, and the window's exit must never be
-    such work: a fresh operation on another socket afterwards reports success AND
-    is committed, which a transaction left open under it would prevent.
+    finishing. Cancelling an operation drops executor work that has not started,
+    and the window's exit must never be such work: a fresh operation on another
+    socket afterwards reports success AND is committed, which a transaction left
+    open under it would prevent.
     """
     router = _window_router(_category_create_schema())
     loop = asyncio.get_running_loop()
@@ -709,10 +709,9 @@ async def test_a_client_complete_mid_window_never_strands_its_transaction():
 async def test_a_window_cancelled_twice_while_held_rolls_back_and_the_next_mutation_commits():
     """Repeated cancellation of an open window still exits its transaction, rolled back.
 
-    The second cancellation lands while the window's exit is queued behind the
-    pipeline it interrupted. The exit still runs once the pipeline finishes, so
-    the held write is rolled back rather than left open, and the next mutation
-    commits on its own.
+    Both cancellations land while the window's thread is held in the pipeline.
+    The thread exits the atomic once the pipeline returns, so the held write is
+    rolled back rather than left open, and the next mutation commits on its own.
     """
     schema = _category_create_schema()
     with _held_in_the_pipeline("window-cancelled") as (reached, release):
@@ -820,9 +819,10 @@ async def test_a_window_cancelled_during_its_enter_still_exits_the_transaction_i
     """A cancellation landing while ``atomic.__enter__`` runs cannot leave that atomic open.
 
     The enter cannot be abandoned once its thread started it, so it completes
-    after the task was cancelled. The window's exit is queued behind it and runs
-    once it finished, so the transaction the enter opened is closed, rolled back,
-    and the next mutation commits on its own.
+    after the task was cancelled, before the completion the cancellation must
+    still reach. The thread then exits the atomic with that cancellation, so the
+    transaction the enter opened is closed, rolled back, and the next mutation
+    commits on its own.
     """
     schema = _category_create_schema()
     loop = asyncio.get_running_loop()

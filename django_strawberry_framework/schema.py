@@ -24,23 +24,22 @@ Execution-mode split (spec plan "Implementation Changes"):
 - **Sync** (``schema.execute_sync`` / the WSGI view): graphql-core completes the
   field synchronously inside ``execute_field``, so the context holds the
   transaction directly around the ``super()`` call on the calling thread.
-- **Async** (``await schema.execute`` / ASGI / Channels): each window owns a
-  private thread and therefore a private Django connection. For its duration it
-  installs a thread-sensitive context of its own, so the atomic's enter, the ORM
-  pipeline's ``sync_to_async(thread_sensitive=True)`` work, completion's nested
-  resolvers, and the exit all land on that one thread - also under an outer
-  ``ThreadSensitiveContext`` (Django's per-request one, or one a consumer shares
-  across concurrent operations), whose thread the window never uses. Nothing
-  outside the window reaches its connection: another socket's connection
-  hygiene (Channels runs ``close_old_connections`` before every dispatched
-  message) runs on another thread, and concurrent windows hold independent
-  transactions. The window's final transition - exit the atomic, close every
-  connection its thread opened, release the thread - runs to completion even
-  when the awaiting task is cancelled, and the cancellation is re-raised after
-  it. Under a sync caller blocked in ``async_to_sync``, asgiref sends
-  thread-sensitive work to that caller's thread before any context is
-  consulted; the window runs there and nests in whatever transaction the caller
-  holds, exactly as sync execution does.
+- **Async** (``await schema.execute`` / ASGI / Channels): each window is one
+  sync call on a private thread, and therefore a private Django connection. The
+  thread enters the atomic and blocks in ``async_to_sync`` while the event loop
+  resolves and completes the field; asgiref sends every thread-sensitive call
+  made meanwhile (the ORM pipeline's work, completion's nested resolvers) to
+  that blocked thread before it consults any ``ThreadSensitiveContext``, so the
+  window stays private under an outer one (Django's per-request context, or one
+  a consumer shares across concurrent operations). Nothing outside the window
+  reaches its connection: another socket's connection hygiene (Channels runs
+  ``close_old_connections`` before every dispatched message) runs on another
+  thread, and concurrent windows hold independent transactions. The atomic
+  lives on the thread's own stack, so a cancellation cannot strand it: it
+  reaches the completion, and the thread exits the atomic, rolled back, and
+  closes its connections. Under a sync caller blocked in ``async_to_sync`` the
+  window runs on that caller's thread and nests in whatever transaction the
+  caller holds, exactly as sync execution does.
 
 Both modes apply the same two failure rules. Any error added during the window
 rolls it back. A window whose connection was closed inside it
@@ -64,14 +63,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import contextvars
+import functools
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from typing import Any
 
 import strawberry
-from asgiref.sync import AsyncToSync, SyncToAsync, ThreadSensitiveContext
+from asgiref.sync import AsyncToSync, async_to_sync, sync_to_async
 from django.db import DatabaseError, connections, transaction
 from django.db.transaction import TransactionManagementError
 from graphql import GraphQLError, located_error, parse
@@ -111,8 +110,8 @@ _CLOSED_WINDOW_MESSAGE = (
 def _close_thread_connections() -> None:
     """Close every Django connection the CURRENT thread opened, then drop its handle.
 
-    Runs on a window's private thread as the last step of its final transition,
-    because that thread ends with the window and Django keeps connections per
+    Runs on a window's private thread as the window's last step, because that
+    thread ends with the window and Django keeps connections per
     thread: nothing else can ever close them. A backend may decline ``close()`` -
     SQLite keeps an in-memory database's handle open, since closing it would
     destroy that connection's database - but the thread owning the handle is
@@ -128,113 +127,6 @@ def _close_thread_connections() -> None:
         if handle is not None:
             handle.close()
             connection.connection = None
-
-
-class _MutationWindowThread:
-    """The thread one async mutation window runs every thread-sensitive call on.
-
-    Outside a blocked sync caller the window gets a PRIVATE single-thread executor,
-    registered under a fresh thread-sensitive context key it installs for its own
-    task (and the child tasks that task creates) and removes when it is released.
-    ``ThreadSensitiveContext`` itself cannot provide this: it is re-entrant and
-    becomes a no-op under an outer one, which would put the window on a thread the
-    outer context shares with everything else it runs. Under a sync caller blocked
-    in ``async_to_sync`` the window uses that caller's executor instead, which
-    asgiref consults before any context: the caller's thread is waiting on this
-    execution, and its transaction is the one the window must nest in.
-
-    asgiref attributes this reads and writes, audited unchanged in every release
-    from 3.8.1 (the minimum the Django floor requires) through 3.12.1:
-    ``AsyncToSync.executors`` (a ``Local`` whose ``current`` names a blocked sync
-    caller's executor), ``SyncToAsync.thread_sensitive_context`` (the
-    ``ContextVar`` naming the active context key) and
-    ``SyncToAsync.context_to_thread_executor`` (key -> executor). The
-    executor-selection block of ``SyncToAsync.__call__`` - caller executor first,
-    then ``context_to_thread_executor[thread_sensitive_context.get()]``, created
-    on first use when absent - is byte-identical across that range.
-    """
-
-    def __init__(self) -> None:
-        caller = getattr(AsyncToSync.executors, "current", None)
-        self._owned = caller is None
-        self._key: ThreadSensitiveContext | None = None
-        self._token: contextvars.Token | None = None
-        if caller is not None:
-            self._executor = caller
-            return
-        self._executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="django-strawberry-framework-mutation",
-        )
-        self._key = ThreadSensitiveContext()
-        SyncToAsync.context_to_thread_executor[self._key] = self._executor
-        self._token = SyncToAsync.thread_sensitive_context.set(self._key)
-
-    async def run(self, fn: Callable[[], Any]) -> Any:
-        """Run ``fn`` on the window's thread under ordinary cancellation.
-
-        Cancelled while queued, ``fn`` never runs; cancelled while running, it
-        runs to its end and ``close``'s transition queues behind it.
-        """
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, contextvars.copy_context().run, fn)
-
-    async def close(self, fn: Callable[[], Any]) -> Any:
-        """Run the window's final transition ``fn`` on its thread, to completion.
-
-        The transition queues behind whatever the window's thread is still
-        running (an enter or a pipeline step a cancellation interrupted keeps
-        running to its end), and executor work cancelled before it starts never
-        runs. The transition is therefore not awaited under ordinary
-        cancellation: the wait survives REPEATED cancellation of the awaiting
-        task, because giving up would leave the transaction open on a connection
-        nothing will ever exit (or, on a caller's thread, open under the caller).
-        The cancellation is re-raised once the transition finished, so the task
-        still ends cancelled.
-        """
-        loop = asyncio.get_running_loop()
-        cancelled: asyncio.CancelledError | None = None
-        try:
-            settled = loop.run_in_executor(
-                self._executor,
-                contextvars.copy_context().run,
-                self._final,
-                fn,
-            )
-            while not settled.done():
-                try:
-                    await asyncio.wait((settled,))
-                except asyncio.CancelledError as exc:  # noqa: PERF203 - repeated cancellation hand-off loop
-                    cancelled = exc
-        finally:
-            self._release()
-        if cancelled is not None:
-            raise cancelled
-        return settled.result()
-
-    def _final(self, fn: Callable[[], Any]) -> Any:
-        """Run ``fn``, then close the private thread's connections and retire it.
-
-        Runs ON the window's thread. Retiring the executor from its own thread
-        (``wait=False``) cancels anything still queued behind the transition, so
-        no work can reopen a connection after it was closed. A caller's thread and
-        its connections belong to the caller, and are left as they are.
-        """
-        try:
-            return fn()
-        finally:
-            if self._owned:
-                try:
-                    _close_thread_connections()
-                finally:
-                    self._executor.shutdown(wait=False, cancel_futures=True)
-
-    def _release(self) -> None:
-        """Uninstall the window's context key from the window's own task."""
-        if self._owned:
-            SyncToAsync.context_to_thread_executor.pop(self._key, None)
-            SyncToAsync.thread_sensitive_context.reset(self._token)
-            self._executor.shutdown(wait=False)
 
 
 class DjangoMutationExecutionContext(ExecutionContext):
@@ -387,6 +279,32 @@ class DjangoMutationExecutionContext(ExecutionContext):
             atomic.__exit__(None, None, None)
         self._refuse_uncommitted_window(alias, field_nodes, path)
 
+    def _run_window(
+        self,
+        alias: str,
+        field_nodes: Any,
+        path: Any,
+        run: Callable[[], Any],
+    ) -> Any:
+        """Hold one window's transaction around ``run`` on the calling thread.
+
+        The window body of both execution modes: ``run`` resolves and completes
+        the field under the managed alias; an exception escaping it exits the
+        atomic with that exception (rolled back), and a clean return exits under
+        ``_exit_window``'s failure rules.
+        """
+        errors_before = len(self._execution_errors())
+        atomic = transaction.atomic(using=alias)
+        atomic.__enter__()
+        try:
+            with managed_write_transaction(alias):
+                result = run()
+        except BaseException as exc:
+            atomic.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        self._exit_window(atomic, errors_before, alias, field_nodes, path)
+        return result
+
     def _execute_mutation_field_sync(
         self,
         alias: str,
@@ -395,25 +313,13 @@ class DjangoMutationExecutionContext(ExecutionContext):
         field_nodes: Any,
         path: Any,
     ) -> Any:
-        """Sync execution: hold the transaction directly around resolve + completion.
+        """Sync execution: one window on the calling thread around ``execute_field``.
 
-        Under sync execution graphql-core completes the field's value INSIDE the
-        ``super().execute_field`` call, so entering ``transaction.atomic`` before
-        it and exiting after covers the whole resolve -> complete window on the
-        calling thread. ``_exit_window`` applies both failure rules: new errors
-        roll the window back, and a connection closed inside it fails the field.
+        graphql-core completes the field's value inside that call, so it covers
+        the whole resolve -> complete span.
         """
-        errors_before = len(self._execution_errors())
-        atomic = transaction.atomic(using=alias)
-        atomic.__enter__()
-        try:
-            with managed_write_transaction(alias):
-                result = super().execute_field(parent_type, source, field_nodes, path)
-        except BaseException as exc:
-            atomic.__exit__(type(exc), exc, exc.__traceback__)
-            raise
-        self._exit_window(atomic, errors_before, alias, field_nodes, path)
-        return result
+        run = functools.partial(super().execute_field, parent_type, source, field_nodes, path)
+        return self._run_window(alias, field_nodes, path, run)
 
     async def _execute_mutation_field_async(
         self,
@@ -423,56 +329,73 @@ class DjangoMutationExecutionContext(ExecutionContext):
         field_nodes: Any,
         path: Any,
     ) -> Any:
-        """Async execution: run the whole window on the window's own thread.
+        """Async execution: run the window on a thread that drives the completion.
 
-        ``_MutationWindowThread`` gives the window a thread nothing outside it
-        shares, and routes every ``thread_sensitive`` call the window's task and
-        its child tasks make - the pipeline's ``run_in_one_sync_boundary`` work,
-        completion's nested resolvers - onto it, so the atomic's enter, the
-        pipeline's queries, and the exit share one Django connection that no
-        other operation, socket, or connection-hygiene pass can reach. The
-        completion ``await`` happens on the event loop between them; the
-        transaction stays open on that thread's (idle) connection meanwhile.
+        ``window`` is one sync call: it enters the atomic, then blocks in
+        ``async_to_sync(complete)`` while the event loop resolves and completes
+        the field. asgiref sends every thread-sensitive call from ``complete``'s
+        task tree (the pipeline's ``run_in_one_sync_boundary`` work, completion's
+        nested resolvers, ``channels.db.database_sync_to_async``) to the thread
+        blocked in ``async_to_sync`` before it consults any
+        ``ThreadSensitiveContext``, so the enter, the pipeline's queries and the
+        exit share one connection. Outside a blocked sync caller that thread is
+        a private single-thread executor's, whose connections ``window`` closes
+        when it ends; under one (``AsyncToSync.executors.current`` set) it is
+        the caller's thread, and the window nests in the caller's transaction
+        and leaves its connections alone.
 
-        The final transition - exit the atomic (with the escaping exception, or
-        under ``_exit_window``'s rules), then close the thread's connections - is
-        driven to completion by ``_MutationWindowThread.close`` whatever
-        cancellation arrives meanwhile. It is queued behind anything the thread
-        is still running, including an enter the cancellation interrupted, so it
-        exits the atomic only when that enter actually happened (``entered`` is
-        written and read on the window's one thread, in that order).
+        A cancellation arriving while ``complete`` runs is propagated into it by
+        ``SyncToAsync``; one arriving before ``complete`` started has no task to
+        reach, so it sets ``cancelled`` and ``complete`` raises it on entry
+        (both on the event loop). Either way the thread exits the atomic with
+        the cancellation, rolled back.
+
+        ``AsyncToSync.executors.current`` is the one asgiref attribute read, and
+        the precedence it relies on - ``SyncToAsync.__call__`` takes the caller's
+        executor before any context, ``AsyncToSync.__call__`` publishes its
+        executor before copying the context ``complete`` runs in, and a
+        cancelled ``SyncToAsync`` cancels the task recorded in ``task_context`` -
+        is unchanged in every release from 3.8.1 (the minimum the Django floor
+        requires) through 3.12.1.
         """
-        errors_before = len(self._execution_errors())
-        atomic = transaction.atomic(using=alias)
-        entered: list[bool] = []
+        execute_field = super().execute_field
+        cancelled = False
 
-        def _enter() -> None:
-            atomic.__enter__()
-            entered.append(True)
+        async def complete() -> Any:
+            if cancelled:
+                raise asyncio.CancelledError
+            result = execute_field(parent_type, source, field_nodes, path)
+            if self.is_awaitable(result):
+                result = await result
+            return result
 
-        def _exit(error: BaseException | None) -> None:
-            if not entered:
-                return
-            if error is not None:
-                atomic.__exit__(type(error), error, error.__traceback__)
-                return
-            self._exit_window(atomic, errors_before, alias, field_nodes, path)
+        caller = getattr(AsyncToSync.executors, "current", None)
 
-        window = _MutationWindowThread()
+        def window() -> Any:
+            try:
+                return self._run_window(alias, field_nodes, path, async_to_sync(complete))
+            finally:
+                if caller is None:
+                    _close_thread_connections()
+
+        executor = None
+        if caller is None:
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="django-strawberry-framework-mutation",
+            )
         try:
-            await window.run(_enter)
-            with managed_write_transaction(alias):
-                result = super().execute_field(parent_type, source, field_nodes, path)
-                if self.is_awaitable(result):
-                    result = await result
-        except BaseException as exc:
-            # Bind the exception explicitly: the ``except`` name is cleared when
-            # the block exits, so the window-thread closure must not capture it.
-            captured = exc
-            await window.close(lambda: _exit(captured))
+            return await sync_to_async(
+                window,
+                thread_sensitive=executor is None,
+                executor=executor,
+            )()
+        except asyncio.CancelledError:
+            cancelled = True
             raise
-        await window.close(lambda: _exit(None))
-        return result
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False)
 
 
 #: The wire-visible ``extensions.code`` on an operation refused because the

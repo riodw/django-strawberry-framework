@@ -431,7 +431,7 @@ async def test_async_window_hostile_error_container_rolls_back_and_leaks_no_tran
     """The async window's clean exit obeys the same containment, rollback included.
 
     The rollback decision raising must not skip the atomic exit, which would
-    retire the window's thread over an abandoned open transaction - and the
+    end the window's thread over an abandoned open transaction - and the
     write the window was holding must not survive it either. Deleting the
     ``transaction.set_rollback(True, using=alias)`` call in the ``except
     Exception`` arm of

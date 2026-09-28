@@ -1649,76 +1649,69 @@ def test_fast_path_ambiguous_empty_served_from_marker_row(args, django_assert_nu
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_fast_path_last_zero_falls_back_for_total_count_and_pageinfo(monkeypatch):
-    """The async fallback mirror rides the ``last: 0`` quirk UNDER ASYNC execution.
+async def test_async_fast_path_last_zero_serves_the_first_zero_page(monkeypatch):
+    """``last: 0`` under ASYNC execution is the ``first: 0`` page served from the window.
 
-    ``last: 0`` is the one shape that always degrades after the marker-row
-    disambiguation (spec-033 Decision 5): upstream ``ListConnection``
-    slices ``edges[-0:]`` - the WHOLE list - so only the per-parent pipeline
-    reproduces it (the walker plans nothing for it). Driven
-    by ``await schema.execute(...)``, the per-parent queryset resolves
-    through ``ListConnection`` asynchronously, so
-    ``_consume_fallback``'s ``super().resolve_connection`` returns a coroutine
-    - exercising the async ``_attach_count_async`` fallback branch
-    (``connection.py::_consume_fallback #"return _attach_count_async("``). The
-    sync ``last: 0`` parity test covers the ``_attach_count_sync`` sibling.
+    Driven by ``await schema.execute(...)``: empty ``edges``, the true
+    ``totalCount`` and ``first: 0``'s ``pageInfo`` (a next page exists), the
+    same payload ``first: 0`` returns on the same schema.
     """
     from asgiref.sync import sync_to_async
 
     # The optimizer extension runs the parent (genre) prefetch with sync ORM on
-    # the event-loop thread; unblock Django's async-safety guard for it. The
-    # nested booksConnection fallback still resolves through ListConnection
-    # ASYNC (strawberry's async execution), so this does not collapse the
-    # awaitable branch into the sync one.
+    # the event-loop thread; unblock Django's async-safety guard for it.
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(_seed_library_books)(["a", "b", "c"])
     schema = await sync_to_async(_genres_list_schema)(optimizer=True, book_total_count=True)
-    selection = (
-        "booksConnection(last: 0) { edges { node { title } } totalCount "
-        "pageInfo { hasNextPage hasPreviousPage } }"
+    page = (
+        "{ edges { node { title } } totalCount "
+        "pageInfo { hasNextPage hasPreviousPage startCursor endCursor } }"
     )
-    result = await schema.execute(f"{{ objs {{ {selection} }} }}")
-    assert result.errors is None, result.errors
-    conn = result.data["objs"][0]["booksConnection"]
-    # Upstream's edges[-0:] quirk: ALL edges, served through the fallback.
-    assert [e["node"]["title"] for e in conn["edges"]] == ["a", "b", "c"]
-    assert conn["totalCount"] == 3
+    last_zero = await schema.execute(f"{{ objs {{ booksConnection(last: 0) {page} }} }}")
+    first_zero = await schema.execute(f"{{ objs {{ booksConnection(first: 0) {page} }} }}")
+    assert last_zero.errors is None, last_zero.errors
+    assert first_zero.errors is None, first_zero.errors
+    assert last_zero.data["objs"][0]["booksConnection"] == {
+        "edges": [],
+        "totalCount": 3,
+        "pageInfo": {
+            "hasNextPage": True,
+            "hasPreviousPage": False,
+            "startCursor": None,
+            "endCursor": None,
+        },
+    }
+    assert last_zero.data == first_zero.data
 
 
 @pytest.mark.django_db
-def test_fast_path_last_zero_quirk_parity_via_fallback():
-    """``last: 0`` falls back per-parent and reproduces upstream's serve-all quirk.
+def test_fast_path_last_zero_serves_the_first_zero_page():
+    """``last: 0`` is the planned ``first: 0`` window, optimizer on and off alike.
 
-    Upstream ``ListConnection`` slices ``edges[-last:]`` for the ``last``-only
-    branch, and ``edges[-0:]`` is the WHOLE list - so ``last: 0`` returns every
-    edge. The walker leaves this shape FULLY UNPLANNED (a reversed window
-    would always come back empty and be discarded, paying a
-    dead query per request while its resolver keys silenced strictness), so
-    the per-parent pipeline - the only path that reproduces the quirk - runs
-    directly and stays byte-identical to the optimizer-off answer.
+    The walker plans the ``first: 0`` window for it, so the page is served from
+    the marker row in the fixed two-query cost, and the payload is the one
+    ``first: 0`` returns and the one the optimizer-off pipeline returns.
     """
     _seed_library_books(["a", "b", "c"])
-    query = (
-        "{ objs { booksConnection(last: 0) { edges { node { title } } totalCount "
-        "pageInfo { hasNextPage hasPreviousPage } } } }"
+    page = (
+        "{ edges { node { title } } totalCount "
+        "pageInfo { hasNextPage hasPreviousPage startCursor endCursor } }"
     )
+    query = f"{{ objs {{ booksConnection(last: 0) {page} }} }}"
     from django.test.utils import CaptureQueriesContext
 
+    schema = _genres_list_schema(optimizer=True, book_total_count=True)
     with CaptureQueriesContext(db_connection) as captured:
-        fast = _exec(_genres_list_schema(optimizer=True, book_total_count=True), query)
-    # The walker plans NOTHING for ``last: 0``. One parent
-    # query + the single genre's per-parent pipeline (a count query for
-    # ``totalCount`` + the edges query) = 3, with NO dead window query
-    # riding along (pre-fix this was 4: the discarded reversed window ran
-    # first on every request).
-    assert len(captured) == 3
-    assert not any("_dst_row_number" in entry["sql"] for entry in captured)
+        fast = _exec(schema, query)
+    assert len(captured) == 2
+    assert "_dst_row_number" in captured[1]["sql"]
+    assert fast.data == _exec(schema, f"{{ objs {{ booksConnection(first: 0) {page} }} }}").data
     registry.clear()
     _connection_type_cache.clear()
     slow = _exec(_genres_list_schema(optimizer=False, book_total_count=True), query)
     assert fast.data == slow.data
-    conn = fast.data["objs"][0]["booksConnection"]
-    assert [e["node"]["title"] for e in conn["edges"]] == ["a", "b", "c"]
+    assert fast.data["objs"][0]["booksConnection"]["edges"] == []
+    assert fast.data["objs"][0]["booksConnection"]["pageInfo"]["hasNextPage"] is True
 
 
 @pytest.mark.django_db
@@ -2502,57 +2495,6 @@ def test_consumer_assigned_relation_with_hint_is_planned_and_silent():
     assert titles == ["a", "b"]
 
 
-@pytest.mark.django_db
-def test_fast_path_last_zero_visible_under_strictness():
-    """``last: 0`` is a REAL per-parent fallback and strictness must see it.
-
-    The walker once planned a reversed window for ``last: 0`` and recorded
-    ``planned_resolver_keys``; the window was then
-    discarded at resolve time and the per-parent fallback ran SILENTLY under
-    ``strictness="raise"`` - a planned-then-fallback strictness hole. Fully
-    unplanned, the shape now raises like every other Decision-6 fallback.
-    """
-    from django.http import HttpRequest
-
-    _seed_library_books(["a", "b"])
-    schema = _genres_list_schema(optimizer=True, book_total_count=True, strictness="raise")
-    result = schema.execute_sync(
-        "{ objs { booksConnection(last: 0) { totalCount } } }",
-        context_value=HttpRequest(),
-    )
-    assert result.errors is not None
-    assert any("Unplanned N+1" in str(error) for error in result.errors)
-
-
-def test_resolve_from_window_last_zero_stays_a_defensive_guard():
-    """The resolve-side ``last: 0`` guard survives as the defensive tail.
-
-    The walker no longer plans the shape, so no live path
-    reaches this branch - but ``_resolve_from_window`` must not ASSUME
-    walker behavior (direct callers, plan/resolve drift). An empty reversed
-    ``limit == 0`` window still refuses to serve (upstream's ``edges[-0:]``
-    quirk needs the pipeline).
-    """
-    from django_strawberry_framework.connection import (
-        _resolve_from_window,
-        _WindowedConnectionRows,
-    )
-
-    window = _WindowedConnectionRows(rows=[], fallback=lambda: None)
-    assert (
-        _resolve_from_window(
-            object,
-            window,
-            info=None,
-            offset=0,
-            limit=0,
-            reverse=True,
-            want_count=False,
-        )
-        is None
-    )
-
-
 def _windowed_book_connection_class(*, total_count=False):
     """A real generated ``<TypeName>Connection`` class for direct-call pins."""
     book_type = make_django_type(
@@ -2565,25 +2507,32 @@ def _windowed_book_connection_class(*, total_count=False):
     return _connection_type_for(book_type, book_type.__django_strawberry_definition__)
 
 
+#: A count-free plain ``first: 2`` window row: with ``totalCount`` observed and no
+#: count annotation, ``_resolve_from_window`` refuses it (the conditional-count
+#: drift guard).
+_COUNT_LESS_WINDOW_ROWS = [SimpleNamespace(_dst_row_number=1)]
+
+
 @pytest.mark.django_db
 def test_consume_window_unservable_window_runs_the_sync_fallback():
     """The unservable-window tail of ``_consume_window`` is a defensive layer.
 
-    No live path produces it anymore (``last: 0`` is fully unplanned, and the
-    ambiguous-empty shapes serve from markers), but
-    the resolve side must not ASSUME walker behavior: a window the resolver
-    refuses (here: the reversed ``last: 0`` quirk shape) recovers the
+    No live path produces it (the planner and the resolver share the count
+    selection walk, and the ambiguous-empty shapes serve from markers), but the
+    resolve side must not ASSUME walker behavior: a window the resolver refuses
+    (here: a count-less window under an observed ``totalCount``) recovers the
     carried per-parent queryset and runs the shipped sync pipeline.
     """
-    from types import SimpleNamespace
-
     from django_strawberry_framework.connection import (
         _consume_window,
         _WindowedConnectionRows,
     )
 
-    connection_cls = _windowed_book_connection_class()
-    window = _WindowedConnectionRows(rows=[], fallback=lambda: Book.objects.none())
+    connection_cls = _windowed_book_connection_class(total_count=True)
+    window = _WindowedConnectionRows(
+        rows=_COUNT_LESS_WINDOW_ROWS,
+        fallback=lambda: Book.objects.none(),
+    )
     conn = _consume_window(
         connection_cls,
         window,
@@ -2592,10 +2541,10 @@ def test_consume_window_unservable_window_runs_the_sync_fallback():
         info=SimpleNamespace(selected_fields=[]),
         before=None,
         after=None,
-        first=None,
-        last=0,
+        first=2,
+        last=None,
         max_results=100,
-        want_count=False,
+        want_count=True,
     )
     assert conn.edges == []
 
@@ -2604,30 +2553,26 @@ def test_consume_window_unservable_window_runs_the_sync_fallback():
 async def test_consume_window_unservable_window_runs_the_async_fallback():
     """The async sibling: an async-iterable fallback routes through
     ``_attach_count_async`` (the awaitable arm of ``_consume_fallback``)."""
-    from types import SimpleNamespace
-
     from django_strawberry_framework.connection import (
         _consume_window,
         _WindowedConnectionRows,
     )
 
-    connection_cls = _windowed_book_connection_class()
-
-    async def _no_rows():
-        return
-        yield  # unreachable; makes this an async generator
-
-    window = _WindowedConnectionRows(rows=[], fallback=_no_rows)
+    connection_cls = _windowed_book_connection_class(total_count=True)
+    window = _WindowedConnectionRows(
+        rows=_COUNT_LESS_WINDOW_ROWS,
+        fallback=lambda: Book.objects.none(),
+    )
     conn = await _consume_window(
         connection_cls,
         window,
         info=SimpleNamespace(selected_fields=[]),
         before=None,
         after=None,
-        first=None,
-        last=0,
+        first=2,
+        last=None,
         max_results=100,
-        want_count=False,
+        want_count=True,
     )
     assert conn.edges == []
 

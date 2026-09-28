@@ -859,8 +859,7 @@ class TestApplyWindowPagination:
         assert "<= 3" in sql
         assert " OR " not in sql
 
-        # The reversed (last-only) window never markers - ``last: 0`` falls
-        # back per-parent for upstream's ``edges[-0:]`` serve-all quirk.
+        # The reversed (last-only) window never markers, even at ``limit == 0``.
         reverse_zero = self._windowed(offset=0, limit=0, reverse=True)
         sql = str(reverse_zero.query).upper()
         assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql

@@ -304,9 +304,16 @@ def test_root_keyset_backward_pagination():
     assert head["pageInfo"]["hasPreviousPage"] is False
 
 
+#: ``first: 0``'s empty-page ``pageInfo`` when rows exist past the page.
+_ZERO_PAGE_INFO = {"hasNextPage": True, "startCursor": None, "endCursor": None}
+
+
 @pytest.mark.django_db
-def test_root_keyset_last_zero_preserves_bounded_shipped_connection_semantics():
-    """``last: 0`` keeps Strawberry's quirk without bypassing the Relay result cap."""
+def test_root_keyset_last_zero_serves_the_first_zero_page():
+    """``last: 0`` is the ``first: 0`` page: no edges, ``first: 0``'s ``pageInfo``.
+
+    Seeded past the Relay cap, so a page serving every row cannot pass.
+    """
     astronomy, _botany, _empty = _seed_periodicals()
     models.Issue.objects.bulk_create(
         [
@@ -320,71 +327,34 @@ def test_root_keyset_last_zero_preserves_bounded_shipped_connection_semantics():
     )
     page = _root_page(last=0)
     assert page["totalCount"] == 101
-    assert len(page["edges"]) == 100
-    assert page["pageInfo"]["hasPreviousPage"] is False
-    assert page["pageInfo"]["hasNextPage"] is True
+    assert page["edges"] == []
+    assert page["pageInfo"] == {**_ZERO_PAGE_INFO, "hasPreviousPage": False}
+    assert page == _root_page(first=0)
 
 
 @pytest.mark.django_db
-def test_root_keyset_last_zero_with_after_matches_offset_pageinfo():
-    """``last: 0`` + ``after:`` serves the after-tail but keeps Strawberry pageInfo.
+def test_root_keyset_last_zero_with_after_serves_the_first_zero_page():
+    """``last: 0`` + ``after:`` is ``first: 0`` + the same ``after:``.
 
-    Offset ``ListConnection`` materializes ``nodes[after:]`` then takes
-    ``edges[-0:]`` (the whole tail) and overwrites ``hasPreviousPage`` from
-    "did the ``-last`` trim drop rows?" - always False for ``last == 0``, even
-    though ``after`` advanced the window. Keyset must match that pageInfo while
-    still seeking in the value domain (the after-tail titles), or offset and
-    keyset connections disagree on the same arguments.
+    No edges, the pre-seek ``totalCount``, and the value-domain flags ``first: 0``
+    serves: the supplied cursor is the previous-page signal and rows past it exist.
     """
     _seed_periodicals()
-    first = _root_page(first=2)
-    assert _titles(first) == ["Astro #5", "Astro #4"]
-    page = _root_page(last=0, after=first["pageInfo"]["endCursor"])
-    assert _titles(page) == [
-        "Astro #3",
-        "Bot #3",
-        "Astro #2",
-        "Bot #2",
-        "Astro #1",
-        "Bot #1",
-    ]
+    after = _root_page(first=2)["pageInfo"]["endCursor"]
+    page = _root_page(last=0, after=after)
+    assert page["edges"] == []
     assert page["totalCount"] == 8
-    assert page["pageInfo"]["hasPreviousPage"] is False
-    assert page["pageInfo"]["hasNextPage"] is False
+    assert page["pageInfo"] == {**_ZERO_PAGE_INFO, "hasPreviousPage": True}
+    assert page == _root_page(first=0, after=after)
 
 
-@pytest.mark.django_db
-def test_root_keyset_last_zero_with_after_stays_bounded_by_cap():
-    """``last: 0`` + ``after:`` still caps the served tail at ``relay_max_results``.
-
-    The serve-all quirk must never let ``after`` widen the page past the Relay
-    cap. With an after-tail well over the default cap of 100, the page is
-    trimmed to exactly the cap and ``hasNextPage`` flips True while the quirk
-    keeps ``hasPreviousPage`` False.
-    """
-    astronomy, _botany, _empty = _seed_periodicals()
-    models.Issue.objects.bulk_create(
-        [
-            models.Issue(periodical=astronomy, number=number, title=f"Cap probe #{number}")
-            for number in range(100, 250)
-        ],
-    )
-    # Cursor at the very first row: the after-tail is everything else (157
-    # rows), far past the cap.
-    first = _root_page(first=1)
-    page = _root_page(last=0, after=first["pageInfo"]["endCursor"])
-    assert len(page["edges"]) == 100  # trimmed to the Relay cap, not the 157-row tail
-    assert page["pageInfo"]["hasPreviousPage"] is False  # last:0 serve-all quirk
-    assert page["pageInfo"]["hasNextPage"] is True  # the cap trim leaves rows unserved
-
-
-NESTED_LAST_ZERO_AFTER = """
-query ($after: String) {
+NESTED_ZERO_PAGE = """
+query ($first: Int, $last: Int, $after: String) {
   allLibraryPeriodicalsConnection(first: 10) {
     edges {
       node {
         name
-        issuesConnection(last: 0, after: $after) {
+        issuesConnection(first: $first, last: $last, after: $after) {
           totalCount
           edges { node { title } }
           pageInfo { hasNextPage hasPreviousPage }
@@ -397,46 +367,36 @@ query ($after: String) {
 
 
 @pytest.mark.django_db
-def test_nested_keyset_last_zero_with_after_matches_root_pageinfo():
-    """Nested ``last: 0`` + ``after:`` (per-parent keyset slicer) keeps the same pageInfo."""
+@pytest.mark.parametrize("with_after", [False, True], ids=["no-cursor", "after"])
+def test_nested_keyset_last_zero_serves_the_first_zero_window(with_after):
+    """Nested ``last: 0`` is the planned ``first: 0`` keyset window over the same cursor.
+
+    The same payload ``first: 0`` returns, served by the one batched window
+    prefetch rather than per parent.
+    """
     astronomy, _botany, _empty = _seed_periodicals()
-    # Mint a cursor from the nested window's first page, then replay last:0 after it.
-    head = _assert_graphql_success(
-        """
-        query {
-          allLibraryPeriodicalsConnection(first: 10) {
-            edges {
-              node {
-                name
-                issuesConnection(first: 2) {
-                  pageInfo { endCursor }
-                  edges { node { title } }
-                }
-              }
-            }
-          }
-        }
-        """,
-    )
-    astro = next(
-        e["node"]
-        for e in head["allLibraryPeriodicalsConnection"]["edges"]
-        if e["node"]["name"] == astronomy.name
-    )
-    assert [e["node"]["title"] for e in astro["issuesConnection"]["edges"]] == [
-        "Astro #5",
-        "Astro #4",
-    ]
-    after = astro["issuesConnection"]["pageInfo"]["endCursor"]
-    data = _assert_graphql_success(NESTED_LAST_ZERO_AFTER, variables={"after": after})
+    cursor = {}
+    if with_after:
+        first_page = _nested_by_periodical(first=2)[astronomy.name]
+        cursor = {"after": first_page["pageInfo"]["endCursor"]}
+    with CaptureQueriesContext(connection) as ctx:
+        data = _assert_graphql_success(NESTED_ZERO_PAGE, variables={"last": 0, **cursor})
+    issue_queries = [q["sql"] for q in ctx.captured_queries if "library_issue" in q["sql"]]
+    assert len(issue_queries) == 1, issue_queries
     page = next(
         e["node"]["issuesConnection"]
         for e in data["allLibraryPeriodicalsConnection"]["edges"]
         if e["node"]["name"] == astronomy.name
     )
-    assert [e["node"]["title"] for e in page["edges"]] == ["Astro #3", "Astro #2", "Astro #1"]
-    assert page["totalCount"] == 5
-    assert page["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": False}
+    assert page == {
+        "totalCount": 5,
+        "edges": [],
+        "pageInfo": {"hasNextPage": True, "hasPreviousPage": with_after},
+    }
+    assert data == _assert_graphql_success(
+        NESTED_ZERO_PAGE,
+        variables={"first": 0, **cursor},
+    )
 
 
 @pytest.mark.django_db

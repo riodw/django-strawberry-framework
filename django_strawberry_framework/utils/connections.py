@@ -133,25 +133,28 @@ def is_backward_shape(first: Any, last: Any) -> bool:
     """Return whether the pagination arguments describe a BACKWARD (``last``-only) page.
 
     The core Relay shape test: ``last`` was given as an ``int`` and ``first``
-    was not. It was spelled inline at four sites, each ANDing a different extra
-    term onto the same core - ``not before_supplied`` in the window derivation,
-    ``not last_zero_quirk`` in the keyset resolver, nothing at all in the keyset
-    bounds. Those extra terms are real per-site differences and stay explicit at
-    their call sites; what is shared is only this core, so a change to the core
-    is one edit and the variation between the sites stays visible.
+    was not. Three sites read it: the window derivation ANDs
+    ``not before_supplied`` onto the core, the keyset resolver and the keyset
+    bounds add nothing. That extra term is a real per-site difference and stays
+    explicit at its call site; what is shared is only this core, so a change to
+    the core is one edit and the variation between the sites stays visible.
     """
     return isinstance(last, int) and not isinstance(first, int)
 
 
-def offset_page_first(first: Any, last: Any, *, cap: int) -> Any:
-    """Return the ``first`` an offset slice runs with, bounding every offset page by ``cap``.
+def page_arguments(first: Any, last: Any, *, cap: int) -> tuple[Any, Any]:
+    """Return the ``(first, last)`` every connection page is sliced with, offset and keyset alike.
 
-    ``SliceMetadata`` applies its default page only when no ``before`` cursor set ``end``; with
-    neither page argument an ``int``, the page is ``first = cap`` (graphene-django's rule).
+    ``last: 0`` with no ``int`` ``first`` is the ``first: 0`` page (Strawberry would slice
+    ``edges[-0:]``, the whole list). ``SliceMetadata`` applies its default page only when no
+    ``before`` cursor set ``end``; with neither page argument an ``int``, the page is
+    ``first = cap`` (graphene-django's rule), so every page is bounded by ``cap``.
     """
+    if last == 0 and not isinstance(first, int):
+        return 0, None
     if isinstance(first, int) or isinstance(last, int):
-        return first
-    return cap
+        return first, last
+    return cap, last
 
 
 def has_connection_sidecar_input(*, filter_input: Any, order_by_input: Any) -> bool:
@@ -633,9 +636,10 @@ def derive_connection_window_bounds(
     and the resolve-time pipeline use. ``max_results`` is passed EXPLICITLY (the
     walker's graphql-core ``info.schema`` has no ``.config`` for the engine to
     read), and is narrowed through the request policy first, so plan-time and
-    resolve-time caps include the same ``max_page_size`` ceiling. The ``first``
-    handed to the engine goes through ``offset_page_first``, so a ``before``
-    cursor with no page argument is bounded by that same cap.
+    resolve-time caps include the same ``max_page_size`` ceiling. The arguments
+    handed to the engine go through ``page_arguments``, so a ``before`` cursor
+    with no page argument is bounded by that same cap and ``last: 0`` is the
+    ``first: 0`` window.
 
     ``SliceMetadata.from_arguments`` raises ``ValueError`` (negative / over-max
     ``first`` / ``last``) or ``TypeError`` (malformed cursor) for invalid
@@ -673,11 +677,12 @@ def derive_connection_window_bounds(
     the field's own negative-index error.
     """
     effective_max_results = resolve_relay_max_results(info, max_results)
+    first, last = page_arguments(first, last, cap=effective_max_results)
     slice_meta = SliceMetadata.from_arguments(
         info,
         before=before,
         after=after,
-        first=offset_page_first(first, last, cap=effective_max_results),
+        first=first,
         last=last,
         max_results=effective_max_results,
     )
@@ -799,7 +804,9 @@ def derive_keyset_window_bounds(
       applies, with its exact error text so the consumer-visible errors do not
       fork), else the effective ``relay_max_results`` cap - matching the root /
       per-parent keyset slicer.
-    - Backward shapes (``last`` with no ``first``, or any ``before:``) raise
+    - The arguments go through ``page_arguments`` first, as on the offset
+      fork, so ``last: 0`` is the forward ``first: 0`` window. Backward shapes
+      (``last`` with no ``first``, or any ``before:``) raise
       ``UnwindowableConnection``: the reversed keyset window is not planned
       in v1, and the per-parent / root keyset slicer resolves those shapes
       correctly instead (the spec-033 Decision-5 fallback discipline).
@@ -808,10 +815,9 @@ def derive_keyset_window_bounds(
       the bound), matching the offset path's flow where the guard raises
       before any window is consumed.
     """
-    before_supplied = is_supplied(before)
-    if before_supplied or is_backward_shape(first, last):
-        raise UnwindowableConnection
     cap = resolve_relay_max_results(info, max_results)
+    first, last = page_arguments(first, last, cap=cap)
+    if is_supplied(before) or is_backward_shape(first, last):
+        raise UnwindowableConnection
     assert_relay_pagination_bound("first", first, cap=cap)
-    limit = first if isinstance(first, int) else cap
-    return ConnectionWindowBounds(0, limit, False)
+    return ConnectionWindowBounds(0, first, False)

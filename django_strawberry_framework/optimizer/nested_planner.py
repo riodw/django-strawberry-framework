@@ -942,10 +942,8 @@ def _divergent_key_windows(
     - sidecar input (``filter:`` / ``orderBy:``) -> that key stays UNPLANNED
       (per-parent, strictness-visible), siblings unaffected;
     - ``UnwindowableConnection`` (``after`` + ``last``; inverted offset interval;
-      every backward keyset shape) and the reversed ``last: 0`` quirk -> likewise
-      that key alone falls back per-parent (a planned reversed ``last: 0``
-      window would come back empty; ``_resolve_from_window`` keeps its own
-      ``last: 0`` guard as the defensive tail for direct callers);
+      every backward keyset shape) -> likewise that key alone falls back
+      per-parent;
     - malformed pagination -> that key is returned in ``malformed`` so the
       caller records ONLY its identities (per-key error locality: the
       per-parent pipeline raises that alias's own validation error). A
@@ -988,9 +986,6 @@ def _divergent_key_windows(
             continue
         if window is None:
             malformed.append(resp_key)
-            continue
-        if window.reverse and window.limit == 0:
-            fallbacks.append((resp_key, "last: 0"))
             continue
         planned.append((resp_key, window, seek))
     return planned, malformed, fallbacks

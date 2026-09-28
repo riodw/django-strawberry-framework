@@ -3722,10 +3722,10 @@ def test_divergent_key_windows_shared_payload_uses_none_key():
     assert malformed == []
     assert fallbacks == [(None, "sidecar arguments")]
 
-    planned, malformed, fallbacks = _divergent_key_windows({None: {"last": 0}}, info)
-    assert planned == []
-    assert malformed == []
-    assert fallbacks == [(None, "last: 0")]
+    # ``last: 0`` plans the ``first: 0`` window.
+    first_zero = ([(None, ConnectionWindowBounds(offset=0, limit=0, reverse=False), None)], [], [])
+    assert _divergent_key_windows({None: {"first": 0}}, info) == first_zero
+    assert _divergent_key_windows({None: {"last": 0}}, info) == first_zero
 
     planned, malformed, fallbacks = _divergent_key_windows(
         {None: {"first": 3, "after": "not-a-valid-cursor"}},
@@ -4059,45 +4059,6 @@ def test_divergent_union_observer_keeps_count_on_every_window():
             sql = str(queryset.query)
             assert page_bound in sql  # plain page bound - no overfetch sentinel.
             assert sentinel_bound not in sql
-    finally:
-        registry.clear()
-
-
-def test_divergent_last_zero_key_falls_back_alone():
-    """A reversed ``last: 0`` alias stays per-parent while its sibling plans.
-
-    Only the per-parent pipeline reproduces upstream's ``edges[-0:]``
-    whole-list quirk, so that key plans no dead window (a reversed ``last: 0``
-    window always comes back empty) and records no identity; the plain sibling
-    is unaffected.
-    """
-    registry.clear()
-    try:
-        types = _connection_relay_types()
-        genre_model, genre_type = types["Genre"]
-        plan = plan_optimizations(
-            [
-                _conn_sel(
-                    "booksConnection",
-                    node_selections=[_sel("title")],
-                    arguments={"last": 0},
-                    alias="a",
-                ),
-                _conn_sel(
-                    "booksConnection",
-                    node_selections=[_sel("title")],
-                    arguments={"first": 5},
-                    alias="b",
-                ),
-            ],
-            genre_model,
-            info=_fake_info(),
-            source_type=genre_type,
-        )
-        by_attr = _prefetch_by_to_attr(plan)
-        assert set(by_attr) == {"_dst_books$b_connection"}
-        assert len(plan.planned_resolver_keys) == 1
-        assert plan.planned_resolver_keys[0].endswith("@b")
     finally:
         registry.clear()
 
@@ -5713,39 +5674,6 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
         assert plan.planned_resolver_keys == (), reason
     finally:
         end_execution_frame(frame)
-        registry.clear()
-
-
-def test_last_zero_connection_left_fully_unplanned():
-    """``last: 0`` plans nothing: no window prefetch, no resolver keys.
-
-    The reversed window for ``last: 0`` always came back
-    empty and was discarded at resolve time - a dead query per request whose
-    recorded resolver keys silenced strictness over the real per-parent
-    fallback. The walker now treats the shape like ``UnwindowableConnection``
-    (fully unplanned, spec-033 Decision 6 discipline).
-    """
-    registry.clear()
-    try:
-        types = _connection_relay_types()
-        genre_model, genre_type = types["Genre"]
-        plan = plan_optimizations(
-            [
-                _conn_sel(
-                    "booksConnection",
-                    node_selections=[_sel("title")],
-                    arguments={"last": 0},
-                ),
-            ],
-            genre_model,
-            info=_fake_info(),
-            source_type=genre_type,
-        )
-        assert not any(
-            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
-        )
-        assert plan.planned_resolver_keys == ()
-    finally:
         registry.clear()
 
 

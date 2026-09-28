@@ -864,15 +864,16 @@ keyset helper mirroring the offset engine's text, not on one owner serving both 
 two cannot answer the same over-cap request with different errors, and a change to either
 message is a change that must be made in both places.
 
-**A `before` cursor never widens an offset page past the cap.** `SliceMetadata` applies its
-default page only when no `before` cursor set the window's end, so a `before` with neither
-`first` nor `last` would slice the whole `start..before` interval. The offset fork hands the
-engine `first = <cap>` whenever neither page argument is an integer, through
-`utils/connections.py::offset_page_first`, which both `::derive_connection_window_bounds`
-and `connection.py::_consume_fallback` call before anything slices, so the planned window
-and the per-parent page are the same bounded page. It is the rule graphene-django's
-`max_limit` applies and the keyset slicer already follows. Every shape the engine already
-bounded is unchanged, and an integer `last: 0` passes through as given.
+**No cursor shape and no `last: 0` widens a page past the cap.** `SliceMetadata` applies its
+default page only when no `before` cursor set the window's end, and Strawberry's
+`ListConnection` slices a `last: 0` page as `edges[-0:]`, the whole list.
+`utils/connections.py::page_arguments` rewrites the page arguments before anything slices:
+with neither an integer, the page is `first = <cap>` (the rule graphene-django's `max_limit`
+applies), and `last: 0` with no integer `first` is the `first: 0` page.
+`::derive_connection_window_bounds`, `::derive_keyset_window_bounds` and
+`connection.py::_consume_fallback` all call it, so the planned window and the per-parent page
+are the same bounded page on both forks, and the `_page_bound` charge (0 for `last: 0`) is
+what the field serves. Every other shape is unchanged.
 
 This keeps the existing precedence intact (an explicit field `max_results` still beats the
 schema config, which still beats Strawberry's default) and adds the policy strictly on top.
@@ -1331,6 +1332,9 @@ Both belong to the surface rather than to a slice; neither is a root package exp
   `sys.maxsize`, serves the page `first: <cap>` serves on the planned window and on the
   per-parent fallback alike, never the whole `start..before` interval
   ([Decision 7](#decision-7--the-policy-is-a-ceiling-over-relay_max_results-never-a-replacement)).
+- **`last: 0`** serves the `first: 0` page on every connection, so it returns no edges and
+  its zero-row admission charge is exact
+  ([Decision 7](#decision-7--the-policy-is-a-ceiling-over-relay_max_results-never-a-replacement)).
 
 ## Test plan
 
@@ -1386,7 +1390,8 @@ rejected on the bound it is about.
   transport body cap cannot be what rejected it.
 - **Collections**: a raw root list stopping at the maximum; the list sibling bounded so it
   cannot bypass the connection cap; a connection page wider than the policy refused; a
-  `before` cursor with no page argument served one capped page, root and nested; the
+  `before` cursor with no page argument served one capped page, root and nested; `last: 0`
+  served as the `first: 0` page, root, nested and keyset; the
   connection-only default leaving no raw sibling in the SDL to select.
 - **Parity**: the sync and async mounts returning byte-identical rejection extensions.
 

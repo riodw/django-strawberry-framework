@@ -107,7 +107,7 @@ from .utils.connections import (
     has_connection_sidecar_input,
     is_backward_shape,
     is_supplied,
-    offset_page_first,
+    page_arguments,
     resolve_relay_max_results,
     split_window_rows,
     window_range_plan,
@@ -224,8 +224,8 @@ class _WindowedConnectionRows:
     per-parent pipeline only when the wrapper cannot be served safely. Planned
     ``first: 0``, overshot offset ``after:``, and corresponding forward keyset
     empty pages retain marker rows and are served directly. The callable remains
-    the defensive recovery seam for shapes such as ``last: 0``, a backward
-    keyset wrapper, or missing required count/seek annotations.
+    the defensive recovery seam for a backward keyset wrapper or missing
+    required count/seek annotations.
 
     The resolver lacks the pagination arguments needed to classify the rows
     itself (Strawberry's ``ConnectionExtension.resolve`` consumes ``first`` /
@@ -339,11 +339,9 @@ def _resolve_from_window(
     this same overfetch, and ``hasPreviousPage`` from "a cursor was supplied".
 
     Returns ``None`` to tell the caller the window cannot be served and must
-    fall back to the per-parent pipeline: a reversed ``last: 0`` window
-    (upstream's ``edges[-0:]`` quirk serves ALL edges - only the pipeline
-    reproduces it), or a count-less window whose selection requests a
-    count-derived field (the conditional-count drift guard - see the ``total``
-    read below).
+    fall back to the per-parent pipeline: a count-less window whose selection
+    requests a count-derived field (the conditional-count drift guard - see the
+    ``total`` read below).
 
     Cursor math is the positional offset cursor ``_dst_row_number - 1`` for
     EVERY window, including the ``last``-only reversed one:
@@ -416,11 +414,6 @@ def _resolve_from_window(
         keyset_counted=bool(rows) and keyset_seek_supplied and not count_absent,
     )
     if not rows:
-        if reverse and limit == 0:
-            # ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
-            # which is the WHOLE list - only the per-parent pipeline reproduces
-            # that quirk, so the (always-empty) reversed window falls back.
-            return None
         # With marker rows planned for the ambiguous shapes (spec-033 Decision 5)
         # and the n+1 sentinel for the count-free probe, an empty forward window
         # now PROVES the parent has no related rows for EVERY shape - a parent with
@@ -629,9 +622,9 @@ def _consume_window(
     the window is consumable, builds the Relay object via ``_resolve_from_window``;
     marker rows directly serve ``first: 0``, overshot offset ``after:``, and
     corresponding forward keyset empty pages. The carried per-parent fallback
-    runs only for an unservable wrapper such as ``last: 0``, a defensive
-    backward-keyset handoff, or required-annotation drift. A non-wrapper
-    ``nodes`` skips the window work entirely; either way the one
+    runs only for an unservable wrapper: a defensive backward-keyset handoff
+    or required-annotation drift. A non-wrapper ``nodes`` skips the window
+    work entirely; either way the one
     ``_consume_fallback`` tail below runs the non-window keyset-or-offset
     path, so the two dispatch outcomes cannot drift in how they thread the
     pagination arguments.
@@ -693,9 +686,9 @@ def _consume_window(
             )
         if built is not None:
             return built
-        # Unservable window (reversed ``last: 0`` quirk, or the
-        # conditional-count drift guard): recover the per-parent queryset and
-        # run the shipped pipeline so the results stay byte-identical.
+        # Unservable window (the conditional-count drift guard): recover the
+        # per-parent queryset and run the shipped pipeline so the results stay
+        # byte-identical.
         nodes = nodes.fallback()
     return _consume_fallback(
         cls,
@@ -727,14 +720,22 @@ def _consume_fallback(
     value cursor nor mint one, so this is also what keeps fallback cursor
     bytes identical to every windowed path's); an ordinary offset source
     reuses ``ListConnection`` slicing - no second offset-slice implementation
-    - with its ``first`` run through ``utils/connections.py::offset_page_first``
-    so the page is bounded by the already-clamped ``max_results`` for every
-    cursor shape, and the ``totalCount`` variant attaches the count when
-    ``want_count``.
+    - and the ``totalCount`` variant attaches the count when ``want_count``.
+    Both slicers receive ``first`` / ``last`` through
+    ``utils/connections.py::page_arguments``, so every page is bounded by the
+    already-clamped ``max_results`` and ``last: 0`` is the ``first: 0`` page.
     ``super(DjangoConnection, cls)`` reaches ``ListConnection`` even for a
     generated ``<TypeName>Connection`` subclass (the spec-032 concrete-class
     pin): the package override already ran the guard and window probe.
     """
+    # The page carries the same ``first`` / ``last`` the window derivations
+    # hand their engines, so no slicer serves a wider page than a planned
+    # window would.
+    slice_kwargs["first"], slice_kwargs["last"] = page_arguments(
+        slice_kwargs["first"],
+        slice_kwargs["last"],
+        cap=slice_kwargs["max_results"],
+    )
     keyset_state = _keyset_connection_context(cls)
     if keyset_state is not None:
         return _resolve_keyset_connection(
@@ -745,14 +746,6 @@ def _consume_fallback(
             state=keyset_state,
             **slice_kwargs,
         )
-    # The offset page carries the same cap-bounded ``first`` the window
-    # derivation hands the engine, so a ``before`` cursor with no page argument
-    # cannot slice a wider page here than a planned window would serve.
-    slice_kwargs["first"] = offset_page_first(
-        slice_kwargs["first"],
-        slice_kwargs["last"],
-        cap=slice_kwargs["max_results"],
-    )
     try:
         conn = super(DjangoConnection, cls).resolve_connection(nodes, info=info, **slice_kwargs)
     except (
@@ -924,13 +917,6 @@ class _KeysetPage:
     backward: bool
     after_supplied: bool
     before_supplied: bool
-    # ``last: 0`` mirrors Strawberry's ``edges[-0:]`` serve-all quirk: the
-    # offset ``ListConnection`` path overwrites ``hasPreviousPage`` from
-    # "did ``edges[-last:]`` trim?" which is always False for ``last == 0``.
-    # Without this flag a keyset ``last: 0`` + ``after:`` page would report
-    # ``hasPreviousPage`` from ``after_supplied`` and diverge from the offset
-    # connection on the same arguments.
-    last_zero_quirk: bool = False
 
     @property
     def has_next_page(self) -> bool:
@@ -945,14 +931,7 @@ class _KeysetPage:
 
     @property
     def has_previous_page(self) -> bool:
-        """Relay's ``HasPreviousPage``: the backward overfetch, else "``after`` was supplied".
-
-        ``last: 0`` is the exception: Strawberry's serve-all quirk never trims,
-        so ``hasPreviousPage`` stays False even when ``after`` advanced the
-        materialized window (byte parity with offset ``ListConnection``).
-        """
-        if self.last_zero_quirk:
-            return False
+        """Relay's ``HasPreviousPage``: the backward overfetch, else "``after`` was supplied"."""
         return (self.backward and self.overfetched) or self.after_supplied
 
 
@@ -1034,17 +1013,8 @@ def _resolve_keyset_connection(
         IndexError,
     ) as exc:
         raise GraphQLError(str(exc)) from exc
-    last_zero_quirk = is_backward_shape(first, last) and last == 0 and not before_supplied
-    backward = is_backward_shape(first, last) and not last_zero_quirk
-    # Strawberry's ``edges[-0:]`` quirk means ``last: 0`` serves the rows it
-    # materialized. Preserve that compatibility, but never let the quirk bypass
-    # the connection's existing Relay cap: fetch at most ``cap + 1`` so the
-    # returned page stays bounded and ``hasNextPage`` remains data-driven.
-    page_size = (
-        cap
-        if last_zero_quirk
-        else (last if backward else (first if isinstance(first, int) else cap))
-    )
+    backward = is_backward_shape(first, last)
+    page_size = last if backward else first
     fetch_queryset = queryset.reverse() if backward else queryset
     # The keyset page ALWAYS probes: ``hasNextPage`` here is data-driven off the
     # overfetched sentinel, so the increment is unconditional rather than gated
@@ -1108,7 +1078,6 @@ def _resolve_keyset_connection(
             backward=backward,
             after_supplied=after_supplied,
             before_supplied=before_supplied,
-            last_zero_quirk=last_zero_quirk,
         )
 
     if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
@@ -1270,7 +1239,7 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
         ``_consume_fallback``. Pins:
         ``test_fast_path_total_count_marker_bypasses_non_queryset_guard`` /
         ``test_fast_path_ambiguous_empty_served_from_marker_row`` /
-        ``test_fast_path_last_zero_quirk_parity_via_fallback``.
+        ``test_fast_path_last_zero_serves_the_first_zero_page``.
         """
         # The request's ``ResourcePolicy.max_page_size`` is a CEILING over the
         # field's / schema's own ``relay_max_results`` (spec-047). Resolving it
@@ -2164,8 +2133,8 @@ def _build_relation_connection_resolver(
     present means the window is ignored and the pipeline runs, so a future
     planner/argument desync can never serve unfiltered wrong data. The marker
     also carries a fallback factory re-running this pipeline as a defensive
-    recovery seam when the wrapper cannot be served (for example ``last: 0``, a
-    backward keyset wrapper, or required-annotation drift). Planned ``first: 0``
+    recovery seam when the wrapper cannot be served (for example a backward
+    keyset wrapper, or required-annotation drift). Planned ``first: 0``
     and overshot ``after:`` marker pages are served directly. The resolver never
     sees the pagination arguments - ``ConnectionExtension`` consumes them.
 

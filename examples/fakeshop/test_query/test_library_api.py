@@ -4924,6 +4924,42 @@ def test_genre_connection_before_without_page_argument_serves_one_capped_page(sh
     assert conn == _genres_connection(f"first: {_DEFAULT_PAGE_CAP}, {arguments}", selection)
 
 
+#: ``last: 0`` cursor shapes: none, and an ``after`` the page starts past.
+_LAST_ZERO_CURSOR_SHAPES = [pytest.param(False, id="no-cursor"), pytest.param(True, id="after")]
+
+
+def _last_zero_cursor(after: bool) -> str:
+    """The cursor arguments one ``_LAST_ZERO_CURSOR_SHAPES`` row prepends."""
+    return f'after: "{_array_cursor(5)}", ' if after else ""
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("after", _LAST_ZERO_CURSOR_SHAPES)
+def test_genre_connection_last_zero_serves_the_first_zero_page(after):
+    """``last: 0`` is the page ``first: 0`` serves over the same cursors.
+
+    No edges and ``first: 0``'s ``pageInfo`` (rows exist past the page, so
+    ``hasNextPage`` is true), over more rows than the cap so a page serving
+    every row cannot pass.
+    """
+    _seed_genres(*[f"Genre-{index:03d}" for index in range(_PAST_CAP_ROWS)])
+    cursor = _last_zero_cursor(after)
+    selection = _CAP_BOUNDED_SELECTION % "name"
+
+    conn = _genres_connection(f"{cursor}last: 0", selection)
+
+    assert conn == {
+        "edges": [],
+        "pageInfo": {
+            "hasNextPage": True,
+            "hasPreviousPage": after,
+            "startCursor": None,
+            "endCursor": None,
+        },
+    }
+    assert conn == _genres_connection(f"{cursor}first: 0", selection)
+
+
 # ---------------------------------------------------------------------------
 # Fakeshop library activation (spec-032 Decision 12): live root
 # node(id:) / nodes(ids:) / typed genre(id:) refetch plus the synthesized
@@ -6338,6 +6374,39 @@ def test_genre_books_connection_before_without_page_argument_serves_one_capped_p
     assert "_dst_row_number" in captured[1]["sql"]
     explicit, _ = _genre_books_connection(f"first: {_DEFAULT_PAGE_CAP}, {arguments}", selection)
     assert conn == explicit
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("after", _LAST_ZERO_CURSOR_SHAPES)
+def test_genre_books_connection_last_zero_serves_the_first_zero_window(after):
+    """Nested ``last: 0`` is the planned ``first: 0`` window over the same cursors.
+
+    The relation-seeded colour of
+    ``::test_genre_connection_last_zero_serves_the_first_zero_page``: no edges and
+    ``first: 0``'s ``pageInfo`` over a genre with more books than the cap, served by
+    the same window SQL ``first: 0`` runs in the fixed two-query cost.
+    """
+    _seed_genre_books(*[f"Book-{index:03d}" for index in range(_PAST_CAP_ROWS)])
+    cursor = _last_zero_cursor(after)
+    selection = _CAP_BOUNDED_SELECTION % "title"
+
+    conn, captured = _genre_books_connection(f"{cursor}last: 0", selection)
+
+    assert conn == {
+        "edges": [],
+        "pageInfo": {
+            "hasNextPage": True,
+            "hasPreviousPage": after,
+            "startCursor": None,
+            "endCursor": None,
+        },
+    }
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_row_number" in window_sql
+    first_zero, first_zero_captured = _genre_books_connection(f"{cursor}first: 0", selection)
+    assert conn == first_zero
+    assert window_sql == first_zero_captured[1]["sql"]
 
 
 @pytest.mark.django_db
@@ -11071,14 +11140,12 @@ def test_library_card_deferred_projection_survives_select_related():
 
 
 @pytest.mark.django_db
-def test_nested_connection_last_zero_serves_quirk_via_per_parent_fallback():
-    """``last: 0`` live: the serve-all quirk through the fallback, no dead window.
+def test_nested_connection_last_zero_serves_the_first_zero_page():
+    """``last: 0`` live: every parent's page is ``first: 0``'s, from one window query.
 
-    Upstream ``ListConnection`` slices ``edges[-0:]`` - the WHOLE list - so
-    ``last: 0`` returns every edge. The walker plans NOTHING for the shape:
-    live queries pay the root query plus the per-parent pipeline (count +
-    edges per genre for ``totalCount``), and NO discarded
-    reversed-window query rides along.
+    No edges and ``first: 0``'s ``pageInfo`` for each genre, the same payload
+    ``first: 0`` returns, served by the planned window in the fixed two-query
+    cost rather than per parent.
     """
     shelf = _seed_shelf()
     for index in range(2):
@@ -11092,7 +11159,7 @@ def test_nested_connection_last_zero_serves_quirk_via_per_parent_fallback():
       allLibraryGenresConnection {
         edges {
           node {
-            booksConnection(last: 0) {
+            booksConnection(%s: 0) {
               edges { node { title } }
               pageInfo { hasNextPage hasPreviousPage }
             }
@@ -11102,26 +11169,21 @@ def test_nested_connection_last_zero_serves_quirk_via_per_parent_fallback():
     }
     """
     with CaptureQueriesContext(connection) as captured:
-        response = _post_graphql(query)
+        response = _post_graphql(query % "last")
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
     edges = payload["data"]["allLibraryGenresConnection"]["edges"]
     assert len(edges) == 2
-    for index, edge in enumerate(edges):
-        books_conn = edge["node"]["booksConnection"]
-        # The upstream ``edges[-0:]`` quirk: ALL three edges served.
-        assert [e["node"]["title"] for e in books_conn["edges"]] == [
-            f"LastZero-{index}-a",
-            f"LastZero-{index}-b",
-            f"LastZero-{index}-c",
-        ]
-        assert books_conn["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": False}
-    # Root genres connection + one per-parent pipeline query per genre = 3 -
-    # and no window SQL anywhere (pre-fix: a discarded reversed window added
-    # one more query per request and hid the fallback from strictness).
-    assert len(captured) == 3
-    assert not any("_dst_row_number" in entry["sql"] for entry in captured)
+    for edge in edges:
+        assert edge["node"]["booksConnection"] == {
+            "edges": [],
+            "pageInfo": {"hasNextPage": True, "hasPreviousPage": False},
+        }
+    # Root genres connection + ONE window query - never one per genre.
+    assert len(captured) == 2
+    assert "_dst_row_number" in captured[1]["sql"]
+    assert payload == _post_graphql(query % "first").json()
 
 
 def _seed_branch_notes():

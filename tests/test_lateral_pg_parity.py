@@ -12,7 +12,7 @@ show:
 - byte-identical data, identical query cost, and real ``CROSS JOIN LATERAL``
   versus the windowed body (reverse-FK pagination shapes, count-free
   ``hasNextPage``, reverse-M2M through-once, depth-two, divergent aliases,
-  ``last: 0`` shared fallback, visibility-scoped lateral, request-varying
+  ``last: 0`` as ``first: 0``, visibility-scoped lateral, request-varying
   visibility on one extension instance, keyset seek/count/cursor parity);
 - LATERAL SQL-shape pins a generic live capture does not uniquely show
   (through-table join once, visibility predicate once, in-branch keyset seek,
@@ -406,15 +406,16 @@ def test_divergent_alias_total_count_sibling_keeps_count_on_both_laterals():
     assert by_code["A"]["b"]["totalCount"] == 5
 
 
-def test_last_zero_quirk_stays_parity_via_the_shared_fallback():
-    """``last: 0`` falls back per-parent under BOTH strategies (the upstream
-    ``edges[-0:]`` serve-all quirk) - parity holds, cost is per-parent."""
+def test_last_zero_serves_the_first_zero_page_under_both_strategies():
+    """``last: 0`` is the planned ``first: 0`` lateral page: parity, two queries, same payload."""
     _seed_library()
-    _assert_parity(
+    last_zero, _ = _assert_parity(
         f"{{ shelves {{ id booksConnection(last: 0) {{ {_FULL_PAGE} }} }} }}",
-        queries=None,
-        expect_lateral=False,
     )
+    first_zero, _ = _assert_parity(
+        f"{{ shelves {{ id booksConnection(first: 0) {{ {_FULL_PAGE} }} }} }}",
+    )
+    assert last_zero == first_zero
 
 
 def test_stray_executor_thread_connections_are_tracked_for_session_close():

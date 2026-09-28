@@ -653,25 +653,39 @@ before anything validates it.
 - **Aliases are charged per alias.** The same expensive field under twenty aliases is
   twenty selections and twenty aliases.
 - **Values are charged in the same pass** because family classification needs the argument's
-  own GraphQL input type, which only the field context supplies. Four value sources normalize
-  through `value_from_ast_untyped` into one walker rather than one walker per source: literal
-  arguments; variables; literal objects with variables spliced into them; and **an operation
-  variable definition's own default**, folded into the per-operation variable map before any
-  argument value is charged (a supplied variable wins; a default is charged only where the
-  map has no entry for its name). The default is a source in its own right because a
-  document can carry its whole payload there — `query($p: [Int!] = [ … 5000 items … ])
-  { … }` supplies no variables map at all — and a walk that charges only what the map holds
-  charges nothing for it. Every one of the four is the value as the REQUEST carried it, before
-  coercion or a custom scalar's `parse_value`, which is the stage boundary
+  own GraphQL input type, which the field or directive context supplies. Four value sources
+  normalize through `value_from_ast_untyped` into one walker rather than one walker per source:
+  literal arguments; variables; literal objects with variables spliced into them; and **an
+  operation variable definition's own default**, folded into the per-operation variable map
+  before any argument value is charged (at a use site a supplied variable wins, and a default
+  stands in only where the map has no entry for its name). The default is a source in its own
+  right because a document can carry its whole payload there — `query($p: [Int!] = [ … 5000
+  items … ]) { … }` supplies no variables map at all — and a walk that charges only what the
+  map holds charges nothing for it. Every one of the four is the value as the REQUEST carried
+  it, before coercion or a custom scalar's `parse_value`, which is the stage boundary
   [Decision 13](#decision-13--what-this-policy-does-not-bound-and-why-each-boundary-is-deliberate)
   states.
+- **Every value validation converts is charged at least once.** Validation parses the
+  literals of every definition in the document, not only the selected operation's, so the one
+  walk visits every operation and every fragment definition no spread expanded. Values are
+  charged per reference everywhere: field arguments, and directive arguments on the
+  operation, on a variable definition, on every field, on every spread node before its
+  fragment resolves (so a spread of an unknown fragment or one closing a cycle still charges),
+  on every inline fragment, and on a fragment definition once per expansion; an argument
+  nothing declares is charged untyped. Shape bounds are charged only for the selected
+  operation: an unselected operation, the subtree of a field the parent type lacks, and an
+  unexpanded fragment are walked for values alone. A variable resolves to its supplied value
+  or default only in the selected operation (elsewhere graphql-core coerces none, so a
+  reference is charged as `None`), and a default no use site charged - unused, shadowed by a
+  supplied variable, or in an unselected operation - is charged once at its definition.
 
 **Why before validation.** Validating a document parses every literal argument and every
 variable-definition default through the scalar it is typed as, so a walk that ran after
 validation would be charging arguments a consumer's own `parse_value` had already been handed.
 The walk resolves field and argument definitions against the schema without needing a valid
-document to do it: it charges a node it cannot type for the selection it is and does not
-descend, and it charges a value that resolves to nothing as the value it resolves to. The
+document to do it: it charges a node it cannot type for the selection it is and walks what is
+under it for values only, untyped, and it charges a value that resolves to nothing as the value
+it resolves to. The
 degenerate inputs an invalid document presents — unknown fragment, unknown field, unknown
 argument, a selection under a leaf, an undefined variable, an operation kind the schema
 lacks — are each handled and tested, which was already required because a schema may disable
@@ -1286,11 +1300,13 @@ Both belong to the surface rather than to a slice; neither is a root package exp
   literal coercion. The request is refused either way, but as a malformed-input failure
   rather than a typed resource rejection — a bound the package does not own is not a bound
   it promises.
-- **A subscription or mutation against a schema that defines no such root** is skipped.
-- **Only the named operation is charged** when `operationName` is supplied, for every
-  bound charged after the parse — `max_selections`, `max_aliases`, `max_collection_cost`
-  and every value bound. A document carrying several operations does not pay those for the
-  ones it did not run.
+- **A subscription or mutation against a schema that defines no such root** charges no
+  shape; its values are still charged, untyped.
+- **Only the named operation is charged** when `operationName` is supplied, for the shape
+  bounds charged after the parse — `max_selections`, `max_aliases`, `max_collection_cost`. A
+  document carrying several operations does not pay those for the ones it did not run. The
+  value bounds follow validation instead, which converts every definition in the document: a
+  value in an operation the request did not name is still charged, per reference.
 - **`max_document_tokens` and `max_depth` are request-level bounds**, charged over the whole
   document text including operations the request did not name. They exist to bound the parse;
   the parse reads the whole document whatever `operationName` says, and no operation is
@@ -1334,7 +1350,11 @@ rejected on the bound it is about.
   the value-depth bound (the bound the pre-parse text scan structurally cannot supply); a
   scalar over the byte bound; several arguments together exhausting the input-node budget;
   and an operation variable DEFAULT charged when the variables map omits it, with its twin
-  proving a supplied variable overrides the default rather than adding to it.
+  proving a supplied variable is what its use site charges, the default charged once at its
+  definition; and every value validation converts outside the selected operation's field
+  arguments — directive arguments at each location, unused, shadowed and directive-only
+  defaults, untyped argument values, and literals in an unselected operation or an unspread
+  fragment.
 - **The relation-list classification, from the bind spec's side**: a raw-pk (`[Int!]`)
   relation list over the bound on each of the model, form and serializer flavors; a nested
   serializer row's own relation list charged against the enclosing field; a `GlobalID`
@@ -1379,7 +1399,7 @@ a non-`str` query it declines rather than lexes, and across the three structural
 families with their derivation from the single pair table; the pickle round trip proving
 `bound` / `limit` / `charged` / `detail` all survive; and the walker's degenerate inputs
 (unnamed operation, missing root type, unknown fragment, fragment cycle, inline fragment
-with and without a type condition, unknown argument, leaf parent, untyped container,
+with and without a type condition, unknown argument charged untyped, leaf parent, untyped container,
 unmeasurable upload). The identity rows are the pointed ones: a container
 referenced twice charged **twice** at a node budget that separates the two contracts, two
 distinct-but-equal containers both charged, a self-referential mapping AND a

@@ -17,7 +17,7 @@ Row groups, in the order a request meets them:
 - the document text bounds (tokens, structural depth) - charged before the parse;
 - the expanded-document bounds (selections, aliases, collection cost) - charged
   before validation, with fragment / alias / directive evasion rows, and the
-  named-operation filter (post-parse bounds charge only the operation
+  named-operation filter (post-parse shape bounds charge only the operation
   ``operationName`` selects; the token bound on the same two-operation
   document is the request-level counterpart);
 - the value bounds (node ids, membership items, relation ids, nested rows,
@@ -26,6 +26,12 @@ Row groups, in the order a request meets them:
   document limits cannot see, including the two shapes only a real request
   builds: one variable spliced into two fields (the same Python object twice)
   and a nested value whose depth no bracket in the document reflects;
+- every value validation converts that no field argument of the selected
+  operation carries - directive arguments at every location a directive
+  rides, variable defaults that are unused, shadowed by a supplied variable,
+  or read only by a directive or an unknown field, argument values nothing
+  types, and literals in an operation the request did not select or a
+  fragment no spread reaches;
 - the raw-pk relation id sets - the write inputs whose relation ids render as
   raw pks rather than ``GlobalID``s (``[Int!]`` on the wire), charged against
   the relation bounds through their bind specs rather than the id scalar's
@@ -1629,6 +1635,20 @@ def test_an_explicit_small_page_narrows_the_collection_cost():
     _no_rejection(_post("/rp-cost/", query))
 
 
+def test_a_page_argument_other_than_first_or_last_does_not_narrow_the_collection_cost():
+    """``after:`` names no page size, so both nested connections still charge full pages."""
+    query = """
+    {
+      allCategories(after: null) {
+        edges { node { itemsConnection(after: null) { edges { node { name } } } } }
+      }
+    }
+    """
+    extensions = _rejection(_post("/rp-cost/", query))
+    assert extensions["bound"] == "max_collection_cost"
+    assert extensions["charged"] > MAX_COST
+
+
 # ---------------------------------------------------------------------------
 # Value bounds: a tiny document carrying a large variable payload
 # ---------------------------------------------------------------------------
@@ -1758,16 +1778,16 @@ def test_variable_default_value_in_operation_header_is_rejected_when_omitted():
 
 @pytest.mark.django_db
 def test_variable_default_value_in_operation_header_ignored_when_overridden():
-    """An explicit variable is charged as the runtime list, not the document default.
+    """An explicit variable is charged at its use as the runtime list, not the default.
 
-    Under the bound the request runs; over it the charge is the runtime width
-    (five), never the default that would have been five either - a walker that
-    ignored both would pass the under-bound arm, and a walker that still charged
-    the default would fail it.
+    The default sits at the bound (four) and is charged once at its definition;
+    the use site charges what the request supplied. Under the bound the request
+    runs; over it the charge is the runtime width (five), which the default
+    alone could never reach.
     """
-    _no_rejection(_post("/rp-values/", _MEMBERSHIP_DEFAULT_OVER, {"ids": ["1", "2"]}))
+    _no_rejection(_post("/rp-values/", _MEMBERSHIP_DEFAULT_AT, {"ids": ["1", "2"]}))
     extensions = _rejection(
-        _post("/rp-values/", _MEMBERSHIP_DEFAULT_OVER, {"ids": ["1"] * (MAX_MEMBERSHIP + 1)}),
+        _post("/rp-values/", _MEMBERSHIP_DEFAULT_AT, {"ids": ["1"] * (MAX_MEMBERSHIP + 1)}),
     )
     assert extensions["bound"] == "max_membership_items"
     assert extensions["charged"] == MAX_MEMBERSHIP + 1
@@ -2143,6 +2163,223 @@ def test_total_input_nodes_are_bounded_across_several_arguments():
     query = "{ allLibraryGenres(filter: { or: [%s] }) { name } }" % branches
     extensions = _rejection(_post("/rp-values/", query))
     assert extensions["bound"] == "max_input_nodes"
+
+
+# ---------------------------------------------------------------------------
+# Every value validation converts: directives, defaults, unreached definitions
+# ---------------------------------------------------------------------------
+
+
+#: One string literal a byte over ``MAX_SCALAR_BYTES``, parked in each row below
+#: at a position the selected operation's field arguments never read.
+_OVER_BYTES = "x" * (MAX_SCALAR_BYTES + 1)
+
+
+def _assert_over_bytes(payload):
+    """Assert ``payload`` is the scalar-byte rejection of exactly ``_OVER_BYTES``."""
+    extensions = _rejection(payload)
+    assert extensions["bound"] == "max_scalar_bytes"
+    assert extensions["charged"] == MAX_SCALAR_BYTES + 1
+
+
+def _assert_over_nodes(payload):
+    """Assert ``payload`` is the input-node rejection one node past ``MAX_INPUT_NODES``."""
+    extensions = _rejection(payload)
+    assert extensions["bound"] == "max_input_nodes"
+    assert extensions["charged"] == MAX_INPUT_NODES + 1
+
+
+def _included_fields(count):
+    """``count`` aliased ``__typename`` selections, each carrying one ``@include`` value."""
+    return " ".join(f"f{index}: __typename @include(if: true)" for index in range(count))
+
+
+def test_field_directive_values_at_the_node_bound_are_admitted():
+    payload = _post("/rp-values/", "{ %s }" % _included_fields(MAX_INPUT_NODES))
+    _no_rejection(payload)
+    assert payload["data"] == {f"f{index}": "Query" for index in range(MAX_INPUT_NODES)}
+
+
+def test_field_directive_values_are_charged_as_input_nodes():
+    """Each ``@include(if: true)`` on a field is one input node, charged per field."""
+    _assert_over_nodes(_post("/rp-values/", "{ %s }" % _included_fields(MAX_INPUT_NODES + 1)))
+
+
+def test_inline_fragment_directive_values_are_charged_as_input_nodes():
+    fragments = " ".join(
+        "... @include(if: true) { __typename }" for _ in range(MAX_INPUT_NODES + 1)
+    )
+    _assert_over_nodes(_post("/rp-values/", "{ %s }" % fragments))
+
+
+def test_spread_directive_values_are_charged_at_every_spread():
+    spreads = " ".join("...F @include(if: true)" for _ in range(MAX_INPUT_NODES + 1))
+    query = "{ %s } fragment F on Query { __typename }" % spreads
+    _assert_over_nodes(_post("/rp-values/", query))
+
+
+def test_fragment_definition_directive_values_are_charged_per_expansion():
+    """The definition's own directive is converted again for every spread that expands it."""
+    spreads = " ".join("...F" for _ in range(MAX_INPUT_NODES + 1))
+    query = "{ %s } fragment F on Query @include(if: true) { __typename }" % spreads
+    _assert_over_nodes(_post("/rp-values/", query))
+
+
+def test_a_directive_value_on_a_spread_of_an_unknown_fragment_is_charged():
+    query = '{ __typename ...Missing @deprecated(reason: "%s") }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_directive_value_on_a_spread_closing_a_fragment_cycle_is_charged():
+    query = (
+        '{ ...A } fragment A on Query { __typename ...A @deprecated(reason: "%s") }' % _OVER_BYTES
+    )
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_an_operation_directive_value_is_charged():
+    query = 'query Q @deprecated(reason: "%s") { __typename }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_variable_definition_directive_value_is_charged():
+    query = (
+        'query Q($v: Boolean! @deprecated(reason: "%s")) { __typename @include(if: $v) }'
+        % _OVER_BYTES
+    )
+    _assert_over_bytes(_post("/rp-values/", query, {"v": True}))
+
+
+def test_a_variable_default_read_only_by_a_directive_is_charged():
+    query = 'query Q($v: String = "%s") { __typename @deprecated(reason: $v) }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_an_unused_variable_default_is_charged():
+    query = 'query Q($v: String = "%s") { __typename }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_variable_default_referenced_only_from_an_unknown_field_is_charged():
+    query = 'query Q($v: String = "%s") { __typename nosuch(b: $v) }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_variable_default_shadowed_by_a_supplied_variable_is_still_charged():
+    """Validation parses the default whether or not the request supplies the variable."""
+    query = 'query Q($v: String = "%s") { __type(name: $v) { name } }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query, {"v": "Query"}))
+
+
+def test_an_unknown_argument_value_is_charged_untyped():
+    """Nothing types ``nope``, so no family classifies it; its bytes are still charged."""
+    query = '{ __type(name: "Query", nope: "%s") { name } }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_value_of_an_unknown_directive_is_charged_untyped():
+    query = '{ __typename @nope(x: "%s") }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_an_unknown_argument_of_a_known_directive_is_charged_untyped():
+    query = '{ __typename @include(if: true, nope: "%s") }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_directive_value_on_a_type_system_definition_at_the_byte_bound_is_admitted():
+    """At the bound the budget admits it, and rejecting the definition is validation's job."""
+    query = '{ __typename } scalar S @specifiedBy(url: "%s")' % ("x" * MAX_SCALAR_BYTES)
+    _no_rejection(_post("/rp-values/", query))
+
+
+def test_a_directive_value_on_a_type_system_definition_is_charged():
+    """Validation types a known directive's arguments in any definition it visits."""
+    query = '{ __typename } scalar S @specifiedBy(url: "%s")' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_literal_in_an_operation_the_request_did_not_select_is_charged():
+    """Validation walks every definition in the document, not only the selected one."""
+    query = 'query A { __typename } query B { __type(name: "%s") { name } }' % _OVER_BYTES
+    _assert_over_bytes(_post_named("/rp-values/", query, "A"))
+
+
+def test_a_literal_in_a_fragment_no_spread_reaches_is_charged():
+    query = '{ __typename } fragment U on Query { __type(name: "%s") { name } }' % _OVER_BYTES
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_a_literal_in_a_duplicate_fragment_definition_is_charged():
+    """The spread expands the last ``F``; validation still parses the first one's literals."""
+    query = (
+        '{ ...F } fragment F on Query { __type(name: "%s") { name } } '
+        "fragment F on Query { __typename }" % _OVER_BYTES
+    )
+    _assert_over_bytes(_post("/rp-values/", query))
+
+
+def test_an_unselected_mutation_is_classified_by_its_write_bind_specs():
+    """A raw-pk relation list in an unselected write still charges the relation bound.
+
+    ``altBranches`` is ``[Int!]`` on the wire, so only ``createShelf``'s bind
+    specs say it is a relation list rather than a membership list.
+    """
+    query = (
+        "query A { __typename } mutation B { createShelf(data: "
+        '{ code: "c", branchId: 1, altBranches: [1, 1, 1] }) { result { code } } }'
+    )
+    extensions = _rejection(_post_named("/rp-values/", query, "A"))
+    assert extensions["bound"] == "max_relation_ids_per_mutation"
+    assert extensions["charged"] == MAX_RELATION_IDS + 1
+
+
+def _genre_or_filter(branches, *, extra=""):
+    """A genre filter literal: one ``or`` list of ``branches`` single-name rows.
+
+    It is ``2 + 3 * branches`` input nodes (the object, the list, and per row
+    the row, its ``name`` object and one leaf), plus one per ``extra`` leaf
+    added to the first row's ``name`` object.
+    """
+    rows = ['{ name: { exact: "x"%s } }' % extra] + ['{ name: { exact: "x" } }'] * (branches - 1)
+    return "{ or: [%s] }" % ", ".join(rows)
+
+
+_SUBSTITUTED_DEFAULT = (
+    "query Q($f: GenreFilterInputType = %s) { allLibraryGenres(filter: $f) { name } }"
+)
+
+
+@pytest.mark.django_db
+def test_a_default_substituted_at_its_use_is_charged_once_at_the_node_bound():
+    """Six rows are exactly ``MAX_INPUT_NODES`` nodes, charged at the use site alone."""
+    _no_rejection(_post("/rp-values/", _SUBSTITUTED_DEFAULT % _genre_or_filter(6)))
+
+
+def test_a_default_substituted_at_its_use_one_node_over_the_bound_is_rejected():
+    query = _SUBSTITUTED_DEFAULT % _genre_or_filter(6, extra=', iContains: "x"')
+    _assert_over_nodes(_post("/rp-values/", query))
+
+
+def test_an_unselected_operation_repeating_a_charged_argument_is_charged_again():
+    """Two byte-identical arguments are two values; each one's nodes are charged."""
+    argument = "filter: %s" % _genre_or_filter(3)
+    query = (
+        "query A { allLibraryGenres(%s) { name } } "
+        "query B { allLibraryGenres(%s) { name } }" % (argument, argument)
+    )
+    _assert_over_nodes(_post_named("/rp-values/", query, "A"))
+
+
+def test_an_upload_variable_in_an_unselected_mutation_is_admitted():
+    """A variable reference there carries no value, so it is not an unmeasurable file."""
+    query = (
+        "query A { __typename } mutation M($a: Upload!, $i: Upload!) { createMediaSpecimen("
+        'data: { label: "l", attachment: $a, image: $i }) { result { label } } }'
+    )
+    payload = _post_named("/rp-uploads/", query, "A")
+    _no_rejection(payload)
+    assert payload["data"] == {"__typename": "Query"}
 
 
 # ---------------------------------------------------------------------------

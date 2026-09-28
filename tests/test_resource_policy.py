@@ -52,7 +52,7 @@ import pickle
 import time
 from collections.abc import AsyncGenerator
 from types import MappingProxyType, SimpleNamespace
-from typing import Any
+from typing import Any, NewType
 
 import pytest
 import strawberry
@@ -67,7 +67,7 @@ from strawberry.extensions import ValidationCache
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types import Info
 
-from django_strawberry_framework import DjangoSchema, Upload
+from django_strawberry_framework import DjangoSchema, Upload, strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.extensions.resource_policy import (
     _CLOSE_TOKEN_KINDS,
@@ -2699,9 +2699,72 @@ def test_an_inline_fragment_names_its_own_type_condition():
     _charge("{ ... on Query { echo } }")
 
 
-def test_an_unknown_argument_is_skipped():
-    """Validation would reject it; the walker charges only arguments it can type."""
-    _charge('{ echo(nope: "x") }')
+#: Every literal the spy scalar below was asked to parse, in order.
+_literal_parses: list[str] = []
+
+
+def _record_literal(node, _variables=None):
+    """Parse a literal by recording its text and handing it back unchanged."""
+    _literal_parses.append(node.value)
+    return node.value
+
+
+SpyText = NewType("SpyText", str)
+
+_SPY_SCALAR = strawberry.scalar(
+    name="SpyText",
+    serialize=str,
+    parse_value=str,
+    parse_literal=_record_literal,
+)
+
+
+@strawberry.type
+class _SpyQuery:
+    """A query root whose one argument is parsed by the recording scalar."""
+
+    @strawberry.field
+    def hello(self) -> str:
+        return "hi"
+
+    @strawberry.field
+    def echo(self, text: SpyText) -> str:
+        return "ok"
+
+
+def _spy_result(document, variables=None, operation_name=None):
+    """Execute ``document`` on a DjangoSchema whose policy admits eight scalar bytes."""
+    schema = DjangoSchema(
+        query=_SpyQuery,
+        config=strawberry_config(extra_scalar_map={SpyText: _SPY_SCALAR}),
+        resource_policy=ResourcePolicy(max_scalar_bytes=8),
+    )
+    _literal_parses.clear()
+    return schema.execute_sync(
+        document,
+        variable_values=variables,
+        operation_name=operation_name,
+    )
+
+
+def test_a_literal_in_an_unselected_operation_is_refused_before_its_scalar_parses_it():
+    result = _spy_result(
+        'query A { hello } query B { echo(text: "%s") }' % ("x" * 9),
+        operation_name="A",
+    )
+    assert result.data is None
+    assert result.errors[0].extensions["bound"] == "max_scalar_bytes"
+    assert _literal_parses == []
+
+
+def test_a_shadowed_variable_default_is_refused_before_its_scalar_parses_it():
+    result = _spy_result(
+        'query Q($t: SpyText = "%s") { echo(text: $t) }' % ("x" * 9),
+        {"t": "small"},
+    )
+    assert result.data is None
+    assert result.errors[0].extensions["bound"] == "max_scalar_bytes"
+    assert _literal_parses == []
 
 
 def test_an_untyped_container_inside_a_scalar_is_still_charged():

@@ -18,11 +18,16 @@ Three passes, in the order a request meets them:
    aliases, and the multiplicative collection cost. Fragment spreads are charged
    at every spread site and cycle-guarded by the spread path, so neither a
    fragment nor a directive can hide a selection from accounting.
-3. **Value budget** (the same walk). Every argument's value - literal, variable,
-   or a literal object with variables spliced into it - is charged against the
-   input-cardinality bounds, typed by the argument's own GraphQL input type
-   and, for a package-generated write input, by the bind-time field specs the
-   owning mutation stashed. The specs are what classify a RELATION list: a
+3. **Value budget** (the same walk). Every value validation converts is
+   charged before validation runs, because graphql-core's
+   ``ValuesOfCorrectTypeRule`` parses each literal through the scalar it is
+   typed as: every field and directive argument in every definition, and every
+   variable-definition default. The selected operation is charged per
+   reference with its variables resolved; other operations and unspread
+   fragments are charged for values only, and a default no use site charged is
+   charged once at its definition. Every value is typed by the GraphQL input
+   type of its position and, for a package-generated write input, by the
+   bind-time field specs the owning mutation stashed. The specs are what classify a RELATION list: a
    multi-relation write input is charged against the relation-id bounds
    whether its ids render as Relay ``GlobalID``s or as raw pks, which a
    scalar-name rule cannot see (a raw-pk relation list is ``[Int!]`` on the
@@ -79,6 +84,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from graphql import (
+    DirectiveNode,
     FieldNode,
     FragmentDefinitionNode,
     FragmentSpreadNode,
@@ -88,12 +94,18 @@ from graphql import (
     GraphQLList,
     GraphQLObjectType,
     InlineFragmentNode,
+    ListValueNode,
+    Node,
+    ObjectValueNode,
     OperationDefinitionNode,
     OperationType,
     SchemaMetaFieldDef,
     TypeMetaFieldDef,
     TypeNameMetaFieldDef,
+    VariableNode,
     get_named_type,
+    is_input_type,
+    type_from_ast,
 )
 from graphql.language.lexer import Lexer
 from graphql.language.source import Source
@@ -191,11 +203,13 @@ def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
     parse, the parse reads the whole document whatever ``operationName`` says,
     and the operation is not identified until that parse has finished. Charging
     only the named operation would therefore name a cost nobody pays and leave
-    the cost somebody does pay unbounded. Every bound charged AFTER the parse -
-    ``max_selections``, ``max_aliases``, ``max_collection_cost`` and every value
-    bound - is charged against the named operation alone (:func:`charge_document`),
-    which is the distinction spec-047 draws between the two halves and not a
-    disagreement between them. A client sending one persisted document carrying
+    the cost somebody does pay unbounded. The shape bounds charged AFTER the
+    parse - ``max_selections``, ``max_aliases``, ``max_collection_cost`` - are
+    charged against the named operation alone (:func:`charge_document`), which is
+    the distinction spec-047 draws between the two halves and not a disagreement
+    between them. The value bounds follow validation, which parses every
+    literal in the document, so the values of an operation the request did not
+    name are charged too. A client sending one persisted document carrying
     several operations is charged for the document it sent.
 
     A malformed document is left to the real parser: a ``GraphQLSyntaxError``
@@ -992,69 +1006,200 @@ def _is_connection_type(candidate: Any) -> bool:
     return isinstance(edge, GraphQLObjectType) and set(edge.fields) >= _EDGE_MARKER_FIELDS
 
 
-def charge_document(
-    policy: ResourcePolicy,
-    graphql_schema: Any,
-    document: Any,
-    variables: Mapping[str, Any] | None = None,
-    operation_name: str | None = None,
-) -> None:
-    """Charge one request's document shape and argument values, iteratively.
+def _variable_names(value_node: Any) -> Iterator[str]:
+    """Yield the name of every variable a value AST references, iteratively."""
+    stack = [value_node]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, VariableNode):
+            yield node.name.value
+        elif isinstance(node, ListValueNode):
+            stack.extend(node.values)
+        elif isinstance(node, ObjectValueNode):
+            stack.extend(field.value for field in node.fields)
 
-    The walk expands fragments at every spread site (so a fragment cannot hide a
-    selection, and spreading one fragment ten times costs ten times) and carries
-    the spread path so a cyclic fragment set terminates instead of looping.
 
-    Every shape validation would have rejected is a shape this walk meets,
-    because it runs BEFORE validation: a cyclic fragment set, a field the parent
-    type does not have, a selection under a leaf, an argument the field does not
-    take, a variable the operation never defined. None of them is an error here.
-    A node the schema cannot type is charged for the selection it is and then
-    not descended into, and a value that resolves to nothing is charged as the
-    value it resolves to; what rejects such a document is validation, which runs
-    next and says so in its own words.
+def _type_system_directives(definition: Any) -> Iterator[Any]:
+    """Yield every directive node inside a type-system definition, iteratively.
+
+    Validation rejects a type-system definition in a request, but only after
+    its value pass has parsed each directive argument in it through the type
+    the directive declares. Nothing else in such a definition is typed as an
+    input, so nothing else in it is converted.
     """
-    safe_variables = variables if variables is not None else {}
-    fragments = {
-        definition.name.value: definition
-        for definition in document.definitions
-        if isinstance(definition, FragmentDefinitionNode)
-    }
-    budget = _DocumentBudget(policy)
-    values = _ValueBudget(policy)
-    for operation in document.definitions:
-        if not isinstance(operation, OperationDefinitionNode):
+    stack = [definition]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, DirectiveNode):
+            yield node
             continue
-        if operation_name is not None and (
-            operation.name is None or operation.name.value != operation_name
-        ):
-            continue
+        for key in node.keys:
+            child = getattr(node, key, None)
+            if isinstance(child, Node):
+                stack.append(child)
+            elif isinstance(child, (list, tuple)):
+                stack.extend(item for item in child if isinstance(item, Node))
+
+
+def _declared_input_type(graphql_schema: Any, type_node: Any) -> Any:
+    """The input type a variable definition declares, or ``None`` when it names none."""
+    declared = type_from_ast(graphql_schema, type_node)
+    return declared if is_input_type(declared) else None
+
+
+class _DocumentWalk:
+    """One request's walk over its document: both budgets, and the fragments it expanded.
+
+    Each root - an operation, or a fragment definition no spread expanded - is
+    walked with its own variable map and mutation-ness. ``variables`` is
+    ``None`` where graphql-core coerces no variable (every definition but the
+    selected operations), and a reference there is charged as ``None``: one
+    node, nothing below it. ``read`` collects the variables a charged value
+    referenced, and is kept only while a default is waiting to be told whether
+    a use site charged it.
+    """
+
+    def __init__(
+        self,
+        policy: ResourcePolicy,
+        graphql_schema: Any,
+        fragments: Any,
+    ) -> None:
+        self.policy = policy
+        self.graphql_schema = graphql_schema
+        self.fragments = fragments
+        self.budget = _DocumentBudget(policy)
+        self.values = _ValueBudget(policy)
+        self.expanded: set[str] = set()
+        self.variables: dict[str, Any] | None = None
+        self.read: set[str] | None = None
+        self.in_mutation = False
+
+    def charge_arguments(
+        self,
+        arguments: Any,
+        argument_defs: Any,
+        specs: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Charge each argument's value, typed where ``argument_defs`` declares it, else untyped."""
+        for argument in arguments or ():
+            argument_def = argument_defs.get(argument.name.value) if argument_defs else None
+            if self.read is not None:
+                self.read.update(_variable_names(argument.value))
+            carried = self.variables
+            if carried is None:
+                carried = dict.fromkeys(_variable_names(argument.value))
+            self.values.charge(
+                None if argument_def is None else argument_def.type,
+                value_from_ast_untyped(argument.value, carried),
+                in_mutation=self.in_mutation,
+                argument=argument.name.value,
+                specs=specs,
+            )
+
+    def charge_directives(self, directives: Any) -> None:
+        """Charge every directive's arguments, typed by the directive's definition where one exists."""
+        for directive in directives or ():
+            directive_def = self.graphql_schema.get_directive(directive.name.value)
+            self.charge_arguments(
+                directive.arguments,
+                None if directive_def is None else directive_def.args,
+            )
+
+    def operation(
+        self,
+        operation: Any,
+        supplied: Mapping[str, Any],
+        *,
+        selected: bool,
+    ) -> None:
+        """Walk one operation, then charge each default no use site charged, at its definition."""
+        graphql_schema = self.graphql_schema
         root = _root_type(graphql_schema, operation.operation)
-        if root is None:
-            continue
-        op_variables = dict(safe_variables)
-        for var_def in operation.variable_definitions or ():
-            var_name = var_def.variable.name.value
-            if var_name not in op_variables and var_def.default_value is not None:
-                op_variables[var_name] = value_from_ast_untyped(var_def.default_value)
-        in_mutation = operation.operation is OperationType.MUTATION
-        # (node, parent type, cost multiplier, fragment spread path)
-        stack: list[tuple[Any, Any, int, frozenset[str]]] = [
+        definitions = operation.variable_definitions or ()
+        defaulted: dict[str, Any] = {}
+        self.variables = None
+        if selected:
+            self.variables = dict(supplied)
+            for var_def in definitions:
+                name = var_def.variable.name.value
+                if name not in self.variables and var_def.default_value is not None:
+                    self.variables[name] = value_from_ast_untyped(var_def.default_value)
+                    defaulted[name] = var_def
+        self.read = set() if defaulted else None
+        self.in_mutation = operation.operation is OperationType.MUTATION
+        for var_def in definitions:
+            self.charge_directives(var_def.directives)
+        self.charge_directives(operation.directives)
+        self.walk(
+            operation.selection_set.selections,
+            root,
+            root,
+            shape=selected and root is not None,
+        )
+        for var_def in definitions:
+            name = var_def.variable.name.value
+            if var_def.default_value is None or (
+                defaulted.get(name) is var_def and name in self.read
+            ):
+                continue
+            self.values.charge(
+                _declared_input_type(graphql_schema, var_def.type),
+                value_from_ast_untyped(var_def.default_value),
+                in_mutation=self.in_mutation,
+                argument=name,
+            )
+
+    def fragment(self, fragment: Any) -> None:
+        """Walk a fragment definition no spread expanded, as a root of its own."""
+        condition = self.graphql_schema.get_type(fragment.type_condition.name.value)
+        self.variables = None
+        self.read = None
+        self.in_mutation = condition is not None and condition is self.graphql_schema.mutation_type
+        self.charge_directives(fragment.directives)
+        self.walk(
+            fragment.selection_set.selections,
+            condition,
+            condition,
+            shape=False,
+            path=frozenset({fragment.name.value}),
+        )
+
+    def walk(
+        self,
+        selections: Any,
+        parent: Any,
+        root: Any,
+        *,
+        shape: bool,
+        path: frozenset[str] = frozenset(),
+    ) -> None:
+        """Walk one root's selections, charging values everywhere and shape where ``shape``."""
+        graphql_schema = self.graphql_schema
+        # (node, parent type, cost multiplier, fragment spread path, shape)
+        stack: list[tuple[Any, Any, int, frozenset[str], bool]] = [
             (
                 selection,
-                root,
+                parent,
                 1,
-                frozenset(),
+                path,
+                shape,
             )
-            for selection in reversed(operation.selection_set.selections)
+            for selection in reversed(selections)
         ]
         while stack:
-            node, parent, multiplier, path = stack.pop()
+            node, parent, multiplier, path, shape = stack.pop()
+            # A spread's own directives are charged before its fragment
+            # resolves: validation converts them whether or not the fragment
+            # exists or is already expanding on this path.
+            self.charge_directives(node.directives)
             if isinstance(node, FragmentSpreadNode):
                 name = node.name.value
-                fragment = fragments.get(name)
+                fragment = self.fragments.get(name)
                 if fragment is None or name in path:
                     continue
+                self.expanded.add(name)
+                self.charge_directives(fragment.directives)
                 condition = graphql_schema.get_type(fragment.type_condition.name.value)
                 stack.extend(
                     (
@@ -1062,6 +1207,7 @@ def charge_document(
                         condition or parent,
                         multiplier,
                         path | {name},
+                        shape,
                     )
                     for selection in reversed(fragment.selection_set.selections)
                 )
@@ -1076,51 +1222,109 @@ def charge_document(
                         condition,
                         multiplier,
                         path,
+                        shape,
                     )
                     for selection in reversed(node.selection_set.selections)
                 )
                 continue
-            budget.charge_selection(node.alias is not None)
+            if shape:
+                self.budget.charge_selection(node.alias is not None)
             field_def = _field_definition(graphql_schema, parent, node.name.value)
-            if field_def is None:
-                continue
             # A generated top-level mutation field carries its bind-time spec
             # map, which classifies the write input's fields for the whole
-            # argument walk below. Resolved per field (not per request) because
-            # the map belongs to THE field's mutation class; ``begin_mutation_field``
-            # keeps the per-field relation counter scoped to exactly this field.
-            field_specs = None
-            if in_mutation and parent is root:
-                values.begin_mutation_field()
-                field_specs = _mutation_input_specs(field_def)
-            for argument in node.arguments:
-                argument_def = field_def.args.get(argument.name.value)
-                if argument_def is None:
-                    continue
-                values.charge(
-                    argument_def.type,
-                    value_from_ast_untyped(argument.value, op_variables),
-                    in_mutation=in_mutation,
-                    argument=argument.name.value,
-                    specs=field_specs,
-                )
+            # argument walk below; ``begin_mutation_field`` keeps the per-field
+            # relation counter scoped to exactly this field.
+            specs = None
+            if self.in_mutation and parent is root:
+                self.values.begin_mutation_field()
+                specs = _mutation_input_specs(field_def)
+            self.charge_arguments(
+                node.arguments,
+                None if field_def is None else field_def.args,
+                specs,
+            )
             child_multiplier = multiplier
-            rows = _collection_rows(policy, parent, field_def.type, node, op_variables)
-            if rows is not None:
-                child_multiplier = multiplier * rows
-                budget.charge_collection(child_multiplier)
+            if shape and field_def is not None:
+                rows = _collection_rows(self.policy, parent, field_def.type, node, self.variables)
+                if rows is not None:
+                    child_multiplier = multiplier * rows
+                    self.budget.charge_collection(child_multiplier)
             if node.selection_set is None:
                 continue
-            child_parent = get_named_type(field_def.type)
+            # Below a field the parent does not have nothing is typed and no
+            # shape is charged, but values still are: validation parses them.
+            child_parent = None if field_def is None else get_named_type(field_def.type)
             stack.extend(
                 (
                     selection,
                     child_parent,
                     child_multiplier,
                     path,
+                    shape and field_def is not None,
                 )
                 for selection in reversed(node.selection_set.selections)
             )
+
+
+def charge_document(
+    policy: ResourcePolicy,
+    graphql_schema: Any,
+    document: Any,
+    variables: Mapping[str, Any] | None = None,
+    operation_name: str | None = None,
+) -> None:
+    """Charge one request's document shape and every value validation converts, iteratively.
+
+    ONE walk over every operation in the document. The selected operation
+    (every operation, when the request names none) is charged for shape -
+    expanded selections, aliases, collection cost - and for values; every other
+    operation, the subtree of a field the parent does not have, and each
+    fragment definition no spread expanded are charged for values only,
+    because validation parses their literals too. Fragments expand at every
+    spread site (spreading one ten times costs ten times) and the spread path
+    makes a cyclic fragment set terminate.
+
+    Values are charged per reference: every field and directive argument - on
+    the operation, a variable definition, a field, a spread (before its
+    fragment resolves), an inline fragment, and a fragment definition once per
+    expansion - typed by the argument's declared input type, untyped where
+    nothing declares one. In a selected operation a variable resolves to the
+    supplied value or, failing that, to its default; anywhere else it is
+    charged as ``None``, since graphql-core coerces no variable there. A default
+    no use site charged - unused, shadowed by a supplied value, or in an
+    unselected operation - is charged once at its definition.
+
+    Every shape validation would have rejected is a shape this walk meets,
+    because it runs BEFORE validation: a cyclic fragment set, an unknown field,
+    fragment, argument or directive, a selection under a leaf, an undefined
+    variable. None of them is an error here; what rejects such a document is
+    validation, which runs next and says so in its own words.
+    """
+    fragments = {
+        definition.name.value: definition
+        for definition in document.definitions
+        if isinstance(definition, FragmentDefinitionNode)
+    }
+    walk = _DocumentWalk(policy, graphql_schema, fragments)
+    supplied = variables if variables is not None else {}
+    for definition in document.definitions:
+        if isinstance(definition, OperationDefinitionNode):
+            selected = operation_name is None or (
+                definition.name is not None and definition.name.value == operation_name
+            )
+            walk.operation(definition, supplied, selected=selected)
+        elif not isinstance(definition, FragmentDefinitionNode):
+            walk.variables = None
+            walk.read = None
+            walk.in_mutation = False
+            walk.charge_directives(_type_system_directives(definition))
+    # A duplicate name is not the definition a spread expands, so it is a root too.
+    for definition in document.definitions:
+        if isinstance(definition, FragmentDefinitionNode) and (
+            fragments[definition.name.value] is not definition
+            or definition.name.value not in walk.expanded
+        ):
+            walk.fragment(definition)
 
 
 @dataclass(frozen=True)

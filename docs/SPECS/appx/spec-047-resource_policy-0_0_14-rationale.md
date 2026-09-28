@@ -246,7 +246,8 @@ the old sentence can see that it was retired deliberately rather than lost.
   the frozen decorator as the thing that makes the request-time budget immutable — for
   `ResourcePolicy` or for `ErrorPolicy`, whose docstring made the same claim about masking.
 - **Edge cases — "only the named operation is charged" as a rule about every document
-  bound.** It governs the bounds charged after the parse. `max_document_tokens` and
+  bound.** It governs the shape bounds charged after the parse; the value bounds follow
+  validation, which converts every definition in the document. `max_document_tokens` and
   `max_depth` are charged before one exists to name, over the whole request document.
 - **[Decision 1][spec-047-d1] — the exact-built-in domain as a rule about STORED bounds.**
   It holds wherever a number enters the budget machinery from outside, charges included. An

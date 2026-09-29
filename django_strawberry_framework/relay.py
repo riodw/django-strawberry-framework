@@ -153,7 +153,7 @@ def _node_id_slot(
         return id_attr, None
 
 
-def _coerce_pk_or_none(resolved_type: type[_RelayDjangoType], node_id: str) -> Any:
+def _coerce_pk_or_none(resolved_type: type[_RelayDjangoType], node_id: object) -> Any:
     """Coerce ``node_id`` to the resolution field's Python type; ``None`` if uncoercible.
 
     ``decode_global_id`` validates payload SHAPE only, so a well-formed
@@ -378,8 +378,12 @@ def _interleave(
     ]
 
 
-def _check_nodes_result(resolved_type: type, result: Any, pks: list[object]) -> Iterable[object]:
-    """Validate a ``resolve_nodes`` return is positionally 1:1 with ``pks``.
+def _check_nodes_result(
+    resolved_type: type,
+    result: Any,
+    node_ids: Sequence[str],
+) -> Iterable[object]:
+    """Validate a ``resolve_nodes`` return is positionally 1:1 with ``node_ids``.
 
     ``_interleave`` indexes each result by its within-group position, so a
     consumer ``resolve_nodes`` override that returns an unordered, shrunk, or
@@ -397,10 +401,10 @@ def _check_nodes_result(resolved_type: type, result: Any, pks: list[object]) -> 
     """
     if not hasattr(result, "__len__"):
         result = list(result)
-    if len(result) != len(pks):
+    if len(result) != len(node_ids):
         raise ConfigurationError(
             f"{resolved_type.__name__}.resolve_nodes returned {len(result)} row(s) for "
-            f"{len(pks)} requested id(s); a resolve_nodes override must return a list "
+            f"{len(node_ids)} requested id(s); a resolve_nodes override must return a list "
             "input-ordered and 1:1 with node_ids (None for missing) - the "
             "_resolve_nodes_default / _order_nodes shape.",
         )
@@ -492,16 +496,17 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # Everything below runs OUTSIDE the decode try/except so a dispatch-time
         # ``SyncMisuseError`` surfaces as itself (see ``_decode_or_graphql_error``).
         _check_typed_match(target_type, resolved)
-        pk = _coerce_pk_or_none(resolved, node_id)
-        if pk is None:
+        if _coerce_pk_or_none(resolved, node_id) is None:
             # Uncoercible literal -> null with no query issued.
             return None
         # In async context ``resolve_node`` returns a coroutine Strawberry's
         # executor awaits as a plain-field return (Edge cases "Async
         # end-to-end") - the stamp then rides inside ``_await_and_stamp``.
         # Calling the classmethod (not the underscore default) preserves
-        # consumer overrides for free.
-        result = resolved.resolve_node(pk, info=info, required=False)
+        # consumer overrides for free. It receives the decoded ``node_id``
+        # string, exactly what Strawberry's own ``relay.node()`` field passes
+        # (``Node.resolve_node(node_id: str)``); the coercion above only gates.
+        result = resolved.resolve_node(node_id, info=info, required=False)
         if not async_execution():
             result = reject_async_in_sync_context(
                 result,
@@ -577,20 +582,21 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         decoded = [_decode_or_graphql_error(raw_id) for raw_id in ids]
         for resolved, _ in decoded:
             _check_typed_match(target_type, resolved)
-        # Group coercible (type, pk) by decoded type - insertion-ordered, pks
-        # in input order with duplicates preserved; uncoercible positions are
-        # reserved null holes that never poison the batch ``pk__in``.
-        # The coerced pks keep ``_coerce_pk_or_none``'s column-typed values.
-        groups: dict[type[_RelayDjangoType], list[Any]] = {}
+        # Group coercible ids by decoded type - insertion-ordered, ids in input
+        # order with duplicates preserved; uncoercible positions are reserved
+        # null holes that never poison the batch ``pk__in``. Each group carries
+        # the decoded ``node_id`` strings, exactly what Strawberry's own
+        # ``relay.node()`` batch passes (``Node.resolve_nodes(node_ids:
+        # Iterable[str])``); the coercion only gates.
+        groups: dict[type[_RelayDjangoType], list[str]] = {}
         positions: list[tuple[type, int] | None] = []
         for resolved, node_id in decoded:
-            pk = _coerce_pk_or_none(resolved, node_id)
-            if pk is None:
+            if _coerce_pk_or_none(resolved, node_id) is None:
                 positions.append(None)
                 continue
-            pks = groups.setdefault(resolved, [])
-            positions.append((resolved, len(pks)))
-            pks.append(pk)
+            node_ids = groups.setdefault(resolved, [])
+            positions.append((resolved, len(node_ids)))
+            node_ids.append(node_id)
         if async_execution():
             # ONE gathering coroutine; per-call dispatch because there is no
             # consumer resolver to inspect at construction (the deliberate
@@ -601,25 +607,29 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
 
             async def _gather() -> list[object]:
                 per_type: dict[type, list[object]] = {}
-                for resolved_type, pks in groups.items():
+                for resolved_type, node_ids in groups.items():
                     # ``resolve_nodes`` is AwaitableOrValue: the framework
                     # default returns a coroutine in async context, but a valid
                     # synchronous consumer override returns the list directly -
                     # await only when the result is actually awaitable, never
                     # unconditionally.
-                    result = resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
+                    result = resolved_type.resolve_nodes(
+                        info=info,
+                        node_ids=node_ids,
+                        required=False,
+                    )
                     if inspect.isawaitable(result):
                         result = await result
                     per_type[resolved_type] = [
                         _stamp_node_type(resolved_type, node)
-                        for node in _check_nodes_result(resolved_type, result, pks)
+                        for node in _check_nodes_result(resolved_type, result, node_ids)
                     ]
                 return _interleave(positions, per_type)
 
             return _gather()
         per_type = {}
-        for resolved_type, pks in groups.items():
-            result = resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
+        for resolved_type, node_ids in groups.items():
+            result = resolved_type.resolve_nodes(info=info, node_ids=node_ids, required=False)
             result = reject_async_in_sync_context(
                 result,
                 owner=resolved_type.__name__,
@@ -629,7 +639,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
             )
             per_type[resolved_type] = [
                 _stamp_node_type(resolved_type, node)
-                for node in _check_nodes_result(resolved_type, result, pks)
+                for node in _check_nodes_result(resolved_type, result, node_ids)
             ]
         return _interleave(positions, per_type)
 

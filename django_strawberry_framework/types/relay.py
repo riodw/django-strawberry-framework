@@ -335,10 +335,65 @@ def _coerce_node_id(node_id: object) -> object:
     return node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
 
 
-def _coerce_node_ids(node_ids: Iterable[object] | None) -> list[object] | None:
-    if node_ids is None:
-        return None
-    return [_coerce_node_id(node_id) for node_id in node_ids]
+def _node_value_or_none(cls: type[_RelayDjangoType], node_id: object) -> object:
+    """The id-slot value ``node_id`` names, coerced to its column's type; ``None`` for no row.
+
+    Every caller of ``resolve_node`` / ``resolve_nodes`` passes the raw GlobalID
+    ``node_id`` string - Strawberry's ``relay.node()`` field and the package's
+    ``DjangoNodeField`` / ``DjangoNodesField`` alike, per Strawberry's
+    ``node_id: str`` contract - so the default resolvers coerce it themselves,
+    against the concrete field behind ``resolve_id_attr()`` through the same
+    ``relay.py::_coerce_pk_or_none`` rule the root fields' uncoercible-id check
+    uses. The coerced value both filters the queryset and keys the reorder, so an
+    id spelling a row's value differently (``"007"`` for pk ``7``, an upper-case
+    UUID) still finds it, and a literal the column rejects identifies no row
+    instead of leaking Django's ``ValueError`` from the filter. A
+    ``relay.GlobalID`` is unwrapped first.
+    """
+    # In-function import: ``relay.py`` imports this module at module top, so a
+    # module-top import back would close the load cycle.
+    from ..relay import _coerce_pk_or_none
+
+    return _coerce_pk_or_none(cls, _coerce_node_id(node_id))
+
+
+def _raise_if_required(
+    cls: type,
+    id_attr: str,
+    node_id: object,
+    *,
+    required: bool,
+) -> None:
+    """Raise ``DoesNotExist`` for an id that identifies no row when the caller required one.
+
+    Keeps the ``required=True`` failure homogeneous with the ``qs.get()`` /
+    ``_order_nodes`` misses, so a consumer catches one exception type for
+    "required id identifies no row"; with ``required=False`` the miss is the
+    caller's ``None``.
+    """
+    if not required:
+        return
+    model = model_for(cls)
+    # mypy: django-stubs omits DoesNotExist on the abstract Model base
+    raise model.DoesNotExist(  # type: ignore[attr-defined]
+        f"{_safe_class_name(model)}: no row matching {id_attr}={_safe_arg_repr(node_id)}.",
+    )
+
+
+def _node_values(
+    cls: type[_RelayDjangoType],
+    id_attr: str,
+    node_ids: Iterable[object],
+    *,
+    required: bool,
+) -> list[object]:
+    """Coerce each of ``node_ids`` (``None`` where it names no row); a required miss raises."""
+    raw_ids = list(node_ids)
+    values = [_node_value_or_none(cls, node_id) for node_id in raw_ids]
+    for node_id, value in zip(raw_ids, values, strict=True):
+        if value is None:
+            _raise_if_required(cls, id_attr, node_id, required=required)
+    return values
 
 
 def _apply_node_filter(
@@ -357,8 +412,7 @@ def _apply_node_filter(
     # The stubs' plugin cannot resolve a lookup spelled as a runtime string, so a
     # ``filter(**{...})`` over one is typed ``Any``; it returns ``qs``'s own class.
     if node_id is not None:
-        coerced = _coerce_node_id(node_id)
-        return cast("models.QuerySet[_ModelT]", qs.filter(**{id_attr: coerced}))
+        return cast("models.QuerySet[_ModelT]", qs.filter(**{id_attr: node_id}))
     if node_ids is not None:
         return cast("models.QuerySet[_ModelT]", qs.filter(**{f"{id_attr}__in": node_ids}))
     return qs
@@ -855,7 +909,7 @@ def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
 def _order_nodes(
     cls: type,
     results: list[_ModelT],
-    coerced_keys: list[str],
+    coerced_keys: list[str | None],
     id_attr: str,
     *,
     required: bool,
@@ -865,7 +919,8 @@ def _order_nodes(
     Mirrors ``strawberry_django/relay/utils.py::resolve_model_nodes #"def map_results"``: build an index
     keyed on ``str(getattr(obj, id_attr))`` (so the dict lookup matches
     the ``coerced_keys`` shape - both are ``str``) and emit one entry per
-    requested key.
+    requested key. A ``None`` key is an id that coerced to no column value; it is
+    emitted as ``None`` (a required miss already raised in ``_node_values``).
 
     ``required=True`` raises the model's ``DoesNotExist`` for any missing
     key - homogeneous with ``_resolve_node_default``'s ``qs.get()`` so
@@ -877,7 +932,7 @@ def _order_nodes(
     output: list[_ModelT | None] = []
     model = model_for(cls)
     for key in coerced_keys:
-        if required:
+        if required and key is not None:
             try:
                 output.append(index[key])
             except KeyError as exc:
@@ -886,7 +941,7 @@ def _order_nodes(
                     f"{_safe_class_name(model)}: no row matching {id_attr}={key!r}.",
                 ) from exc
         else:
-            output.append(index.get(key))
+            output.append(None if key is None else index.get(key))
     return output
 
 
@@ -919,10 +974,14 @@ def _resolve_node_default(
     object has no attribute 'filter'``.
     """
     id_attr = cls.resolve_id_attr()
+    value = _node_value_or_none(cls, node_id)
     if async_execution():
-        return _resolve_node_async(cls, id_attr, node_id, info=info, required=required)
+        return _resolve_node_async(cls, id_attr, node_id, value, info=info, required=required)
+    if value is None:
+        _raise_if_required(cls, id_attr, node_id, required=required)
+        return None
     qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_id=node_id)
+    qs = _apply_node_filter(qs, id_attr, node_id=value)
     return qs.get() if required else qs.first()
 
 
@@ -930,6 +989,7 @@ async def _resolve_node_async(
     cls: type,
     id_attr: str,
     node_id: object,
+    value: object,
     *,
     info: Info[object, object],
     required: bool,
@@ -942,8 +1002,11 @@ async def _resolve_node_async(
     both shapes; this is the awaitable that actually delivers on that
     contract.
     """
+    if value is None:
+        _raise_if_required(cls, id_attr, node_id, required=required)
+        return None
     qs = await apply_type_visibility_async(cls, initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_id=node_id)
+    qs = _apply_node_filter(qs, id_attr, node_id=value)
     return await (qs.aget() if required else qs.afirst())
 
 
@@ -983,12 +1046,12 @@ def _resolve_nodes_default(
     id_attr = cls.resolve_id_attr()
     if async_execution():
         return _resolve_nodes_async(cls, id_attr, node_ids, info=info, required=required)
+    if node_ids is None:
+        return apply_type_visibility_sync(cls, initial_queryset(cls), info)
+    values = _node_values(cls, id_attr, node_ids, required=required)
     qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
-    coerced_ids = _coerce_node_ids(node_ids)
-    qs = _apply_node_filter(qs, id_attr, node_ids=coerced_ids)
-    if coerced_ids is None:
-        return qs
-    coerced_keys = [str(node_id) for node_id in coerced_ids]
+    qs = _apply_node_filter(qs, id_attr, node_ids=[value for value in values if value is not None])
+    coerced_keys = [None if value is None else str(value) for value in values]
     return _order_nodes(cls, list(qs), coerced_keys, id_attr, required=required)
 
 
@@ -1008,12 +1071,12 @@ async def _resolve_nodes_async(
     ``async for``); when ``node_ids`` is provided, materializes via
     ``async for`` and returns the order-preserving list shape.
     """
+    if node_ids is None:
+        return await apply_type_visibility_async(cls, initial_queryset(cls), info)
+    values = _node_values(cls, id_attr, node_ids, required=required)
     qs = await apply_type_visibility_async(cls, initial_queryset(cls), info)
-    coerced_ids = _coerce_node_ids(node_ids)
-    qs = _apply_node_filter(qs, id_attr, node_ids=coerced_ids)
-    if coerced_ids is None:
-        return qs
-    coerced_keys = [str(node_id) for node_id in coerced_ids]
+    qs = _apply_node_filter(qs, id_attr, node_ids=[value for value in values if value is not None])
+    coerced_keys = [None if value is None else str(value) for value in values]
     results = [obj async for obj in qs]
     return _order_nodes(cls, results, coerced_keys, id_attr, required=required)
 

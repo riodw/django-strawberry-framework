@@ -471,6 +471,182 @@ def test_coerce_pk_or_none_passes_raw_string_for_non_field_node_id():
 
 
 # ---------------------------------------------------------------------------
+# resolve_node(s) receive the decoded node_id string (Strawberry's contract)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_consumer_overrides_receive_the_decoded_node_id_string():
+    """Both root fields hand a consumer override the ``node_id`` string, as Strawberry does.
+
+    Strawberry's ``Node.resolve_node(node_id: str)`` / ``resolve_nodes(node_ids:
+    Iterable[str])`` is the override contract, and its own ``relay.node()`` field
+    passes the decoded string. The id-slot coercion only gates an uncoercible
+    literal to ``null``; handing the override the coerced ``int`` instead broke a
+    ``str``-typed override (``'int' object has no attribute 'startswith'``) and
+    made the same override see two types depending on which field called it.
+    """
+    services.seed_data(1)
+    row = Category.objects.order_by("pk").first()
+    received = []
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+        @classmethod
+        def resolve_node(
+            cls,
+            node_id,
+            *,
+            info,
+            required=False,
+        ):
+            received.append(node_id)
+            return None if node_id.startswith("legacy-") else row
+
+        @classmethod
+        def resolve_nodes(
+            cls,
+            *,
+            info,
+            node_ids,
+            required=False,
+        ):
+            node_ids = list(node_ids)
+            received.append(node_ids)
+            return [row for _ in node_ids]
+
+    @strawberry.type
+    class Query:
+        node: relay.Node | None = DjangoNodeField()
+        nodes: list[relay.Node | None] = DjangoNodesField()
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, config=strawberry_config(), types=[CategoryNode])
+    gid = _gid("products.category", row.pk)
+    result = schema.execute_sync(
+        "query ($id: ID!) { node(id: $id) { __typename } nodes(ids: [$id, $id]) { __typename } }",
+        variable_values={"id": gid},
+    )
+
+    assert result.errors is None
+    assert received == [str(row.pk), [str(row.pk), str(row.pk)]]
+
+
+@pytest.mark.django_db
+def test_default_resolvers_find_a_row_whose_id_literal_spells_its_pk_differently():
+    """The defaults coerce the ``node_id`` string themselves, so ``"07"`` finds pk ``7``.
+
+    The batch default reorders rows by the coerced key; keying on the raw string
+    would miss the row and hand back a ``null`` hole for an id that names it.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+    @strawberry.type
+    class Query:
+        node: relay.Node | None = DjangoNodeField()
+        nodes: list[relay.Node | None] = DjangoNodesField()
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, config=strawberry_config(), types=[CategoryNode])
+    row = Category.objects.order_by("pk").first()
+    padded = _gid("products.category", f"0{row.pk}")
+    result = schema.execute_sync(
+        "query ($id: ID!) { node(id: $id) { ... on CategoryNode { name } }"
+        " nodes(ids: [$id]) { ... on CategoryNode { name } } }",
+        variable_values={"id": padded},
+    )
+
+    assert result.errors is None
+    assert result.data == {"node": {"name": row.name}, "nodes": [{"name": row.name}]}
+
+
+def _strawberry_node_schema():
+    """A schema whose root fields are Strawberry's own ``relay.node()`` over the defaults."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+            globalid_strategy = "type"
+
+    @strawberry.type
+    class Query:
+        node: relay.Node | None = relay.node()
+        required_node: relay.Node = relay.node()
+        nodes: list[relay.Node | None] = relay.node()
+
+    finalize_django_types()
+    return strawberry.Schema(query=Query, config=strawberry_config(), types=[CategoryNode])
+
+
+_STRAWBERRY_NODE_QUERY = (
+    "query ($bad: ID!, $good: ID!) { node(id: $bad) { __typename }"
+    " nodes(ids: [$bad, $good]) { ... on CategoryNode { name } } }"
+)
+
+
+@pytest.mark.django_db
+def test_default_resolvers_read_an_uncoercible_id_as_no_row_under_strawberrys_node_field():
+    """``library.genre:abc``-shaped ids reach the defaults raw through ``relay.node()``.
+
+    Strawberry's own field has no id-slot gate, so the default resolvers own the
+    coercion: an uncoercible literal identifies no row (``null`` / a positional
+    ``null`` hole) instead of leaking Django's ``ValueError`` from
+    ``filter(pk="abc")``, and a required field raises the model's
+    ``DoesNotExist``, homogeneous with a missing row.
+    """
+    services.seed_data(1)
+    schema = _strawberry_node_schema()
+    row = Category.objects.order_by("pk").first()
+    bad, good = _gid("CategoryNode", "abc"), _gid("CategoryNode", row.pk)
+
+    result = schema.execute_sync(
+        _STRAWBERRY_NODE_QUERY,
+        variable_values={"bad": bad, "good": good},
+    )
+    assert result.errors is None
+    assert result.data == {"node": None, "nodes": [None, {"name": row.name}]}
+
+    required = schema.execute_sync(
+        "query ($bad: ID!) { requiredNode(id: $bad) { __typename } }",
+        variable_values={"bad": bad},
+    )
+    assert isinstance(required.errors[0].original_error, Category.DoesNotExist)
+    assert "no row matching pk='abc'" in str(required.errors[0])
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_default_resolvers_read_an_uncoercible_id_as_no_row():
+    """The async defaults take the same no-row reading of an uncoercible id."""
+    await sync_to_async(services.seed_data)(1)
+    schema = _strawberry_node_schema()
+    row = await Category.objects.order_by("pk").afirst()
+    bad, good = _gid("CategoryNode", "abc"), _gid("CategoryNode", row.pk)
+
+    result = await schema.execute(
+        _STRAWBERRY_NODE_QUERY,
+        variable_values={"bad": bad, "good": good},
+    )
+
+    assert result.errors is None
+    assert result.data == {"node": None, "nodes": [None, {"name": row.name}]}
+
+
+# ---------------------------------------------------------------------------
 # Construction-time guards + finalize-time ledger check
 # ---------------------------------------------------------------------------
 

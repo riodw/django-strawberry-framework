@@ -67,6 +67,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from enum import Enum
+from types import GenericAlias
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import strawberry
@@ -467,7 +468,7 @@ def convert_scalar(
                 f"on base_field for element-level enum, or use FilterSet.",
             )
         inner = convert_scalar(field.base_field, type_name)
-        result = list[inner]  # type: ignore[valid-type]  # runtime-built annotation
+        result = GenericAlias(list, (inner,))
         return result | None if effective_null else result
     # Sentinel-guarded ``HStoreField`` dispatch mirrors the ArrayField
     # posture: outer-``choices`` rejection (HStore stores
@@ -815,7 +816,7 @@ def resolved_relation_annotation(
     """Return the concrete annotation for ``field`` pointing at ``target_type``."""
     meta = field_meta or FieldMeta.from_django_field(field)
     if meta.is_many_side:
-        return list[target_type]  # type: ignore[valid-type]  # runtime-built annotation
+        return GenericAlias(list, (target_type,))
     if meta.nullable:
         return target_type | None
     return target_type

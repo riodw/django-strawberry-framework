@@ -54,6 +54,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from types import GenericAlias
 from typing import TYPE_CHECKING, cast
 
 from rest_framework import serializers
@@ -1530,8 +1531,7 @@ def _resolve_nested_field(
     )
     nested_cls, nested_shape = _dedupe_and_materialize_nested(nested_cls, nested_shape)
     kind = NESTED_MULTI if many else NESTED_SINGLE
-    # mypy: runtime-built annotation
-    annotation: object = list[nested_cls] if many else nested_cls  # type: ignore[valid-type]
+    annotation: object = GenericAlias(list, (nested_cls,)) if many else nested_cls
     spec = InputFieldSpec(
         input_attr=field_name,
         graphql_name=graphql_camel_name(field_name),

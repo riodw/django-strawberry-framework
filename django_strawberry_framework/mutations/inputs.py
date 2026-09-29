@@ -37,6 +37,7 @@ symmetric by construction (spec-036 Decision 6).
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable
+from types import GenericAlias
 from typing import TYPE_CHECKING, NamedTuple, cast
 
 import strawberry
@@ -388,7 +389,7 @@ def relation_id_annotation(
     vs declared name vs id-like-suffix dedupe) stays at each flavor.
     """
     id_scalar = relation_id_scalar(related_model, related_primary_type)
-    return list[id_scalar] if many else id_scalar  # type: ignore[valid-type]  # runtime-built annotation
+    return GenericAlias(list, (id_scalar,)) if many else id_scalar
 
 
 def related_model_of_queryset(queryset: object) -> type[models.Model] | None:

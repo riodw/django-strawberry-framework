@@ -24,7 +24,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
+from types import GenericAlias, MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import strawberry
@@ -498,16 +498,14 @@ def convert_filter_to_input_annotation(
         # subclasses) whose form field consumes a LIST of values, not a
         # scalar. The element type is model-field-driven so a CSV ``in`` over
         # a choice column keeps its enum and a 64-bit column keeps ``BigInt``.
-        # mypy: runtime-built annotation
-        return list[_element_annotation(matched, model_field, owner_definition)]  # type: ignore[misc]
+        return GenericAlias(list, (_element_annotation(matched, model_field, owner_definition),))
 
     def _range(matched: Filter) -> object:
         inner = _scalar_from_model_field(model_field)
         return _build_range_input_class(matched, inner, filterset_cls)
 
     def _list(matched: Filter) -> object:
-        # mypy: runtime-built annotation
-        return list[_element_annotation(matched, model_field, owner_definition)]  # type: ignore[misc]
+        return GenericAlias(list, (_element_annotation(matched, model_field, owner_definition),))
 
     def _typed(matched: Filter) -> object:
         return _element_annotation(matched, model_field, owner_definition)

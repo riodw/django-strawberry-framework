@@ -11,6 +11,7 @@ import contextlib
 import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from types import GenericAlias
 from typing import TYPE_CHECKING, Any, cast
 
 import strawberry
@@ -595,8 +596,7 @@ def _synthesized_list_signature(
     if orderset_class is not None:
         from .orders import order_input_type
 
-        # mypy: runtime-built annotation
-        order_ann: object = list[order_input_type(orderset_class)] | None  # type: ignore[misc]
+        order_ann = GenericAlias(list, (order_input_type(orderset_class),)) | None
         params.append(
             inspect.Parameter(
                 "order_by",

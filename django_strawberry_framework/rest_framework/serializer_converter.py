@@ -59,6 +59,7 @@ import decimal
 import uuid
 from collections.abc import Callable
 from enum import Enum
+from types import GenericAlias
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 import strawberry
@@ -409,8 +410,7 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
             "scalar child is supported.",
         )
     return SerializerFieldConversion(
-        # mypy: runtime-built annotation
-        annotation=list[child_conversion.annotation],  # type: ignore[name-defined]
+        annotation=GenericAlias(list, (child_conversion.annotation,)),
         kind=SCALAR,
         required=field.required,
     )
@@ -941,7 +941,7 @@ def _serializer_choice_annotation(field: serializers.ChoiceField, type_name: str
     """
     enum_cls = _serializer_choice_enum(field, type_name)
     if isinstance(field, serializers.MultipleChoiceField):
-        return list[enum_cls]  # type: ignore[valid-type]  # runtime-built annotation
+        return GenericAlias(list, (enum_cls,))
     return enum_cls
 
 

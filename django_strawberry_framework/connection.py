@@ -47,6 +47,7 @@ import types
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from types import GenericAlias
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast
 
 import strawberry
@@ -2005,8 +2006,7 @@ def _synthesized_signature(
         )
         annotations[CONNECTION_FILTER_KWARG] = filter_ann
     if definition.orderset_class is not None:
-        # mypy: runtime-built annotation
-        order_ann: object = list[order_input_type(definition.orderset_class)] | None  # type: ignore[misc]
+        order_ann = GenericAlias(list, (order_input_type(definition.orderset_class),)) | None
         params.append(
             inspect.Parameter(
                 CONNECTION_ORDER_KWARG,
@@ -2016,7 +2016,7 @@ def _synthesized_signature(
             ),
         )
         annotations[CONNECTION_ORDER_KWARG] = order_ann
-    return_annotation = Iterable[target_type]  # type: ignore[valid-type]  # runtime-built annotation
+    return_annotation = GenericAlias(Iterable, (target_type,))
     annotations["return"] = return_annotation
     return inspect.Signature(params, return_annotation=return_annotation), annotations
 

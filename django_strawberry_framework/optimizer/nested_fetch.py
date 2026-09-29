@@ -208,10 +208,7 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
         if self._result_cache is None:
             rows = self._fetch_recognized_rows()
             if rows is not None:
-                # mypy: without ``--disallow-any-generics`` mypy leaves the stub's defaulted
-                # ``_Row`` unbound on a ``QuerySet`` subclass's ``_result_cache`` (with the
-                # flag it binds, hence ``unused-ignore``); the rows are its model instances.
-                self._result_cache = rows  # type: ignore[assignment, unused-ignore]
+                self._result_cache = rows
         # The superclass call is a no-op on a populated cache except for the
         # nested ``prefetch_related`` pass - which recognized rows need too
         # (single-parent rows are usually already populated because the

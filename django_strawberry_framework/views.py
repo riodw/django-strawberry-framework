@@ -109,11 +109,14 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
     from django.http import HttpRequest, HttpResponseBase
     from django.views import View
+    from strawberry.http.base import BaseView
 
     # Both package views compose the boundary mixin ahead of a Django ``View``
-    # subclass, which its ``as_view`` extends; at run time the mixin's base stays
-    # ``object`` so it adds nothing to either view's MRO.
-    _BoundaryMixinBase = View
+    # subclass that is also a Strawberry ``BaseView`` (its ``as_view`` extends the
+    # one, its ``parse_json`` delegates to the other); at run time the mixin's base
+    # stays ``object`` so it adds nothing to either view's MRO.
+    class _BoundaryMixinBase(BaseView[Any], View):
+        pass
 else:
     _BoundaryMixinBase = object
 
@@ -231,7 +234,7 @@ def _declared_content_length(request: HttpRequest) -> int | None:
         return None
 
 
-def _canonicalizes_to_utf8(encoding: object) -> bool:
+def _canonicalizes_to_utf8(encoding: str) -> bool:
     """Whether ``encoding`` names a codec Python canonicalizes to UTF-8.
 
     ``codecs.lookup`` supplies the answer instead of a name comparison, so every
@@ -242,8 +245,7 @@ def _canonicalizes_to_utf8(encoding: object) -> bool:
     cannot prove this is UTF-8", which is a rejection.
     """
     try:
-        # mypy: a non-string raises the TypeError handled below
-        return codecs.lookup(encoding).name == _UTF8_CODEC_NAME  # type: ignore[arg-type]
+        return codecs.lookup(encoding).name == _UTF8_CODEC_NAME
     except (LookupError, TypeError):
         return False
 
@@ -835,8 +837,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
                 data = data.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise HTTPException(400, _JSON_PARSE_REASON) from exc
-        # mypy: a mixin over Strawberry's view, which defines parse_json
-        return super().parse_json(data)  # type: ignore[misc]
+        return super().parse_json(data)
 
 
 def _run_after_csrf_check(

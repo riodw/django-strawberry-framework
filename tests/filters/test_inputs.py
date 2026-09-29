@@ -1101,6 +1101,116 @@ def test_convert_raw_pk_filter_on_a_non_relation_names_the_leaf_and_related_filt
     assert "SCALAR_MAP" not in message
 
 
+def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_target_key():
+    """A ``filter_overrides``-selected model-choice key stays the consumer's, typed from its column.
+
+    ``exact`` keeps django-filter's ``ModelChoiceFilter`` and ``in`` its
+    ``ConcreteInFilter(BaseInFilter, ModelChoiceFilter)`` wrapper, both still holding
+    their ``queryset`` (so the form still validates) and stamped ``override_generated``,
+    which keeps them out of the optimizer's candidate rows. The input is the category
+    pk: one ``Int`` for ``exact``, a list for ``in``.
+    """
+    import django_filters
+    from django_filters.filters import BaseInFilter as DjangoBaseInFilter
+
+    from django_strawberry_framework.filters.sets import filter_generation_provenance
+
+    class ItemFilter(FilterSet):
+        class Meta:
+            model = Item
+            fields = {"category": ["exact", "in"]}
+            filter_overrides = {
+                models.ForeignKey: {
+                    "filter_class": django_filters.ModelChoiceFilter,
+                    "extra": lambda _field: {"queryset": Category.objects.all()},
+                },
+            }
+
+    relation = Item._meta.get_field("category")
+    exact = ItemFilter.get_filters()["category"]
+    in_ = ItemFilter.get_filters()["category__in"]
+    assert type(exact) is django_filters.ModelChoiceFilter
+    assert isinstance(in_, DjangoBaseInFilter)
+    assert isinstance(in_, django_filters.ModelChoiceFilter)
+    for leaf in (exact, in_):
+        assert leaf.queryset.model is Category
+        record = filter_generation_provenance(leaf)
+        assert record is not None
+        assert record.origin == "override_generated"
+    snapshot = ItemFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert not {"category", "category__in"} & set(snapshot.candidates)
+    assert convert_filter_to_input_annotation(exact, relation) == (int | None)
+    assert convert_filter_to_input_annotation(in_, relation) == (list[int] | None)
+    assert normalize_input_value(exact, 3) == 3
+    assert normalize_input_value(in_, (3, 4)) == [3, 4]
+    with pytest.raises(ConfigurationError, match="model-choice list"):
+        normalize_input_value(in_, 3)
+
+
+def test_declared_model_choice_filter_follows_a_relation_valued_primary_key():
+    """A queryset whose model's key is a one-to-one types from the column that key stores.
+
+    ``PatronProfile``'s primary key is its ``patron`` one-to-one, so the value the form
+    cleans is ``Patron.id``: an ``Int``. A declared filter stays ``origin="declared"``.
+    """
+    import django_filters
+
+    from django_strawberry_framework.filters.sets import filter_generation_provenance
+
+    class AnnotationFilter(FilterSet):
+        profile = django_filters.ModelChoiceFilter(
+            queryset=library_models.PatronProfile.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Annotation
+            fields = ["id"]
+
+    leaf = AnnotationFilter.get_filters()["profile"]
+    record = filter_generation_provenance(leaf)
+    assert record is not None
+    assert record.origin == "declared"
+    relation = library_models.Annotation._meta.get_field("profile")
+    assert convert_filter_to_input_annotation(leaf, relation) == (int | None)
+
+
+def test_model_choice_filter_with_no_column_source_names_the_filterset_and_the_fix():
+    """A callable queryset on a ``method=`` filter naming no relation fails at input build.
+
+    Neither source names a model: the callable queryset has none until a request
+    arrives and ``field_name`` (``owner``) is no relation on ``Item``. The message names
+    the FilterSet, the filter and both fixes, never ``SCALAR_MAP`` / ``Meta.exclude``.
+    """
+    import django_filters
+
+    class ItemFilter(FilterSet):
+        owner = django_filters.ModelChoiceFilter(
+            queryset=lambda _request: Category.objects.all(),
+            method="filter_owner",
+        )
+
+        class Meta:
+            model = Item
+            fields = ["name"]
+
+        def filter_owner(
+            self,
+            queryset: Any,
+            _name: str,
+            _value: object,
+        ) -> Any:
+            return queryset
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        _build_input_fields(ItemFilter)
+    message = str(exc_info.value)
+    assert message.startswith("ItemFilter: ModelChoiceFilter on 'owner'")
+    assert "Pass a model queryset, or point field_name at a relation." in message
+    assert "SCALAR_MAP" not in message
+    assert "Meta.exclude" not in message
+
+
 def test_normalize_input_value_typed_filter_unwraps_none_enum_value():
     """``TypedFilter`` is convert-only; normalize continues and may return ``None``."""
 

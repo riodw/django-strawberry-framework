@@ -1443,6 +1443,164 @@ def test_library_branches_filter_by_reverse_m2m_primary_keys_over_http():
     )
 
 
+def _seed_shelves_on_home_branches() -> tuple[models.Branch, models.Branch, models.Branch]:
+    """Seed three branches (one ``city="restricted"``) with one shelf each, plus a spare shelf."""
+    north = models.Branch.objects.create(name="North", city="Boston")
+    south = models.Branch.objects.create(name="South", city="Boston")
+    restricted = models.Branch.objects.create(name="Vault", city="restricted")
+    models.Shelf.objects.create(code="N-1", topic="general", branch=north)
+    models.Shelf.objects.create(code="S-1", topic="general", branch=south)
+    models.Shelf.objects.create(code="V-1", topic="general", branch=restricted)
+    return north, south, restricted
+
+
+def _assert_invalid_choice(query: str, variables: dict[str, Any], form_key: str) -> None:
+    """Assert the declared filter's own form field refused the value as "Select a valid choice"."""
+    response = _post_graphql(query, variables=variables)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("data") is None, payload
+    (error,) = payload["errors"]
+    assert error["message"] == "Invalid filter input"
+    assert error["extensions"]["code"] == "FILTER_INVALID"
+    field_errors = error["extensions"]["errors"][form_key]
+    assert [entry["code"] for entry in field_errors] == ["invalid_choice"]
+    assert "Select a valid choice" in field_errors[0]["message"]
+
+
+@pytest.mark.django_db
+def test_library_declared_model_choice_filters_take_the_column_their_form_cleans_over_http():
+    """Each declared model-choice filter's input is typed from the column its form field cleans.
+
+    The primary key (``Int``) by default, the ``to_field_name`` column (``name``, a
+    ``String``) when set; a list for ``ModelMultipleChoiceFilter`` and for the
+    ``BaseInFilter`` wrapper. A callable queryset types from the ``branch`` relation.
+    """
+    scalar_int = {"kind": "SCALAR", "name": "Int", "ofType": None}
+    int_list = {"kind": "LIST", "name": None, "ofType": {"kind": "NON_NULL", "name": None}}
+    assert _input_field_type("ShelfFilterHomeBranchFilterInputType", "exact") == scalar_int
+    assert _input_field_type("ShelfFilterHomeBranchNamedFilterInputType", "exact") == {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": None,
+    }
+    assert _input_field_type("ShelfFilterHomeBranchesFilterInputType", "exact") == int_list
+    assert _input_field_type("ShelfFilterHomeBranchInFilterInputType", "in") == int_list
+    assert (
+        _input_field_type("ShelfFilterHomeBranchForRequestFilterInputType", "exact") == scalar_int
+    )
+
+
+_SHELVES_BY_HOME_BRANCH = """
+query ($pk: Int) {
+  allLibraryShelves(filter: { homeBranch: { exact: $pk } }) {
+    code
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_library_declared_model_choice_filter_validates_against_its_own_queryset_over_http():
+    """A declared ``ModelChoiceFilter`` filters by a pk inside its queryset and refuses one outside.
+
+    The restricted branch exists but lies outside the filter's consumer-scoped
+    queryset, so its own ``ModelChoiceField`` answers "Select a valid choice". Omitting
+    the value, or sending ``null``, applies no constraint.
+    """
+    north, _south, restricted = _seed_shelves_on_home_branches()
+
+    _assert_graphql_data(
+        _SHELVES_BY_HOME_BRANCH,
+        {"allLibraryShelves": [{"code": "N-1"}]},
+        variables={"pk": north.pk},
+    )
+    _assert_invalid_choice(_SHELVES_BY_HOME_BRANCH, {"pk": restricted.pk}, "home_branch")
+    every_shelf = {"allLibraryShelves": [{"code": "N-1"}, {"code": "S-1"}, {"code": "V-1"}]}
+    _assert_graphql_data(_SHELVES_BY_HOME_BRANCH, every_shelf, variables={"pk": None})
+    _assert_graphql_data("{ allLibraryShelves(filter: {}) { code } }", every_shelf)
+
+
+@pytest.mark.django_db
+def test_library_declared_model_multiple_choice_filter_takes_a_list_of_pks_over_http():
+    """A declared ``ModelMultipleChoiceFilter`` takes a list and validates every member."""
+    north, south, restricted = _seed_shelves_on_home_branches()
+    query = """
+    query ($pks: [Int!]) {
+      allLibraryShelves(filter: { homeBranches: { exact: $pks } }) {
+        code
+      }
+    }
+    """
+
+    _assert_graphql_data(
+        query,
+        {"allLibraryShelves": [{"code": "N-1"}, {"code": "S-1"}]},
+        variables={"pks": [north.pk, south.pk]},
+    )
+    _assert_invalid_choice(query, {"pks": [north.pk, restricted.pk]}, "home_branches")
+
+
+@pytest.mark.django_db
+def test_library_declared_model_choice_filter_takes_its_to_field_name_value_over_http():
+    """A ``to_field_name="name"`` model-choice filter takes a branch name, checked against its queryset."""
+    _seed_shelves_on_home_branches()
+    query = """
+    query ($name: String) {
+      allLibraryShelves(filter: { homeBranchNamed: { exact: $name } }) {
+        code
+      }
+    }
+    """
+
+    _assert_graphql_data(
+        query,
+        {"allLibraryShelves": [{"code": "S-1"}]},
+        variables={"name": "South"},
+    )
+    _assert_invalid_choice(query, {"name": "Vault"}, "home_branch_named")
+
+
+@pytest.mark.django_db
+def test_library_declared_model_choice_filter_with_a_callable_queryset_over_http():
+    """A callable queryset is called with the request, and its rows decide validity."""
+    north, _south, restricted = _seed_shelves_on_home_branches()
+    query = """
+    query ($pk: Int) {
+      allLibraryShelves(filter: { homeBranchForRequest: { exact: $pk } }) {
+        code
+      }
+    }
+    """
+
+    _assert_graphql_data(
+        query,
+        {"allLibraryShelves": [{"code": "N-1"}]},
+        variables={"pk": north.pk},
+    )
+    _assert_invalid_choice(query, {"pk": restricted.pk}, "home_branch_for_request")
+
+
+@pytest.mark.django_db
+def test_library_declared_model_choice_in_filter_takes_a_list_of_pks_over_http():
+    """The ``BaseInFilter`` wrapper over a ``ModelChoiceFilter`` cleans each member through it."""
+    north, south, restricted = _seed_shelves_on_home_branches()
+    query = """
+    query ($pks: [Int!]) {
+      allLibraryShelves(filter: { homeBranchIn: { in: $pks } }) {
+        code
+      }
+    }
+    """
+
+    _assert_graphql_data(
+        query,
+        {"allLibraryShelves": [{"code": "N-1"}, {"code": "S-1"}]},
+        variables={"pks": [north.pk, south.pk]},
+    )
+    _assert_invalid_choice(query, {"pks": [south.pk, restricted.pk]}, "home_branch_in")
+
+
 @pytest.mark.django_db
 def test_library_all_fields_filterset_sweeps_forward_relation_columns_only_over_http():
     """``fields = "__all__"`` keeps forward single-column relations, never M2M or reverse ones."""

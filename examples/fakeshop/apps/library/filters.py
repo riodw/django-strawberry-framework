@@ -20,7 +20,8 @@ from __future__ import annotations
 from typing import Any
 
 from django import forms
-from django_filters import CharFilter
+from django_filters import CharFilter, ModelChoiceFilter, ModelMultipleChoiceFilter
+from django_filters.filters import BaseInFilter
 
 from apps.library import models
 from django_strawberry_framework.filters import FilterSet, RelatedFilter
@@ -62,15 +63,53 @@ class BranchFilter(FilterSet):
         }
 
 
+class ModelChoiceInFilter(BaseInFilter, ModelChoiceFilter):
+    """The django-filter ``in`` idiom over a model-choice filter: a list of branch keys."""
+
+
+def _unrestricted_branches(request: Any = None) -> Any:
+    """Every branch but the ``city="restricted"`` ones: the declared model-choice queryset.
+
+    ``ShelfFilter``'s model-choice filters validate against it. ``home_branch_for_request``
+    passes it uncalled as a callable ``queryset``, which django-filter calls with the
+    request when it builds the form.
+    """
+    return models.Branch.objects.exclude(city="restricted")
+
+
 class ShelfFilter(FilterSet):
     """Shelf filterset bound to ``ShelfType`` at finalize phase 2.5.
 
     ``alt_branches`` is a relation key over a forward many-to-many whose target
     (``BranchType``) is not a Relay node, so it filters by a list of branch primary keys.
+
+    The ``home_branch*`` filters are django-filter's own model-choice filters declared
+    over the ``branch`` foreign key. Each keeps its form validation: a value outside its
+    queryset (every branch but the ``city="restricted"`` ones) answers "Select a valid
+    choice". ``home_branch`` takes one branch pk, ``home_branches`` a list,
+    ``home_branch_named`` one branch ``name`` (its ``to_field_name``),
+    ``home_branch_in`` a list through the ``BaseInFilter`` wrapper, and
+    ``home_branch_for_request`` one branch pk typed from the ``branch`` relation,
+    since its callable queryset has no model until a request arrives.
     """
 
     branch = RelatedFilter("BranchFilter", field_name="branch")
     books = RelatedFilter("BookFilter", field_name="books")
+    home_branch = ModelChoiceFilter(field_name="branch", queryset=_unrestricted_branches())
+    home_branches = ModelMultipleChoiceFilter(
+        field_name="branch",
+        queryset=_unrestricted_branches(),
+    )
+    home_branch_named = ModelChoiceFilter(
+        field_name="branch",
+        queryset=_unrestricted_branches(),
+        to_field_name="name",
+    )
+    home_branch_in = ModelChoiceInFilter(field_name="branch", queryset=_unrestricted_branches())
+    home_branch_for_request = ModelChoiceFilter(
+        field_name="branch",
+        queryset=_unrestricted_branches,
+    )
 
     class Meta:
         model = models.Shelf

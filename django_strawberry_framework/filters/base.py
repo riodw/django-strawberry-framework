@@ -1087,11 +1087,45 @@ def relation_identity_column(relation: object) -> ConcreteField | None:
     """
     if not getattr(relation, "is_relation", False):
         return None
-    related_model = getattr(relation, "related_model", None)
-    column = getattr(getattr(related_model, "_meta", None), "pk", None)
+    return _model_identity_column(getattr(relation, "related_model", None), None)
+
+
+def _model_identity_column(model: object, to_field_name: str | None) -> ConcreteField | None:
+    """Return the concrete column holding ``model``'s primary key, or its ``to_field_name``.
+
+    A relation-valued column (a multi-table-inheritance parent link, a one-to-one used
+    as the key, a foreign key named as ``to_field_name``) is followed to the column that
+    actually stores the value. ``None`` when ``model`` is not a resolved model.
+    """
+    meta = getattr(model, "_meta", None)
+    if meta is None:
+        return None
+    column = meta.get_field(to_field_name) if to_field_name else meta.pk
     while isinstance(column, models.ForeignKey):
         column = column.target_field
     return column if isinstance(column, models.Field) else None
+
+
+def model_choice_identity_column(
+    filter_instance: Filter,
+    relation: object,
+) -> ConcreteField | None:
+    """Return the column a consumer ``ModelChoiceFilter`` family filter's form field cleans.
+
+    A ``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter`` the consumer declares (or
+    selects through ``Meta.filter_overrides``) keeps django-filter's model-choice form
+    field, which looks each value up in the filter's ``queryset`` by ``to_field_name``
+    (the primary key when unset). The value's column is that field of the queryset's
+    model. A callable ``queryset`` (``queryset=lambda request: ...``) has no model until
+    a request arrives, so the model is the target of ``relation``, the field the
+    filter's ``field_name`` names on its FilterSet model. ``None`` when neither source
+    names a model.
+    """
+    queryset = getattr(filter_instance, "queryset", None)
+    model = None if callable(queryset) else getattr(queryset, "model", None)
+    if model is None and getattr(relation, "is_relation", False):
+        model = getattr(relation, "related_model", None)
+    return _model_identity_column(model, filter_instance.extra.get("to_field_name"))
 
 
 def _relation_identity_column_for(filter_instance: Filter) -> ConcreteField | None:

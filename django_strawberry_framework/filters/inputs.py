@@ -29,7 +29,13 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import strawberry
 from django.db import models
-from django_filters import ChoiceFilter, Filter, TypedChoiceFilter
+from django_filters import (
+    ChoiceFilter,
+    Filter,
+    ModelChoiceFilter,
+    ModelMultipleChoiceFilter,
+    TypedChoiceFilter,
+)
 from django_filters import RangeFilter as _DjangoRangeFilter
 from django_filters.filters import BaseCSVFilter
 from django_filters.utils import get_model_field
@@ -59,6 +65,7 @@ from .base import (
     RelationPkFilter,
     RelationPkMultipleFilter,
     TypedFilter,
+    model_choice_identity_column,
     relation_identity_column,
 )
 
@@ -366,6 +373,42 @@ def _relation_identity_annotation(
     return _scalar_from_model_field(column)
 
 
+def _model_choice_takes_list(filter_instance: Filter) -> bool:
+    """Whether a consumer model-choice filter's form field cleans a list of values.
+
+    ``ModelMultipleChoiceFilter`` does, and so does django-filter's CSV wrapper around
+    a ``ModelChoiceFilter`` (``filter_for_lookup`` builds
+    ``ConcreteInFilter(BaseInFilter, <filter_class>)`` for an ``in`` lookup), whose
+    ``BaseCSVField`` cleans each member through the model-choice field.
+    """
+    return isinstance(filter_instance, (ModelMultipleChoiceFilter, BaseCSVFilter))
+
+
+def _model_choice_identity_annotation(
+    filter_instance: Filter,
+    model_field: ModelField | None,
+    filterset_cls: type[FilterSet] | None,
+) -> _TypeForm:
+    """Type one value of a consumer model-choice filter from the column its form cleans.
+
+    The column is ``filters/base.py::model_choice_identity_column``'s (the ``queryset``
+    model's primary key or ``to_field_name`` field, or the ``field_name`` relation's
+    target for a callable ``queryset``) through the shared ``SCALAR_MAP`` lookup. The
+    filter keeps its own form field, so its ``queryset`` still validates every value.
+    """
+    column = model_choice_identity_column(filter_instance, model_field)
+    if column is None:
+        owner = filterset_cls.__name__ if filterset_cls is not None else "FilterSet"
+        raise ConfigurationError(
+            f"{owner}: {_safe_type_name(filter_instance)} on "
+            f"{_safe_arg_repr(getattr(filter_instance, 'field_name', None))} has no model "
+            "queryset (its queryset is callable or unset) and its field_name names no "
+            "relation on the FilterSet model, so there is no column to type its input "
+            "from. Pass a model queryset, or point field_name at a relation.",
+        )
+    return _scalar_from_model_field(column)
+
+
 def _choice_enum_from_filter(
     filter_instance: ChoiceFilter,
     type_name: str,
@@ -443,7 +486,10 @@ def _element_annotation(
 
 # Most-specific-first filter-class order. Convert and normalize both walk this
 # via ``convert_with_mro`` so a new primitive cannot be typed on one ladder and
-# coerced on the other (spec-053 C3). ``TypedFilter`` is convert-only: List /
+# coerced on the other (spec-053 C3). The consumer model-choice pair sits after
+# the package relation primitives and before ``BaseCSVFilter`` (its ``in``
+# wrapper is both) and ``ChoiceFilter`` (which ``ModelChoiceFilter``
+# subclasses). ``TypedFilter`` is convert-only: List /
 # Array / Range already matched, so normalize returns ``MRO_CONTINUE`` and
 # falls through to ChoiceFilter / the catch-all. Last entry is ``object`` (the
 # original ``else``): convert's method-filter / ``isnull`` / scalar arm,
@@ -454,6 +500,7 @@ _FILTER_INPUT_KIND_TYPES: tuple[type | tuple[type, ...], ...] = (
     GlobalIDFilter,
     RelationPkMultipleFilter,
     RelationPkFilter,
+    (ModelMultipleChoiceFilter, ModelChoiceFilter),
     BaseCSVFilter,
     (RangeFilter, _DjangoRangeFilter),
     (ListFilter, ArrayFilter),
@@ -496,7 +543,9 @@ def convert_filter_to_input_annotation(
 
     Implements the spec-027 Decision 4 conversion table. Kind order is
     ``_FILTER_INPUT_KIND_TYPES`` (most-specific first): Relay-aware primitives,
-    then the raw-pk relation pair (typed from the target key column), then
+    then the raw-pk relation pair (typed from the target key column), then a
+    consumer ``ModelChoiceFilter`` / ``ModelMultipleChoiceFilter`` (typed from the
+    column its form field cleans), then CSV, then
     Range / List / Array, then bare ``TypedFilter``, then
     ``ChoiceFilter``, then the ``object`` catch-all (the original ``else``).
     ``method=...`` filters
@@ -525,6 +574,10 @@ def convert_filter_to_input_annotation(
 
     def _pk(matched: Filter) -> object:
         return _relation_identity_annotation(matched, model_field)
+
+    def _model_choice(matched: Filter) -> object:
+        element = _model_choice_identity_annotation(matched, model_field, filterset_cls)
+        return GenericAlias(list, (element,)) if _model_choice_takes_list(matched) else element
 
     def _csv(matched: Filter) -> object:
         # django-filter expands ``Meta.fields`` ``in`` / ``range`` lookups
@@ -573,6 +626,7 @@ def convert_filter_to_input_annotation(
             _gid,
             _pk_multi,
             _pk,
+            _model_choice,
             _csv,
             _range,
             _list,
@@ -642,6 +696,13 @@ def normalize_input_value(
     def _pk(_filter: Filter) -> object:
         return _unwrap_enum_member(raw_value)
 
+    def _model_choice(matched: Filter) -> object:
+        # The consumer's model-choice form field cleans the raw value(s) itself.
+        if not _model_choice_takes_list(matched):
+            return _unwrap_enum_member(raw_value)
+        _require_list_container(matched, raw_value, "model-choice list")
+        return [_unwrap_enum_member(item) for item in raw_value]
+
     def _csv(_filter: Filter) -> object:
         # ``in`` / ``range`` generated CSV filters consume a list; unwrap
         # any enum members per element (parity with ``ListFilter`` below).
@@ -671,6 +732,7 @@ def normalize_input_value(
             _gid,
             _pk_multi,
             _pk,
+            _model_choice,
             _csv,
             _range,
             _list,

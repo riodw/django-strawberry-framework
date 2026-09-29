@@ -520,6 +520,20 @@ def _make_auth_field(
     )
 
 
+def _close_unawaited(awaitable: object) -> None:
+    """Close an awaitable ``is_authenticated`` value so it is never left un-awaited.
+
+    Coroutines (and generator-based awaitables) carry ``close``; an awaitable
+    without a callable one is left alone. Whatever the read or the close raises
+    is swallowed, because the caller has already classified the request as
+    anonymous.
+    """
+    with contextlib.suppress(BaseException):
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+
+
 def _authenticated_actor_or_none(request: object) -> _User | None:
     """Return the request's authenticated actor, or ``None`` when anonymous.
 
@@ -577,14 +591,10 @@ def _authenticated_actor_or_none(request: object) -> _User | None:
         ):
             return None
         if inspect.isawaitable(is_authenticated):
-            with contextlib.suppress(BaseException):
-                # mypy: duck-typed close; an awaitable without it raises AttributeError, suppressed
-                is_authenticated.close()  # type: ignore[attr-defined]
+            _close_unawaited(is_authenticated)
             return None
     elif inspect.isawaitable(is_authenticated):
-        with contextlib.suppress(BaseException):
-            # mypy: duck-typed close; an awaitable without it raises AttributeError, suppressed
-            is_authenticated.close()  # type: ignore[attr-defined]
+        _close_unawaited(is_authenticated)
         return None
     # Truthiness is the FOURTH hostile surface (hunt 0.0.15): the read and the
     # legacy-callable call above are contained, but a value whose ``__bool__``

@@ -161,13 +161,11 @@ class GraphQLRequestBodyBoundaryMiddleware:
         later entry in the chain - and reset in a ``finally`` so a raising view
         cannot leave it set for whatever the worker handles next.
         """
-        if iscoroutinefunction(self):
-            # mypy: typeshed's iscoroutinefunction TypeGuard narrows ``self`` to a bare Callable;
-            # the attribute is this middleware's own ``__acall__``.
-            return cast(
-                "Awaitable[HttpResponseBase]",
-                self.__acall__(request),  # type: ignore[attr-defined]
-            )
+        # Read into a local: typeshed's ``iscoroutinefunction`` is a TypeGuard, and
+        # guarding on ``self`` directly would re-type it as a bare callable.
+        is_async = iscoroutinefunction(self)
+        if is_async:
+            return self.__acall__(request)
         token = _boundary_middleware_request.set(request)
         try:
             return self.get_response(request)

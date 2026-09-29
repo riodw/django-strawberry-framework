@@ -481,9 +481,9 @@ def test_the_declared_length_reader_is_none_for_every_unmeasurable_shape(content
 
     ``None`` is the fail-safe direction: an unmeasurable declaration falls
     through to the counted check rather than being trusted, so a hostile client
-    cannot buy a larger body by omitting or corrupting the header. ``int(None)``
-    raises ``TypeError`` and ``int("not-a-number")`` raises ``ValueError``, which
-    is why the helper catches both rather than only one.
+    cannot buy a larger body by omitting or corrupting the header. An absent
+    header reads as ``""``, so it fails ``int`` with the same ``ValueError`` as
+    ``"not-a-number"``.
     """
     request = RequestFactory().post("/graphql/", data=b"x" * 16, content_type="application/json")
     if content_length is None:
@@ -2338,11 +2338,11 @@ def test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_ty
 
     The refusal is asserted at the boundary rather than on
     ``_canonicalizes_to_utf8``'s return value, because the contract at stake is
-    the wire outcome: with the ``TypeError`` arm gone the exception escapes
+    the wire outcome: with the non-string refusal gone the ``TypeError`` escapes
     ``_enforce_multipart_form_encoding`` -> ``_enforce_request_boundary`` -> ``run``
     and upstream's ``dispatch`` ``except HTTPException`` does not catch it, so a
     controlled ``400`` becomes an unhandled ``500``. That is not a claim a narrower
-    row could not see the mutation - removing the arm makes the helper *raise*
+    row could not see the mutation - removing the refusal makes the helper *raise*
     rather than return, so a row asserting only ``is False`` fails too. What this
     shape buys is that the assertions are the observable contract: the status code
     and the shared reason string, rather than a private helper's return value.

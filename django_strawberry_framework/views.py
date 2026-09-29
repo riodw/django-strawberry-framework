@@ -222,31 +222,34 @@ def _resolved_max_request_body_bytes(value: object) -> int | None:
 def _declared_content_length(request: HttpRequest) -> int | None:
     """The request's declared ``CONTENT_LENGTH`` as an ``int``, or ``None``.
 
-    ``None`` covers both unmeasurable shapes: the header is absent
-    (``int(None)`` -> ``TypeError``) or is not a number (``ValueError``). Both
-    fall through to the counted check rather than being trusted, which is the
+    ``None`` covers both unmeasurable shapes: the header is absent (read as
+    ``""``) or is not a number; ``int`` raises ``ValueError`` on either, and
+    ``TypeError`` on a non-string a hand-built ``META`` carries. All fall
+    through to the counted check rather than being trusted, which is the
     fail-safe direction - an unparseable declaration must not buy a larger body.
     """
     try:
-        # mypy: a missing header raises the TypeError handled below
-        return int(request.META.get("CONTENT_LENGTH"))  # type: ignore[arg-type]
+        return int(request.META.get("CONTENT_LENGTH", ""))
     except (TypeError, ValueError):
         return None
 
 
-def _canonicalizes_to_utf8(encoding: str) -> bool:
+def _canonicalizes_to_utf8(encoding: object) -> bool:
     """Whether ``encoding`` names a codec Python canonicalizes to UTF-8.
 
     ``codecs.lookup`` supplies the answer instead of a name comparison, so every
     UTF-8 alias is accepted (``"utf8"``, ``"U8"``, an alias the package never
     heard of) and only codecs that genuinely canonicalize to UTF-8 are -
-    ``utf-8-sig`` is a *different* codec and is refused. An unknown name raises
-    ``LookupError`` and a non-string raises ``TypeError``; both mean "the package
-    cannot prove this is UTF-8", which is a rejection.
+    ``utf-8-sig`` is a *different* codec and is refused. A non-string (a
+    consumer-set ``request.encoding`` is uncoerced, so ``b"utf-8"`` can arrive)
+    and an unknown name (``LookupError``) both mean "the package cannot prove
+    this is UTF-8", which is a rejection.
     """
+    if not isinstance(encoding, str):
+        return False
     try:
         return codecs.lookup(encoding).name == _UTF8_CODEC_NAME
-    except (LookupError, TypeError):
+    except LookupError:
         return False
 
 

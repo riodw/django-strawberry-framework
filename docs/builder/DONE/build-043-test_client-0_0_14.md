@@ -288,7 +288,7 @@ same idiom, unrecorded. Decision 7 is the owning Decision.
 ### F5 — Decision 9 and `## Error shapes` describe a guard the code does not have
 
 Two disagreements, both **verified** against
-`django_strawberry_framework/testing/client.py::TestClient._build_body`:
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._build_body`:
 
 - `## Error shapes` says the guard is
   `if files is not None and variables is None: raise AssertionError(...)`.

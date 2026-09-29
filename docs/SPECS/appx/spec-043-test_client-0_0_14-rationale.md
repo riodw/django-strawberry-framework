@@ -176,7 +176,7 @@ function pattern and which returns a `str` — collected, it fails the run under
 
 **This is the one finding where the spec text, not the code, was the defect.** Both disagreements
 were verified against
-`django_strawberry_framework/testing/client.py::TestClient._build_body` and
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._build_body` and
 `::TestClient._assert_file_placeholders`.
 
 - *Claimed:* `## Error shapes` said the guard is

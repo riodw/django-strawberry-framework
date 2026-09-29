@@ -11,7 +11,8 @@ distinctly-ours import path (``django_strawberry_framework.testing``).
 ``TestClient`` so the body building and decoding exist exactly once
 (spec-043 Decision 10).
 
-The clients subclass Strawberry's ``strawberry.test.BaseGraphQLTestClient``
+The clients are siblings over one private base that subclasses Strawberry's
+``strawberry.test.BaseGraphQLTestClient``
 (engine-owned over the package's hard ``strawberry-graphql`` dependency - no
 soft-dependency machinery, spec-043 Decision 5), reusing its ``_decode``, the
 ``Response`` field schema, and the abstract ``request()`` seam. The package
@@ -32,7 +33,7 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from asgiref.sync import sync_to_async
 from django.test import AsyncClient, Client, TestCase, TransactionTestCase
@@ -49,7 +50,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.contrib.auth.models import _User
 
     class _ClientPostKwargs(TypedDict, total=False):
-        """The keyword arguments :meth:`TestClient.request` forwards to ``Client.post``."""
+        """The keyword arguments the clients' ``request()`` forwards to ``Client.post``."""
 
         data: dict[str, object]
         headers: dict[str, object] | None
@@ -81,6 +82,10 @@ __all__ = [
 ]
 
 
+#: The wrapped Django test client: sync ``Client`` or ``AsyncClient``.
+_ClientT = TypeVar("_ClientT", Client, AsyncClient)
+
+
 @dataclass
 class Response(_EngineResponse):
     """A decoded GraphQL response: the engine's typed triple plus the raw ``HttpResponse``.
@@ -101,112 +106,36 @@ class Response(_EngineResponse):
     response: Any = None
 
 
-class TestClient(BaseGraphQLTestClient):
-    """A GraphQL test client over ``django.test.Client`` - post, decode, typed result.
+class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
+    """What both clients share: endpoint, wrapped transport, body build, decode.
 
-    The ``strawberry_django.test.client.TestClient`` shape (spec-043
-    Decision 3): construct one (optionally with an explicit endpoint ``path``
-    and/or a pre-configured Django test ``client``), call :meth:`query`, and
-    assert on the returned :class:`Response`. A GraphQL *mutation* posts
-    through :meth:`query` like any operation - there is deliberately no
-    ``mutate()`` (neither upstream ships one; spec-043 Decision 6).
-
-    Endpoint resolution happens once, at construction: an explicit ``path``
-    wins, else ``DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]``, else
-    ``"/graphql/"``. The resolved value is stored as ``self.path`` and never
-    mutated; the per-call ``query(..., url=...)`` override routes a single
-    request without touching it (spec-043 Decision 7).
-
-    The wrapped Django client stays reachable as ``.client`` for anything the
-    helper does not wrap - session-cookie inspection, or passing
-    ``client=Client(enforce_csrf_checks=True)`` to test CSRF enforcement
-    (Django's default test client skips CSRF checks).
+    ``TestClient`` and ``AsyncTestClient`` are siblings over this base, not
+    parent and child: the async ``query()`` / ``login()`` are coroutine-colored,
+    so an ``AsyncTestClient`` standing in for a ``TestClient`` would hand back an
+    un-awaited coroutine from ``query()``. Only the transport is colored -
+    ``request()`` returns whatever the wrapped client's ``post()`` returns, an
+    awaitable over ``AsyncClient`` - so everything else is written once here.
     """
 
-    # Pytest collection guard: the class name matches ``Test*``, so without
-    # this pytest tries to collect the class as a test suite and warns - a
+    # Pytest collection guard: both concrete class names match ``Test*``, so
+    # without this pytest tries to collect them as test suites and warns - a
     # hard failure under the repo's ``-W error`` posture. Upstream carries the
     # same guard.
     __test__ = False
 
-    def __init__(self, path: str | None = None, client: Client | None = None) -> None:
+    def __init__(self, path: str | None, client: _ClientT) -> None:
         resolved = path if path is not None else testing_endpoint_setting()
         self.path = resolved
         # Forward the resolved endpoint as the base's ``url`` too, so the
         # inherited attribute never reads the base default while ``path``
         # reads the real endpoint. ``path`` stays the documented surface.
-        super().__init__(client if client is not None else Client(), resolved)
+        super().__init__(client, resolved)
 
     @property
-    def client(self) -> Client:
-        """The wrapped ``django.test.Client`` (the base stores it as ``self._client``)."""
-        # The base stores its client untyped; ``__init__`` handed it a ``Client``.
-        return cast("Client", self._client)
-
-    def query(
-        self,
-        query: str,
-        variables: dict[str, Any] | None = None,
-        headers: dict[str, object] | None = None,
-        files: dict[str, object] | None = None,
-        assert_no_errors: bool | None = True,
-        *,
-        operation_name: str | None = None,
-        url: str | None = None,
-    ) -> Response:
-        """Post a GraphQL operation and return the decoded, typed :class:`Response`.
-
-        Mutations and subscriptions-over-POST go through this same method -
-        an operation is an operation.
-
-        The first five parameters are positionally byte-compatible with
-        ``strawberry_django``'s client; the two keyword-only extensions are
-        package-owned (spec-043 Decision 6):
-
-        - ``operation_name=`` - sent as ``operationName`` whenever it is not
-          ``None`` (the default ``None`` omits the key entirely - never an
-          explicit ``operationName: null``, which is a GraphQL validation
-          error against a multi-operation document). An explicit ``""`` is a
-          *provided* value and IS sent, for the server to reject as the
-          malformed name it is, rather than silently reinterpreted as "no
-          operation name" (the module's fail-at-the-source posture).
-        - ``url=`` - a per-call endpoint override, honored for this one
-          request only and never persisted on the client.
-
-        With ``assert_no_errors=True`` (this client's default - the
-        unittest-flavored ``GraphQLTestMixin.query()`` defaults to ``False``,
-        matching its own upstream) a response carrying ``errors`` raises
-        ``AssertionError`` with the errors list as the message (an explicit
-        raise, so it survives ``python -O``). Tests that *expect* errors pass
-        ``assert_no_errors=False`` and assert on ``res.errors`` - remember
-        GraphQL returns HTTP 200 with an ``errors`` key for most failures.
-
-        ``files=`` switches the post to multipart. Each key is the variable
-        path the file binds to, and ``variables`` must carry a ``None``
-        placeholder at that path::
-
-            # top-level file
-            client.query(mutation, variables={"file": None}, files={"file": f})
-
-            # nested input object, two file fields
-            client.query(
-                mutation,
-                variables={"data": {"label": "x", "attachment": None, "image": None}},
-                files={"data.attachment": f1, "data.image": f2},
-            )
-
-        A transport-level misconfiguration (an endpoint typo, or a
-        ``TESTING_ENDPOINT`` that does not match the project's URLconf) is not
-        wrapped: the JSON decode is Django's ``response.json()``, which raises
-        ``ValueError`` naming the non-JSON ``Content-Type`` of the 404/HTML
-        body; ``json.JSONDecodeError`` surfaces only when the header *is* JSON
-        but the body is malformed (or on the multipart decode path, which does
-        not sniff the header).
-        """
-        body = self._build_body(query, variables, files, operation_name)
-
-        resp = self.request(body, headers, files, url=url)
-        return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
+    def client(self) -> _ClientT:
+        """The wrapped Django test client (the base stores it as ``self._client``)."""
+        # The base stores its client untyped; ``__init__`` handed it a ``_ClientT``.
+        return cast("_ClientT", self._client)
 
     def _finish_response(
         self,
@@ -430,6 +359,97 @@ class TestClient(BaseGraphQLTestClient):
                     f"variables, but the value there is {_safe_arg_repr(current)}.",
                 )
 
+
+class TestClient(_GraphQLTestClientBase[Client]):
+    """A GraphQL test client over ``django.test.Client`` - post, decode, typed result.
+
+    The ``strawberry_django.test.client.TestClient`` shape (spec-043
+    Decision 3): construct one (optionally with an explicit endpoint ``path``
+    and/or a pre-configured Django test ``client``), call :meth:`query`, and
+    assert on the returned :class:`Response`. A GraphQL *mutation* posts
+    through :meth:`query` like any operation - there is deliberately no
+    ``mutate()`` (neither upstream ships one; spec-043 Decision 6).
+
+    Endpoint resolution happens once, at construction: an explicit ``path``
+    wins, else ``DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]``, else
+    ``"/graphql/"``. The resolved value is stored as ``self.path`` and never
+    mutated; the per-call ``query(..., url=...)`` override routes a single
+    request without touching it (spec-043 Decision 7).
+
+    The wrapped Django client stays reachable as ``.client`` for anything the
+    helper does not wrap - session-cookie inspection, or passing
+    ``client=Client(enforce_csrf_checks=True)`` to test CSRF enforcement
+    (Django's default test client skips CSRF checks).
+    """
+
+    def __init__(self, path: str | None = None, client: Client | None = None) -> None:
+        super().__init__(path, client if client is not None else Client())
+
+    def query(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        headers: dict[str, object] | None = None,
+        files: dict[str, object] | None = None,
+        assert_no_errors: bool | None = True,
+        *,
+        operation_name: str | None = None,
+        url: str | None = None,
+    ) -> Response:
+        """Post a GraphQL operation and return the decoded, typed :class:`Response`.
+
+        Mutations and subscriptions-over-POST go through this same method -
+        an operation is an operation.
+
+        The first five parameters are positionally byte-compatible with
+        ``strawberry_django``'s client; the two keyword-only extensions are
+        package-owned (spec-043 Decision 6):
+
+        - ``operation_name=`` - sent as ``operationName`` whenever it is not
+          ``None`` (the default ``None`` omits the key entirely - never an
+          explicit ``operationName: null``, which is a GraphQL validation
+          error against a multi-operation document). An explicit ``""`` is a
+          *provided* value and IS sent, for the server to reject as the
+          malformed name it is, rather than silently reinterpreted as "no
+          operation name" (the module's fail-at-the-source posture).
+        - ``url=`` - a per-call endpoint override, honored for this one
+          request only and never persisted on the client.
+
+        With ``assert_no_errors=True`` (this client's default - the
+        unittest-flavored ``GraphQLTestMixin.query()`` defaults to ``False``,
+        matching its own upstream) a response carrying ``errors`` raises
+        ``AssertionError`` with the errors list as the message (an explicit
+        raise, so it survives ``python -O``). Tests that *expect* errors pass
+        ``assert_no_errors=False`` and assert on ``res.errors`` - remember
+        GraphQL returns HTTP 200 with an ``errors`` key for most failures.
+
+        ``files=`` switches the post to multipart. Each key is the variable
+        path the file binds to, and ``variables`` must carry a ``None``
+        placeholder at that path::
+
+            # top-level file
+            client.query(mutation, variables={"file": None}, files={"file": f})
+
+            # nested input object, two file fields
+            client.query(
+                mutation,
+                variables={"data": {"label": "x", "attachment": None, "image": None}},
+                files={"data.attachment": f1, "data.image": f2},
+            )
+
+        A transport-level misconfiguration (an endpoint typo, or a
+        ``TESTING_ENDPOINT`` that does not match the project's URLconf) is not
+        wrapped: the JSON decode is Django's ``response.json()``, which raises
+        ``ValueError`` naming the non-JSON ``Content-Type`` of the 404/HTML
+        body; ``json.JSONDecodeError`` surfaces only when the header *is* JSON
+        but the body is malformed (or on the multipart decode path, which does
+        not sniff the header).
+        """
+        body = self._build_body(query, variables, files, operation_name)
+
+        resp = self.request(body, headers, files, url=url)
+        return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
+
     @contextlib.contextmanager
     def login(self, user: _User) -> Iterator[None]:
         """Run the block authenticated as ``user`` - ``force_login`` on entry, ``logout`` on exit.
@@ -446,29 +466,22 @@ class TestClient(BaseGraphQLTestClient):
             self.client.logout()
 
 
-class AsyncTestClient(TestClient):
-    """The async twin: ``TestClient`` over ``django.test.AsyncClient``, awaited transport.
+class AsyncTestClient(_GraphQLTestClientBase[AsyncClient]):
+    """The async twin of ``TestClient`` over ``django.test.AsyncClient``, awaited transport.
 
     Drives Django's own in-process ``AsyncClientHandler`` - no ``asgi.py``
     (and no Channels; this is not a Channels communicator) is required, so it
     works against a WSGI-only project (spec-043 Decision 8). The body build,
-    file-map rule, and per-call ``url=`` routing are shared with the sync
-    client; only the transport await and the ``login()`` color differ.
+    file-map rule, and per-call ``url=`` routing are the shared base's; only the
+    transport await and the ``login()`` color differ. It is a sibling of
+    ``TestClient``, not a subclass, so ``isinstance(client, TestClient)`` is
+    ``False`` for it.
     """
 
     def __init__(self, path: str | None = None, client: AsyncClient | None = None) -> None:
-        # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
-        super().__init__(path, client if client is not None else AsyncClient())  # type: ignore[arg-type]
+        super().__init__(path, client if client is not None else AsyncClient())
 
-    @property
-    # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
-    def client(self) -> AsyncClient:  # type: ignore[override]
-        """The wrapped ``django.test.AsyncClient``."""
-        # The base stores its client untyped; ``__init__`` handed it an ``AsyncClient``.
-        return cast("AsyncClient", self._client)
-
-    # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
-    async def query(  # type: ignore[override]
+    async def query(
         self,
         query: str,
         variables: dict[str, Any] | None = None,
@@ -498,8 +511,7 @@ class AsyncTestClient(TestClient):
         return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
 
     @contextlib.asynccontextmanager
-    # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
-    async def login(self, user: _User) -> AsyncIterator[None]:  # type: ignore[override]
+    async def login(self, user: _User) -> AsyncIterator[None]:
         """The async ``login()`` bracket - ``force_login`` / ``logout`` via ``sync_to_async``.
 
         Session writes are ORM work, hence the ``sync_to_async`` wrapping;

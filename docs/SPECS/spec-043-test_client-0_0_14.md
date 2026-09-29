@@ -1084,7 +1084,7 @@ Owning `query()` in both colors does **not** mean writing the whole flow
 twice. Only the `request()` call is sync/async-colored, so the shared tail —
 `_decode` → package `Response` construction → the `assert_no_errors` raise —
 is one un-colored helper,
-`django_strawberry_framework/testing/client.py::TestClient._finish_response`,
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._finish_response`,
 that both `query()` overrides call. The factoring sits **below** the
 not-calling-`super().query()` decision rather than around it: the async color
 still owns its own `await self.request(...)`.
@@ -1269,7 +1269,7 @@ the file binds to.** A key `"data.attachment"` means "the file at
 
 **The multipart envelope is entered on truthiness, and the placeholder
 contract is enforced by a recursive walker, not by one guard.**
-`django_strawberry_framework/testing/client.py::TestClient._build_body` returns
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._build_body` returns
 the plain JSON body when `files` is falsy — so `files={}` posts JSON rather
 than an empty-map multipart envelope — and then raises when the built body
 carries no `variables` member for the `map` to point into. The guard's subject
@@ -1287,7 +1287,7 @@ Beyond the empty-`variables` guard, `_build_body` refuses a `files` key named
 `operations` or `map` — those are the envelope's own multipart field names and
 the trailing `**files` spread would silently clobber them — and then hands the
 call to
-`django_strawberry_framework/testing/client.py::TestClient._assert_file_placeholders`,
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._assert_file_placeholders`,
 which walks every dotted path and rejects five distinct shapes at the source
 rather than emitting a spec-invalid envelope only the server could diagnose:
 

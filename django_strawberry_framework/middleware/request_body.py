@@ -218,7 +218,7 @@ class GraphQLRequestBodyBoundaryMiddleware:
         view = _package_view_instance(view_func)
         if view is None:
             return None
-        setup = getattr(view, "setup", _NO_SETUP)
+        setup: Any = getattr(view, "setup", _NO_SETUP)
         if setup is not _NO_SETUP:
             setup(request, *view_args, **view_kwargs)
             if not hasattr(view, "request"):

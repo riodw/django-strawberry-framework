@@ -51,7 +51,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 import strawberry
 from django.db import models
@@ -79,8 +79,16 @@ from .relay import (
 )
 from .resolvers import _attach_file_resolvers, _attach_relation_resolvers
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry.types.fields.resolver import StrawberryResolver
+
+    from ..filters.sets import FilterSet
+    from ..orders.sets import OrderSet
     from .definition import DjangoTypeDefinition
+
+# The sidecar family one phase-2.5 binding pass runs over: every hook in one
+# ``_SidecarBindingSpec`` takes the same family's set classes.
+_SetT = TypeVar("_SetT", bound="type[FilterSet] | type[OrderSet]")
 
 
 def _safe_qualified_class_name(value: object) -> str:
@@ -405,7 +413,9 @@ def _audit_model_label_routing(multi_type_models: tuple[type[models.Model], ...]
         emitter = _first_model_label_emitter(model)
         if emitter is None:
             continue
-        primary = registry.primary_for(model)
+        # ``_audit_primary_ambiguity`` already rejected every multi-type model
+        # without a declared primary, so ``primary`` is set.
+        primary = cast("type", registry.primary_for(model))
         primary_definition = registry.get_definition(primary)
         if primary_definition is None:
             raise ConfigurationError(
@@ -472,7 +482,13 @@ def _warn_model_label_secondary_collapse(
             type_cls
             for type_cls in registry.types_for(model)
             if type_cls is not primary
-            and _emits_model_label(registry.get_definition(type_cls).effective_globalid_strategy)
+            and _emits_model_label(
+                # Every registered type carries a definition (``register_with_definition``).
+                cast(
+                    "DjangoTypeDefinition",
+                    registry.get_definition(type_cls),
+                ).effective_globalid_strategy,
+            )
         )
         if not secondaries:
             continue
@@ -563,7 +579,8 @@ def _register_relation_connection_teardown(
     finalization. This is class hygiene for the test-only fresh-registry
     lifecycle, not a general unfinalizer for Strawberry-decorated classes.
     """
-    generated_resolver = field_obj.base_resolver.wrapped_func
+    # The synthesized connection field is always built around a resolver.
+    generated_resolver = cast("StrawberryResolver[Any]", field_obj.base_resolver).wrapped_func
 
     def teardown() -> None:
         current = type_cls.__dict__.get(generated, _MISSING_CLASS_MEMBER)
@@ -686,7 +703,8 @@ def _synthesize_relation_connections() -> None:
                 # naming a consumer-authored relation already raised at type
                 # creation (Decision 7).
                 continue
-            target_type = registry.get(field.related_model)
+            # A many-side relation always names its related model.
+            target_type = registry.get(cast("type[models.Model]", field.related_model))
             if target_type is None or not implements_relay_node(target_type):
                 if shapes.get(name) in ("connection", "both"):
                     target_label = (
@@ -1150,13 +1168,13 @@ def finalize_django_types() -> None:
 
 
 def _bind_set_owner_common(
-    set_cls: type,
+    set_cls: _SetT,
     definition: DjangoTypeDefinition,
     *,
-    get_model: Callable[[type], type[models.Model] | None],
-    format_model_mismatch: Callable[[type, DjangoTypeDefinition], str],
+    get_model: Callable[[_SetT], type[models.Model] | None],
+    format_model_mismatch: Callable[[_SetT, DjangoTypeDefinition], str],
     before_second_owner_check: (
-        Callable[[type, DjangoTypeDefinition, DjangoTypeDefinition], None] | None
+        Callable[[_SetT, DjangoTypeDefinition, DjangoTypeDefinition], None] | None
     ),
     related_attr: str,
     format_target_mismatch: Callable[..., str],
@@ -1245,7 +1263,10 @@ def _bind_set_owner_common(
             )
 
 
-def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition) -> None:
+def _bind_filterset_owner(
+    filterset_cls: type[FilterSet],
+    definition: DjangoTypeDefinition,
+) -> None:
     """Bind ``filterset_cls._owner_definition`` with strict multi-owner validation.
 
     First binding writes ``filterset_cls._owner_definition = definition``
@@ -1534,7 +1555,10 @@ def _format_owner_set_model_mismatch_error(
     )
 
 
-def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDefinition) -> str:
+def _format_owner_model_mismatch_error(
+    filterset_cls: type[FilterSet],
+    owner: DjangoTypeDefinition,
+) -> str:
     """Return the first-bind owner/filterset model-mismatch message.
 
     Fires on the FIRST owner binding when a ``Meta.filterset_class`` is
@@ -1622,7 +1646,7 @@ def _format_unregistered_related_target_error(
     )
 
 
-def _bind_orderset_owner(orderset_cls: type, definition: DjangoTypeDefinition) -> None:
+def _bind_orderset_owner(orderset_cls: type[OrderSet], definition: DjangoTypeDefinition) -> None:
     """Bind ``orderset_cls._owner_definition`` with first-bind / related / idempotency checks.
 
     First binding writes ``orderset_cls._owner_definition = definition``
@@ -1681,7 +1705,7 @@ def _format_owner_orderset_model_mismatch_error(
 
 
 @dataclass(frozen=True)
-class _SidecarBindingSpec:
+class _SidecarBindingSpec(Generic[_SetT]):
     """Per-family configuration for the shared phase-2.5 binding driver.
 
     The ordered four-subpass binding skeleton (``_bind_sidecar_sets``) is shared
@@ -1694,21 +1718,21 @@ class _SidecarBindingSpec:
     definition_attr: str
     expand_label_noun: str
     related_noun: str
-    bind_owner: Callable[[type, DjangoTypeDefinition], None]
-    helper_ledger: set[type]
+    bind_owner: Callable[[_SetT, DjangoTypeDefinition], None]
+    helper_ledger: set[_SetT]
     factory_cls: type
     materialize: Callable[[str, type], None]
     format_orphans: Callable[[list[type]], str]
-    expand: Callable[[type], None]
-    post_expand_audit: Callable[[list[type]], None] | None
+    expand: Callable[[_SetT], None]
+    post_expand_audit: Callable[[list[_SetT]], None] | None
 
 
-def _expand_filterset(filterset_cls: type) -> None:
+def _expand_filterset(filterset_cls: type[FilterSet]) -> None:
     """Layer-4 filterset expansion (resolves lazy ``RelatedFilter`` refs)."""
     filterset_cls.get_filters()
 
 
-def _expand_orderset(orderset_cls: type) -> None:
+def _expand_orderset(orderset_cls: type[OrderSet]) -> None:
     """Layer-4 orderset expansion.
 
     ``OrderSet.get_fields()`` stores ``RelatedOrder`` instances without eagerly
@@ -1723,7 +1747,7 @@ def _expand_orderset(orderset_cls: type) -> None:
         _ = related.orderset
 
 
-def _audit_unregistered_related_filter_targets(wired: list[type]) -> None:
+def _audit_unregistered_related_filter_targets(wired: list[type[FilterSet]]) -> None:
     """Filter-only subpass 2.5: every reachable ``RelatedFilter`` target must be registered.
 
     A related branch's visibility scoping runs the target type's
@@ -1735,8 +1759,8 @@ def _audit_unregistered_related_filter_targets(wired: list[type]) -> None:
     sibling of this error). The walk is transitive with a visited set; cyclic
     cross-references (``BookFilter`` <-> ``ShelfFilter``) are legal.
     """
-    seen_filtersets: set[type] = set(wired)
-    pending_filtersets: list[type] = list(wired)
+    seen_filtersets: set[type[FilterSet]] = set(wired)
+    pending_filtersets: list[type[FilterSet]] = list(wired)
     while pending_filtersets:
         filterset_cls = pending_filtersets.pop()
         for field_name, related_filter in (
@@ -1756,7 +1780,7 @@ def _audit_unregistered_related_filter_targets(wired: list[type]) -> None:
                 )
 
 
-def _bind_sidecar_sets(spec: _SidecarBindingSpec) -> None:
+def _bind_sidecar_sets(spec: _SidecarBindingSpec[_SetT]) -> None:
     """Run the ordered phase-2.5 subpasses for one sidecar family.
 
     Shared by ``_bind_filtersets`` / ``_bind_ordersets``.
@@ -1778,7 +1802,7 @@ def _bind_sidecar_sets(spec: _SidecarBindingSpec) -> None:
     5. Materialize every built input class as a module global.
     """
     # Subpass 1: bind every owner before any expansion runs.
-    wired: list[type] = []
+    wired: list[_SetT] = []
     for _type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
@@ -1817,7 +1841,7 @@ def _bind_sidecar_sets(spec: _SidecarBindingSpec) -> None:
     # materialization so a failure here doesn't leave half-materialized input
     # classes in the inputs-module namespace.
     wired_set = set(wired)
-    orphans = sorted(
+    orphans: list[type] = sorted(
         spec.helper_ledger - wired_set,
         key=_safe_qualified_class_name,
     )
@@ -1903,7 +1927,7 @@ def _bind_ordersets() -> None:
     )
 
 
-def _audit_globalid_filter_strategies(wired: list[type]) -> None:
+def _audit_globalid_filter_strategies(wired: list[type[FilterSet]]) -> None:
     """Filter-only subpass 2.5: reject GlobalID filters bound to encode-only targets.
 
     Runs AFTER every Relay type's ``effective_globalid_strategy`` is stamped
@@ -1931,7 +1955,8 @@ def _audit_globalid_filter_strategies(wired: list[type]) -> None:
     )
 
     for filterset_cls in wired:
-        owner = filterset_cls._owner_definition
+        # Subpass 1 bound every wired filterset's owner before this audit runs.
+        owner = cast("DjangoTypeDefinition", filterset_cls._owner_definition)
         for field_name, filter_instance in (filterset_cls.get_filters() or {}).items():
             if not isinstance(filter_instance, GlobalIDFilter | GlobalIDMultipleChoiceFilter):
                 continue
@@ -1968,7 +1993,7 @@ def _format_globalid_encode_only_filter_error(
     )
 
 
-def _audit_filterset_subpass_2_5(wired: list[type]) -> None:
+def _audit_filterset_subpass_2_5(wired: list[type[FilterSet]]) -> None:
     """Run every filter-only subpass-2.5 audit in order over the wired filtersets.
 
     1. ``_audit_unregistered_related_filter_targets`` -- every reachable

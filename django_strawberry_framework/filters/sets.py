@@ -20,7 +20,7 @@ from collections import OrderedDict
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn, cast
 
 import django_filters
 from django.db import models
@@ -116,6 +116,8 @@ from .inputs import (
 _LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(op.python_attr for op in LOGIC_OPERATORS)
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from types import MethodType
+
     from ..types.definition import DjangoTypeDefinition
 
 
@@ -1574,9 +1576,10 @@ class FilterSet(
         # policy is applied only to a proven ``framework_default`` leaf.
         default_origin = cls._generation_origin_for_field(field, lookup_expr)
         generation_shape_capable = (
-            getattr(cls.filter_for_field, "__func__", None) is FilterSet.filter_for_field.__func__
+            getattr(cls.filter_for_field, "__func__", None)
+            is cast("MethodType", FilterSet.filter_for_field).__func__
             and getattr(cls.filter_for_lookup, "__func__", None)
-            is FilterSet.filter_for_lookup.__func__
+            is cast("MethodType", FilterSet.filter_for_lookup).__func__
         )
         effective_origin = default_origin
         # A consumer ``filter_for_lookup`` override owns the wire shape when
@@ -1586,7 +1589,7 @@ class FilterSet(
         # remains available for the fail-closed metadata contract.
         lookup_seam_overridden = (
             getattr(cls.filter_for_lookup, "__func__", None)
-            is not FilterSet.filter_for_lookup.__func__
+            is not cast("MethodType", FilterSet.filter_for_lookup).__func__
         )
         relation_target = (
             cls._resolve_relation_target_type(field, field_name)
@@ -1873,9 +1876,10 @@ class FilterSet(
         bound. ``filterset`` is the imported ``django_filters.filterset``.
         """
         return (
-            getattr(cls.filter_for_field, "__func__", None) is FilterSet.filter_for_field.__func__
+            getattr(cls.filter_for_field, "__func__", None)
+            is cast("MethodType", FilterSet.filter_for_field).__func__
             and getattr(cls.filter_for_lookup, "__func__", None)
-            is FilterSet.filter_for_lookup.__func__
+            is cast("MethodType", FilterSet.filter_for_lookup).__func__
             and cls.FILTER_DEFAULTS is _PUBLIC_PACKAGE_FILTER_DEFAULTS
             and cls.__init__ is FilterSet.__init__
         )

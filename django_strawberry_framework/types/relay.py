@@ -23,7 +23,7 @@ package is not imported at runtime.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from django.apps import apps
 from django.db import models
@@ -46,11 +46,19 @@ from ..utils.querysets import (
     model_for,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (quoted annotation).
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .base import DjangoType
     from .definition import DjangoTypeDefinition
 
+    class _RelayDjangoType(DjangoType, relay.Node):
+        """A Relay-Node-shaped ``DjangoType``: both surfaces on one class.
 
-def implements_relay_node(type_cls: type) -> bool:
+        Names the classes ``decode_global_id`` resolves to. Type-checking only:
+        a runtime subclass of ``DjangoType`` would run its collection hook.
+        """
+
+
+def implements_relay_node(type_cls: type) -> TypeGuard[type[relay.Node]]:
     """Return whether ``type_cls`` is a subclass of ``strawberry.relay.Node``.
 
     Used by ``finalize_django_types()`` Phase 2.5 (after ``__bases__``
@@ -75,7 +83,7 @@ def implements_relay_node(type_cls: type) -> bool:
 _NODE_TYPE_HINT_ATTR = "_dsf_node_type_hint"
 
 
-def install_is_type_of(type_cls: type) -> None:
+def install_is_type_of(type_cls: type[DjangoType]) -> None:
     """Borrow strawberry-django's ``is_type_of`` virtual-subclass behavior.
 
     Direct port of ``strawberry_django/type.py::_process_type``
@@ -185,6 +193,7 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     # swallows ``NodeIDAnnotationError`` into the ``"pk"`` fallback and
     # would let a composite-pk child slip past this gate.
     try:
+        # mypy: a classmethod read off its class is typed without __func__
         relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
         pass
@@ -208,7 +217,7 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
 _RELAY_ID_ATTR_SLOT = "_dsf_relay_id_attr"
 
 
-def _stamp_relay_id_attr(type_cls: type) -> None:
+def _stamp_relay_id_attr(type_cls: type[relay.Node]) -> None:
     """Resolve the Relay id attribute ONCE and pin it on the class (Phase 2.5).
 
     Two defects in the per-call path this replaces:
@@ -234,6 +243,7 @@ def _stamp_relay_id_attr(type_cls: type) -> None:
     """
     type_cls._id_attr = None
     try:
+        # mypy: a classmethod read off its class is typed without __func__
         id_attr = relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
         id_attr = "pk"
@@ -271,12 +281,13 @@ def _resolve_id_attr_default(cls: type) -> str:
     if stamped is not None:
         return stamped
     try:
+        # mypy: a classmethod read off its class is typed without __func__
         return relay.Node.resolve_id_attr.__func__(cls)  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
         return "pk"
 
 
-def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:  # noqa: ARG001
+def _resolve_id_default(cls: type[relay.Node], root: models.Model, *, info: Any) -> str:  # noqa: ARG001
     """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
 
     Signature mirrors ``strawberry.relay.Node.resolve_id`` after
@@ -591,7 +602,7 @@ def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
 
 
 def install_globalid_typename_resolver(
-    type_cls: type,
+    type_cls: type[relay.Node],
     definition: DjangoTypeDefinition,
     globalid_setting: str | Callable[..., str] | None,
 ) -> None:
@@ -655,7 +666,7 @@ def install_globalid_typename_resolver(
 
 
 def _install_typename_closure(
-    type_cls: type,
+    type_cls: type[relay.Node],
     definition: DjangoTypeDefinition,
     strategy: str | Callable[..., str],
 ) -> None:
@@ -680,10 +691,11 @@ def _install_typename_closure(
         return encode_typename(definition, strategy, cls, root)
 
     setattr(resolve_typename, _FRAMEWORK_CLOSURE_MARKER, True)
-    type_cls.resolve_typename = classmethod(resolve_typename)
+    # mypy: runtime classmethod install
+    type_cls.resolve_typename = classmethod(resolve_typename)  # type: ignore[method-assign,assignment]
 
 
-def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
+def decode_global_id(gid: relay.GlobalID | str) -> tuple[type[_RelayDjangoType], str]:
     """Decode a ``GlobalID`` to its ``(DjangoType, node_id)`` via resolve-then-enforce.
 
     The decode half of the GlobalID-encoding feature (spec-031 Decision 8), and the
@@ -821,7 +833,9 @@ def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
             "(callable / custom strategies are encode-only in 0.0.9).",
         )
 
-    return target_type, node_id
+    # A recorded strategy is only ever stamped on a Relay-Node-shaped type
+    # (``install_globalid_typename_resolver``), so the candidate is one.
+    return cast("type[_RelayDjangoType]", target_type), node_id
 
 
 def _order_nodes(
@@ -853,7 +867,8 @@ def _order_nodes(
             try:
                 output.append(index[key])
             except KeyError as exc:
-                raise model.DoesNotExist(
+                # mypy: django-stubs omits DoesNotExist on the abstract Model base
+                raise model.DoesNotExist(  # type: ignore[attr-defined]
                     f"{_safe_class_name(model)}: no row matching {id_attr}={key!r}.",
                 ) from exc
         else:
@@ -862,7 +877,7 @@ def _order_nodes(
 
 
 def _resolve_node_default(
-    cls: type,
+    cls: type[_RelayDjangoType],
     node_id: Any,
     *,
     info: Any,
@@ -919,7 +934,7 @@ async def _resolve_node_async(
 
 
 def _resolve_nodes_default(
-    cls: type,
+    cls: type[_RelayDjangoType],
     *,
     info: Any,
     node_ids: Any = None,
@@ -1000,7 +1015,7 @@ _RELAY_RESOLVER_DEFAULTS: tuple[tuple[str, Callable[..., Any]], ...] = (
 )
 
 
-def install_relay_node_resolvers(type_cls: type) -> None:
+def install_relay_node_resolvers(type_cls: type[relay.Node]) -> None:
     """Inject the four ``resolve_*`` defaults via the ``__func__`` identity test.
 
     Step 0 stamps the type's resolved Relay id attribute

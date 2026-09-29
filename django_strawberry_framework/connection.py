@@ -47,7 +47,7 @@ import types
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any, ClassVar, Generic, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeVar, cast
 
 import strawberry
 from django.db import models
@@ -130,6 +130,10 @@ from .utils.querysets import (
 from .utils.relations import relation_kind
 from .utils.typing import is_async_callable, unwrap_container_type
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry.types.base import WithStrawberryObjectDefinition
+    from strawberry.types.field import StrawberryField
+
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
 # ``_ends_in_unique_column`` from here unchanged. The canonical implementation
@@ -147,7 +151,7 @@ NodeType = TypeVar("NodeType")
 _TOTAL_COUNT_ATTR = "_django_total_count"
 
 
-def _keyset_connection_context(cls: type) -> DeclaredCursorState | None:
+def _keyset_connection_context(cls: type[DjangoConnection]) -> DeclaredCursorState | None:
     """Return a connection's keyset-mode state, fixed when the class was generated.
 
     A declared ``Meta.cursor_field`` on the node type's definition makes every
@@ -178,7 +182,7 @@ def _set_total_count(conn: Any, *, want_count: bool, value: Any) -> Any:
 
 
 def _empty_page_connection(
-    cls: type,
+    cls: type[DjangoConnection],
     *,
     offset: int,
     has_next_page: bool,
@@ -266,7 +270,7 @@ def _build_windowed_fallback(
     )
 
 
-def _window_edge_class(cls: type) -> Any:
+def _window_edge_class(cls: type[DjangoConnection]) -> Any:
     """Resolve the connection's edge class exactly as ``ListConnection`` does.
 
     ``get_object_definition`` -> ``edges`` field -> ``resolve_type`` -> unwrap
@@ -277,12 +281,13 @@ def _window_edge_class(cls: type) -> Any:
     there - the fast path passes only the integer offset).
     """
     type_def = get_object_definition(cls, strict=True)
-    field_def = type_def.get_field("edges")
+    # Every Relay connection type declares ``edges``.
+    field_def = cast("StrawberryField", type_def.get_field("edges"))
     return unwrap_container_type(field_def.resolve_type(type_definition=type_def))
 
 
 def _resolve_from_window(
-    cls: type,
+    cls: type[DjangoConnection],
     window: _WindowedConnectionRows,
     *,
     info: Info,
@@ -596,7 +601,7 @@ def _resolve_from_window(
 
 
 def _consume_window(
-    cls: type,
+    cls: type[DjangoConnection],
     nodes: Any,
     *,
     info: Info,
@@ -702,7 +707,7 @@ def _consume_window(
 
 
 def _consume_fallback(
-    cls: type,
+    cls: type[DjangoConnection],
     nodes: Any,
     *,
     info: Info,
@@ -933,7 +938,7 @@ class _KeysetPage:
 
 
 def _resolve_keyset_connection(
-    cls: type,
+    cls: type[DjangoConnection],
     nodes: Any,
     *,
     info: Info,
@@ -988,10 +993,22 @@ def _resolve_keyset_connection(
     after_supplied = is_supplied(after)
     before_supplied = is_supplied(before)
     if after_supplied:
-        cursor = decode_keyset_cursor(after, columns, fingerprint=fingerprint, argument="after")
+        # ``after_supplied`` proved a client cursor string.
+        cursor = decode_keyset_cursor(
+            cast("str", after),
+            columns,
+            fingerprint=fingerprint,
+            argument="after",
+        )
         queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor).q())
     if before_supplied:
-        cursor = decode_keyset_cursor(before, columns, fingerprint=fingerprint, argument="before")
+        # ``before_supplied`` proved a client cursor string.
+        cursor = decode_keyset_cursor(
+            cast("str", before),
+            columns,
+            fingerprint=fingerprint,
+            argument="before",
+        )
         queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor, flip=True).q())
     cap = resolve_relay_max_results(info, max_results)
     # SliceMetadata-parity bound check (shared with derive_keyset_window_bounds)
@@ -1011,7 +1028,9 @@ def _resolve_keyset_connection(
     ) as exc:
         raise GraphQLError(str(exc)) from exc
     backward = is_backward_shape(first, last)
-    page_size = last if backward else first
+    # ``_consume_fallback``'s ``page_arguments`` bounds every page with an ``int``:
+    # ``last`` on a backward page, ``first`` on every other.
+    page_size = cast("int", last if backward else first)
     fetch_queryset = queryset.reverse() if backward else queryset
     # The keyset page ALWAYS probes: ``hasNextPage`` here is data-driven off the
     # overfetched sentinel, so the increment is unconditional rather than gated
@@ -1171,7 +1190,9 @@ def _has_next_page_requested(info: Info) -> bool:
     return _connection_field_requested(info, connection_has_next_page_selected)
 
 
-class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
+# The ``type-var`` ignore: a ``Meta.interfaces`` node type becomes a ``relay.Node`` only at
+# run time, so the package's ``NodeType`` stays unbounded.
+class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # type: ignore[type-var]
     """Generic Relay connection base owning package pagination dispatch.
 
     Adds the spec-030 Decision 3 ``first`` + ``last`` guard, consumes optimized nested
@@ -1355,7 +1376,7 @@ def _generate_connection_class(
 
     generated = types.new_class(
         f"{definition.graphql_type_name}Connection",
-        (DjangoConnection[target_type],),
+        (DjangoConnection[target_type],),  # type: ignore[valid-type]  # runtime-built annotation
         exec_body=_populate,
     )
     return strawberry.type(generated, description=description)
@@ -1509,7 +1530,11 @@ def _connection_type_for(target_type: type, definition: Any) -> type:
         connection_type = _generate_connection_class(
             target_type,
             definition,
-            description=DjangoConnection.__strawberry_definition__.description,
+            # ``ListConnection``'s ``strawberry.type`` decoration is inherited here.
+            description=cast(
+                "type[WithStrawberryObjectDefinition]",
+                DjangoConnection,
+            ).__strawberry_definition__.description,
         )
     _connection_type_cache[target_type] = _CachedConnectionType(definition, connection_type)
     return connection_type
@@ -1928,7 +1953,8 @@ def _synthesized_signature(
     ]
     annotations: dict[str, Any] = {"info": Info}
     if definition.filterset_class is not None:
-        filter_ann = filter_input_type(definition.filterset_class) | None
+        # mypy: runtime-built annotation
+        filter_ann = filter_input_type(definition.filterset_class) | None  # type: ignore[operator]
         params.append(
             inspect.Parameter(
                 CONNECTION_FILTER_KWARG,
@@ -1939,7 +1965,8 @@ def _synthesized_signature(
         )
         annotations[CONNECTION_FILTER_KWARG] = filter_ann
     if definition.orderset_class is not None:
-        order_ann = list[order_input_type(definition.orderset_class)] | None
+        # mypy: runtime-built annotation
+        order_ann: Any = list[order_input_type(definition.orderset_class)] | None  # type: ignore[misc]
         params.append(
             inspect.Parameter(
                 CONNECTION_ORDER_KWARG,
@@ -1949,7 +1976,7 @@ def _synthesized_signature(
             ),
         )
         annotations[CONNECTION_ORDER_KWARG] = order_ann
-    return_annotation = Iterable[target_type]
+    return_annotation = Iterable[target_type]  # type: ignore[valid-type]  # runtime-built annotation
     annotations["return"] = return_annotation
     return inspect.Signature(params, return_annotation=return_annotation), annotations
 
@@ -1994,6 +2021,7 @@ def _build_connection_resolver(
       its return and the async ``get_queryset`` / ``apply_async`` hooks run on
       the async path.
     """
+    _resolve: Callable[..., Any]
     if is_async_callable(resolver):
 
         async def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
@@ -2041,7 +2069,8 @@ def _build_connection_resolver(
             )
 
     signature, annotations = _synthesized_signature(target_type, definition)
-    _resolve.__signature__ = signature
+    # mypy: typeshed's FunctionType omits __signature__
+    _resolve.__signature__ = signature  # type: ignore[union-attr]
     _resolve.__annotations__ = annotations
     return _resolve
 
@@ -2161,7 +2190,11 @@ def _build_relation_connection_resolver(
         # which attr actually held rows so the strictness probe below reads
         # the same location the fast path did; with neither attr present it
         # stays the shared attr, whose absence IS the unplanned signal.
-        per_key_attr = _relation_connection_to_attr_for_key(relation_field_name, info.path.key)
+        # A field's own path segment is its response key, never a list index.
+        per_key_attr = _relation_connection_to_attr_for_key(
+            relation_field_name,
+            cast("str", info.path.key),
+        )
         probe_attr = per_key_attr
         window_rows = getattr(root, per_key_attr, None)
         if window_rows is None:
@@ -2218,7 +2251,8 @@ def _build_relation_connection_resolver(
         )
 
     signature, annotations = _synthesized_signature(target_type, definition)
-    _resolve.__signature__ = signature
+    # mypy: typeshed's FunctionType omits __signature__
+    _resolve.__signature__ = signature  # type: ignore[attr-defined]
     _resolve.__annotations__ = annotations
     return _resolve
 

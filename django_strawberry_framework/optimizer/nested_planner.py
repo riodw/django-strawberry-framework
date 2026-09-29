@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist
@@ -73,6 +73,9 @@ from .selections import (
 from .selections import (
     response_keys as _response_keys,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import MutableSequence
 
 # The exact ``Index`` types proven to build an ordinary ORDER-serving B-tree:
 # the plain ``models.Index`` and PostgreSQL's ``BTreeIndex``. ``GinIndex`` /
@@ -861,7 +864,7 @@ def _keyset_window_slice_from_arguments(
     *,
     columns: tuple[Any, ...],
     fingerprint: str,
-) -> tuple[tuple[int, int | None, bool], KeysetSeek | None] | None:
+) -> tuple[ConnectionWindowBounds, KeysetSeek | None] | None:
     """Resolve one keyset window ``(bounds, seek)`` per payload.
 
     The keyset twin of ``_connection_window_slice_from_arguments``, forking
@@ -993,7 +996,7 @@ def _divergent_key_windows(
 
 def _log_connection_fallback(
     relation_field_name: str,
-    response_keys: Sequence[str],
+    response_keys: Sequence[str | None],
     reason: str,
 ) -> None:
     """Log each response key that will use the per-parent connection pipeline."""
@@ -1179,7 +1182,7 @@ def plan_connection_relation(
         # is not a runtime_path suffix, so the filter would drop them all).
         if divergent:
             append_unique_many(
-                plan.planned_resolver_keys,
+                cast("MutableSequence[str]", plan.planned_resolver_keys),
                 _identities_for_response_keys(
                     runtime_paths,
                     resolver_identities,
@@ -1187,7 +1190,10 @@ def plan_connection_relation(
                 ),
             )
         else:
-            append_unique_many(plan.planned_resolver_keys, resolver_identities)
+            append_unique_many(
+                cast("MutableSequence[str]", plan.planned_resolver_keys),
+                resolver_identities,
+            )
     if not keyed_windows:
         return NestedConnectionPlanResult(plan=plan)
 
@@ -1437,11 +1443,14 @@ def plan_connection_relation(
     # strictness-visible as a real per-parent access).
     if divergent:
         append_unique_many(
-            plan.planned_resolver_keys,
+            cast("MutableSequence[str]", plan.planned_resolver_keys),
             _identities_for_response_keys(runtime_paths, resolver_identities, planned_keys),
         )
     else:
-        append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        append_unique_many(
+            cast("MutableSequence[str]", plan.planned_resolver_keys),
+            resolver_identities,
+        )
     return NestedConnectionPlanResult(
         plan=plan,
         accepted_response_keys=tuple(planned_keys),

@@ -34,7 +34,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterable, MutableSequence, Sequence
 from dataclasses import dataclass, field, fields, replace
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Count, Prefetch, Q, Window
@@ -43,6 +43,11 @@ from django.db.models.functions import RowNumber
 from ..exceptions import OptimizerError
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from .join_taxonomy import WINDOWABLE_RELATION_KINDS, classify_relation_join
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+
+    from ..keyset import KeysetSeek
 
 
 def _lookup_path(entry: Any) -> str:
@@ -314,10 +319,15 @@ class OptimizationPlan:
         """
         self._assert_under_construction()
         other._assert_under_construction()
-        append_unique_many(self.select_related, other.select_related)
+        # ``_assert_under_construction`` just proved both plans' directive
+        # fields are still the mutable construction-time lists.
+        append_unique_many(cast("MutableSequence[str]", self.select_related), other.select_related)
         for prefetch in other.prefetch_related:
-            append_prefetch_unique(self.prefetch_related, prefetch)
-        append_unique_many(self.only_fields, other.only_fields)
+            append_prefetch_unique(
+                cast("MutableSequence[str | Prefetch]", self.prefetch_related),
+                prefetch,
+            )
+        append_unique_many(cast("MutableSequence[str]", self.only_fields), other.only_fields)
         self.merge_metadata_from(other)
         for path, resolver_keys in other.select_path_resolver_keys.items():
             merged = list(self.select_path_resolver_keys.get(path, ()))
@@ -340,8 +350,11 @@ class OptimizationPlan:
         self._assert_merge_field_inventory()
         self._assert_under_construction()
         other._assert_under_construction()
-        append_unique_many(self.fk_id_elisions, other.fk_id_elisions)
-        append_unique_many(self.planned_resolver_keys, other.planned_resolver_keys)
+        append_unique_many(cast("MutableSequence[str]", self.fk_id_elisions), other.fk_id_elisions)
+        append_unique_many(
+            cast("MutableSequence[str]", self.planned_resolver_keys),
+            other.planned_resolver_keys,
+        )
         if not other.cacheable:
             self.cacheable = False
 
@@ -490,7 +503,7 @@ def append_unique_many(values: MutableSequence[Any], new_values: Iterable[Any]) 
         append_unique(values, value)
 
 
-def append_prefetch_unique(values: MutableSequence[Any], prefetch: Prefetch) -> None:
+def append_prefetch_unique(values: MutableSequence[Any], prefetch: str | Prefetch) -> None:
     """Append ``prefetch`` unless a lookup for the same path already exists.
 
     Compares lookup paths via ``_lookup_path`` so a hint-supplied
@@ -779,14 +792,14 @@ def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
         name = entry[1:] if descending else entry
         return (name, descending) if name else None
     expression = getattr(entry, "expression", None)
-    name = (
+    expression_name = (
         getattr(expression, "name", None)
         if expression is not None
         else getattr(entry, "name", None)
     )
-    if not isinstance(name, str) or not name:
+    if not isinstance(expression_name, str) or not expression_name:
         return None
-    return name, bool(getattr(entry, "descending", False))
+    return expression_name, bool(getattr(entry, "descending", False))
 
 
 def order_entry_has_explicit_nulls(entry: Any) -> bool:
@@ -860,7 +873,11 @@ def ends_in_unique_column(effective: tuple, model: type) -> bool:
     )
 
 
-def effective_connection_order(cursor_field: tuple | None, explicit: tuple, model: type) -> tuple:
+def effective_connection_order(
+    cursor_field: tuple | None,
+    explicit: tuple,
+    model: type[models.Model],
+) -> tuple:
     """Return the effective ORDER BY a connection paginates under by default.
 
     The precedence ladder shared by the plan-time window
@@ -885,7 +902,7 @@ def effective_connection_order(cursor_field: tuple | None, explicit: tuple, mode
     return deterministic_order(explicit or tuple(model._meta.ordering), model)
 
 
-def deterministic_order(effective: tuple, model: type) -> tuple:
+def deterministic_order(effective: tuple, model: type[models.Model]) -> tuple:
     """Return the deterministic TOTAL ordering tuple for a connection queryset.
 
     The effective ordering with the model pk appended as a terminal tiebreaker
@@ -954,7 +971,7 @@ def apply_window_pagination(
     reverse: bool = False,
     with_total_count: bool = True,
     next_page_probe: bool = False,
-    keyset_seek: Any | None = None,
+    keyset_seek: KeysetSeek | None = None,
 ) -> Any:
     """Annotate row-number / total-count windows and filter to the requested slice.
 
@@ -1082,7 +1099,8 @@ def apply_window_pagination(
             queryset,
             partition_by=partition_by,
             order_by=order_by,
-            seek_q=keyset_seek.q(),
+            # ``keyset_counted`` is only set for a present seek.
+            seek_q=cast("KeysetSeek", keyset_seek).q(),
             range_plan=range_plan,
         )
     if keyset_seek is not None:
@@ -1098,7 +1116,9 @@ def apply_window_pagination(
         ),
     }
     if with_total_count:
-        annotations[WINDOW_TOTAL_COUNT] = Window(Count(1), partition_by=partition_by)
+        # mypy: django-stubs types Count's expression as Combinable | str; Func wraps a
+        # literal in Value
+        annotations[WINDOW_TOTAL_COUNT] = Window(Count(1), partition_by=partition_by)  # type: ignore[arg-type]
     queryset = queryset.annotate(**annotations)
     if range_plan.reverse:
         if range_plan.lower_bound is not None:
@@ -1172,7 +1192,9 @@ def _apply_keyset_counted_window(
             partition_by=partition_by,
             order_by=order_by,
         ),
-        WINDOW_TOTAL_COUNT: Window(Count(1), partition_by=partition_by),
+        # mypy: django-stubs types Count's expression as Combinable | str; Func wraps a
+        # literal in Value
+        WINDOW_TOTAL_COUNT: Window(Count(1), partition_by=partition_by),  # type: ignore[arg-type]
         WINDOW_KEYSET_SEEK_COUNT: Window(Count("pk", filter=seek_q), partition_by=partition_by),
     }
     if range_plan.add_marker_rows:

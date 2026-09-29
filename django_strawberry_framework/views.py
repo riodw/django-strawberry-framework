@@ -104,10 +104,18 @@ from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
     from django.http import HttpRequest
+    from django.views import View
+
+    # Both package views compose the boundary mixin ahead of a Django ``View``
+    # subclass, which its ``as_view`` extends; at run time the mixin's base stays
+    # ``object`` so it adds nothing to either view's MRO.
+    _BoundaryMixinBase = View
+else:
+    _BoundaryMixinBase = object
 
 __all__ = ("AsyncDjangoGraphQLView", "DjangoGraphQLView")
 
@@ -116,6 +124,9 @@ __all__ = ("AsyncDjangoGraphQLView", "DjangoGraphQLView")
 #: shapes. Named once so the package tier can import the exact bytes the live
 #: tier reads off the response.
 _BODY_LIMIT_REASON = "Request body exceeded the configured GraphQL request-body limit."
+
+#: The view-callback attribute Django's ``CsrfViewMiddleware.process_view`` reads.
+_CSRF_EXEMPT = "csrf_exempt"
 
 #: The wire reason for a request body the endpoint refuses to read as JSON -
 #: ``strawberry.http.base.BaseView.parse_json``'s own literal, reproduced
@@ -211,6 +222,7 @@ def _declared_content_length(request: HttpRequest) -> int | None:
     fail-safe direction - an unparseable declaration must not buy a larger body.
     """
     try:
+        # mypy: a missing header raises the TypeError handled below
         return int(request.META.get("CONTENT_LENGTH"))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
@@ -227,6 +239,7 @@ def _canonicalizes_to_utf8(encoding: object) -> bool:
     cannot prove this is UTF-8", which is a rejection.
     """
     try:
+        # mypy: a non-string raises the TypeError handled below
         return codecs.lookup(encoding).name == _UTF8_CODEC_NAME  # type: ignore[arg-type]
     except (LookupError, TypeError):
         return False
@@ -385,7 +398,7 @@ class _RawBodyRequestAdapter(DjangoHTTPRequestAdapter):
         return self.request.body
 
 
-class _RequestBodyBoundaryMixin:
+class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
     """The package's raw-request-body boundary, shared by both package views.
 
     One mixin, one subject: the bytes of an incoming GraphQL request, and the
@@ -548,7 +561,9 @@ class _RequestBodyBoundaryMixin:
         can still lose the ordering (a wrapper that drops the attributes, and a
         consumer middleware that reads the body inbound).
         """
-        upstream_view = super().as_view(**initkwargs)
+        # A coroutine function when ``view_is_async``: django-stubs types ``View.as_view``'s
+        # sync callback only.
+        upstream_view: Callable[..., Any] = super().as_view(**initkwargs)
         mount = object()
 
         def prepared_view(request: HttpRequest) -> Any:
@@ -576,7 +591,7 @@ class _RequestBodyBoundaryMixin:
                     return upstream_view(request, *args, **kwargs)
                 return instance.dispatch(request, *args, **kwargs)
 
-        view.csrf_exempt = _CSRF_ORDERING_EXEMPTION
+        setattr(view, _CSRF_EXEMPT, _CSRF_ORDERING_EXEMPTION)
         setattr(view, _BOUNDARY_MARKER, True)
         setattr(view, _BOUNDARY_MOUNT, mount)
         return view
@@ -817,6 +832,7 @@ class _RequestBodyBoundaryMixin:
                 data = data.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise HTTPException(400, _JSON_PARSE_REASON) from exc
+        # mypy: a mixin over Strawberry's view, which defines parse_json
         return super().parse_json(data)  # type: ignore[misc]
 
 

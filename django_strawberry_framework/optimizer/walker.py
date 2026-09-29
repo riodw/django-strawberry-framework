@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from django.db import models
 from django.db.models import Prefetch
@@ -52,6 +52,21 @@ from .selections import (
     should_include,
     with_runtime_prefix,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    # The ``MutableSequence`` casts below restate that a plan under walker
+    # construction still holds its mutable directive lists; ``OptimizationPlan``
+    # types them as the ``Sequence`` a finalized plan's tuples also satisfy.
+    from collections.abc import MutableSequence
+    from typing import Protocol
+
+    from ..types.definition import DjangoTypeDefinition
+
+    class _CustomGetQuerysetReporter(Protocol):
+        """A registered class answering the ``get_queryset`` downgrade question itself."""
+
+        def has_custom_get_queryset(self) -> bool: ...
+
 
 # The selection-traversal primitives live in ``optimizer/selections.py`` so the
 # walker and the AST seam in ``extension.py`` share ONE
@@ -208,7 +223,9 @@ def plan_relation(
         logger.debug(
             "Optimizer: will downgrade %s to Prefetch because %s overrides get_queryset.",
             field.name,
-            target_type.__name__,
+            # The walk pairs a definition with its origin, so a downgrade verdict
+            # always has a target type.
+            cast("type", target_type).__name__,
         )
         return ("prefetch", "custom_get_queryset")
     if is_many_side_relation_kind(relation_kind(field)):
@@ -237,7 +254,10 @@ def _target_has_custom_get_queryset(
     """
     if target_definition is not None:
         return target_definition.has_custom_get_queryset
-    return target_type is not None and target_type.has_custom_get_queryset()
+    return (
+        target_type is not None
+        and cast("_CustomGetQuerysetReporter", target_type).has_custom_get_queryset()
+    )
 
 
 def _schema_name_converter(info: Any | None) -> Any | None:
@@ -367,7 +387,8 @@ def _forward_names(
         return cached
     built = _build_forward_names(
         field_map,
-        definition.relation_connections or {},
+        # ``cacheable`` read ``finalized`` off a present definition.
+        cast("DjangoTypeDefinition", definition).relation_connections or {},
         _graphql_names_by_python_name(type_cls, info),
         converter=converter,
     )
@@ -597,7 +618,8 @@ def _build_child_queryset(
         # the generated one never passes through: the plan applies it after the
         # parent's own seal has run.
         queryset = apply_type_visibility_sync(
-            target_type,
+            # ``has_custom_qs`` is True only for a resolved target type.
+            cast("type", target_type),
             queryset,
             info,
             model=target_model,
@@ -810,7 +832,10 @@ def _walk_selections(
                     # the relation name, which would drag the related row
                     # back via ``.only("user")``.
                     column = db_field.attname or id_attr
-                    append_unique(plan.only_fields, f"{prefix}{column}")
+                    append_unique(
+                        cast("MutableSequence[str]", plan.only_fields),
+                        f"{prefix}{column}",
+                    )
             continue
         if not django_field.is_relation:
             # Scalar projection. When ``django_name == "id"`` and the
@@ -822,7 +847,10 @@ def _walk_selections(
             # The ``continue`` stays unconditional - the scalar field is
             # accounted for whether or not it is projected.
             if enable_only:
-                append_unique(plan.only_fields, f"{prefix}{django_name}")
+                append_unique(
+                    cast("MutableSequence[str]", plan.only_fields),
+                    f"{prefix}{django_name}",
+                )
             continue
 
         # Consumer-assigned relation fields are FULLY unplanned without an
@@ -868,7 +896,8 @@ def _walk_selections(
             sel=sel,
             django_field=django_field,
             django_name=django_name,
-            type_cls=type_cls,
+            # Hints come only from a registered definition, so ``type_cls`` is set.
+            type_cls=cast("type", type_cls),
             target_type=target_type,
             target_definition=target_definition,
             plan=plan,
@@ -999,9 +1028,9 @@ def _plan_select_relation(
         and _selected_scalar_names(sel.selections, django_field.related_model, info=info)
         == {target_pk_name}
     ):
-        append_unique_many(plan.fk_id_elisions, resolver_identities)
+        append_unique_many(cast("MutableSequence[str]", plan.fk_id_elisions), resolver_identities)
         return
-    append_unique(plan.select_related, full_path)
+    append_unique(cast("MutableSequence[str]", plan.select_related), full_path)
     # Couple the directive to the resolver metadata it satisfies: if
     # reconciliation later drops this path because a consumer projection
     # cannot traverse it (``plans.py::prune_unsupportable_select_related``),
@@ -1062,7 +1091,7 @@ def _plan_prefetch_relation(
         plan.cacheable = False
     if django_field.related_model is None:
         _record_prefetch_path_keys(plan, lookup_path, resolver_identities)
-        append_unique(plan.prefetch_related, lookup_path)
+        append_unique(cast("MutableSequence[str | Prefetch]", plan.prefetch_related), lookup_path)
         return
 
     # Snapshot before the child absorb so nested PLANNED keys that land on
@@ -1087,7 +1116,10 @@ def _plan_prefetch_relation(
     )
     nested_keys = tuple(k for k in plan.planned_resolver_keys if k not in prior_planned)
     _record_prefetch_path_keys(plan, lookup_path, (*resolver_identities, *nested_keys))
-    append_prefetch_unique(plan.prefetch_related, Prefetch(lookup_path, queryset=child_queryset))
+    append_prefetch_unique(
+        cast("MutableSequence[str | Prefetch]", plan.prefetch_related),
+        Prefetch(lookup_path, queryset=child_queryset),
+    )
 
 
 def _record_relation_access(
@@ -1117,8 +1149,11 @@ def _record_relation_access(
     """
     attname = django_field.attname
     if enable_only and attname is not None:
-        append_unique(plan.only_fields, f"{prefix}{attname}")
-    append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        append_unique(cast("MutableSequence[str]", plan.only_fields), f"{prefix}{attname}")
+    append_unique_many(
+        cast("MutableSequence[str]", plan.planned_resolver_keys),
+        resolver_identities,
+    )
 
 
 def _build_prefetch_child_queryset(
@@ -1197,7 +1232,7 @@ def _apply_hint(
     sel: Any,
     django_field: Any,
     django_name: str,
-    type_cls: type | None,
+    type_cls: type,
     target_type: type | None,
     target_definition: Any | None,
     plan: OptimizationPlan,
@@ -1291,13 +1326,21 @@ def _apply_hint(
         plan.cacheable = False
         # B8 coupling: attribute the relation's resolver keys to the rebased
         # lookup so a later consumer-wins drop strips them from strictness.
-        hinted_lookup = getattr(rebased_prefetch, "prefetch_to", None) or getattr(
-            rebased_prefetch,
-            "prefetch_through",
-            "",
+        # ``rebased_prefetch`` is a ``Prefetch``, whose lookups are strings.
+        hinted_lookup = cast(
+            "str",
+            getattr(rebased_prefetch, "prefetch_to", None)
+            or getattr(
+                rebased_prefetch,
+                "prefetch_through",
+                "",
+            ),
         )
         _record_prefetch_path_keys(plan, hinted_lookup, resolver_identities)
-        append_prefetch_unique(plan.prefetch_related, rebased_prefetch)
+        append_prefetch_unique(
+            cast("MutableSequence[str | Prefetch]", plan.prefetch_related),
+            rebased_prefetch,
+        )
         return True
     if hint.force_select:
         kind = relation_kind(django_field)
@@ -1372,9 +1415,10 @@ def _hint_prefetch_over_pk_set(
     queryset = models.QuerySet(
         model=inner.model,
         query=rewritten,
-        using=inner._db,
-        hints=dict(inner._hints),
-    ).prefetch_related(*inner._prefetch_related_lookups)
+        using=inner._db,  # type: ignore[attr-defined]  # django-stubs omits QuerySet._db
+        hints=dict(inner._hints),  # type: ignore[attr-defined]  # django-stubs omits QuerySet._hints
+        # mypy: django-stubs omits QuerySet._prefetch_related_lookups
+    ).prefetch_related(*inner._prefetch_related_lookups)  # type: ignore[attr-defined]
     return Prefetch(prefetch.prefetch_through, queryset=queryset, to_attr=prefetch.to_attr)
 
 
@@ -1544,7 +1588,7 @@ def _ensure_connector_only_fields(
         )
         return
     for attname in columns:
-        append_unique(plan.only_fields, attname)
+        append_unique(cast("MutableSequence[str]", plan.only_fields), attname)
 
 
 def _merge_aliased_selections(selections: list[Any]) -> list[Any]:

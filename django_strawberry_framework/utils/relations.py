@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, TypeGuard
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models.constants import LOOKUP_SEP
@@ -17,7 +17,10 @@ from django_strawberry_framework.exceptions import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from collections.abc import Sequence
+
     from django.db import models
+    from django.db.models.query_utils import PathInfo
 
 __all__ = [
     "MANY_SIDE_RELATION_KINDS",
@@ -147,14 +150,29 @@ class _RelationFieldLike(Protocol):
     descriptor whose ``many_to_many`` / ``one_to_many`` / ``one_to_one`` /
     ``auto_created`` / ``concrete`` attributes are always present. The narrower
     annotation documents the read contract; ``getattr(..., False)`` in the body
-    still defends against shapes that omit a flag.
+    still defends against shapes that omit a flag. The flags are read, never
+    written, and a ``None`` reads as ``False`` (a plain Django ``Field`` carries
+    ``None`` in the three cardinality slots), so a read-only snapshot such as
+    ``FieldMeta`` satisfies the contract as well.
     """
 
-    many_to_many: bool
-    one_to_many: bool
-    one_to_one: bool
-    auto_created: bool
-    concrete: bool
+    @property
+    def many_to_many(self) -> bool | None: ...
+    @property
+    def one_to_many(self) -> bool | None: ...
+    @property
+    def one_to_one(self) -> bool | None: ...
+    @property
+    def auto_created(self) -> bool | None: ...
+    @property
+    def concrete(self) -> bool | None: ...
+
+
+class _TraversableRelationLike(_RelationFieldLike, Protocol):
+    """A relation whose ``path_infos`` a path walk can follow."""
+
+    @property
+    def path_infos(self) -> Sequence[PathInfo]: ...
 
 
 def relation_kind(field: _RelationFieldLike) -> RelationKind:
@@ -284,7 +302,7 @@ class ClassifiedPath:
     relation_chain: tuple[str, ...]
 
 
-def _resolve_segment_field(model: type, segment: str) -> object:
+def _resolve_segment_field(model: type[models.Model], segment: str) -> object:
     """Return the field a path segment names, resolving ``pk`` to the pk field.
 
     ``pk`` is Django's ORM alias for the model's primary key; a ``pk`` segment
@@ -303,7 +321,7 @@ def _resolve_segment_field(model: type, segment: str) -> object:
         raise FieldDoesNotExist(segment) from None
 
 
-def _is_traversable_relation(field: object) -> bool:
+def _is_traversable_relation(field: object) -> TypeGuard[_TraversableRelationLike]:
     """Return whether a resolved field is a relation the walk can follow.
 
     A traversable relation is one exposing usable ``path_infos``. A forward
@@ -320,7 +338,7 @@ def _is_traversable_relation(field: object) -> bool:
         return False
 
 
-def classify_path(model: type, field_path: str) -> ClassifiedPath:
+def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
     """Strictly classify an ORM ``field_path`` into an immutable relation plan.
 
     Splits on ``LOOKUP_SEP`` and walks each segment through
@@ -450,41 +468,40 @@ def validate_lookup_expr(terminal: Any, lookup_expr: str) -> type:
         if not part:
             raise LookupValidationError(terminal, lookup_expr, part)
     cursor: Any = terminal
-    last_index = len(parts) - 1
-    for index, part in enumerate(parts):
-        if index < last_index:
-            try:
-                transform = cursor.get_transform(part)
-            except BaseException:
-                raise LookupValidationError(terminal, lookup_expr, part) from None
-            if transform is None:
-                raise LookupValidationError(terminal, lookup_expr, part)
-            try:
-                cursor = transform(cursor)
-            except BaseException:
-                raise LookupValidationError(terminal, lookup_expr, part) from None
-            continue
-        try:
-            lookup = cursor.get_lookup(part)
-        except BaseException:
-            raise LookupValidationError(terminal, lookup_expr, part) from None
-        if lookup is not None:
-            return lookup
+    # ``str.split`` always yields at least one part, so the final part always exists.
+    *transform_parts, final_part = parts
+    for part in transform_parts:
         try:
             transform = cursor.get_transform(part)
         except BaseException:
             raise LookupValidationError(terminal, lookup_expr, part) from None
-        if transform is not None:
-            try:
-                exact = transform(cursor).get_lookup("exact")
-            except BaseException:
-                raise LookupValidationError(terminal, lookup_expr, part) from None
-            if exact is not None:
-                return exact
-        raise LookupValidationError(terminal, lookup_expr, part)
+        if transform is None:
+            raise LookupValidationError(terminal, lookup_expr, part)
+        try:
+            cursor = transform(cursor)
+        except BaseException:
+            raise LookupValidationError(terminal, lookup_expr, part) from None
+    try:
+        lookup = cursor.get_lookup(final_part)
+    except BaseException:
+        raise LookupValidationError(terminal, lookup_expr, final_part) from None
+    if lookup is not None:
+        return lookup
+    try:
+        transform = cursor.get_transform(final_part)
+    except BaseException:
+        raise LookupValidationError(terminal, lookup_expr, final_part) from None
+    if transform is not None:
+        try:
+            exact = transform(cursor).get_lookup("exact")
+        except BaseException:
+            raise LookupValidationError(terminal, lookup_expr, final_part) from None
+        if exact is not None:
+            return exact
+    raise LookupValidationError(terminal, lookup_expr, final_part)
 
 
-def _lenient_traverses_to_many(model: type, field_path: str) -> bool:
+def _lenient_traverses_to_many(model: type[models.Model], field_path: str) -> bool:
     """Legacy lenient to-many walk, retained verbatim as a fail-open fallback.
 
     Walks the ``__``-separated path swallowing any resolution failure into a
@@ -519,7 +536,7 @@ def _lenient_traverses_to_many(model: type, field_path: str) -> bool:
 
 
 @lru_cache(maxsize=2048)
-def _classify_path_cached(model: type, field_path: str) -> ClassifiedPath:
+def _classify_path_cached(model: type[models.Model], field_path: str) -> ClassifiedPath:
     """Bounded ``lru_cache`` over ``classify_path`` for the hot to-many probe.
 
     ``path_traverses_to_many`` is called repeatedly with the same
@@ -531,7 +548,7 @@ def _classify_path_cached(model: type, field_path: str) -> ClassifiedPath:
     return classify_path(model, field_path)
 
 
-def _traverses_to_many(classify: Any, model: type, field_path: str) -> bool:
+def _traverses_to_many(classify: Any, model: type[models.Model], field_path: str) -> bool:
     """Answer the to-many question over ``classify``, with the shared fallback ladder.
 
     ONE body for both arms of :func:`path_traverses_to_many`: the hashable arm
@@ -549,12 +566,12 @@ def _traverses_to_many(classify: Any, model: type, field_path: str) -> bool:
 
 
 @lru_cache(maxsize=2048)
-def _path_traverses_to_many_cached(model: type, field_path: str) -> bool:
+def _path_traverses_to_many_cached(model: type[models.Model], field_path: str) -> bool:
     """Cached implementation for hashable definition-time model/path pairs."""
     return _traverses_to_many(_classify_path_cached, model, field_path)
 
 
-def path_traverses_to_many(model: type, field_path: str) -> bool:
+def path_traverses_to_many(model: type[models.Model], field_path: str) -> bool:
     """Return whether an ORM ``field_path`` traverses a to-many relation.
 
     Reimplemented on ``classify_path``: the strict classifier is the single
@@ -608,8 +625,13 @@ def _path_traverses_to_many_cache_clear() -> None:
     _path_traverses_to_many_cached.cache_clear()
 
 
-path_traverses_to_many.cache_clear = _path_traverses_to_many_cache_clear
-path_traverses_to_many.cache_info = _path_traverses_to_many_cached.cache_info
+# mypy models no attribute set on a plain ``def`` (python/mypy#2087).
+path_traverses_to_many.cache_clear = (  # type: ignore[attr-defined]  # mypy#2087
+    _path_traverses_to_many_cache_clear
+)
+path_traverses_to_many.cache_info = (  # type: ignore[attr-defined]  # mypy#2087
+    _path_traverses_to_many_cached.cache_info
+)
 
 
 def is_forward_many_to_many(field: object) -> bool:
@@ -638,7 +660,7 @@ def is_forward_many_to_many(field: object) -> bool:
     return many_to_many and (concrete or not auto_created)
 
 
-def is_forward_concrete_relation(field: object) -> bool:
+def is_forward_concrete_relation(field: _RelationFieldLike) -> bool:
     """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
 
     Cardinality is decided by ``relation_kind`` - this module's single site of

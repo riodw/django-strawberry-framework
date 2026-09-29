@@ -32,7 +32,7 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from asgiref.sync import sync_to_async
 from django.test import AsyncClient, Client, TestCase, TransactionTestCase
@@ -44,8 +44,32 @@ from django_strawberry_framework.exceptions import _safe_arg_repr
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import AsyncIterator, Iterator
+    from typing import Protocol, TypedDict
 
-    from django.contrib.auth.base_user import AbstractBaseUser
+    from django.contrib.auth.models import _User
+
+    class _ClientPostKwargs(TypedDict, total=False):
+        """The keyword arguments :meth:`TestClient.request` forwards to ``Client.post``."""
+
+        data: dict[str, object]
+        headers: dict[str, object] | None
+        content_type: str
+
+    class _GraphQLTestHost(Protocol):
+        """What :class:`GraphQLTestMixin` reads from the test case it is composed over."""
+
+        GRAPHQL_URL: str | None
+        client: Client
+
+        def assertEqual(  # noqa: N802 - unittest assertion vocabulary
+            self,
+            first: Any,
+            second: Any,
+            msg: Any = None,
+        ) -> None: ...
+        def assertIsNone(self, obj: object, msg: Any = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
+        def assertTrue(self, expr: Any, msg: Any = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
+
 
 __all__ = [
     "AsyncTestClient",
@@ -236,11 +260,13 @@ class TestClient(BaseGraphQLTestClient):
         deliberately dropped here, do not "fix" it back in. Spec-043
         Decision 9.)
         """
-        kwargs: dict[str, object] = {"data": body, "headers": headers}
+        kwargs: _ClientPostKwargs = {"data": body, "headers": headers}
         if not files:
             kwargs["content_type"] = "application/json"
 
-        return self.client.post(url if url is not None else self.path, **kwargs)
+        # mypy: strawberry's BaseGraphQLTestClient types headers dict[str, object]; django-stubs
+        # narrows Client.post headers to Mapping[str, str]
+        return self.client.post(url if url is not None else self.path, **kwargs)  # type: ignore[arg-type]
 
     def _build_body(
         self,
@@ -308,7 +334,9 @@ class TestClient(BaseGraphQLTestClient):
                 f"are built by this client - rename the variable path.",
             )
 
-        self._assert_file_placeholders(variables, files)
+        # ``cast``: the ``variables`` member checked above exists only for a
+        # non-empty ``variables`` dict.
+        self._assert_file_placeholders(cast("dict[str, Any]", variables), files)
 
         file_map = {key: [f"variables.{key}"] for key in files}
         return {"operations": json.dumps(body), "map": json.dumps(file_map), **files}
@@ -399,7 +427,7 @@ class TestClient(BaseGraphQLTestClient):
                 )
 
     @contextlib.contextmanager
-    def login(self, user: AbstractBaseUser) -> Iterator[None]:
+    def login(self, user: _User) -> Iterator[None]:
         """Run the block authenticated as ``user`` - ``force_login`` on entry, ``logout`` on exit.
 
         The logout runs even when the block raises, so a failing assertion
@@ -425,14 +453,17 @@ class AsyncTestClient(TestClient):
     """
 
     def __init__(self, path: str | None = None, client: AsyncClient | None = None) -> None:
-        super().__init__(path, client if client is not None else AsyncClient())
+        # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
+        super().__init__(path, client if client is not None else AsyncClient())  # type: ignore[arg-type]
 
     @property
-    def client(self) -> AsyncClient:
+    # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
+    def client(self) -> AsyncClient:  # type: ignore[override]
         """The wrapped ``django.test.AsyncClient``."""
         return self._client
 
-    async def query(
+    # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
+    async def query(  # type: ignore[override]
         self,
         query: str,
         variables: dict[str, Any] | None = None,
@@ -462,7 +493,8 @@ class AsyncTestClient(TestClient):
         return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
 
     @contextlib.asynccontextmanager
-    async def login(self, user: AbstractBaseUser) -> AsyncIterator[None]:
+    # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
+    async def login(self, user: _User) -> AsyncIterator[None]:  # type: ignore[override]
         """The async ``login()`` bracket - ``force_login`` / ``logout`` via ``sync_to_async``.
 
         Session writes are ORM work, hence the ``sync_to_async`` wrapping;
@@ -501,7 +533,7 @@ class GraphQLTestMixin:
     GRAPHQL_URL: str | None = None
 
     def query(
-        self,
+        self: _GraphQLTestHost,
         query: str,
         *,
         variables: dict[str, Any] | None = None,
@@ -533,7 +565,11 @@ class GraphQLTestMixin:
             url=url,
         )
 
-    def assertResponseNoErrors(self, resp: Response, msg: str | None = None) -> None:  # noqa: N802 - unittest/graphene assertion vocabulary
+    def assertResponseNoErrors(  # noqa: N802 - unittest/graphene assertion vocabulary
+        self: _GraphQLTestHost,
+        resp: Response,
+        msg: str | None = None,
+    ) -> None:
         """Assert the response is HTTP 200 AND carries no GraphQL ``errors``.
 
         Both of graphene's checks, against the typed :class:`Response`;
@@ -545,7 +581,11 @@ class GraphQLTestMixin:
         self.assertEqual(resp.response.status_code, 200, details)
         self.assertIsNone(resp.errors, details)
 
-    def assertResponseHasErrors(self, resp: Response, msg: str | None = None) -> None:  # noqa: N802 - unittest/graphene assertion vocabulary
+    def assertResponseHasErrors(  # noqa: N802 - unittest/graphene assertion vocabulary
+        self: _GraphQLTestHost,
+        resp: Response,
+        msg: str | None = None,
+    ) -> None:
         """Assert the response carries GraphQL ``errors``.
 
         Deliberately no status assertion - even with errors, GraphQL returns

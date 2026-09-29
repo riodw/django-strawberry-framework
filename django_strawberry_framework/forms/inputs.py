@@ -42,7 +42,7 @@ wrapper, in the spirit of ``mutations/inputs.py``.
 from __future__ import annotations
 
 import keyword
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
@@ -82,6 +82,14 @@ from .converter import (
     convert_form_field,
     form_field_required,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
+    # A declarative form class - the only kind a form mutation's ``Meta.form_class``
+    # validates to (``forms.Form`` / ``forms.ModelForm`` are siblings under
+    # ``forms.BaseForm``, and only they carry the metaclass-built ``base_fields``).
+    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm]
 
 # Module path the ``strawberry.lazy(...)`` marker references for the FORM input
 # namespace; pinned as a single constant so any forward-ref and
@@ -173,7 +181,7 @@ register_subsystem_clear(
 )
 
 
-def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:
+def get_form_fields(form_class: FormClass) -> dict[str, forms.Field]:
     """Return the form's declared field dict from ``base_fields`` - NO instantiation.
 
     ``base_fields`` is the class-level declared-fields dict Django's
@@ -199,10 +207,7 @@ def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:
         ) from exc
 
 
-def _form_field_basis(
-    form_class: type[forms.BaseForm],
-    form_fields: Any = None,
-) -> dict[str, forms.Field]:
+def _form_field_basis(form_class: FormClass, form_fields: Any = None) -> dict[str, forms.Field]:
     """Return the validated field basis used by every form-input operation.
 
     ``form_fields`` is the optional stable mapping supplied by a mutation's
@@ -261,10 +266,7 @@ def _form_field_basis(
     return basis
 
 
-def normalize_form_field_basis(
-    form_class: type[forms.BaseForm],
-    form_fields: Any,
-) -> dict[str, forms.Field]:
+def normalize_form_field_basis(form_class: FormClass, form_fields: Any) -> dict[str, forms.Field]:
     """Normalize a mutation hook's returned field basis with typed diagnostics."""
     if form_fields is None:
         raise ConfigurationError(
@@ -289,15 +291,15 @@ def _related_model_of(field: forms.Field) -> Any:
     actually emitted.
     """
     try:
-        return getattr(field.queryset, "model", None)
+        # A deliberate probe of an attribute only relation fields carry: a scalar
+        # field's ``AttributeError`` projects ``None`` below, exactly like a hostile
+        # attribute that raises.
+        return getattr(getattr(field, "queryset"), "model", None)  # noqa: B009
     except BaseException:
         return None
 
 
-def _form_basis_content_identity(
-    form_class: type[forms.BaseForm],
-    form_fields: Any = None,
-) -> tuple:
+def _form_basis_content_identity(form_class: FormClass, form_fields: Any = None) -> tuple:
     """Return a hashable projection of the hook basis that determines input content.
 
     The per-shape build cache (``forms/sets.py::_cached_build_form_input``) keys
@@ -349,7 +351,7 @@ def _form_basis_content_identity(
 
 
 def resolve_effective_form_fields(
-    form_class: type[forms.BaseForm],
+    form_class: FormClass,
     *,
     fields: Any = None,
     exclude: Any = None,
@@ -394,7 +396,7 @@ def resolve_effective_form_fields(
 
 
 def form_input_type_name(
-    form_class: type[forms.BaseForm],
+    form_class: FormClass,
     operation_kind: str,
     effective_field_names: tuple[str, ...],
     *,
@@ -424,7 +426,7 @@ def form_input_type_name(
     )
 
 
-def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
+def _model_column_for(form_class: FormClass, name: str) -> Any:
     """Return the backing model column for a ``ModelForm`` field ``name``, or ``None``.
 
     A ``ModelForm`` exposes its model via ``_meta.model``; a field with a backing
@@ -486,8 +488,8 @@ def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
 
 def _model_less_relation_annotation(
     name: str,
-    field: forms.Field,
-    form_class: type[forms.BaseForm],
+    field: forms.ModelChoiceField,
+    form_class: FormClass,
 ) -> tuple[str, Any, type]:
     """Map a column-LESS relation form field to its ``(python_attr, annotation, related_model)``.
 
@@ -542,7 +544,7 @@ def _field_triple_and_spec(
     field: forms.Field,
     column: Any,
     type_name: str,
-    form_class: type[forms.BaseForm],
+    form_class: FormClass,
 ) -> tuple[str, Any, InputFieldSpec, bool]:
     """Resolve one form field to its ``(python_attr, base_annotation, InputFieldSpec, required)``.
 
@@ -598,9 +600,11 @@ def _field_triple_and_spec(
         if conversion.kind == FILE:
             python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
         elif conversion.kind in (RELATION_SINGLE, RELATION_MULTI):
+            # ``convert_form_field`` answers a relation kind only for a
+            # ``ModelChoiceField`` (the multi variant subclasses it).
             python_attr, annotation, related_model = _model_less_relation_annotation(
                 name,
-                field,
+                cast("forms.ModelChoiceField", field),
                 form_class,
             )
             graphql_name = graphql_camel_name(python_attr)
@@ -622,10 +626,7 @@ def _field_triple_and_spec(
     return python_attr, annotation, spec, field_required
 
 
-def _guard_input_attr_collisions(
-    form_class: type[forms.BaseForm],
-    field_specs: list[InputFieldSpec],
-) -> None:
+def _guard_input_attr_collisions(form_class: FormClass, field_specs: list[InputFieldSpec]) -> None:
     """Raise if two form fields collide on the generated input attr OR GraphQL name.
 
     Two distinct ways two form fields collapse to one generated input field, both
@@ -659,7 +660,7 @@ def _guard_input_attr_collisions(
 
 
 def build_form_input_class(
-    form_class: type[forms.BaseForm],
+    form_class: FormClass,
     *,
     operation_kind: str,
     fields: Any = None,
@@ -736,10 +737,7 @@ def build_form_input_class(
     return input_cls, field_specs
 
 
-def _required_form_field_names(
-    form_class: type[forms.BaseForm],
-    form_fields: Any = None,
-) -> set[str]:
+def _required_form_field_names(form_class: FormClass, form_fields: Any = None) -> set[str]:
     """Return the names of every declared form field that must appear in a create input.
 
     Uses the shared ``converter.form_field_required`` with each field's backing
@@ -756,7 +754,7 @@ def _required_form_field_names(
 
 
 def guard_create_required_fields(
-    form_class: type[forms.BaseForm],
+    form_class: FormClass,
     effective_field_names: Any,
     form_fields: Any = None,
 ) -> None:
@@ -796,7 +794,7 @@ def guard_create_required_fields(
 
 
 def guard_partial_required_column_less_fields(
-    form_class: type[forms.BaseForm],
+    form_class: FormClass,
     effective_field_names: Any,
     form_fields: Any = None,
 ) -> None:
@@ -841,7 +839,7 @@ def guard_partial_required_column_less_fields(
 
 
 def build_form_inputs(
-    form_class: type[forms.BaseForm],
+    form_class: FormClass,
     *,
     operation_kind: str = FORM,
     fields: Any = None,

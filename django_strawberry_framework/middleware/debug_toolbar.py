@@ -145,6 +145,10 @@ from strawberry.django.views import BaseView  # noqa: E402
 # The content-type sniff set for the HTML injection path (upstream verbatim).
 _HTML_TYPES = {"text/html", "application/xhtml+xml"}
 
+# The request attribute ``process_view`` stamps and ``_postprocess`` reads: whether the
+# resolved view is a Strawberry Django view (the GraphiQL page the bridge script joins).
+_IS_GRAPHIQL = "_is_graphiql"
+
 
 def _get_payload(
     request: HttpRequest,  # noqa: ARG001 - upstream-verbatim signature (spec-042 Decision 6)
@@ -231,7 +235,7 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
         no ``process_view`` hook to preserve.
         """
         view = getattr(view_func, "view_class", None)
-        request._is_graphiql = isinstance(view, type) and issubclass(view, BaseView)
+        setattr(request, _IS_GRAPHIQL, isinstance(view, type) and issubclass(view, BaseView))
 
     def _postprocess(
         self,
@@ -267,7 +271,7 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
 
         content_type = response.get("Content-Type", "").split(";")[0]
         is_html = content_type in _HTML_TYPES
-        is_graphiql = getattr(request, "_is_graphiql", False)
+        is_graphiql = getattr(request, _IS_GRAPHIQL, False)
 
         if is_html and is_graphiql and response.status_code == 200:
             template = render_to_string("django_strawberry_framework/debug_toolbar.html")

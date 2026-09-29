@@ -125,7 +125,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterable, Iterator
 from contextvars import ContextVar, Token
-from typing import Any, NamedTuple
+from typing import Any, Generic, NamedTuple, TypeVar, cast
 from weakref import ref
 
 from strawberry.extensions.base_extension import SchemaExtension
@@ -200,6 +200,11 @@ class OperationState:
     def resumed_bindings(self) -> tuple[tuple[ContextVar[Any], Any], ...]:
         """The variables an extension asked the runner to bind again on resume."""
         return tuple(self._resumed_bindings)
+
+
+# The state type one operation-bound extension builds and reads back: the
+# ``OperationState`` subclass its ``_new_operation_state`` returns.
+_StateT = TypeVar("_StateT", bound=OperationState)
 
 
 class _RunnerScope(NamedTuple):
@@ -382,7 +387,7 @@ def _carrier(extension: Any) -> ContextVar[Any]:
     return carrier
 
 
-def _bound_state(extension: Any) -> OperationState | None:
+def _bound_state(extension: _OperationBoundExtension[_StateT]) -> _StateT | None:
     """The state bound to ``extension`` here, or ``None`` outside that binding.
 
     Two conditions, one answer. The lease is closed when the scope that bound it
@@ -444,7 +449,7 @@ def _binds_operation_state(execution_context: Any) -> bool:
     return issubclass(type(schema), DjangoSchema)
 
 
-class _OperationBoundExtension(SchemaExtension):
+class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
     """A ``SchemaExtension`` whose per-operation state is bound, not stored on it.
 
     Subclasses keep their configuration wherever their own authority holds it
@@ -526,11 +531,12 @@ class _OperationBoundExtension(SchemaExtension):
             None if value is None else self._new_operation_state(value)
         )
 
-    def _new_operation_state(self, execution_context: Any) -> OperationState:
+    def _new_operation_state(self, execution_context: Any) -> _StateT:
         """Build the state one operation on this extension is answered from."""
-        return OperationState(execution_context)
+        # A subclass that keeps this default declares ``OperationState`` as its state type.
+        return cast("_StateT", OperationState(execution_context))
 
-    def _operation_state(self) -> OperationState | None:
+    def _operation_state(self) -> _StateT | None:
         """The state this extension may write this operation's scratch on.
 
         ``None`` outside an operation, and ``None`` again in a task that copied

@@ -67,7 +67,7 @@ import functools
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, NoReturn
 
 import strawberry
 from asgiref.sync import AsyncToSync, async_to_sync, sync_to_async
@@ -633,7 +633,7 @@ class _RefusedConfiguration(SchemaExtension):
         self.execution_context.pre_execution_errors = [self._refusal()]
         yield
 
-    def on_execute(self) -> None:
+    def on_execute(self) -> NoReturn:
         """Refuse to begin executing, for a path that reached execution regardless."""
         raise self._refusal()
 

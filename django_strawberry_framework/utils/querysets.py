@@ -86,7 +86,7 @@ import uuid
 import zoneinfo
 from collections.abc import AsyncIterable, Iterable
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from asgiref.sync import sync_to_async
 from django.db import models, router
@@ -120,6 +120,11 @@ from .write_transaction import (
     pin_write_queryset,
     pipeline_scoped_queryset,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from ..filters.sets import FilterSet
+    from ..orders.sets import OrderSet
+    from ..types.base import DjangoType
 
 
 class SyncMisuseError(ConfigurationError, RuntimeError):
@@ -235,7 +240,7 @@ def _dispose_sync_awaitable(value: Any) -> None:
         value.cancel()
 
 
-def model_for(type_cls: type) -> type[models.Model]:
+def model_for(type_cls: type[DjangoType]) -> type[models.Model]:
     """Return the Django model registered to a ``DjangoType``.
 
     Centralizes the ``type_cls.__django_strawberry_definition__.model`` lookup
@@ -313,7 +318,7 @@ def normalize_query_source(source: Any) -> tuple[Any, bool]:
     return source, isinstance(source, models.QuerySet)
 
 
-def coerce_field_value_or_none(field: models.Field, value: Any) -> Any:
+def coerce_field_value_or_none(field: models.Field | ForeignObjectRel | None, value: Any) -> Any:
     """Coerce ``value`` through ``field``'s ``to_python`` + ``run_validators``; ``None`` if invalid.
 
     The single "raw literal -> Django field value, or nothing" safety wrapper
@@ -338,7 +343,8 @@ def coerce_field_value_or_none(field: models.Field, value: Any) -> Any:
     crash. WHICH field to coerce against is a genuine per-caller decision (a
     Relay type's resolved id field, a related model's pk, an arbitrary filtered
     column) and stays at each call site; only the coercion mechanics are
-    single-sourced here.
+    single-sourced here. A ``ForeignObjectRel`` or ``None`` field has no column
+    to coerce against, so it identifies no row either.
     """
     if not isinstance(field, models.Field):
         return None
@@ -1599,7 +1605,8 @@ def _normalized_complex(value: Any) -> complex:
 
 def _normalized_decimal(value: Any) -> Decimal:
     """Return an exact ``Decimal`` rebuilt from a ``Decimal`` subclass's coefficient tuple."""
-    return Decimal(Decimal.as_tuple(value))
+    # mypy: typeshed's Decimal() omits the DecimalTuple special-value exponents it accepts
+    return Decimal(Decimal.as_tuple(value))  # type: ignore[arg-type]
 
 
 def _normalized_date(value: Any) -> datetime.date:
@@ -1657,7 +1664,8 @@ def _normalized_timedelta(value: Any) -> datetime.timedelta:
 
 def _normalized_uuid(value: Any) -> uuid.UUID:
     """Return an exact ``uuid.UUID`` rebuilt from a UUID subclass's integer slot."""
-    return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))
+    # mypy: typeshed declares UUID.int an instance attribute, not its __slots__ descriptor
+    return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))  # type: ignore[misc,attr-defined]
 
 
 # Plain-data bases a bound value may descend from, each paired with the primitive that
@@ -3088,10 +3096,14 @@ def _validate_post_orderset_result(
         )
         messages["routing"] = f"{method_name} changed database routing intent; {defect[1]}."
         raise ConfigurationError(_defect_message(messages, defect, method_name))
-    return sealed
+    # ``_seal_or_defect`` returns a queryset exactly when it returns no defect.
+    return cast("models.QuerySet", sealed)
 
 
-def require_orderset_class(target_type: type, orderset_class: type | None) -> type:
+def require_orderset_class(
+    target_type: type,
+    orderset_class: type[OrderSet] | None,
+) -> type[OrderSet]:
     """Return the field's captured ``OrderSet``, or reject an ordering call without one.
 
     Reachable only through a direct call that supplies ``order_by`` to a field
@@ -3107,7 +3119,7 @@ def require_orderset_class(target_type: type, orderset_class: type | None) -> ty
 
 def _apply_sidecar_sync(
     target_type: type,
-    set_class: type,
+    set_class: type[FilterSet] | type[OrderSet],
     queryset: models.QuerySet,
     input_value: Any,
     info: Any,
@@ -3150,7 +3162,7 @@ def _apply_sidecar_sync(
 
 async def _apply_sidecar_async(
     target_type: type,
-    set_class: type,
+    set_class: type[FilterSet] | type[OrderSet],
     queryset: models.QuerySet,
     input_value: Any,
     info: Any,
@@ -3189,7 +3201,7 @@ async def _apply_sidecar_async(
 
 def apply_orderset_sync(
     target_type: type,
-    orderset_class: type | None,
+    orderset_class: type[OrderSet] | None,
     queryset: models.QuerySet,
     order_by: Any,
     info: Any,
@@ -3207,7 +3219,7 @@ def apply_orderset_sync(
 
 async def apply_orderset_async(
     target_type: type,
-    orderset_class: type | None,
+    orderset_class: type[OrderSet] | None,
     queryset: models.QuerySet,
     order_by: Any,
     info: Any,
@@ -3228,7 +3240,7 @@ async def apply_orderset_async(
 
 def apply_filterset_sync(
     target_type: type,
-    filterset_class: type,
+    filterset_class: type[FilterSet],
     queryset: models.QuerySet,
     filter_input: Any,
     info: Any,
@@ -3253,7 +3265,7 @@ def apply_filterset_sync(
 
 async def apply_filterset_async(
     target_type: type,
-    filterset_class: type,
+    filterset_class: type[FilterSet],
     queryset: models.QuerySet,
     filter_input: Any,
     info: Any,
@@ -3360,7 +3372,7 @@ def _combined_lost_property(query: Any, model: type[models.Model], *, outer: boo
 def _pk_membership_query_or_defect(
     query: Any,
     model: type[models.Model],
-) -> tuple[Any | None, tuple[str, str] | None]:
+) -> tuple[sql.Query | None, tuple[str, str] | None]:
     """Rewrite a combined ``query`` as ``<model>.filter(pk__in=<combined>.values("pk"))``.
 
     Returns ``(rewritten, None)``: a fresh single-table ``sql.Query`` over
@@ -3375,7 +3387,7 @@ def _pk_membership_query_or_defect(
     lost = _combined_lost_property(query, model, outer=True)
     if lost is not None:
         return None, ("combined", f"{query.combinator}: {lost}")
-    combined = models.QuerySet(model=model, query=query)
+    combined: models.QuerySet[models.Model] = models.QuerySet(model=model, query=query)
     rewritten = models.QuerySet(model=model).filter(pk__in=combined.order_by().values("pk"))
     if query.order_by:
         rewritten = rewritten.order_by(*query.order_by)
@@ -3542,7 +3554,9 @@ def _seal_or_defect(
     qmodel = state.get("model")
     db = state.get("_db")
     iterable = state.get("_iterable_class")
-    concrete = model._meta.concrete_model
+    # A model class always carries its concrete model (``ModelBase`` sets it); django-stubs
+    # types the attribute by ``Options``' pre-class ``None`` default.
+    concrete = cast("type[models.Model]", model._meta.concrete_model)
     cls_name = _safe_type_name(candidate)
     if _concrete_or_none(qmodel) is not concrete:
         return None, ("table", _safe_class_name(qmodel))
@@ -3691,9 +3705,11 @@ def _seal_or_defect(
     # ``.values()`` combinator a model-row surface refuses is never turned into
     # model rows. A shape whose rows that rewrite would change fails closed.
     if policy.rewrite_combined and rebuilt_query.combinator:
-        rebuilt_query, combined_defect = _pk_membership_query_or_defect(rebuilt_query, qmodel)
+        rewritten, combined_defect = _pk_membership_query_or_defect(rebuilt_query, qmodel)
         if combined_defect is not None:
             return None, combined_defect
+        # The rewrite returns a query exactly when it returns no defect.
+        rebuilt_query = cast("sql.Query", rewritten)
         iterable = ModelIterable
         fields = None
     if policy.require_shared_alias:
@@ -3711,7 +3727,7 @@ def _seal_or_defect(
     # the sealed queryset holding a mutable dict the untrusted object can still write to
     # (a routing-control surface when a custom router consults hints on an unrouted read).
     hints = state.get("_hints")
-    sealed = models.QuerySet(
+    sealed: models.QuerySet[models.Model] = models.QuerySet(
         model=qmodel,
         query=rebuilt_query,
         using=using,
@@ -3723,10 +3739,13 @@ def _seal_or_defect(
     # a fresh fetch is always correct, whereas copying an untrusted cache could pre-seed
     # synthetic related instances that bypass the related type's own visibility hook).
     sealed._iterable_class = iterable
-    sealed._fields = fields
-    sealed._prefetch_related_lookups = sealed_prefetch
-    sealed._sticky_filter = state.get("_sticky_filter") is True
-    sealed._for_write = state.get("_for_write") is True
+    sealed._fields = fields  # type: ignore[attr-defined]  # django-stubs omits QuerySet._fields
+    # mypy: django-stubs omits QuerySet._prefetch_related_lookups
+    sealed._prefetch_related_lookups = sealed_prefetch  # type: ignore[attr-defined]
+    # mypy: django-stubs omits QuerySet._sticky_filter
+    sealed._sticky_filter = state.get("_sticky_filter") is True  # type: ignore[attr-defined]
+    # mypy: django-stubs omits QuerySet._for_write
+    sealed._for_write = state.get("_for_write") is True  # type: ignore[attr-defined]
     if policy.carry_result_cache:
         # The rows the source already fetched travel onto the rebuild, so a surface
         # that only windows them re-queries nothing. The list object is taken as it
@@ -3753,7 +3772,7 @@ def _row_source_model(state: dict[str, Any], origin: str) -> type[models.Model]:
     type object whatever ``model`` is - which also makes the following
     ``issubclass`` call safe to reach.
     """
-    model = state.get("model")
+    model: Any = state.get("model")
     if not issubclass(type(model), type) or not issubclass(model, models.Model):
         raise ConfigurationError(
             f"{_sentence_start(origin)} a QuerySet subclass whose model is "
@@ -3964,10 +3983,11 @@ def _coerced_manager_queryset(manager: models.Manager) -> models.QuerySet:
             f"or other non-queryset cannot enter the visibility boundary and must not "
             f"be treated as the deliberate plain-iterable bypass.",
         )
-    if queryset._db != explicit:
+    if queryset._db != explicit:  # type: ignore[attr-defined]  # django-stubs omits QuerySet._db
         raise ConfigurationError(
             f"A {_safe_type_name(manager)} pinned to alias {explicit!r} produced a "
-            f"queryset routed to {queryset._db!r} on .all(); a Manager coercion must "
+            # mypy: django-stubs omits QuerySet._db
+            f"queryset routed to {queryset._db!r} on .all(); a Manager coercion must "  # type: ignore[attr-defined]
             f"preserve the manager's explicit routing exactly (an unrouted manager "
             f"must stay unrouted until the resolution's required alias pins it), so a "
             f"visibility source or hook cannot silently change databases.",
@@ -4246,11 +4266,12 @@ def _normalized_visibility_result(
     sealed, defect = _seal_or_defect(result, model, required_alias, policy)
     if defect is not None:
         raise _visibility_result_error(type_cls, model, required_alias, defect, render_error)
-    return sealed
+    # ``_seal_or_defect`` returns a queryset exactly when it returns no defect.
+    return cast("models.QuerySet", sealed)
 
 
 def apply_type_visibility_sync(
-    type_cls: type,
+    type_cls: type[DjangoType],
     queryset: models.QuerySet,
     info: Any,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
@@ -4524,7 +4545,7 @@ def visible_related_objects(
 
 
 async def apply_type_visibility_async(
-    type_cls: type,
+    type_cls: type[DjangoType],
     queryset: models.QuerySet,
     info: Any,
     *,

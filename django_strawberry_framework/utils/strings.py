@@ -18,8 +18,23 @@ Every name transform the package applies at the GraphQL/Django boundary:
 
 import functools
 from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import Protocol
+
+    class _CachedNameTransform(Protocol):
+        """A name transform that carries its ``lru_cache``'s controls as attributes."""
+
+        cache_clear: Callable[[], None]
+        cache_info: Callable[[], functools._CacheInfo]
+        cache_parameters: Callable[[], functools._CacheParameters]
+
+        def __call__(self, name: str) -> str:
+            """Transform ``name``."""
+
 
 __all__ = (
     "flatten_lookup_path",
@@ -89,9 +104,12 @@ def _snake_case_cached(name: str) -> str:
     return "".join(out)
 
 
-@functools.wraps(
-    _snake_case_cached,
-    assigned=("__module__", "__annotations__"),
+@cast(
+    "Callable[[Callable[[str], str]], _CachedNameTransform]",
+    functools.wraps(
+        _snake_case_cached,
+        assigned=("__module__", "__annotations__"),
+    ),
 )
 def snake_case(name: str) -> str:
     """Convert a ``camelCase`` / ``PascalCase`` GraphQL name to ``snake_case``.

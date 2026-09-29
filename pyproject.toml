@@ -78,6 +78,13 @@ dev = [
     # rather than reviewed by eye (spec-049 Decision 6).
     "pyyaml>=6.0.2",
     "ruff>=0.15.0",
+    # The package ships ``py.typed``, so its annotations are a public contract
+    # that downstream type checkers consume. mypy (config in ``[tool.mypy]``)
+    # checks them, with the Django and DRF stubs so framework types are real
+    # rather than ``Any``.
+    "django-stubs>=6.0.9",
+    "djangorestframework-stubs>=3.18.0",
+    "mypy>=2.3.1",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
 # ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the
@@ -216,6 +223,38 @@ multiline-quotes = "double"
 # The formatter wraps code at line-length (99); E501 only flags lines past 110
 # -- the grace covers long strings/comments the formatter cannot break.
 max-line-length = 110
+
+# mypy checks the shipped package (``py.typed`` makes its annotations public).
+# Default mode plus the flags that keep suppressions honest: an unneeded
+# ``# type: ignore`` or redundant ``cast`` is itself an error. The Django plugin
+# loads the fakeshop test settings, exactly as pytest does. The soft
+# dependencies without type information are silenced by name only.
+[tool.mypy]
+python_version = "3.10"
+files = ["django_strawberry_framework"]
+mypy_path = "examples/fakeshop"
+plugins = [
+    "mypy_django_plugin.main",
+    "mypy_drf_plugin.main",
+    "strawberry.ext.mypy_plugin",
+]
+check_untyped_defs = true
+extra_checks = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.django-stubs]
+django_settings_module = "config.test_settings"
+
+[[tool.mypy.overrides]]
+module = [
+    "channels.*",
+    "daphne.*",
+    "debug_toolbar.*",
+    "django_filters.*",
+]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

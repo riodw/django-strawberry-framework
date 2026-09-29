@@ -578,5 +578,6 @@ def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> 
         return True
     stream.close()
     request._stream = BytesIO(b"".join(chunks))
-    request._read_started = False
+    # mypy: django-stubs omits HttpRequest._read_started, which HttpRequest.read reads
+    request._read_started = False  # type: ignore[attr-defined]
     return False

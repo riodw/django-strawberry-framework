@@ -24,7 +24,8 @@ the same dig from plan-time graphql-core ``info`` and resolve-time Strawberry
 
 import functools
 import inspect
-from typing import Any, get_args, get_origin
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeGuard, get_args, get_origin
 
 __all__ = (
     "MAX_TYPE_WRAPPER_DEPTH",
@@ -113,7 +114,7 @@ def _callable_inspection_target(value: Any) -> Any:
     )
 
 
-def is_async_callable(value: Any) -> bool:
+def is_async_callable(value: Any) -> TypeGuard[Callable[..., Coroutine[Any, Any, Any]]]:
     """Return whether calling ``value`` yields a coroutine.
 
     ``inspect.iscoroutinefunction`` only reports on the value handed to it

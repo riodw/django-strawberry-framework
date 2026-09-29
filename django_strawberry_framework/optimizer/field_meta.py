@@ -49,11 +49,16 @@ class _DjangoFieldLike(Protocol):
     (``many_to_many``, ``attname``, ``target_field``, ``field``, ...)
     are read defensively with ``getattr`` defaults so the four documented
     input shapes (forward field, reverse FK, M2M, O2O) all build cleanly
-    without per-shape branching.
+    without per-shape branching. Both members are read-only, which is what
+    lets a reverse-relation descriptor (whose ``name`` is a property) satisfy
+    the contract beside a forward ``Field``.
     """
 
-    name: str
-    is_relation: bool
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def is_relation(self) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)

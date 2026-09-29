@@ -33,9 +33,10 @@ cycle (same contract as ``utils/connections.py``).
 from __future__ import annotations
 
 import sys
+from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any, ClassVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 import strawberry
 from django.db import models as django_models
@@ -50,6 +51,11 @@ from .imports import import_attr_if_importable
 # path.
 from .strings import flatten_lookup_path
 from .strings import graphql_camel_name as graphql_camel_name
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Sequence
+
+    from ..sets_mixins import ClassBasedTypeNameMixin
 
 
 @dataclass(frozen=True)
@@ -67,7 +73,7 @@ class GeneratedInputFieldSpec:
     django_source_path: str
 
 
-def set_input_type_name(set_class: type) -> str:
+def set_input_type_name(set_class: type[ClassBasedTypeNameMixin]) -> str:
     """Return the canonical Strawberry input-class name for a set-family class.
 
     Thin delegate to ``ClassBasedTypeNameMixin.type_name_for()``: every
@@ -205,7 +211,8 @@ def emit_set_input_field_triples(
                 # ``Related*(None, ...)`` placeholder - skip silently.
                 continue
             target_name = input_type_name_for(target)
-            inner = Annotated[target_name, strawberry.lazy(module_path)]
+            # mypy: runtime-built annotation
+            inner = Annotated[target_name, strawberry.lazy(module_path)]  # type: ignore[valid-type]
             annotation: Any = inner | None
             django_source_path = related_source_path_of(top_name, entry)
         else:
@@ -1114,8 +1121,7 @@ def normalize_field_name_sequence(
             f"[{', '.join(_safe_arg_repr(name) for name in non_strings)}].",
         )
     names = tuple(str.__str__(name) if type(name) is not str else name for name in names)
-    seen: set[str] = set()
-    duplicates = sorted({name for name in names if name in seen or seen.add(name)})
+    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
     if duplicates:
         raise ConfigurationError(
             f"{flavor} Meta.{label} declares duplicate field name(s): "
@@ -1240,7 +1246,7 @@ def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
 
 def build_strawberry_input_class(
     name: str,
-    field_specs: list[tuple[str, Any, dict[str, Any] | None]],
+    field_specs: Sequence[tuple[str, Any, dict[str, Any] | None]],
     *,
     empty_message: str | None = None,
 ) -> type:

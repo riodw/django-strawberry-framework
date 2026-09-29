@@ -123,7 +123,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import FieldDoesNotExist
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -132,6 +132,7 @@ from django.db import IntegrityError, transaction
 from django.db.models.signals import post_save, pre_save
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
+from rest_framework.settings import api_settings
 
 from ..exceptions import ConfigurationError, _safe_type_name
 from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
@@ -186,6 +187,12 @@ from .serializer_converter import (
     resolve_serializer_field,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+    from django.db.models import Manager, QuerySet
+
+    from .sets import SerializerMutation
+
 # The omission sentinel the reserved serializer-kwarg checks use: it keeps an
 # explicit ``data=None`` / ``instance=None`` return distinguishable from a hook
 # that simply omitted the key (a ``pop(..., None)`` default would conflate the
@@ -204,7 +211,7 @@ _SERIALIZER_ASYNC_RECOURSE = sync_pipeline_recourse("serializer mutation")
 # default ``"non_field_errors"``). Read once from DRF's settings so the recursive
 # flattener normalizes WHATEVER key DRF is configured to use (not a hard-coded
 # literal) to the package's ``"__all__"`` sentinel at every level.
-_DRF_NON_FIELD_KEY: str = serializers.api_settings.NON_FIELD_ERRORS_KEY
+_DRF_NON_FIELD_KEY: str = api_settings.NON_FIELD_ERRORS_KEY
 
 
 def _decode_relation_single(
@@ -269,7 +276,7 @@ def _decode_relation_multi(
 
 
 def _decode_serializer_data(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     data: Any,
     info: Any,
 ) -> tuple[dict[str, Any], FieldError | None]:
@@ -637,7 +644,11 @@ def _upload_metadata(item: Any) -> UploadMetadata:
     )
 
 
-def _hook_mapping(mutation_cls: type, hook_name: str, value: Any) -> dict[str, Any]:
+def _hook_mapping(
+    mutation_cls: type[SerializerMutation],
+    hook_name: str,
+    value: Any,
+) -> dict[str, Any]:
     """Coerce one mapping-valued hook result or raise a typed configuration error.
 
     The three serializer hooks that return keyword/data mappings are consumer extension points.
@@ -837,7 +848,7 @@ def _frozen_hook_view(value: Any) -> Any:
 
 
 def _injected_serializer_data(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     info: Any,
     *,
     frozen_provided: Any,
@@ -879,7 +890,7 @@ def _injected_serializer_data(
 
 
 def _merged_serializer_kwargs(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     info: Any,
     *,
     final_data: dict[str, Any],
@@ -1016,7 +1027,10 @@ def _relation_model_of(field: Any) -> Any:
     return getattr(getattr(related, "queryset", None), "model", None)
 
 
-def _assert_schema_runtime_agreement(mutation_cls: type, serializer: Any) -> None:
+def _assert_schema_runtime_agreement(
+    mutation_cls: type[SerializerMutation],
+    serializer: Any,
+) -> None:
     """Raise ``ConfigurationError`` if runtime disagrees with the schema write surface.
 
     The schema-time field map (the ``get_serializer_for_schema()`` hook) drives the generated
@@ -1048,7 +1062,7 @@ def _assert_schema_runtime_agreement(mutation_cls: type, serializer: Any) -> Non
 
 
 def _assert_runtime_write_source_ownership(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     serializer: Any,
     data: Mapping[str, Any],
     specs: list,
@@ -1096,7 +1110,11 @@ def _assert_runtime_write_source_ownership(
         )
 
 
-def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> None:
+def _assert_field_agreement(
+    mutation_cls: type[SerializerMutation],
+    serializer: Any,
+    spec: Any,
+) -> None:
     """Assert ONE schema-time field spec agrees with the runtime serializer.
 
     The per-field body of ``_assert_schema_runtime_agreement`` (which walks the one
@@ -1237,7 +1255,11 @@ def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> N
         )
 
 
-def _assert_relation_agreement(mutation_cls: type, spec: Any, runtime: Any) -> None:
+def _assert_relation_agreement(
+    mutation_cls: type[SerializerMutation],
+    spec: Any,
+    runtime: Any,
+) -> None:
     """Confirm a runtime relation field matches the schema-time relation spec (helper).
 
     A ``RELATION_SINGLE`` spec requires a runtime ``PrimaryKeyRelatedField``; a
@@ -1271,7 +1293,11 @@ def _assert_relation_agreement(mutation_cls: type, spec: Any, runtime: Any) -> N
         )
 
 
-def _assert_nested_agreement(mutation_cls: type, spec: Any, runtime: Any) -> None:
+def _assert_nested_agreement(
+    mutation_cls: type[SerializerMutation],
+    spec: Any,
+    runtime: Any,
+) -> None:
     """Confirm a runtime nested serializer field matches the schema-time nested spec.
 
     A ``NESTED_MULTI`` spec requires a runtime ``ListSerializer`` (a ``many=True`` nested
@@ -1302,7 +1328,7 @@ def _assert_nested_agreement(mutation_cls: type, spec: Any, runtime: Any) -> Non
 
 
 def _scope_relation_querysets_to_visibility(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     serializer: Any,
     info: Any,
 ) -> None:
@@ -1436,8 +1462,11 @@ def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> Non
         )
         # ``.all()`` normalizes a Manager to a QuerySet (preserving an explicit ``.using``);
         # the pin fails closed on a cross-alias author queryset BEFORE any validation runs.
+        # The schema/runtime agreement guard already rejected a relation whose queryset
+        # names no model, so the author queryset is set here.
+        author_queryset = relation.queryset  # type: ignore[arg-type]  # drf-stubs: Manager.__get__
         scoped = pin_write_queryset(
-            relation.queryset.all(),
+            cast("QuerySet[Any] | Manager[Any]", author_queryset).all(),
             pipeline.alias,
             owner=(f"{type(serializer).__name__}.{spec.target_name} relation queryset"),
         )
@@ -1457,11 +1486,11 @@ def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> Non
             )
         if pipeline.lock:
             scoped = base_locked_queryset(spec.related_model, pipeline.alias, scoped)
-        relation.queryset = scoped
+        relation.queryset = scoped  # type: ignore[arg-type]  # drf-stubs: Manager.__get__
 
 
 def _assert_save_kwargs_no_shadow(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     serializer: Any,
     save_kwargs: dict[str, Any],
 ) -> None:
@@ -1487,7 +1516,10 @@ def _assert_save_kwargs_no_shadow(
         )
 
 
-def _assert_save_kwargs_not_model_fields(mutation_cls: type, save_kwargs: dict[str, Any]) -> None:
+def _assert_save_kwargs_not_model_fields(
+    mutation_cls: type[SerializerMutation],
+    save_kwargs: dict[str, Any],
+) -> None:
     """Raise if a ``get_serializer_save_kwargs`` key names ANY model field.
 
     DRF merges save kwargs into the write with no validation and no visibility check, so a
@@ -1502,7 +1534,8 @@ def _assert_save_kwargs_not_model_fields(mutation_cls: type, save_kwargs: dict[s
     """
     if not save_kwargs:
         return
-    model = mutation_cls._mutation_meta.model
+    # A model-backed snapshot always carries its validated model.
+    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
     field_names: set[str] = set()
     for field in model._meta.get_fields():
         field_names.add(field.name)
@@ -1520,7 +1553,7 @@ def _assert_save_kwargs_not_model_fields(mutation_cls: type, save_kwargs: dict[s
         )
 
 
-def _write_surface_specs(mutation_cls: type) -> list:
+def _write_surface_specs(mutation_cls: type[SerializerMutation]) -> list:
     """Return the top-level write-surface specs: GraphQL input fields + ``Meta.injected_fields``.
 
     The one list every top-level per-field discipline walks (schema/runtime agreement,
@@ -1559,7 +1592,7 @@ class _RelationIntentLedger:
         self.counters[path] = index + 1
         return entries[index]
 
-    def assert_fully_consumed(self, mutation_cls: type) -> None:
+    def assert_fully_consumed(self, mutation_cls: type[SerializerMutation]) -> None:
         """Every recorded relation resolution must have been consumed by the intent walk.
 
         A record left unconsumed means a relation field validated (resolving a
@@ -1621,7 +1654,10 @@ def _relation_identity_intact(value: Any, snapshot: tuple) -> bool:
     return getattr(value, "pk", None) == recorded_pk and getattr(state, "db", None) == recorded_db
 
 
-def _instrument_relation_intent(mutation_cls: type, serializer: Any) -> _RelationIntentLedger:
+def _instrument_relation_intent(
+    mutation_cls: type[SerializerMutation],
+    serializer: Any,
+) -> _RelationIntentLedger:
     """Wrap every (top-level and nested) relation field's ``run_validation`` to record its return.
 
     Installed AFTER the queryset scoping (the recorded objects are the visibility-scoped,
@@ -1680,7 +1716,7 @@ def _record_field_intent(field: Any, ledger: _RelationIntentLedger, path: str) -
 
 
 def _assert_relation_intent(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     serializer: Any,
     ledger: _RelationIntentLedger,
 ) -> dict[str, Any]:
@@ -1726,7 +1762,7 @@ def _assert_relation_intent(
 
 
 def _assert_intent_specs(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     specs: list,
     serializer: Any,
     validated_data: Any,
@@ -1825,7 +1861,7 @@ def _assert_intent_specs(
 
 
 def _m2m_membership_snapshot(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     instance: Any,
     alias: str,
 ) -> dict[str, frozenset]:
@@ -1840,7 +1876,8 @@ def _m2m_membership_snapshot(
     """
     if instance is None:
         return {}
-    model = mutation_cls._mutation_meta.model
+    # A model-backed snapshot always carries its validated model.
+    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
     snapshot: dict[str, frozenset] = {}
     for spec, model_field, source in _attestable_m2m_fields(mutation_cls, model):
         del spec
@@ -1851,7 +1888,10 @@ def _m2m_membership_snapshot(
     return snapshot
 
 
-def _attestable_m2m_fields(mutation_cls: type, model: type) -> list[tuple[Any, Any, str]]:
+def _attestable_m2m_fields(
+    mutation_cls: type[SerializerMutation],
+    model: type[models.Model],
+) -> list[tuple[Any, Any, str]]:
     """Yield ``(spec, model_field, source)`` for each top-level direct-M2M write-surface spec."""
     entries: list[tuple[Any, Any, str]] = []
     for spec in _write_surface_specs(mutation_cls):
@@ -1869,7 +1909,7 @@ def _attestable_m2m_fields(mutation_cls: type, model: type) -> list[tuple[Any, A
 
 
 def _attest_saved_relations(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     serializer: Any,
     saved: Any,
     *,
@@ -1899,7 +1939,8 @@ def _attest_saved_relations(
     A divergence is a loud ``ConfigurationError`` (a configuration/trust failure of the
     consumer's custom write code), never a plausible success payload.
     """
-    model = mutation_cls._mutation_meta.model
+    # A model-backed snapshot always carries its validated model.
+    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
     name = type(serializer).__name__
 
     fk_checks: list[tuple[str, Any, Any]] = []
@@ -1974,7 +2015,7 @@ def _attest_saved_relations(
 
 @contextmanager
 def _write_witness(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     model: type,
     alias: str,
 ) -> Iterator[list[tuple[Any, Any, bool, str | None]]]:
@@ -2044,7 +2085,7 @@ def _write_witness(
 
 
 def _checked_saved_result(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     serializer: Any,
     saved: Any,
     authorized_pk: Any,
@@ -2085,7 +2126,8 @@ def _checked_saved_result(
       A custom ``create()`` that persists via signal-less bulk paths fails closed here;
       persist the returned row via ``instance.save()``.
     """
-    model = mutation_cls._mutation_meta.model
+    # A model-backed snapshot always carries its validated model.
+    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
     name = type(serializer).__name__
     if not isinstance(saved, model):
         raise ConfigurationError(
@@ -2147,7 +2189,7 @@ def _checked_saved_result(
 
 
 def _serializer_write_step(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     info: Any,
     instance: Any,
     provided_data: dict[str, Any],
@@ -2199,7 +2241,9 @@ def _serializer_write_step(
     # so a create result can be PROVEN inserted. The statement-level cross-alias net
     # (signal-less paths included) is the pipeline skeleton's ``pipeline_alias_guard``,
     # which spans this step and every other consumer-reachable phase.
-    witness = _write_witness(mutation_cls, mutation_cls._mutation_meta.model, alias)
+    # A model-backed snapshot always carries its validated model.
+    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
+    witness = _write_witness(mutation_cls, model, alias)
     with witness as written:
         return _guarded_serializer_write(
             mutation_cls,
@@ -2216,7 +2260,7 @@ def _serializer_write_step(
 
 
 def _guarded_serializer_write(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     info: Any,
     instance: Any,
     provided_data: dict[str, Any],
@@ -2376,7 +2420,7 @@ def _guarded_serializer_write(
 
 
 def _serializer_decode_step(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     data: Any,
     info: Any,
 ) -> dict[str, Any] | list[FieldError]:
@@ -2397,7 +2441,7 @@ def _serializer_decode_step(
 
 
 def _run_serializer_pipeline_sync(
-    mutation_cls: type,
+    mutation_cls: type[SerializerMutation],
     info: Any,
     data: Any,
     id: Any,  # noqa: A002

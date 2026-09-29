@@ -47,7 +47,7 @@ import asyncio
 import contextlib
 import enum
 from collections.abc import AsyncIterator, MutableMapping
-from typing import Any
+from typing import Any, cast
 
 from django.http import HttpRequest
 
@@ -218,7 +218,7 @@ def _safe_transport_label(transport: Any) -> str:
     ``_safe_type_name`` so the message stays actionable.
     """
     try:
-        raw = transport.value  # type: ignore[union-attr]
+        raw = transport.value
     except BaseException:
         return _safe_type_name(transport)
     try:
@@ -289,7 +289,8 @@ def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[st
             f"same-scope session mutations, but got a {_safe_type_name(scope)}; real ASGI "
             "scopes are dictionaries. Do not route auth through an immutable scope.",
         )
-    return scope
+    # ``is_mutable`` is the ``isinstance(scope, MutableMapping)`` verdict checked above.
+    return cast("MutableMapping[str, Any]", scope)
 
 
 @contextlib.asynccontextmanager

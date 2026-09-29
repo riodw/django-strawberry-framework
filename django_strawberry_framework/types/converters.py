@@ -65,8 +65,9 @@ import decimal
 import keyword
 import re
 import uuid
+from collections.abc import Iterable
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import strawberry
 from django.db import models
@@ -77,6 +78,9 @@ from ..registry import registry
 from ..scalars import BigInt
 from ..utils.imports import import_attr_if_importable
 from ..utils.strings import pascal_case
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.contrib.postgres.fields import ArrayField, HStoreField
 
 
 def _safe_file_attr(file_file: Any, attr: str) -> Any:
@@ -136,7 +140,8 @@ class DjangoFileType:
     @strawberry.field
     def name(self) -> str:
         """The stored file name. Non-null and read directly (no storage guard)."""
-        return self.name
+        # ``self`` is the bound, non-empty ``FieldFile``, whose name is a stored string.
+        return cast("str", self.name)
 
     @strawberry.field
     def size(self) -> int | None:
@@ -292,11 +297,11 @@ _GRAPHQL_RESERVED_ENUM_VALUES = frozenset(
 # postgres driver), and a loud ``AttributeError`` if that module is importable but
 # somehow missing the expected class -- a broken environment that should fail rather
 # than silently degrade.
-_ARRAY_FIELD_CLS: type[models.Field] | None = import_attr_if_importable(
+_ARRAY_FIELD_CLS: "type[ArrayField] | None" = import_attr_if_importable(
     "django.contrib.postgres.fields",
     "ArrayField",
 )
-_HSTORE_FIELD_CLS: type[models.Field] | None = import_attr_if_importable(
+_HSTORE_FIELD_CLS: "type[HStoreField] | None" = import_attr_if_importable(
     "django.contrib.postgres.fields",
     "HStoreField",
 )
@@ -453,7 +458,7 @@ def convert_scalar(
                 f"on base_field for element-level enum, or use FilterSet.",
             )
         inner = convert_scalar(field.base_field, type_name)
-        result = list[inner]
+        result = list[inner]  # type: ignore[valid-type]  # runtime-built annotation
         return result | None if effective_null else result
     # Sentinel-guarded ``HStoreField`` dispatch mirrors the ArrayField
     # posture: outer-``choices`` rejection (HStore stores
@@ -467,7 +472,7 @@ def convert_scalar(
                 f"GraphQL boundary. Drop the choices declaration or model the constrained "
                 f"shape with a separate field.",
             )
-        py_type = strawberry.scalars.JSON
+        py_type: Any = strawberry.scalars.JSON
         return py_type | None if effective_null else py_type
     # Shared field-class -> scalar lookup (also used by the filter-input
     # converter) so a column resolves to the same scalar on both sides. Walks
@@ -626,7 +631,7 @@ def _sanitize_member_name(value: Any, *, enum_name: str | None = None) -> str:
 
 
 def build_enum_from_choices(
-    choice_pairs: list[tuple[Any, Any]],
+    choice_pairs: Iterable[tuple[Any, Any]],
     enum_name: str,
     *,
     source_label: str,
@@ -733,7 +738,7 @@ def build_enum_from_choices(
             f"{source_label} choices sanitize to the same enum member: "
             f"{details}.  Rename one side or split into separate fields.",
         )
-    enum_cls = Enum(enum_name, members)  # type: ignore[arg-type]
+    enum_cls = Enum(enum_name, members)  # type: ignore[misc]  # mypy wants a literal enum name
     return strawberry.enum(enum_cls)
 
 
@@ -793,7 +798,7 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
 
 
 def resolved_relation_annotation(
-    field: models.Field,
+    field: models.Field | models.ForeignObjectRel,
     target_type: type,
     *,
     field_meta: FieldMeta | None = None,
@@ -801,7 +806,7 @@ def resolved_relation_annotation(
     """Return the concrete annotation for ``field`` pointing at ``target_type``."""
     meta = field_meta or FieldMeta.from_django_field(field)
     if meta.is_many_side:
-        return list[target_type]
+        return list[target_type]  # type: ignore[valid-type]  # runtime-built annotation
     if meta.nullable:
         return target_type | None
     return target_type

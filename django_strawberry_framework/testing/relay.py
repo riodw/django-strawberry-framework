@@ -34,6 +34,8 @@ also keeps ``import django_strawberry_framework.testing`` light - the
 ``types``-package imports below are paid only by suites that use the helpers.
 """
 
+from typing import TYPE_CHECKING, cast
+
 from strawberry import relay
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_arg_repr
@@ -45,6 +47,9 @@ from django_strawberry_framework.types.base import (
     DjangoType,
 )
 from django_strawberry_framework.types.relay import decode_global_id, encode_typename
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
 
 __all__ = ["decode_global_id", "global_id_for"]
 
@@ -75,6 +80,8 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
             "DjangoType subclass; "
             "pass the DjangoType class whose emitted id you want to mint.",
         )
+    # The gate above proved ``definition`` is ``type_cls``'s own registered one.
+    definition = cast("DjangoTypeDefinition", definition)
     if not definition.finalized:
         # Gate on ``finalized`` FIRST. The strategy stamp is written in Phase
         # 2.5 - BEFORE Phase 3 flips ``finalized`` - so a partial-finalize

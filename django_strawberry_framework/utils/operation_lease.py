@@ -61,7 +61,7 @@ class OperationLease(Generic[PayloadT]):
     __slots__ = ("__weakref__", "_payload")
 
     def __init__(self, payload: PayloadT) -> None:
-        self._payload = payload
+        self._payload: PayloadT | None = payload
 
     def held(self) -> PayloadT | None:
         """The payload, or ``None`` once the scope that owned it has ended."""
@@ -74,4 +74,4 @@ class OperationLease(Generic[PayloadT]):
         unwound twice is not a reason to raise: the answer after the first close
         is already the final one.
         """
-        self._payload = None  # type: ignore[assignment]
+        self._payload = None

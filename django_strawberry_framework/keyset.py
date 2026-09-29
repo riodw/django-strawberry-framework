@@ -79,7 +79,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.conf import settings
 from django.core import signing
@@ -91,6 +91,9 @@ from strawberry.relay.utils import from_base64, to_base64
 
 from .exceptions import ConfigurationError
 from .utils.imports import require_optional_module
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db.models import ForeignObjectRel
 
 #: The keyset cursor namespace, package-owned (upstream strawberry uses
 #: ``arrayconnection``; strawberry-graphql-django uses ``orderedcursor`` -
@@ -231,8 +234,15 @@ def validate_cursor_field_references(
     return tuple(parsed)
 
 
-def _resolve_cursor_field_column(model: type[models.Model], name: str) -> models.Field:
-    """Resolve one cursor column name to its model field (``pk`` alias honored)."""
+def _resolve_cursor_field_column(
+    model: type[models.Model],
+    name: str,
+) -> models.Field | ForeignObjectRel:
+    """Resolve one cursor column name to its model field (``pk`` alias honored).
+
+    A reverse-relation name resolves to its ``ForeignObjectRel``;
+    ``validate_cursor_field_columns`` is what rejects it.
+    """
     if name == "pk":
         return model._meta.pk
     return model._meta.get_field(name)
@@ -251,7 +261,8 @@ def cursor_columns_for(
     columns = []
     for order_ref in order_refs:
         name, descending = split_order_ref(order_ref)
-        field = _resolve_cursor_field_column(model, name)
+        # A validated entry is a local concrete column, never a reverse relation.
+        field = cast("models.Field", _resolve_cursor_field_column(model, name))
         columns.append(
             CursorColumn(
                 order_ref=order_ref,
@@ -339,7 +350,8 @@ def validate_cursor_field_columns(
                 "backends and poisons tuple comparisons. Use a non-nullable "
                 "column (or a defaulted denormalization of the nullable one).",
             )
-        if not _is_supported_cursor_field(field):
+        # The relation / non-concrete check above leaves only a local concrete column.
+        if not _is_supported_cursor_field(cast("models.Field", field)):
             raise ConfigurationError(
                 f"{lead} entry {order_ref!r} uses JSONField. Keyset cursor columns "
                 "must have portable ordering semantics across database backends; "
@@ -347,7 +359,8 @@ def validate_cursor_field_columns(
                 "column containing the intended ordering key.",
             )
     terminal_name, _ = parsed[-1]
-    terminal = _resolve_cursor_field_column(model, terminal_name)
+    # Every entry passed the local-concrete-column check above.
+    terminal = cast("models.Field", _resolve_cursor_field_column(model, terminal_name))
     if not (terminal.primary_key or getattr(terminal, "unique", False)):
         raise ConfigurationError(
             f"{lead} must end in a unique column so the cursor order is a total "
@@ -375,7 +388,8 @@ def serialize_cursor_value(field: models.Field, value: Any) -> Any:
     if value is None:
         attname = getattr(field, "attname", getattr(field, "name", "?"))
         raise ValueError(f"NULL value for keyset cursor column {attname!r}")
-    return field.value_to_string(SimpleNamespace(**{field.attname: value}))
+    # mypy: value_from_object reads only obj.<attname>, which the shim carries
+    return field.value_to_string(SimpleNamespace(**{field.attname: value}))  # type: ignore[arg-type]
 
 
 def _deserialize_cursor_value(field: models.Field, raw: Any, argument: str) -> Any:

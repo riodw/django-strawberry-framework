@@ -68,7 +68,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
-from typing import Any, ClassVar, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
 from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
@@ -78,6 +78,9 @@ from ..utils.connections import assert_window_fetch_mode_for
 from ._context import active_nested_strategy
 from .join_taxonomy import RelationJoinDescriptor
 from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagination
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import MutableSequence
 
 
 def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
@@ -161,7 +164,7 @@ class RecognizedFetchQuerySet(QuerySet):
     _dst_window_signature: tuple | None = None
 
     def _clone(self) -> RecognizedFetchQuerySet:
-        clone = super()._clone()
+        clone = super()._clone()  # type: ignore[misc]  # django-stubs omits QuerySet._clone
         setattr(clone, self._dst_spec_attr, getattr(self, self._dst_spec_attr))
         clone._dst_window_signature = self._dst_window_signature
         return clone
@@ -316,7 +319,9 @@ def attach_windowed_prefetch(
     """
     windowed_queryset = apply_window_pagination(
         request.child_queryset,
-        partition_by=request.join.partition_expr,
+        # A request's join is windowable by construction, and a windowable
+        # join always carries its partition.
+        partition_by=cast("str", request.join.partition_expr),
         order_by=request.order_by,
         offset=request.offset,
         limit=request.limit,
@@ -328,7 +333,7 @@ def attach_windowed_prefetch(
     if wrap is not None:
         windowed_queryset = wrap(windowed_queryset)
     append_prefetch_unique(
-        plan.prefetch_related,
+        cast("MutableSequence[str | Prefetch]", plan.prefetch_related),
         Prefetch(
             request.lookup,
             queryset=windowed_queryset,

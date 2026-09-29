@@ -95,7 +95,7 @@ import traceback
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict, cast
 
 from django.conf import settings
 from django.db import connections
@@ -328,7 +328,9 @@ def _terminal_original_error(error: GraphQLError) -> BaseException:
     graphql-core uses that exact shape when a resolver explicitly raises
     ``GraphQLError``.
     """
-    candidate = error.original_error
+    # ``cast``, not a narrowing: the one caller skips every error whose
+    # ``original_error`` is ``None``, so the walk always starts on an exception.
+    candidate = cast("Exception", error.original_error)
     seen_identities = {id(candidate)}
     for _ in range(_MAX_ORIGINAL_ERROR_HOPS):
         if not isinstance(candidate, GraphQLError):
@@ -584,7 +586,7 @@ class _AcceptedDisclosure(NamedTuple):
 _ACKNOWLEDGEMENT: PrivateAuthority[_AcceptedDisclosure] = PrivateAuthority()
 
 
-class DjangoDebugExtension(_OperationBoundExtension):
+class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
     """Attach Django query-log SQL and execution exceptions to ``extensions["debug"]``.
 
     Development tool - NEVER enable on an internet-facing schema: the payload
@@ -738,7 +740,7 @@ class DjangoDebugExtension(_OperationBoundExtension):
         # closed without touching the operation.
         return self._acknowledged() or getattr(settings, "DEBUG", None) is True
 
-    def on_operation(self) -> Any:  # type: ignore[override]
+    def on_operation(self) -> Any:
         """Bracket the operation with the debug cursor; assemble the payload at teardown.
 
         One synchronous generator serves both execution colors (the engine
@@ -804,7 +806,7 @@ class DjangoDebugExtension(_OperationBoundExtension):
                 # contract).
                 self._stash_payload_if_executed(state)
 
-    def on_execute(self) -> Any:  # type: ignore[override]
+    def on_execute(self) -> Any:
         """Stash the payload the moment graphql-core returns, before any operation teardown.
 
         The engine's streaming path reads the extension results inside the

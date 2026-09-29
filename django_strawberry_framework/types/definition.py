@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from django.db import models
 
@@ -264,7 +264,7 @@ class DjangoTypeDefinition:
     def related_target_for(
         self,
         field_name: str,
-    ) -> tuple[DjangoTypeDefinition, models.Field] | None:
+    ) -> tuple[DjangoTypeDefinition, models.Field | models.ForeignObjectRel] | None:
         """Return ``(target_definition, model_field)`` for a relation field.
 
         Walks ``self.model._meta.get_field(field_name)``; returns
@@ -425,7 +425,8 @@ def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
     if not is_node:
         return False
     try:
-        id_attr = origin.resolve_id_attr()
+        # ``is_node`` above established the ``relay.Node`` subclass.
+        id_attr = cast("type[relay.Node]", origin).resolve_id_attr()
     except NodeIDAnnotationError:
         # No ``NodeID`` annotation: the framework default resolves to "pk".
         return False

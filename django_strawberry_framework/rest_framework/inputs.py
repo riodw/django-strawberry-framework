@@ -288,7 +288,7 @@ NESTED_STABLE_FIELDS_INSTRUCTION: str = (
 
 
 def read_nested_serializer_fields(
-    serializer: serializers.BaseSerializer,
+    serializer: serializers.Serializer,
 ) -> dict[str, serializers.Field]:
     """Return an OPTED-IN nested serializer's bound field map, or fail loud.
 
@@ -341,7 +341,7 @@ def require_nested_serializer_config(owner_name: str, field_name: Any, config: A
 
 
 def get_serializer_for_schema(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
 ) -> dict[str, serializers.Field]:
     """Return the serializer's schema-time field dict, materializing ``.fields`` loudly.
 
@@ -710,7 +710,7 @@ def raise_writable_source_ownership_errors(
 
 
 def resolve_effective_serializer_fields(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     *,
     fields: Any = None,
     exclude: Any = None,
@@ -1111,7 +1111,7 @@ def serializer_input_type_name(
 
 
 def _required_writable_field_names(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     *,
     field_map: dict[str, serializers.Field] | None = None,
 ) -> set[str]:
@@ -1130,7 +1130,7 @@ def _required_writable_field_names(
 
 
 def guard_create_required_serializer_fields(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     effective_field_names: Any,
     *,
     injected_fields: Any = None,
@@ -1470,7 +1470,7 @@ def _dedupe_and_materialize_nested(
 
 
 def _resolve_nested_field(
-    field: serializers.Field,
+    field: serializers.BaseSerializer,
     field_name: str,
     nested_config: NestedSerializerConfig,
     *,
@@ -1522,7 +1522,8 @@ def _resolve_nested_field(
     )
     nested_cls, nested_shape = _dedupe_and_materialize_nested(nested_cls, nested_shape)
     kind = NESTED_MULTI if many else NESTED_SINGLE
-    annotation: Any = list[nested_cls] if many else nested_cls
+    # mypy: runtime-built annotation
+    annotation: Any = list[nested_cls] if many else nested_cls  # type: ignore[valid-type]
     spec = InputFieldSpec(
         input_attr=field_name,
         graphql_name=graphql_camel_name(field_name),
@@ -1536,7 +1537,7 @@ def _resolve_nested_field(
 
 
 def validate_nested_config_keys(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     effective: dict[str, serializers.Field],
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
 ) -> None:
@@ -1569,7 +1570,7 @@ def validate_nested_config_keys(
 
 
 def _default_full_shape_identity(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     model: Any,
     provisional_name: str,
     *,
@@ -1625,7 +1626,7 @@ def _default_full_shape_identity(
 
 
 def build_serializer_input_class(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     *,
     operation_kind: str,
     fields: Any = None,
@@ -1776,7 +1777,7 @@ def build_serializer_input_class(
 
 
 def build_serializer_inputs(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     *,
     fields: Any = None,
     exclude: Any = None,

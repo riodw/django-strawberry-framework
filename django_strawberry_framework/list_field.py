@@ -11,7 +11,7 @@ import contextlib
 import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -106,6 +106,7 @@ from .utils.querysets import (
 from .utils.typing import is_async_callable
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from .orders.sets import OrderSet
     from .types.definition import DjangoTypeDefinition
 
 __all__ = ("DjangoListField", "ListArgumentError")
@@ -207,7 +208,9 @@ def _validate_djangotype_target(
         )
     if resolver is not None and not callable(resolver):
         raise ConfigurationError(f"{field} resolver must be callable.")
-    return definition
+    # The ``is None`` arm above rejected a missing definition; mypy's ``is canonical``
+    # narrowing re-widens it to the registry's Optional return.
+    return cast("DjangoTypeDefinition", definition)
 
 
 def _validate_relay_djangotype_target(
@@ -546,7 +549,7 @@ def _normalize_list_arguments(
 
 
 def _synthesized_list_signature(
-    orderset_class: type | None,
+    orderset_class: type[OrderSet] | None,
 ) -> tuple[inspect.Signature, dict[str, Any]]:
     """Build the resolver ``__signature__`` and ``__annotations__`` for DjangoListField.
 
@@ -582,7 +585,8 @@ def _synthesized_list_signature(
     if orderset_class is not None:
         from .orders import order_input_type
 
-        order_ann = list[order_input_type(orderset_class)] | None
+        # mypy: runtime-built annotation
+        order_ann: Any = list[order_input_type(orderset_class)] | None  # type: ignore[misc]
         params.append(
             inspect.Parameter(
                 "order_by",
@@ -1205,7 +1209,7 @@ def _model_from_definition(definition: Any) -> type[models.Model]:
     return model
 
 
-def _orderset_class_from_definition(definition: Any) -> type | None:
+def _orderset_class_from_definition(definition: Any) -> type[OrderSet] | None:
     """Read the target's declared ``Meta.orderset_class`` off its ONE definition read.
 
     Called exactly once per field, at construction, from the definition
@@ -1284,7 +1288,7 @@ def _build_non_queryset_rejection_error(
     args_record: _ListArguments,
     info: Info,
     *,
-    orderset_class: type | None = None,
+    orderset_class: type[OrderSet] | None = None,
 ) -> ListArgumentError | None:
     field_name = _field_label(info)
     if args_record.order_by_supplied:
@@ -1310,7 +1314,7 @@ async def _handle_non_queryset_rejections_async(
     args_record: _ListArguments,
     info: Info,
     *,
-    orderset_class: type | None = None,
+    orderset_class: type[OrderSet] | None = None,
 ) -> None:
     """Reject a non-queryset source, closing an async-only one on EVERY rejecting exit.
 
@@ -1340,7 +1344,7 @@ async def _handle_non_queryset_rejections_async(
 def _check_nonzero_offset_guard(
     queryset: models.QuerySet,
     args_record: _ListArguments,
-    orderset_class: type | None,
+    orderset_class: type[OrderSet] | None,
     info: Info,
 ) -> None:
     """Validate that non-zero offset pagination is backed by a deterministic ordering.
@@ -1384,7 +1388,7 @@ def _check_nonzero_offset_guard(
 
 def _order_normalization_scope(
     args_record: _ListArguments,
-    orderset_class: type | None,
+    orderset_class: type[OrderSet] | None,
 ) -> contextlib.AbstractContextManager[None]:
     """Return the capture scope this request actually needs, or an inert one.
 
@@ -1427,7 +1431,7 @@ def _execute_queryset_pipeline_sync(
     trusted_max_rows: bool,
     *,
     model: type[models.Model],
-    orderset_class: type | None,
+    orderset_class: type[OrderSet] | None,
     is_async_context: bool,
 ) -> Any:
     post_vis_qs = apply_type_visibility_sync(target_type, source, info, model=model)
@@ -1474,7 +1478,7 @@ async def _execute_queryset_pipeline_async(
     trusted_max_rows: bool,
     *,
     model: type[models.Model],
-    orderset_class: type | None,
+    orderset_class: type[OrderSet] | None,
 ) -> Any:
     post_vis_qs = await apply_type_visibility_async(target_type, source, info, model=model)
     if not args_record.any_argument_supplied:
@@ -1678,6 +1682,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 requested_limit=args_record.limit,
             )
 
+        # The two arms bind the one name to a coroutine function and a plain one, so it
+        # is declared up front.
+        _wrap: Callable[..., Any]
         if is_async_callable(user_resolver):
 
             async def _wrap(
@@ -1780,7 +1787,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         wrapped = _wrap
 
     signature, annotations = _synthesized_list_signature(orderset_class)
-    wrapped.__signature__ = signature
+    # mypy: typeshed's FunctionType omits __signature__
+    wrapped.__signature__ = signature  # type: ignore[attr-defined]
     wrapped.__annotations__ = annotations
 
     return strawberry.field(

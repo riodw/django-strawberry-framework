@@ -26,12 +26,29 @@ across read and write.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..utils.permissions import request_from_info
 from ..utils.querysets import reject_async_in_sync_context
 from .operations import _OPERATION_PERMISSION_ACTION
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import ClassVar, Protocol
+
+    from django.db import models
+
+    class _ModelResolvingMutation(Protocol):
+        """An instance of a concrete model-backed mutation class ``DjangoModelPermission`` reads.
+
+        The class carries its nested ``Meta`` and the ``_resolve_model`` seam.
+        """
+
+        Meta: ClassVar[type]
+
+        @classmethod
+        def _resolve_model(cls, meta: type) -> type[models.Model] | None: ...
+
 
 # The recourse appended to a ``SyncMisuseError`` raised when a permission hook
 # (``check_permission`` / a ``permission_classes`` entry's ``has_permission``)
@@ -150,7 +167,7 @@ class DjangoModelPermission:
     def has_permission(
         self,
         info: Any,
-        mutation: type,
+        mutation: type[_ModelResolvingMutation],
         operation: str,
         data: Any,
         instance: Any = None,
@@ -170,7 +187,8 @@ class DjangoModelPermission:
         user = getattr(request, "user", None)
         if user is None:
             return False
-        model = mutation._resolve_model(mutation.Meta)
+        # Class-creation validation already required the seam to resolve a model.
+        model = cast("type[models.Model]", mutation._resolve_model(mutation.Meta))
         action = _OPERATION_PERMISSION_ACTION[operation]
         codename = f"{model._meta.app_label}.{action}_{model._meta.model_name}"
         # ``user.has_perm`` is sync Django auth; an awaitable / non-bool return

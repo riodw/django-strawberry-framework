@@ -487,14 +487,16 @@ def convert_filter_to_input_annotation(
         # subclasses) whose form field consumes a LIST of values, not a
         # scalar. The element type is model-field-driven so a CSV ``in`` over
         # a choice column keeps its enum and a 64-bit column keeps ``BigInt``.
-        return list[_element_annotation(matched, model_field, owner_definition)]
+        # mypy: runtime-built annotation
+        return list[_element_annotation(matched, model_field, owner_definition)]  # type: ignore[misc]
 
     def _range(matched: Filter) -> Any:
         inner = _scalar_from_model_field(model_field)
         return _build_range_input_class(matched, inner, filterset_cls)
 
     def _list(matched: Filter) -> Any:
-        return list[_element_annotation(matched, model_field, owner_definition)]
+        # mypy: runtime-built annotation
+        return list[_element_annotation(matched, model_field, owner_definition)]  # type: ignore[misc]
 
     def _typed(matched: Filter) -> Any:
         return _element_annotation(matched, model_field, owner_definition)
@@ -739,7 +741,7 @@ def _build_range_input_class(
     cache = getattr(filter_instance, "_range_input_classes", None)
     if cache is None:
         cache = {}
-        filter_instance._range_input_classes = cache  # type: ignore[attr-defined]
+        filter_instance._range_input_classes = cache
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
@@ -828,7 +830,8 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]
     ``optional_field_kwargs`` -> ``strawberry.field(name=...)`` because the
     wire tokens are Python keywords and cannot be dataclass field names.
     """
-    self_ref = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]
+    # mypy: runtime-built annotation
+    self_ref = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]  # type: ignore[valid-type]
     list_ref = list[self_ref]
     return [
         (

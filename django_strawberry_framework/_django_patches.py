@@ -115,18 +115,22 @@ AppConfig.
 
 import inspect
 import textwrap
+from typing import TYPE_CHECKING
 
 from django.db import connections
 from django.test.testcases import SimpleTestCase
 
 from .conf import upstream_patches_enabled
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
 try:
     from django.test.testcases import _DatabaseFailure
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
-    _DatabaseFailure = None  # type: ignore[assignment,misc]
+    _DatabaseFailure = None  # type: ignore[assignment,misc]  # import-failure sentinel
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -282,7 +286,10 @@ def _is_database_failure(method: object) -> bool:
     return _DatabaseFailure is not None and isinstance(method, _DatabaseFailure)
 
 
-def _disallowed_connection_methods(cls: type, connection: object) -> object:
+def _disallowed_connection_methods(
+    cls: type[SimpleTestCase],
+    connection: "BaseDatabaseWrapper",
+) -> list[tuple[str, str]]:
     """Return the ``(name, operation)`` pairs upstream wrapped on ``connection``.
 
     One read for both audited upstream shapes (see
@@ -300,7 +307,8 @@ def _disallowed_connection_methods(cls: type, connection: object) -> object:
         _validated_remove_databases_failures_source
         == _CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE
     ):
-        return cls._disallowed_connection_methods
+        # mypy: django-stubs omits SimpleTestCase._disallowed_connection_methods (Django < 6.1)
+        return cls._disallowed_connection_methods  # type: ignore[attr-defined]
     if (
         _validated_remove_databases_failures_source
         == _CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE
@@ -312,7 +320,7 @@ def _disallowed_connection_methods(cls: type, connection: object) -> object:
     )
 
 
-def _patched_remove_databases_failures(cls: type) -> None:
+def _patched_remove_databases_failures(cls: type[SimpleTestCase]) -> None:
     """Defensive replacement for ``SimpleTestCase._remove_databases_failures``.
 
     Identical to Django's upstream classmethod except for the
@@ -418,6 +426,7 @@ def apply() -> None:
     _validated_remove_databases_failures_source = source
     if _patch_is_installed():
         return
-    SimpleTestCase._remove_databases_failures = classmethod(
+    # mypy: the patch itself; django-stubs omits the private classmethod
+    SimpleTestCase._remove_databases_failures = classmethod(  # type: ignore[attr-defined]
         _patched_remove_databases_failures,
     )

@@ -78,7 +78,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from types import MethodType
-from typing import Any, Generic, NamedTuple, TypeVar
+from typing import Any, Generic, NamedTuple, TypeVar, cast
 from weakref import ReferenceType, ref
 
 __all__ = ("PrivateAuthority", "PrivateMembership")
@@ -278,7 +278,8 @@ class PrivateMembership(Generic[MemberT]):
                 box = evidence.box()
                 if box is None:
                     return None
-                accepted.append(box.__self__)
+                # A box is only ever built on an accepted member.
+                accepted.append(cast("MemberT", box.__self__))
                 continue
             member = evidence()
             if member is None:

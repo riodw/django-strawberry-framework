@@ -294,19 +294,19 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
         # while an iterable with unhashable entries (``fields=[["item"]]``) iterates
         # fine and is caught by the string check below -- so a malformed shape never
         # escapes as a raw ``TypeError`` from ``set(...)``.
-        requested = list(fields)
+        entries = list(fields)
     except TypeError as exc:
         raise ConfigurationError(
             f"apply_cascade_permissions fields= must be a non-string iterable of "
             f"field names; got {fields!r}.",
         ) from exc
-    non_strings = [entry for entry in requested if not isinstance(entry, str)]
+    non_strings = [entry for entry in entries if not isinstance(entry, str)]
     if non_strings:
         raise ConfigurationError(
             f"apply_cascade_permissions fields= entries must be field-name strings; "
             f"got non-string entries {non_strings!r}.",
         )
-    requested = set(requested)
+    requested: set[str] = set(entries)
     plan = _edge_plan(model)
     unsupported = requested.intersection(plan.unsupported)
     if unsupported:

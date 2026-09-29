@@ -54,7 +54,7 @@ rejects it, that is surfaced rather than silently swapped.
 from __future__ import annotations
 
 import inspect
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
 from strawberry.types import Info
@@ -64,6 +64,9 @@ from ..utils.directives import validated_field_directives
 from ..utils.execution_mode import async_execution
 from .inputs import INPUTS_MODULE_PATH
 from .operations import operation_takes_data, operation_takes_id
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .sets import WriteMutationClass
 
 # The attribute name ``DjangoMutationField`` stamps its synthesized resolver with,
 # pointing at the bound mutation class. ``schema.py::DjangoMutationExecutionContext``
@@ -213,7 +216,7 @@ def build_lazy_field_signature(
 
 
 def _synthesized_mutation_signature(
-    mutation_cls: type,
+    mutation_cls: WriteMutationClass,
 ) -> tuple[inspect.Signature, dict[str, Any]]:
     """Build the per-operation resolver ``__signature__`` + ``__annotations__`` (spec-036 Decision 14 / 7).
 
@@ -258,7 +261,7 @@ def _synthesized_mutation_signature(
 
 
 def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory family (DjangoConnectionField / DjangoNodeField parity)
-    mutation_cls: type,
+    mutation_cls: WriteMutationClass,
     *,
     description: str | None = None,
     deprecation_reason: str | None = None,
@@ -298,7 +301,8 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
         return mutation_cls.resolve_sync(info, **call_kwargs)
 
     signature, annotations = _synthesized_mutation_signature(mutation_cls)
-    _resolve.__signature__ = signature
+    # mypy: typeshed's FunctionType omits __signature__
+    _resolve.__signature__ = signature  # type: ignore[attr-defined]
     _resolve.__annotations__ = annotations
     # The mutation-atomicity marker (shipped 0.0.14): ``DjangoMutationExecutionContext`` finds this
     # through the built field's ``strawberry-definition`` extension and wraps the field's

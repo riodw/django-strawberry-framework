@@ -888,7 +888,7 @@ class _AcceptedOptimizerConfiguration(NamedTuple):
 _OPTIMIZER_CONFIGURATION: PrivateAuthority[_AcceptedOptimizerConfiguration] = PrivateAuthority()
 
 
-class DjangoOptimizerExtension(_OperationBoundExtension):
+class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState]):
     """Strawberry schema extension that optimizes Django querysets per request.
 
     Pass a module-level singleton wrapped in a factory - that preserves
@@ -1052,7 +1052,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension):
         self._cache_hits = 0
         self._cache_misses = 0
 
-    def on_execute(self) -> Any:  # type: ignore[override]
+    def on_execute(self) -> Any:
         """Open this execution's frame, and close it however the operation ends.
 
         One frame carries everything the execution publishes to itself - this

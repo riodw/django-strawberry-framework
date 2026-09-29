@@ -37,7 +37,7 @@ symmetric by construction (spec-036 Decision 6).
 from __future__ import annotations
 
 from collections.abc import Callable, Collection
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, FieldDoesNotExist
@@ -66,6 +66,9 @@ from ..utils.inputs import (
 )
 from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_many
 from ..utils.strings import graphql_camel_name
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry.types.base import WithStrawberryObjectDefinition
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
 # single constant so any forward-ref and ``materialize_mutation_input_class``
@@ -172,7 +175,10 @@ _materialized_names, _materialize_input, _clear_input_namespace = make_input_nam
 )
 
 
-def _audit_mutation_input_surface(name: str, input_cls: type) -> None:
+def _audit_mutation_input_surface(
+    name: str,
+    input_cls: type[WithStrawberryObjectDefinition],
+) -> None:
     """Reject a duplicate effective GraphQL name on generated or merged inputs.
 
     The fallback is Strawberry's ``to_camel_case`` and NOT the package's
@@ -196,7 +202,10 @@ def _audit_mutation_input_surface(name: str, input_cls: type) -> None:
         seen[graphql_name] = field.python_name
 
 
-def materialize_mutation_input_class(name: str, input_cls: type) -> None:
+def materialize_mutation_input_class(
+    name: str,
+    input_cls: type[WithStrawberryObjectDefinition],
+) -> None:
     """Set ``input_cls`` as a real module global of ``mutations.inputs`` under ``name``.
 
     Audits the final Strawberry field surface first, which is the earliest point
@@ -290,7 +299,8 @@ def editable_input_fields(
             # Forward M2M only: a forward ``ManyToManyField`` is concrete and
             # writable; an auto-created reverse M2M accessor is not.
             if is_forward_many_to_many(field) and getattr(field, "editable", False):
-                selected.append(field)
+                # A forward M2M is a ``ManyToManyField``, never a reverse ``*Rel``.
+                selected.append(cast("models.Field", field))
             continue
         # Concrete column-backed fields only (``hasattr(f, "column")`` is the
         # cookbook idiom); reverse FKs have no ``column``. Drop the pk
@@ -302,7 +312,8 @@ def editable_input_fields(
             and getattr(field, "editable", False)
             and not getattr(field, "primary_key", False)
         ):
-            selected.append(field)
+            # Only a concrete ``Field`` carries a ``column``; a reverse ``*Rel`` has none.
+            selected.append(cast("models.Field", field))
 
     by_name = {field.name: field for field in selected}
     # No ``empty_message``: the model flavor's empty-input rejection is
@@ -338,7 +349,10 @@ def input_field_required(field: models.Field) -> bool:
     return not field.blank
 
 
-def relation_id_scalar(related_model: type, related_primary_type: type | None) -> Any:
+def relation_id_scalar(
+    related_model: type[models.Model],
+    related_primary_type: type | None,
+) -> Any:
     """Return the GraphQL id scalar for a write-input relation to ``related_model``.
 
     ``relay.GlobalID`` when the related model's primary ``DjangoType`` is
@@ -356,7 +370,7 @@ def relation_id_scalar(related_model: type, related_primary_type: type | None) -
 
 
 def relation_id_annotation(
-    related_model: type,
+    related_model: type[models.Model],
     related_primary_type: type | None,
     *,
     many: bool,
@@ -368,10 +382,10 @@ def relation_id_annotation(
     vs declared name vs id-like-suffix dedupe) stays at each flavor.
     """
     id_scalar = relation_id_scalar(related_model, related_primary_type)
-    return list[id_scalar] if many else id_scalar
+    return list[id_scalar] if many else id_scalar  # type: ignore[valid-type]  # runtime-built annotation
 
 
-def related_model_of_queryset(queryset: Any) -> type | None:
+def related_model_of_queryset(queryset: Any) -> type[models.Model] | None:
     """Return ``queryset.model`` when a relation queryset is typed, else ``None``.
 
     Column-less write-input relations (form ``ModelChoiceField``, serializer
@@ -387,7 +401,7 @@ def require_queryset_related_model(
     queryset: Any,
     *,
     missing: Callable[[], ConfigurationError],
-) -> type:
+) -> type[models.Model]:
     """Return ``queryset.model``, or raise the flavor's configuration error.
 
     The fail-loud half of column-less relation typing. Form and serializer each
@@ -407,7 +421,7 @@ def annotate_queryset_relation(
     python_attr: str,
     primary_of: Callable[[type], type | None],
     missing: Callable[[], ConfigurationError],
-) -> tuple[str, Any, type]:
+) -> tuple[str, Any, type[models.Model]]:
     """Return ``(python_attr, id-annotation, related_model)`` for a column-less relation.
 
     Form ``_model_less_relation_annotation`` and serializer
@@ -453,8 +467,9 @@ def relation_input_annotation(
     which case the raw pk scalar is used.
     """
     many = bool(getattr(field, "many_to_many", False))
+    # A relation field's ``related_model`` is its resolved target model class.
     annotation = relation_id_annotation(
-        field.related_model,
+        cast("type[models.Model]", field.related_model),
         related_primary_type,
         many=many,
     )
@@ -479,7 +494,9 @@ def model_column_write_kind(field: models.Field) -> str:
     return SCALAR
 
 
-def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
+def _relation_field_index(
+    model: type[models.Model],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Index a model's forward FK/OneToOne (by ``<field>_id`` attr) and M2M (by name).
 
     Bind-time helper: the same input-attr-to-relation-field mapping the generator's
@@ -508,8 +525,8 @@ def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def mutation_input_field_specs(
-    model: type,
-    input_cls: type,
+    model: type[models.Model],
+    input_cls: type[WithStrawberryObjectDefinition],
     *,
     excluded_attrs: Collection[str] = (),
 ) -> tuple[list[InputFieldSpec], dict[str, Any]]:
@@ -551,7 +568,13 @@ def mutation_input_field_specs(
                     f"DjangoMutation input field {python_name!r} does not map to a "
                     f"concrete column of {model.__name__}.",
                 )
-        kind = EXCLUDED if python_name in excluded else model_column_write_kind(django_field)
+        # Past the guard above, a non-indexed attr resolved to a concrete non-relation
+        # column, i.e. a ``Field`` (every reverse ``*Rel`` is a relation).
+        kind = (
+            EXCLUDED
+            if python_name in excluded
+            else model_column_write_kind(cast("models.Field", django_field))
+        )
         related_model = (
             django_field.related_model if kind in (RELATION_SINGLE, RELATION_MULTI) else None
         )
@@ -587,9 +610,11 @@ def model_column_write_annotation(
     if kind is None:
         kind = model_column_write_kind(field)
     if kind in (RELATION_SINGLE, RELATION_MULTI):
+        # A relation field's ``related_model`` is its resolved target model class.
+        related_model = cast("type[models.Model]", field.related_model)
         return relation_id_annotation(
-            field.related_model,
-            primary_of(field.related_model),
+            related_model,
+            primary_of(related_model),
             many=kind == RELATION_MULTI,
         )
     if kind == FILE:
@@ -621,9 +646,10 @@ def model_column_input_annotation(
     """
     kind = model_column_write_kind(field)
     if kind in (RELATION_SINGLE, RELATION_MULTI):
+        # A relation field's ``related_model`` is its resolved target model class.
         return relation_input_annotation(
             field,
-            related_primary_type=primary_of(field.related_model),
+            related_primary_type=primary_of(cast("type[models.Model]", field.related_model)),
         )
     python_attr = field.name
     graphql_name = graphql_camel_name(python_attr)

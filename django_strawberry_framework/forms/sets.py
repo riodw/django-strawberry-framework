@@ -42,7 +42,7 @@ consumer overrides the construction hook), and the reverse-map
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django import forms
 
@@ -92,6 +92,9 @@ from .inputs import (
 from .inputs import (
     INPUTS_MODULE_PATH as FORMS_INPUTS_MODULE_PATH,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .inputs import FormClass
 
 # The form ``Meta``'s allowed-key sets (spec-038 Decision 6), composed from
 # the shared mutation foundation key sets plus the local ``form_class`` key.
@@ -182,10 +185,7 @@ def _default_mutation_get_form_fields(cls: type) -> dict[str, forms.Field]:
     return get_form_fields(form_class)
 
 
-def _mutation_form_fields(
-    mutation_cls: type,
-    form_class: type[forms.BaseForm],
-) -> dict[str, forms.Field]:
+def _mutation_form_fields(mutation_cls: type, form_class: FormClass) -> dict[str, forms.Field]:
     """Resolve a mutation's overridable form-field hook for one build pass.
 
     The hook INVOCATION is the typed boundary both flavors' ``_validate_meta``
@@ -529,7 +529,9 @@ class DjangoModelFormMutation(DjangoMutation):
     ``Meta.fields`` / ``Meta.exclude`` / ``Meta.permission_classes``).
     """
 
-    get_form_fields = classmethod(_default_mutation_get_form_fields)
+    get_form_fields: ClassVar[classmethod[Any, [], dict[str, forms.Field]]] = classmethod(
+        _default_mutation_get_form_fields,
+    )
 
     @classmethod
     def _resolve_model(cls, meta: type) -> Any:
@@ -642,12 +644,16 @@ class DjangoModelFormMutation(DjangoMutation):
     # The form-input namespace (``forms.inputs``), overriding the ``036`` model
     # default (``mutations.inputs``) so a ``ModelForm`` mutation's lazy ``data:``
     # ref resolves the form-derived input, not a model-column input.
-    input_module_path: str = FORMS_INPUTS_MODULE_PATH
+    input_module_path: ClassVar[str] = FORMS_INPUTS_MODULE_PATH
 
     # The reverse-map records (``utils/inputs.py::InputFieldSpec`` per input
     # field), stashed at bind so the decode reaches the form-field-keyed
-    # reverse map. ``None`` until bind (mirrors ``_input_class``).
-    _input_field_specs: list | None = None
+    # reverse map. ``None`` until bind (mirrors ``_input_class``); a type checker
+    # sees the bound list, since every form operation has an input.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _input_field_specs: ClassVar[list]
+    else:
+        _input_field_specs = None
 
     @classmethod
     def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
@@ -718,12 +724,20 @@ class DjangoModelFormMutation(DjangoMutation):
 # (``register_form_mutation``). A separate metaclass instance (not
 # ``DjangoMutationMetaclass``) because ``DjangoFormMutation`` is model-less - it
 # is NOT a ``DjangoMutation`` subclass and does not ride the model declaration
-# registry or ``bind_mutations()``.
-DjangoFormMutationMetaclass = make_meta_validating_metaclass(
-    register_form_mutation,
-    name="DjangoFormMutationMetaclass",
-    module=__name__,
-)
+# registry or ``bind_mutations()``. A type checker cannot follow a factory-built
+# metaclass into a ``metaclass=`` keyword, so it sees the class statement below
+# instead; the runtime binding is the factory product.
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+    class DjangoFormMutationMetaclass(type):
+        """The factory-built plain-form metaclass, as a type checker sees it."""
+
+else:
+    DjangoFormMutationMetaclass = make_meta_validating_metaclass(
+        register_form_mutation,
+        name="DjangoFormMutationMetaclass",
+        module=__name__,
+    )
 
 
 class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
@@ -743,26 +757,39 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     payload (no object slot). The resolver pipeline lives in ``resolvers.py``.
     """
 
-    get_form_fields = classmethod(_default_mutation_get_form_fields)
+    get_form_fields: ClassVar[classmethod[Any, [], dict[str, forms.Field]]] = classmethod(
+        _default_mutation_get_form_fields,
+    )
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete subclass.
-    # ``None`` on the abstract base (no ``Meta``).
-    _mutation_meta: _ValidatedMutationMeta | None = None
+    # ``None`` on the abstract base (no ``Meta``); a type checker sees the
+    # concrete-subclass type, the only one the pipeline reads.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _mutation_meta: ClassVar[_ValidatedMutationMeta]
+    else:
+        _mutation_meta = None
 
     # Bind outputs. ``_primary_type`` is
     # ALWAYS ``None`` (a model-less mutation returns no ``DjangoType``); the bind
     # stashes the materialized input class + the pinned ``{ ok errors }`` payload
-    # name. ``DjangoMutationField`` reads them.
-    _primary_type: type | None = None
-    _input_class: type | None = None
-    _payload_type_name: str | None = None
+    # name. ``DjangoMutationField`` reads them. A type checker sees the bound
+    # payload name, since only a bound mutation is resolved.
+    _primary_type: ClassVar[None] = None
+    _input_class: ClassVar[type | None] = None
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _payload_type_name: ClassVar[str]
+    else:
+        _payload_type_name = None
 
     # The reverse-map records, stashed at bind for the decode
     # (mirrors ``DjangoModelFormMutation._input_field_specs``).
-    _input_field_specs: list | None = None
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _input_field_specs: ClassVar[list]
+    else:
+        _input_field_specs = None
 
     # The form-input namespace; mirrors ``DjangoModelFormMutation``.
-    input_module_path: str = FORMS_INPUTS_MODULE_PATH
+    input_module_path: ClassVar[str] = FORMS_INPUTS_MODULE_PATH
 
     @classmethod
     def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:

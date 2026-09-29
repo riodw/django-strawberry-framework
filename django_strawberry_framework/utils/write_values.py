@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from strawberry import relay
 
@@ -242,7 +242,10 @@ RELATION_ID_ATOM_TYPES = (
 )
 
 
-def materialize_relation_id_container(values: Any, graphql_name: str) -> tuple[list | None, Any]:
+def materialize_relation_id_container(
+    values: Any,
+    graphql_name: str,
+) -> tuple[list[Any], None] | tuple[None, FieldError]:
     """Materialize a relation-id container, or return the uniform field-keyed error.
 
     GraphQL normally supplies a list, but every write flavor's M2M seam can be
@@ -298,7 +301,8 @@ def decode_visible_relation_ids(
         return None, container_error
 
     pks: list[Any] = []
-    for value in provided_values:
+    # A ``None`` error means the container materialized into a list.
+    for value in cast("list[Any]", provided_values):
         pk, error = type_check_relation_id(
             value,
             graphql_name=graphql_name,

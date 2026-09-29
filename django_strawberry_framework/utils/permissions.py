@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
@@ -49,6 +49,9 @@ from .input_values import (
 )
 from .querysets import reject_async_in_sync_context
 from .strings import flatten_lookup_path
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from ..sets_mixins import ActiveInputPermissionMixin
 
 # Recourse text shared by every ``check_<field>_permission`` async-guard raise. A
 # filter / order permission gate is fired synchronously (on the async surface it
@@ -679,7 +682,7 @@ def _related_declarations(cls: type, related_attr: str) -> tuple[tuple[Any, Any]
 
 
 def run_active_input_permission_checks(
-    cls: type,
+    cls: type[ActiveInputPermissionMixin],
     input_value: Any,
     request: Any,
     *,

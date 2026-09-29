@@ -70,7 +70,7 @@ from __future__ import annotations
 import threading
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, transaction
 from django.db.models.fields.files import FieldFile
@@ -79,6 +79,11 @@ from django.db.models.signals import pre_save
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
 from .canonical import base_container_values, canonical_sort_key
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+
+    from ..mutations.sets import WriteMutationClass
 
 # The alias of the completion-spanning transaction ``DjangoSchema``'s execution
 # context opened for the mutation field currently executing. ``None`` means no
@@ -227,7 +232,7 @@ def write_pipeline(alias: str, *, lock: bool) -> Any:
 
 
 @contextmanager
-def open_write_pipeline(mutation_cls: type) -> Any:
+def open_write_pipeline(mutation_cls: WriteMutationClass) -> Any:
     """Open the nested atomic + pinned write-pipeline context for one mutation.
 
     Shared substrate for every write flavor: resolve the managed alias, then
@@ -714,7 +719,7 @@ def check_instance_write_alias(model: type, alias: str, instance: Any) -> None:
         )
 
 
-def canonical_pk(model: type, value: Any) -> Any:
+def canonical_pk(model: type[models.Model], value: Any) -> Any:
     """Coerce ``value`` through ``model``'s pk field to its canonical Python form.
 
     The pk-equality primitive the pipeline compares authorization snapshots with:
@@ -728,7 +733,7 @@ def canonical_pk(model: type, value: Any) -> Any:
     return model._meta.pk.to_python(value)
 
 
-def pks_match(model: type, first: Any, second: Any) -> bool:
+def pks_match(model: type[models.Model], first: Any, second: Any) -> bool:
     """Compare two pk values canonically through ``model``'s pk field (fail closed).
 
     ``True`` only when BOTH values coerce through the pk field's ``to_python``
@@ -742,7 +747,7 @@ def pks_match(model: type, first: Any, second: Any) -> bool:
 
 
 def reject_substituted_row(
-    model: type,
+    model: type[models.Model],
     actual_pk: Any,
     authorized_pk: Any,
     *,
@@ -1088,7 +1093,7 @@ def assert_no_target_drift(owner: str, instance: Any) -> None:
             )
 
 
-def base_locked_queryset(model: type, alias: str, visible_queryset: Any) -> Any:
+def base_locked_queryset(model: type[models.Model], alias: str, visible_queryset: Any) -> Any:
     """Build the ``SELECT ... FOR UPDATE`` base query constrained by the visibility pk subquery.
 
     The lock rides the model's BASE MANAGER - a plain single-table query that can
@@ -1106,7 +1111,7 @@ def base_locked_queryset(model: type, alias: str, visible_queryset: Any) -> Any:
     )
 
 
-def pipeline_scoped_queryset(queryset: Any, model: type) -> Any:
+def pipeline_scoped_queryset(queryset: Any, model: type[models.Model]) -> Any:
     """Apply the active write pipeline's alias pin (+ conditional row lock) to ``queryset``.
 
     The invariant the shared relation-visibility helpers

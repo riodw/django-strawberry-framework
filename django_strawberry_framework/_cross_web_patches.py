@@ -206,7 +206,7 @@ try:
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
-    DjangoHTTPRequestAdapter = None  # type: ignore[assignment,misc]
+    DjangoHTTPRequestAdapter = None  # type: ignore[assignment,misc]  # import-failure sentinel
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -344,4 +344,5 @@ def apply() -> None:
     _validate_upstream_shape()
     if _patch_is_installed():
         return
-    DjangoHTTPRequestAdapter.body = property(_patched_body)
+    # mypy: the patch itself
+    DjangoHTTPRequestAdapter.body = property(_patched_body)  # type: ignore[method-assign,assignment]

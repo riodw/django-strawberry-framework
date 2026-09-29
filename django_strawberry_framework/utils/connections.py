@@ -465,10 +465,9 @@ def window_range_plan(
     if limit == sys.maxsize:
         limit = None
     lower_bound = offset if (offset or keyset_counted) else None
-    bounded = limit is not None
-    upper_bound = (limit if reverse else offset + limit) if bounded else None
+    upper_bound = (limit if reverse else offset + limit) if limit is not None else None
     ambiguous = keyset_counted or is_ambiguous_empty_window(offset, limit, reverse=reverse)
-    plain_first_page = not reverse and offset == 0 and bounded and limit > 0
+    plain_first_page = not reverse and offset == 0 and limit is not None and limit > 0
     probe_shape = _is_probe_shape(
         offset=offset,
         limit=limit,

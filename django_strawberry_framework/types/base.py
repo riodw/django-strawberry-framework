@@ -43,7 +43,7 @@ import re
 import typing
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Annotated, Any, ClassVar, NamedTuple
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Protocol, cast
 
 from django.db import models
 from strawberry import relay
@@ -135,8 +135,18 @@ STRING_GLOBALID_STRATEGIES: frozenset[str] = frozenset({"model", "type", "type+m
 DEFAULT_GLOBALID_STRATEGY = "model"
 
 
+class _ModelMeta(Protocol):
+    """A consumer ``Meta`` class whose ``model`` ``_validate_meta`` has already checked.
+
+    The ``meta`` every per-key validator below receives: each one runs after the
+    ``Meta.model`` gate, so ``meta.model`` names a Django model in their error text.
+    """
+
+    model: type[models.Model]
+
+
 def _validate_set_sidecar(
-    meta: type,
+    meta: _ModelMeta,
     sidecar_class: Any,
     *,
     expected: type,
@@ -159,7 +169,7 @@ def _validate_set_sidecar(
     return sidecar_class
 
 
-def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
+def _validate_filterset_class(meta: _ModelMeta, filterset_class: Any) -> type | None:
     """Validate ``Meta.filterset_class`` is a package-``FilterSet`` subclass.
 
     Local import of ``FilterSet`` at function scope keeps ``types/base.py``
@@ -186,7 +196,7 @@ def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     )
 
 
-def _validate_orderset_class(meta: type, orderset_class: Any) -> type | None:
+def _validate_orderset_class(meta: _ModelMeta, orderset_class: Any) -> type | None:
     """Validate ``Meta.orderset_class`` is a package-``OrderSet`` subclass.
 
     Local import of ``OrderSet`` at function scope keeps ``types/base.py``
@@ -215,7 +225,7 @@ def _validate_orderset_class(meta: type, orderset_class: Any) -> type | None:
     )
 
 
-def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dict | None:
+def _validate_connection(meta: _ModelMeta, connection: Any, relay_shaped: bool) -> dict | None:
     """Validate ``Meta.connection`` shape AND the Relay-Node requirement (spec-030 Decision 8).
 
     ``None``-short-circuits when unset; otherwise shape-checks the dict (for
@@ -263,7 +273,11 @@ def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dic
     return dict(connection)
 
 
-def _validate_cursor_field(meta: type, value: Any, relay_shaped: bool) -> tuple[str, ...] | None:
+def _validate_cursor_field(
+    meta: _ModelMeta,
+    value: Any,
+    relay_shaped: bool,
+) -> tuple[str, ...] | None:
     """Validate ``Meta.cursor_field`` SHAPE and the Relay-Node gate (keyset cursors).
 
     Class-creation stage of the ``stable_cursor_field`` two-stage validation
@@ -311,7 +325,11 @@ def _validate_cursor_field(meta: type, value: Any, relay_shaped: bool) -> tuple[
     return entries
 
 
-def _validate_relation_shapes(meta: type, value: Any, relay_shaped: bool) -> dict[str, str] | None:
+def _validate_relation_shapes(
+    meta: _ModelMeta,
+    value: Any,
+    relay_shaped: bool,
+) -> dict[str, str] | None:
     """Validate ``Meta.relation_shapes`` shape AND the Relay-Node requirement (spec-032 Decision 7).
 
     Stage 1 of the relation-shapes validation flow, structurally modeled on
@@ -374,7 +392,7 @@ _GLOBALID_CALLABLE_PARAMS = ("type_cls", "model", "root")
 
 
 def _validate_globalid_strategy(
-    meta: type | None,
+    meta: _ModelMeta | None,
     value: Any,
     relay_shaped: bool,
     *,
@@ -405,8 +423,11 @@ def _validate_globalid_strategy(
     if value is None:
         return None
     is_meta = source == "meta"
+    # Only the setting path (``source="setting"``) passes ``meta=None``.
     subject = (
-        f"{meta.model.__name__}.Meta.globalid_strategy" if is_meta else RELAY_GLOBALID_STRATEGY_KEY
+        f"{cast('_ModelMeta', meta).model.__name__}.Meta.globalid_strategy"
+        if is_meta
+        else RELAY_GLOBALID_STRATEGY_KEY
     )
     if isinstance(value, str):
         if value not in STRING_GLOBALID_STRATEGIES:
@@ -558,7 +579,7 @@ def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
     )
 
 
-def _meta_attr(meta: type, key: str, default: Any = None) -> Any:
+def _meta_attr(meta: object, key: str, default: Any = None) -> Any:
     """Read one ``Meta`` attribute, containing hostile attribute access.
 
     ``getattr(meta, key, default)`` only swallows ``AttributeError``; a Meta
@@ -610,6 +631,10 @@ class DjangoType:
     """Base class for Django-model-backed Strawberry GraphQL types."""
 
     _is_default_get_queryset: ClassVar[bool] = True
+    # Set by ``__init_subclass__`` on every subclass that declares ``Meta``.
+    __django_strawberry_definition__: ClassVar[DjangoTypeDefinition]
+    # Installed alongside it by ``types/relay.py::install_is_type_of``.
+    is_type_of: ClassVar[Callable[[object, object], bool]]
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect model/type metadata without finalizing the Strawberry type."""
@@ -873,13 +898,13 @@ def _detect_custom_get_queryset(cls: type) -> bool:
     return False
 
 
-def _normalize_fields_spec(value: Any) -> tuple[str, ...] | str | None:
+def _normalize_fields_spec(value: Any) -> tuple[str, ...] | Literal["__all__"] | None:
     """Normalize ``Meta.fields`` for storage on ``DjangoTypeDefinition``."""
     if value is None:
         return value
     if isinstance(value, str):
         if value == "__all__":
-            return value
+            return cast('Literal["__all__"]', value)
         raise ConfigurationError(
             "Meta.fields must be '__all__' or a non-string sequence of field names",
         )
@@ -1002,7 +1027,7 @@ def _consumer_assigned_fields(
     return frozenset(relation_assigned), frozenset(scalar_assigned)
 
 
-def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
+def _meta_optimizer_hints(meta: _ModelMeta) -> dict[str, Any]:
     """Return ``meta.optimizer_hints`` as a dict, or ``{}`` when unset.
 
     Centralizes the shape guard used across ``__init_subclass__`` and the
@@ -1055,7 +1080,7 @@ _INTERFACES_SHAPE_ERROR_LEAD_IN = (
 )
 
 
-def _interfaces_shape_error(meta: type, got_suffix: str) -> str:
+def _interfaces_shape_error(meta: _ModelMeta, got_suffix: str) -> str:
     """Format the top-level ``Meta.interfaces`` shape-rejection message.
 
     Both raise sites (string-typed raw, other non-sequence raw) share the
@@ -1110,7 +1135,7 @@ _RELAY_NON_INTERFACE_HELPERS: tuple[tuple[object, str, str], ...] = (
 )
 
 
-def _validate_interfaces(meta: type) -> tuple[type, ...]:
+def _validate_interfaces(meta: _ModelMeta) -> tuple[type, ...]:
     """Validate and normalize ``Meta.interfaces`` per Decision 4.
 
     Returns a normalized ``tuple[type, ...]`` ready to pass through to
@@ -1217,7 +1242,7 @@ class _ValidatedMeta(NamedTuple):
     name: str | None
     primary: bool
     optimizer_hints: dict[str, Any]
-    fields_spec: tuple[str, ...] | str | None
+    fields_spec: tuple[str, ...] | Literal["__all__"] | None
     exclude_spec: tuple[str, ...] | None
     filterset_class: type | None
     orderset_class: type | None
@@ -1279,6 +1304,8 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         raise ConfigurationError("Meta.model is required")
     if not isinstance(model, type) or not issubclass(model, models.Model):
         raise ConfigurationError("Meta.model must be a Django model class")
+    # ``Meta.model`` is checked from here on: the per-key validators take it as such.
+    model_meta = cast("_ModelMeta", meta)
 
     raw_name = _meta_attr(meta, "name")
     if raw_name is not None:
@@ -1337,20 +1364,24 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
 
     fields_spec = _normalize_fields_spec(_meta_attr(meta, "fields"))
     exclude_spec = _normalize_sequence_spec(_meta_attr(meta, "exclude"), "exclude")
-    optimizer_hints = _meta_optimizer_hints(meta)
-    interfaces = _validate_interfaces(meta)
+    optimizer_hints = _meta_optimizer_hints(model_meta)
+    interfaces = _validate_interfaces(model_meta)
     relay_shaped = _is_relay_shaped(cls, interfaces)
-    filterset_class = _validate_filterset_class(meta, _meta_attr(meta, "filterset_class"))
-    orderset_class = _validate_orderset_class(meta, _meta_attr(meta, "orderset_class"))
-    connection = _validate_connection(meta, _meta_attr(meta, "connection"), relay_shaped)
-    cursor_field = _validate_cursor_field(meta, _meta_attr(meta, "cursor_field"), relay_shaped)
+    filterset_class = _validate_filterset_class(model_meta, _meta_attr(meta, "filterset_class"))
+    orderset_class = _validate_orderset_class(model_meta, _meta_attr(meta, "orderset_class"))
+    connection = _validate_connection(model_meta, _meta_attr(meta, "connection"), relay_shaped)
+    cursor_field = _validate_cursor_field(
+        model_meta,
+        _meta_attr(meta, "cursor_field"),
+        relay_shaped,
+    )
     globalid_strategy = _validate_globalid_strategy(
-        meta,
+        model_meta,
         _meta_attr(meta, "globalid_strategy"),
         relay_shaped,
     )
     relation_shapes = _validate_relation_shapes(
-        meta,
+        model_meta,
         _meta_attr(meta, "relation_shapes"),
         relay_shaped,
     )
@@ -1373,7 +1404,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     both_sets_collision = sorted(nullable_overrides & required_overrides)
     if both_sets_collision:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta names {both_sets_collision} in both "
+            f"{model_meta.model.__name__}.Meta names {both_sets_collision} in both "
             "nullable_overrides and required_overrides; a field cannot be both "
             "forced-nullable and forced-required.",
         )
@@ -1410,7 +1441,11 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     )
 
 
-def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], model: type) -> None:
+def _validate_optimizer_hints(
+    hints: dict[str, Any],
+    fields: tuple[Any, ...],
+    model: type[models.Model],
+) -> None:
     """Validate ``Meta.optimizer_hints`` keys and values in one pass.
 
     Combines the field-surface and value checks in one place:
@@ -1484,7 +1519,7 @@ def _selected_meta_targets(
     model: type[models.Model],
     selected_fields: tuple[Any, ...],
     attr: str,
-    targets: set[str],
+    targets: AbstractSet[str],
     excluded_error: Callable[[list[str]], str],
 ) -> tuple[dict[str, Any], list[str]]:
     """Run the shared unknown/excluded Meta-target guards; return ``(selected_by_name, sorted)``.
@@ -1809,7 +1844,9 @@ def _select_fields(
             )
         selected_names = set(fields_spec)
     else:
-        unknown = sorted(set(exclude_spec) - valid_names)
+        # ``fields_spec`` is ``None`` here, so the first branch leaves ``exclude_spec`` set.
+        excluded = cast("tuple[str, ...]", exclude_spec)
+        unknown = sorted(set(excluded) - valid_names)
         if unknown:
             raise ConfigurationError(
                 _format_unknown_fields_error(
@@ -1819,7 +1856,7 @@ def _select_fields(
                     available=valid_names,
                 ),
             )
-        selected_names = valid_names - set(exclude_spec)
+        selected_names = valid_names - set(excluded)
 
     return tuple(f for f in all_fields if f.name in selected_names)
 

@@ -402,8 +402,10 @@ class RangeField(Field):
     constraint instead of compiling ``col BETWEEN NULL AND NULL``.
     """
 
-    default_validators: ClassVar[list] = [validate_range]
-    empty_values: ClassVar[list] = [
+    # django-stubs declares both as ``forms.Field`` instance variables; Django
+    # defines them as class attributes, which is what these override.
+    default_validators: ClassVar[list] = [validate_range]  # type: ignore[misc]  # stub: instance var
+    empty_values: ClassVar[list] = [  # type: ignore[misc]  # stub: instance var
         None,
         [None, None],
         (None, None),

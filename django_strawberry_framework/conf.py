@@ -525,7 +525,7 @@ def testing_endpoint_setting() -> str:
 # ``PytestReturnNotNoneWarning`` under a ``filterwarnings = error`` posture.
 # Same hazard class (and same idiom) as ``testing/client.py::TestClient``'s
 # class-level guard.
-testing_endpoint_setting.__test__ = False
+testing_endpoint_setting.__test__ = False  # type: ignore[attr-defined]  # mypy: a def takes no new attrs
 
 
 def hide_flat_filters_setting() -> bool:

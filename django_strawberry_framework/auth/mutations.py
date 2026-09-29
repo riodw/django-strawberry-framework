@@ -32,7 +32,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import inspect
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast
 
 import strawberry
 from django.contrib import auth
@@ -73,6 +73,12 @@ from ..utils.permissions import request_from_info
 from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.sessions import actor_transition
 from . import sessions
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable
+
+    from django.contrib.auth.base_user import AbstractBaseUser
+    from django.db import models
 
 # The one family label every auth surface resolves its request under (the
 # spec-040 D1 reuse directive): a single module-level constant, never a per-field
@@ -213,7 +219,26 @@ class _AuthMutationMetaSnapshot:
         )
 
 
-class _SealedAuthHolderMeta(type):
+# The class attributes ``_make_permission_holder`` stashes on every holder
+# (``_primary_type`` / ``_payload_type_name`` are rebound at bind), declared on a
+# type-checking-only base so the runtime metaclass body records no annotations: a
+# metaclass-level ``__annotations__`` would shadow ``type``'s own descriptor on every
+# holder class.
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+    class _AuthHolderAttributes(type):
+        """The holder class attributes, as a type checker sees them."""
+
+        _mutation_meta: _AuthMutationMetaSnapshot
+        _auth_surface: str
+        _primary_type: type | None
+        _payload_type_name: str | None
+
+else:
+    _AuthHolderAttributes = type
+
+
+class _SealedAuthHolderMeta(_AuthHolderAttributes):
     """Seals the synthesized auth holder's ``_mutation_meta`` head (0.0.15 auth hardening).
 
     Mirrors ``mutations/sets.py::make_meta_validating_metaclass``: a holder's
@@ -224,7 +249,7 @@ class _SealedAuthHolderMeta(type):
     one honored write; rebinding or deletion raises ``ConfigurationError``.
     """
 
-    def __setattr__(cls, name: str, value: Any) -> None:
+    def __setattr__(cls, name: str, value: Any) -> None:  # noqa: N805 - a metaclass method's first argument is the class
         if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
             raise ConfigurationError(
                 f"{cls.__name__}._mutation_meta is sealed and cannot be rebound; the auth "
@@ -232,7 +257,7 @@ class _SealedAuthHolderMeta(type):
             )
         super().__setattr__(name, value)
 
-    def __delattr__(cls, name: str) -> None:
+    def __delattr__(cls, name: str) -> None:  # noqa: N805 - a metaclass method's first argument is the class
         if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
             raise ConfigurationError(
                 f"{cls.__name__}._mutation_meta is sealed and cannot be deleted; the "
@@ -241,11 +266,17 @@ class _SealedAuthHolderMeta(type):
         super().__delattr__(name)
 
 
+# One auth-ledger declaration: a fixed surface's permission holder or the
+# ``register`` rider.
+_AuthDeclaration: TypeAlias = _SealedAuthHolderMeta | type[DjangoMutation]
+_AuthDeclarationT = TypeVar("_AuthDeclarationT", _SealedAuthHolderMeta, type[DjangoMutation])
+
+
 def _make_permission_holder(
     operation: str,
     holder_name: str,
     permission_classes: tuple[Any, ...],
-) -> type:
+) -> _SealedAuthHolderMeta:
     """Synthesize the module-internal permission holder for one fixed auth surface.
 
     The ONE holder-synthesis site the three fixed factories share (spec-040 D3 /
@@ -281,7 +312,7 @@ def _make_permission_holder(
     )
 
 
-def _declared_auth_surface(surface: str) -> type | None:
+def _declared_auth_surface(surface: str) -> _AuthDeclaration | None:
     """Return the ledger's declaration for ``surface``, or ``None``.
 
     The ledger IS the same-args cache and the conflict state (spec-040 Decision 9):
@@ -297,7 +328,7 @@ def _declared_auth_surface(surface: str) -> type | None:
 
 def _reject_conflicting_permission_classes(
     surface: str,
-    declared_cls: type,
+    declared_cls: _AuthDeclaration,
     permission_classes: tuple[Any, ...],
 ) -> None:
     """Raise unless a repeat declaration's ``permission_classes`` match the cached one.
@@ -327,8 +358,8 @@ def _declare_auth_surface(
     surface: str,
     label: str,
     permission_classes: Any,
-    synthesize: Any,
-) -> type:
+    synthesize: Callable[[tuple[Any, ...]], _AuthDeclarationT],
+) -> _AuthDeclarationT:
     """Resolve one auth surface's declaration class (cached, conflict-checked, or fresh).
 
     The ONE declaration path all four factories route through: normalize
@@ -347,11 +378,18 @@ def _declare_auth_surface(
     declared_cls = _declared_auth_surface(surface)
     if declared_cls is not None:
         _reject_conflicting_permission_classes(surface, declared_cls, normalized)
-        return declared_cls
+        # One surface is only ever minted by one ``synthesize`` (a holder for the fixed
+        # fields, the ``Register`` rider for ``register``), so the cached entry is that
+        # factory's type.
+        return cast("_AuthDeclarationT", declared_cls)
     return synthesize(normalized)
 
 
-def _declare_fixed_auth_surface(surface: str, holder_name: str, permission_classes: Any) -> type:
+def _declare_fixed_auth_surface(
+    surface: str,
+    holder_name: str,
+    permission_classes: Any,
+) -> _SealedAuthHolderMeta:
     """Record (or re-record) one fixed auth surface; return its permission holder.
 
     The shared fixed-field declaration path ``login_mutation`` /
@@ -436,7 +474,8 @@ def _make_auth_field(
         return sync_body(info, **kwargs)
 
     signature, annotations = build_lazy_field_signature(arguments, return_annotation)
-    _resolve.__signature__ = signature
+    # mypy: typeshed's FunctionType omits __signature__
+    _resolve.__signature__ = signature  # type: ignore[attr-defined]
     _resolve.__annotations__ = annotations
     return strawberry.field(
         resolver=_resolve,
@@ -504,11 +543,13 @@ def _authenticated_actor_or_none(request: Any) -> Any:
             return None
         if inspect.isawaitable(is_authenticated):
             with contextlib.suppress(BaseException):
-                is_authenticated.close()
+                # mypy: duck-typed close; an awaitable without it raises AttributeError, suppressed
+                is_authenticated.close()  # type: ignore[attr-defined]
             return None
     elif inspect.isawaitable(is_authenticated):
         with contextlib.suppress(BaseException):
-            is_authenticated.close()
+            # mypy: duck-typed close; an awaitable without it raises AttributeError, suppressed
+            is_authenticated.close()  # type: ignore[attr-defined]
         return None
     # Truthiness is the FOURTH hostile surface (hunt 0.0.15): the read and the
     # legacy-callable call above are contained, but a value whose ``__bool__``
@@ -590,7 +631,7 @@ def _login_result_payload(payload_cls: type, slot: str, user: Any) -> Any:
 
 
 def _login_authenticate(
-    holder_cls: type,
+    holder_cls: _SealedAuthHolderMeta,
     info: Any,
     username: str,
     password: str,
@@ -631,7 +672,9 @@ def _login_authenticate(
     )
     resolvers.authorize_or_raise(holder_cls, info, "login", {"username": username}, instance=None)
     payload_cls = resolvers.payload_cls_for(holder_cls)
-    slot = payload_object_slot(holder_cls._primary_type)
+    # The login holder's primary is bound at finalize (``bind_auth_mutations``), before
+    # any request reaches this prologue.
+    slot = payload_object_slot(cast("type", holder_cls._primary_type))
     unstorable = (
         unencodable_text_error("username", username) is not None
         or unencodable_text_error("password", password) is not None
@@ -710,7 +753,7 @@ async def _channels_http_login_establish(request: Any, session: Any, user: Any) 
 
 
 def _login_resolve_body(
-    holder_cls: type,
+    holder_cls: _SealedAuthHolderMeta,
     info: Any,
     *,
     username: str,
@@ -749,7 +792,7 @@ def _login_resolve_body(
 
 
 async def _login_resolve_body_async(
-    holder_cls: type,
+    holder_cls: _SealedAuthHolderMeta,
     info: Any,
     *,
     username: str,
@@ -789,7 +832,10 @@ async def _login_resolve_body_async(
     return payload
 
 
-def _logout_prologue(holder_cls: type, info: Any) -> tuple[Any, sessions.Transport, type]:
+def _logout_prologue(
+    holder_cls: _SealedAuthHolderMeta,
+    info: Any,
+) -> tuple[Any, sessions.Transport, type]:
     """The all-sync logout prologue: classify, capability, missing-session, gate, payload class.
 
     Runs steps 1-3 of the logout state machine with NO session mutation:
@@ -925,7 +971,7 @@ async def _channels_logout(request: Any, payload_cls: type) -> Any:
             return payload
 
 
-def _logout_resolve_body(holder_cls: type, info: Any) -> Any:
+def _logout_resolve_body(holder_cls: _SealedAuthHolderMeta, info: Any) -> Any:
     """The native SYNC logout body: prologue, then the transport critical section.
 
     Handles Django HTTP under synchronous execution directly, and a directly-invoked
@@ -949,7 +995,7 @@ def _logout_resolve_body(holder_cls: type, info: Any) -> Any:
     return async_to_sync(_channels_logout)(request, payload_cls)
 
 
-async def _logout_resolve_body_async(holder_cls: type, info: Any) -> Any:
+async def _logout_resolve_body_async(holder_cls: _SealedAuthHolderMeta, info: Any) -> Any:
     """The native ASYNC logout body: bridge Django HTTP, await Channels natively.
 
     A Django ``HttpRequest`` under async execution stays inside the existing
@@ -1029,7 +1075,7 @@ def logout_mutation(
     )
 
 
-def derive_register_fields(user_model: type) -> tuple[str, ...]:
+def derive_register_fields(user_model: type[AbstractBaseUser]) -> tuple[str, ...]:
     """Return the register input's narrowed field tuple for ``user_model`` (Decision 6).
 
     The exact rule: ``USERNAME_FIELD`` first, then each distinct
@@ -1048,7 +1094,8 @@ def derive_register_fields(user_model: type) -> tuple[str, ...]:
     keeps privilege and activation state server-owned instead of silently
     turning an unusual user-model declaration into public registration input.
     """
-    names = [user_model.USERNAME_FIELD, *user_model.REQUIRED_FIELDS, "password"]
+    # mypy: django-stubs omits AbstractBaseUser.USERNAME_FIELD, which Django's base methods read
+    names = [user_model.USERNAME_FIELD, *user_model.REQUIRED_FIELDS, "password"]  # type: ignore[attr-defined]
     deduped = tuple(dict.fromkeys(names))
     protected = sorted(_REGISTER_PROTECTED_FIELDS.intersection(deduped))
     if protected:
@@ -1065,7 +1112,7 @@ def derive_register_fields(user_model: type) -> tuple[str, ...]:
 
 
 def _register_decode_step(
-    mutation_cls: type,
+    mutation_cls: type[DjangoMutation],
     data: Any,
     info: Any,
     instance: Any,
@@ -1084,14 +1131,16 @@ def _register_decode_step(
     """
     from ..mutations.resolvers import _model_decode_step
 
-    model = mutation_cls._mutation_meta.model
+    # The rider is a model-backed create: its snapshot carries the user model and the
+    # bind stashed the decode's reverse maps.
+    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
     decoded = _model_decode_step(
         model,
         data,
         info,
         instance=instance,
-        specs=mutation_cls._input_field_specs,
-        model_fields=mutation_cls._model_fields_by_attr,
+        specs=cast("list", mutation_cls._input_field_specs),
+        model_fields=cast("dict[str, Any]", mutation_cls._model_fields_by_attr),
     )
     if isinstance(decoded, list):
         return decoded
@@ -1145,7 +1194,7 @@ def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
     return resolvers._model_write_step(instance, (user, m2m_assignments, exclude))
 
 
-def _run_register_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> Any:
+def _run_register_pipeline_sync(mutation_cls: type[DjangoMutation], info: Any, data: Any) -> Any:
     """Run the register create through the shared write skeleton (spec-040 Decision 6).
 
     Rides ``run_write_pipeline_sync`` unchanged - the ``transaction.atomic()``
@@ -1168,7 +1217,7 @@ def _run_register_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> Any
     )
 
 
-def _synthesize_register_rider(permission_classes: list[Any]) -> type:
+def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[DjangoMutation]:
     """Synthesize the concrete ``Register`` rider class (spec-040 Decision 6).
 
     A package-declared ``DjangoMutation`` subclass whose ``__name__`` is pinned to
@@ -1370,7 +1419,7 @@ def bind_auth_mutations() -> None:
         payload_cls = build_payload_type(
             "Login",
             object_type=primary,
-            object_slot=payload_object_slot(primary),
+            object_slot=payload_object_slot(cast("type", primary)),
         )
         materialize_mutation_input_class(payload_cls.__name__, payload_cls)
         login_holder._payload_type_name = payload_cls.__name__
@@ -1389,7 +1438,7 @@ def bind_auth_mutations() -> None:
         # imported ``current_user`` (which imported ``queries``).
         from .queries import CURRENT_USER_ALIAS_NAME, materialize_current_user_alias
 
-        materialize_current_user_alias(CURRENT_USER_ALIAS_NAME, primary)
+        materialize_current_user_alias(CURRENT_USER_ALIAS_NAME, cast("type", primary))
     # ``register`` needs no auth-side emit work: the rider is an ordinary
     # ``DjangoMutation``, so ``bind_mutations()`` (next in the pinned order)
     # materializes its ``RegisterInput`` / ``RegisterPayload``; this bind's

@@ -22,7 +22,7 @@ caller pre-computes the field list with
 
 import inspect
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 import strawberry
 from asgiref.sync import sync_to_async
@@ -64,7 +64,7 @@ from ..utils.querysets import (
     materialized_rows,
     normalized_row_source,
 )
-from ..utils.relations import instance_accessor, is_many_side_relation_kind
+from ..utils.relations import RelationKind, instance_accessor, is_many_side_relation_kind
 from .converters import _field_output_type_for
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
@@ -223,7 +223,7 @@ def _check_n1(
     field_name: str,
     parent_type: type | None = None,
     *,
-    kind: str | None,
+    kind: RelationKind | Literal["connection_to_attr"] | None,
     accessor_name: str | None = None,
     to_attr: str | None = None,
     reason: str | None = None,
@@ -603,7 +603,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         return _name_resolver(many_resolver, field_name)
 
     if kind == "reverse_one_to_one":
-        related_does_not_exist = (
+        reverse_does_not_exist = (
             field_meta.related_model.DoesNotExist
             if field_meta.related_model is not None
             and hasattr(field_meta.related_model, "DoesNotExist")
@@ -620,7 +620,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
                             root,
                             accessor_name,
                         )
-                    except related_does_not_exist:
+                    except reverse_does_not_exist:
                         return None
                     if visibility_type is not None and related is not None:
                         if _optimizer_scoped_relation(info, parent_type, field_name):
@@ -635,7 +635,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
             try:
                 related = getattr(root, accessor_name)
-            except related_does_not_exist:
+            except reverse_does_not_exist:
                 return None
             if visibility_type is not None and related is not None:
                 if _optimizer_scoped_relation(info, parent_type, field_name):

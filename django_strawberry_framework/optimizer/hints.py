@@ -24,7 +24,7 @@ top-level ``__init__.py`` so the import path stays short.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from django.db.models import Prefetch
 
@@ -96,7 +96,8 @@ def _require_strategy(name: object) -> StrategySelection:
             f"or a NestedConnectionStrategy instance; got {_safe_type_name(name)}.",
         )
     resolve_strategy(name)
-    return name  # type: ignore[return-value]
+    # ``resolve_strategy`` raises for anything that is not a strategy selection.
+    return cast("StrategySelection", name)
 
 
 @dataclass(frozen=True)
@@ -264,8 +265,5 @@ def hint_is_skip(hint: OptimizerHint | None) -> bool:
 
 # Sentinel instance - must be created after the class body so the
 # dataclass decorator has finished installing ``__init__`` and
-# ``__setattr__``.  The ``# type: ignore[misc]`` silences mypy's
-# "cannot assign to a ClassVar" warning: the ClassVar declaration is
-# the only way to keep the dataclass decorator from treating ``SKIP``
-# as a regular default-typed field, but mypy still flags the rebind.
-OptimizerHint.SKIP = OptimizerHint(skip=True)  # type: ignore[misc]
+# ``__setattr__``.
+OptimizerHint.SKIP = OptimizerHint(skip=True)

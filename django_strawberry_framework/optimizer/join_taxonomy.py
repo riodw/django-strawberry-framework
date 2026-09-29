@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..utils.relations import (
     RelationKind,
@@ -60,6 +60,9 @@ from ..utils.relations import (
     relation_kind,
     safe_truthy,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
 
 
 class LateralJoinShape(enum.Enum):
@@ -221,7 +224,7 @@ def _parent_join_column(field: Any, kind: RelationKind) -> str | None:
         return None
 
 
-def _through_model(field: Any) -> type | None:
+def _through_model(field: Any) -> type[models.Model] | None:
     """The M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
     through = _safe_getattr(field, "through")
     if through is not None:
@@ -229,7 +232,7 @@ def _through_model(field: Any) -> type | None:
     return _safe_getattr(_safe_getattr(field, "remote_field"), "through")
 
 
-def _through_link_fields(field: Any, through: type | None) -> tuple[Any, Any]:
+def _through_link_fields(field: Any, through: type[models.Model] | None) -> tuple[Any, Any]:
     """The M2M through table's (parent-side FK, child-side FK) for ``field``.
 
     Resolved from the forward ``ManyToManyField``'s own naming

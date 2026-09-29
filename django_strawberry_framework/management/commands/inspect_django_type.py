@@ -63,6 +63,12 @@ from django_strawberry_framework.scalars import _PACKAGE_SCALAR_MAP
 from django_strawberry_framework.types.base import DjangoType, _is_relay_shaped
 from django_strawberry_framework.types.converters import SCALAR_MAP, _field_output_type_for
 
+if typing.TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry.types.base import WithStrawberryObjectDefinition
+
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+
 _GLOBAL_ID_GRAPHQL_TYPE = "GlobalID!"
 _RELAY_PK_CONVERTER = "relay.Node id"
 _DEFAULT_NAME_CONVERTER = NameConverter()
@@ -125,7 +131,7 @@ class Command(BaseCommand):
             ),
         )
 
-    def handle(self, *args: object, **options: object) -> None:
+    def handle(self, *args: object, **options: typing.Any) -> None:
         """Import the schema (if given), resolve the type, and print its field table."""
         schema = options.get("schema")
         schema_object = None
@@ -202,7 +208,7 @@ class Command(BaseCommand):
 
     def _print_table(
         self,
-        definition: object,
+        definition: "DjangoTypeDefinition",
         scalar_namer: _ScalarNamer,
         name_converter: NameConverter,
     ) -> None:
@@ -234,7 +240,7 @@ class Command(BaseCommand):
 
     def _resolve_row(
         self,
-        definition: object,
+        definition: "DjangoTypeDefinition",
         field: models.Field,
         scalar_namer: _ScalarNamer,
     ) -> tuple[str, str, str]:
@@ -269,7 +275,7 @@ class Command(BaseCommand):
         return self._scalar_row(definition, field, scalar_namer)
 
     @staticmethod
-    def _is_suppressed_relay_pk(definition: object, field: models.Field) -> bool:
+    def _is_suppressed_relay_pk(definition: "DjangoTypeDefinition", field: models.Field) -> bool:
         """Return whether ``field`` is the Relay-Node-suppressed primary key.
 
         On a Relay-Node-shaped type a NON-relation pk ``continue``s past
@@ -299,9 +305,9 @@ class Command(BaseCommand):
     @classmethod
     def _relation_row(
         cls,
-        definition: object,
+        definition: "DjangoTypeDefinition",
         field: models.Field,
-        field_meta: object,
+        field_meta: "FieldMeta",
         scalar_namer: _ScalarNamer | None = None,
     ) -> tuple[str, str, str]:
         """Build the row for a relation field from its resolved annotation + cardinality.
@@ -336,7 +342,10 @@ class Command(BaseCommand):
         return graphql_type, nullable, converter
 
     @staticmethod
-    def _suppressed_connection_name(definition: object, field: models.Field) -> str | None:
+    def _suppressed_connection_name(
+        definition: "DjangoTypeDefinition",
+        field: models.Field,
+    ) -> str | None:
         """Return the synthesized ``<rel>_connection`` name when ``field``'s list form was dropped.
 
         A ``relation_shapes = {<rel>: "connection"}`` field has its generated
@@ -356,8 +365,8 @@ class Command(BaseCommand):
 
     @staticmethod
     def _connection_only_relation_row(
-        definition: object,
-        field_meta: object,
+        definition: "DjangoTypeDefinition",
+        field_meta: "FieldMeta",
         generated: str,
         scalar_namer: _ScalarNamer | None = None,
     ) -> tuple[str, str, str]:
@@ -373,7 +382,10 @@ class Command(BaseCommand):
         list form was deliberately dropped.
         """
         scalar_namer = scalar_namer or _scalar_name
-        strawberry_fields = definition.origin.__strawberry_definition__.fields
+        # ``cast``: ``handle`` refused an unfinalized type, and finalization is
+        # what attaches ``origin.__strawberry_definition__``.
+        finalized_origin = typing.cast("type[WithStrawberryObjectDefinition]", definition.origin)
+        strawberry_fields = finalized_origin.__strawberry_definition__.fields
         field_type = next(sf.type for sf in strawberry_fields if sf.python_name == generated)
         graphql_type = _render_strawberry_type(field_type, scalar_namer)
         kind = field_meta.relation_kind
@@ -382,7 +394,7 @@ class Command(BaseCommand):
 
     @staticmethod
     def _scalar_row(
-        definition: object,
+        definition: "DjangoTypeDefinition",
         field: models.Field,
         scalar_namer: _ScalarNamer | None = None,
     ) -> tuple[str, str, str]:
@@ -410,7 +422,7 @@ class Command(BaseCommand):
 
     @staticmethod
     def _consumer_authored_row(
-        definition: object,
+        definition: "DjangoTypeDefinition",
         field: models.Field,
         scalar_namer: _ScalarNamer | None = None,
     ) -> tuple[str, str, str]:
@@ -434,7 +446,10 @@ class Command(BaseCommand):
         time - so it raises ``CommandError`` with a concrete recovery hint instead.
         """
         scalar_namer = scalar_namer or _scalar_name
-        strawberry_fields = definition.origin.__strawberry_definition__.fields
+        # ``cast``: ``handle`` refused an unfinalized type, and finalization is
+        # what attaches ``origin.__strawberry_definition__``.
+        finalized_origin = typing.cast("type[WithStrawberryObjectDefinition]", definition.origin)
+        strawberry_fields = finalized_origin.__strawberry_definition__.fields
         field_type = next(sf.type for sf in strawberry_fields if sf.python_name == field.name)
         if field_type is UNRESOLVED:
             raise CommandError(
@@ -515,7 +530,7 @@ def _consumer_nullable(field_type: object) -> str:
     return "no"
 
 
-def _consumer_converter_label(definition: object, name: str) -> str:
+def _consumer_converter_label(definition: "DjangoTypeDefinition", name: str) -> str:
     """Name the override row that produced a consumer-authored field.
 
     ``annotation`` vs ``strawberry.field`` distinguishes the two authoring styles
@@ -551,7 +566,11 @@ def _consumer_converter_label(definition: object, name: str) -> str:
     return f"consumer {source} ({kind})"
 
 
-def _sdl_type_name(type_cls: type, definition: object, name_converter: NameConverter) -> str:
+def _sdl_type_name(
+    type_cls: type,
+    definition: "DjangoTypeDefinition",
+    name_converter: NameConverter,
+) -> str:
     """Return the SDL type name Strawberry emits, applying the schema NameConverter.
 
     Runs ``name_converter.from_type`` over the finalized Strawberry object

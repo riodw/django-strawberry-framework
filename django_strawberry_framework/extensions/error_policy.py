@@ -80,7 +80,7 @@ from strawberry.types.execution import ExecutionResult as StrawberryExecutionRes
 
 from .. import logger
 from ..error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, new_correlation_id
-from .operation_state import _OperationBoundExtension
+from .operation_state import OperationState, _OperationBoundExtension
 
 __all__ = [
     "DjangoErrorPolicyExtension",
@@ -359,7 +359,7 @@ def _replacement_for(error: Any, policy: ErrorPolicy) -> Any:
         return _degraded(policy)
 
 
-class DjangoErrorPolicyExtension(_OperationBoundExtension):
+class DjangoErrorPolicyExtension(_OperationBoundExtension[OperationState]):
     """Replace unexpected exception messages with a stable message plus a correlation id.
 
     ``DjangoSchema`` installs one of these on every operation and is the only

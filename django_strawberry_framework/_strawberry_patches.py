@@ -387,11 +387,11 @@ try:
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
-    BaseView = None  # type: ignore[assignment,misc]
-    HTTPException = None  # type: ignore[assignment,misc]
-    AsyncBaseHTTPView = None  # type: ignore[assignment,misc]
-    SyncBaseHTTPView = None  # type: ignore[assignment,misc]
-    replace_placeholders_with_files = None  # type: ignore[assignment,misc]
+    BaseView = None  # type: ignore[assignment,misc]  # import-failure sentinel
+    HTTPException = None  # type: ignore[assignment,misc]  # import-failure sentinel
+    AsyncBaseHTTPView = None  # type: ignore[assignment,misc]  # import-failure sentinel
+    SyncBaseHTTPView = None  # type: ignore[assignment,misc]  # import-failure sentinel
+    replace_placeholders_with_files = None  # type: ignore[assignment]  # import-failure sentinel
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -844,7 +844,10 @@ def apply() -> None:
     _validate_upstream_shape()
     if _patch_is_installed():
         return
-    BaseView.parse_json = _patched_parse_json
-    BaseView.parse_query_params = _patched_parse_query_params
-    SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart
-    AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart
+    BaseView.parse_json = _patched_parse_json  # type: ignore[method-assign]  # the patch itself
+    # mypy: the patch itself
+    BaseView.parse_query_params = _patched_parse_query_params  # type: ignore[method-assign]
+    # mypy: the patch itself
+    SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart  # type: ignore[method-assign]
+    # mypy: the patch itself
+    AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart  # type: ignore[method-assign]

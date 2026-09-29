@@ -59,7 +59,7 @@ through ``_merged_serializer_kwargs`` (spec-039).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from rest_framework import serializers
 
@@ -216,7 +216,7 @@ def _validate_schema_field_map(name: str, field_map: Any) -> dict[str, serialize
 
 
 def _checked_schema_field_map(
-    cls: type,
+    cls: type[SerializerMutation],
     meta: _ValidatedMutationMeta,
 ) -> dict[str, serializers.Field]:
     """Read ``get_serializer_for_schema()`` through the ONE guarded path.
@@ -298,7 +298,7 @@ def _validate_serializer_nested_fields(
     operation: str,
     field_map: dict[str, serializers.Field],
     nested_fields: Any,
-) -> dict[str, NestedSerializerConfig] | None:
+) -> Mapping[str, NestedSerializerConfig] | None:
     """Validate + normalize ``Meta.nested_fields`` at class creation.
 
     ``Meta.nested_fields`` is the explicit opt-in for nested serializer writes: a
@@ -397,7 +397,7 @@ def _assert_schema_source_ownership(
     name: str,
     field_map: Mapping[str, serializers.Field],
     *,
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[serializers.Serializer],
     supplied_fields: set[str],
     apply_defaults: bool,
     nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
@@ -428,7 +428,9 @@ def _assert_schema_source_ownership(
         nested_fields,
     )
     for field_name, config in nested_fields.items():
-        child_serializer, _many = nested_serializer_child(field_map[field_name])
+        # ``validate_nested_config_keys`` just required every key to name a nested serializer.
+        nested_field = cast("serializers.BaseSerializer", field_map[field_name])
+        child_serializer, _many = nested_serializer_child(nested_field)
         child_class = type(child_serializer)
         guard_nested_recursion(child_class, nested_path, field_name)
         child_fields = read_nested_serializer_fields(child_serializer)
@@ -472,23 +474,37 @@ class SerializerMutation(DjangoMutation):
     # The serializer-input namespace (``rest_framework.inputs``), overriding the
     # ``036`` model default (``mutations.inputs``) so a serializer mutation's lazy
     # ``data:`` ref resolves the serializer-derived input, not a model-column input.
-    input_module_path: str = SERIALIZER_INPUTS_MODULE_PATH
+    input_module_path: ClassVar[str] = SERIALIZER_INPUTS_MODULE_PATH
 
     # The reverse-map records (``InputFieldSpec`` per input field), stashed
     # at bind so the decode reaches the serializer-field-keyed reverse map.
-    # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot).
-    _input_field_specs: list | None = None
+    # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot); a type
+    # checker sees the bound list, since every serializer operation has an input.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _input_field_specs: ClassVar[list]
+    else:
+        _input_field_specs = None
 
     # The schema-time specs for ``Meta.injected_fields``, stashed at
     # bind so the resolver holds each injected field to the SAME runtime-agreement
     # contract (present / writable / source / kind / relation-model) an input field gets - not
     # merely that its key is present in ``data``. ``[]`` when no fields are injected.
-    _injected_field_specs: list | None = None
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _injected_field_specs: ClassVar[list]
+    else:
+        _injected_field_specs = None
 
     # The bound serializer-input type name, stashed after successful materialization.
     # Before bind, ``input_type_name`` derives the descriptor through the shared
     # cache helper; after bind, it can read this once the determinism guard passes.
-    _input_type_name: str | None = None
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _input_type_name: ClassVar[str]
+    else:
+        _input_type_name = None
+
+    # The consumer's nested ``Meta`` (declared on every concrete subclass; the metaclass
+    # validates it before the snapshot exists).
+    Meta: ClassVar[type[Any]]
 
     @classmethod
     def _resolve_model(cls, meta: type) -> Any:

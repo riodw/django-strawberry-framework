@@ -53,7 +53,7 @@ import copy
 import inspect
 from collections.abc import Sequence
 from enum import Enum
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -74,6 +74,10 @@ from .utils.querysets import (
     model_for,
     reject_async_in_sync_context,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .types.base import DjangoType
+    from .types.relay import _RelayDjangoType
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
 
@@ -98,7 +102,7 @@ def _clear_node_fields_declared() -> None:
 register_subsystem_clear(_clear_node_fields_declared, owner="relay.node_fields")
 
 
-def _decode_or_graphql_error(gid: str) -> tuple[type, str]:
+def _decode_or_graphql_error(gid: str) -> tuple[type[_RelayDjangoType], str]:
     """Decode ``gid``, converting ``ConfigurationError`` to the wire error.
 
     Every ``ConfigurationError`` from ``types/relay.py::decode_global_id``
@@ -122,7 +126,9 @@ def _decode_or_graphql_error(gid: str) -> tuple[type, str]:
         ) from exc
 
 
-def _node_id_slot(resolved_type: type) -> tuple[str, models.Field | None]:
+def _node_id_slot(
+    resolved_type: type[_RelayDjangoType],
+) -> tuple[str, models.Field | models.ForeignObjectRel | None]:
     """Resolve a Relay type's id slot to ``(id_attr, concrete field or None)``.
 
     The single statement of "which concrete model column backs the GlobalID id
@@ -145,7 +151,7 @@ def _node_id_slot(resolved_type: type) -> tuple[str, models.Field | None]:
         return id_attr, None
 
 
-def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
+def _coerce_pk_or_none(resolved_type: type[_RelayDjangoType], node_id: str) -> Any:
     """Coerce ``node_id`` to the resolution field's Python type; ``None`` if uncoercible.
 
     ``decode_global_id`` validates payload SHAPE only, so a well-formed
@@ -181,7 +187,7 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
     return coerce_field_value_or_none(field, node_id)
 
 
-def _check_typed_match(target_type: type | None, resolved: type) -> None:
+def _check_typed_match(target_type: type | None, resolved: type[_RelayDjangoType]) -> None:
     """Raise the typed-form mismatch ``GraphQLError``; no-op for the bare form.
 
     Identity comparison (``resolved is not target_type``) on the decoded
@@ -192,7 +198,11 @@ def _check_typed_match(target_type: type | None, resolved: type) -> None:
     """
     if target_type is None or resolved is target_type:
         return
-    expected = target_type.__django_strawberry_definition__.graphql_type_name
+    # The factory's ``_validate_node_target`` admitted ``target_type`` as a ``DjangoType``.
+    expected = cast(
+        "type[DjangoType]",
+        target_type,
+    ).__django_strawberry_definition__.graphql_type_name
     received = resolved.__django_strawberry_definition__.graphql_type_name
     raise GraphQLError(
         f"Wrong node type: expected a {expected} id, received a {received} id.",
@@ -230,7 +240,7 @@ class DecodeResult(NamedTuple):
 
 
 def _resolve_real_pk(
-    resolved_type: type,
+    resolved_type: type[_RelayDjangoType],
     coerced_id: Any,
     *,
     using: str | None = None,
@@ -567,7 +577,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         # Group coercible (type, pk) by decoded type - insertion-ordered, pks
         # in input order with duplicates preserved; uncoercible positions are
         # reserved null holes that never poison the batch ``pk__in``.
-        groups: dict[type, list[Any]] = {}
+        groups: dict[type[_RelayDjangoType], list[Any]] = {}
         positions: list[tuple[type, int] | None] = []
         for resolved, node_id in decoded:
             pk = _coerce_pk_or_none(resolved, node_id)

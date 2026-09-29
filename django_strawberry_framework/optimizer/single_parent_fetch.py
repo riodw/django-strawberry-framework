@@ -41,7 +41,7 @@ Two verified corrections to the original idea:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from django.db.models import QuerySet
 
@@ -151,7 +151,8 @@ def single_parent_spec(request: NestedConnectionRequest) -> SingleParentWindowSp
         parent_link_attname=parent_link_field.attname,
         parent_link_column=parent_link_field.column,
         parent_link_table=request.child_queryset.model._meta.db_table,
-        fetch_limit=range_plan.fetch_limit,
+        # ``plain_first_page`` implies a bounded ``limit``, so the fetch limit is set.
+        fetch_limit=cast("int", range_plan.fetch_limit),
         select_related=request.child_queryset.query.select_related,
         select_columns=_select_columns(
             request.child_queryset,

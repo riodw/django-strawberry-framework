@@ -58,7 +58,8 @@ import datetime
 import decimal
 import uuid
 from collections.abc import Callable
-from typing import Any
+from enum import Enum
+from typing import Any, TypeGuard, cast
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -256,7 +257,7 @@ def register_serializer_field_converter(
 # finalize re-emits (the parked-globals discipline the input namespaces use). The
 # read-side model-choice enums live in ``registry`` keyed by ``(model, field_name)``; a
 # serializer-only choice has no model, so it needs this separate name-keyed cache.
-_SERIALIZER_CHOICE_ENUMS: dict[str, type] = {}
+_SERIALIZER_CHOICE_ENUMS: dict[str, type[Enum]] = {}
 
 
 def clear_serializer_choice_enums() -> None:
@@ -267,7 +268,7 @@ def clear_serializer_choice_enums() -> None:
 register_subsystem_clear(clear_serializer_choice_enums, owner="rest_framework.choice_enums")
 
 
-def is_nested_serializer_field(field: serializers.Field) -> bool:
+def is_nested_serializer_field(field: serializers.Field) -> TypeGuard[serializers.BaseSerializer]:
     """Return whether ``field`` is a nested ``Serializer`` / ``ListSerializer``.
 
     A nested ``Serializer`` / ``ModelSerializer`` field (single) or a
@@ -281,8 +282,8 @@ def is_nested_serializer_field(field: serializers.Field) -> bool:
 
 
 def nested_serializer_child(
-    field: serializers.Field,
-) -> tuple[serializers.BaseSerializer, bool]:
+    field: serializers.BaseSerializer,
+) -> tuple[serializers.Serializer, bool]:
     """Return ``(child_serializer_instance, many)`` for a nested serializer field.
 
     A ``ListSerializer`` (``many=True``) carries the item serializer on ``.child`` and is
@@ -291,9 +292,11 @@ def nested_serializer_child(
     schema-time field map), which the recursive nested build in ``rest_framework/inputs.py``
     walks with the SAME machinery the top level uses.
     """
+    # The supported nested shapes are a ``Serializer`` item (``many=True`` builds a
+    # ``ListSerializer`` around one); any other child fails loud at its guarded ``.fields`` read.
     if isinstance(field, serializers.ListSerializer):
-        return field.child, True
-    return field, False
+        return cast("serializers.Serializer", field.child), True
+    return cast("serializers.Serializer", field), False
 
 
 def _reject_nested_serializer(field: serializers.Field) -> None:
@@ -385,7 +388,8 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
             "scalar child is supported.",
         )
     return SerializerFieldConversion(
-        annotation=list[child_conversion.annotation],
+        # mypy: runtime-built annotation
+        annotation=list[child_conversion.annotation],  # type: ignore[name-defined]
         kind=SCALAR,
         required=field.required,
     )
@@ -703,7 +707,8 @@ def backing_model_field(model: type[models.Model] | None, field: serializers.Fie
         field_label=f"Serializer field {field.field_name!r}",
         must_map_to="a model-column-backed field must map to a single concrete column",
     )
-    source = field.source if field.source else field.field_name
+    # A bound field (read off a serializer's ``.fields``) always carries its name.
+    source = field.source if field.source else cast("str", field.field_name)
     try:
         return model._meta.get_field(source)
     except FieldDoesNotExist:
@@ -755,14 +760,21 @@ def serializer_only_relation_annotation(
     not visible at schema build) raises ``ConfigurationError`` naming the field -
     it cannot be typed.
     """
-    related_field = field.child_relation if kind == RELATION_MULTI else field
+    # ``convert_serializer_field`` classifies only a ``ManyRelatedField`` as ``RELATION_MULTI``,
+    # and a bound field (read off a serializer's ``.fields``) always carries its name.
+    related_field = (
+        cast("serializers.ManyRelatedField", field).child_relation
+        if kind == RELATION_MULTI
+        else field
+    )
     many = kind == RELATION_MULTI
-    input_attr, _ = serializer_field_graphql_name(field.field_name, kind)
+    field_name = cast("str", field.field_name)
+    input_attr, _ = serializer_field_graphql_name(field_name, kind)
     return annotate_queryset_relation(
         getattr(related_field, "queryset", None),
         many=many,
         python_attr=input_attr,
-        primary_of=lambda model: _require_relation_primary(field.field_name, model),
+        primary_of=lambda model: _require_relation_primary(field_name, model),
         missing=lambda: ConfigurationError(
             f"Serializer relation field {field.field_name!r} has no backing model column "
             "and no concrete queryset.model at schema build, so its related model - and "
@@ -848,7 +860,9 @@ def _model_backed_scalar_annotation(
     return model_annotation
 
 
-def _is_enumerable_serializer_choice(field: serializers.Field) -> bool:
+def _is_enumerable_serializer_choice(
+    field: serializers.Field,
+) -> TypeGuard[serializers.ChoiceField]:
     """Return whether a serializer-only ``ChoiceField`` should generate a GraphQL enum.
 
     A serializer-only ``ChoiceField`` / ``MultipleChoiceField`` with static choices maps to
@@ -864,12 +878,12 @@ def _is_enumerable_serializer_choice(field: serializers.Field) -> bool:
     )
 
 
-def _enum_member_map(enum_cls: type) -> dict[str, Any]:
+def _enum_member_map(enum_cls: type[Enum]) -> dict[str, Any]:
     """Return an enum's ``{member_name: value}`` map (for the choice-enum collision check)."""
     return {member.name: member.value for member in enum_cls}
 
 
-def _serializer_choice_enum(field: serializers.Field, type_name: str) -> type:
+def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> type[Enum]:
     """Build (or dedupe) the generated enum for a serializer-only ``ChoiceField``.
 
     Reuses the shared ``types/converters.py::build_enum_from_choices`` core (the SAME
@@ -882,7 +896,8 @@ def _serializer_choice_enum(field: serializers.Field, type_name: str) -> type:
     name); a name reused with a DIFFERENT member set fails loud rather than silently reusing
     the first.
     """
-    enum_name = f"{type_name}{pascal_case(field.field_name)}Enum"
+    # A bound field (read off a serializer's ``.fields``) always carries its name.
+    enum_name = f"{type_name}{pascal_case(cast('str', field.field_name))}Enum"
     enum_cls = build_enum_from_choices(
         list(field.choices.items()),
         enum_name,
@@ -901,7 +916,7 @@ def _serializer_choice_enum(field: serializers.Field, type_name: str) -> type:
     return enum_cls
 
 
-def _serializer_choice_annotation(field: serializers.Field, type_name: str) -> Any:
+def _serializer_choice_annotation(field: serializers.ChoiceField, type_name: str) -> Any:
     """Return the generated enum annotation for an enumerable ``ChoiceField``.
 
     A ``ChoiceField`` -> a single generated enum; a ``MultipleChoiceField`` (a ``ChoiceField``
@@ -912,7 +927,7 @@ def _serializer_choice_annotation(field: serializers.Field, type_name: str) -> A
     """
     enum_cls = _serializer_choice_enum(field, type_name)
     if isinstance(field, serializers.MultipleChoiceField):
-        return list[enum_cls]
+        return list[enum_cls]  # type: ignore[valid-type]  # runtime-built annotation
     return enum_cls
 
 
@@ -970,7 +985,8 @@ def resolve_serializer_field(
     # reaches here (``inputs.py``'s walk routes it to the recursive nested build first); this
     # raise is the fail-loud default for an un-opted-in nested field.
     _reject_nested_serializer(field)
-    field_name = field.field_name
+    # A bound field (read off a serializer's ``.fields``) always carries its name.
+    field_name = cast("str", field.field_name)
     column = backing_model_field(model, field)
     # ``source`` axis: the resolved one-segment source (``None`` when it equals
     # the declared name - keeps the reverse map terse and form-symmetric).

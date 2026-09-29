@@ -22,8 +22,8 @@ try:
     from graphql.execution.execute import ExecutionContext
     from graphql.pyutils import is_iterable
 except ImportError:  # pragma: no cover - exercised through patched imports in tests.
-    ExecutionContext = None  # type: ignore[assignment,misc]
-    is_iterable = None  # type: ignore[assignment,misc]
+    ExecutionContext = None  # type: ignore[assignment,misc]  # import-failure sentinel
+    is_iterable = None  # type: ignore[assignment]  # import-failure sentinel
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -124,4 +124,5 @@ def apply() -> None:
     _validate_upstream_shape()
     if _patch_is_installed():
         return
-    ExecutionContext.complete_list_value = _patched_complete_list_value
+    # mypy: the patch itself
+    ExecutionContext.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign]

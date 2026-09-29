@@ -57,6 +57,7 @@ from .utils.imports import CHANNELS_FLOOR, STRAWBERRY_FLOOR, require_optional_mo
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.core.handlers.asgi import ASGIHandler
+    from strawberry.channels import GraphQLWSConsumer
     from strawberry.schema import BaseSchema
 
 # The one public symbol is resolved lazily via the PEP 562 module ``__getattr__``
@@ -295,7 +296,7 @@ def _websocket_application(
     *,
     schema: BaseSchema,
     package_consumer_class: type[Any],
-    base_consumer_class: type[Any],
+    base_consumer_class: type[GraphQLWSConsumer],
     revalidation_window: float,
 ) -> Any:
     """Resolve the WebSocket branch's ASGI application from the injection seam.

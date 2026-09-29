@@ -24,13 +24,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import fields
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ..exceptions import ConfigurationError, describe_value
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from _typeshed import DataclassInstance
+
 __all__ = ("canonical_policy", "copy_policy", "resolve_policy")
 
-PolicyT = TypeVar("PolicyT")
+PolicyT = TypeVar("PolicyT", bound="DataclassInstance")
 
 
 def copy_policy(policy: PolicyT) -> PolicyT:

@@ -384,7 +384,7 @@ import contextlib
 import math
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import DisallowedHost
 from django.http import HttpRequest
@@ -397,6 +397,9 @@ from .utils.sessions import (
     note_authenticated_actor,
     scope_key,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry.channels import GraphQLWSConsumer
 
 #: The default revalidation window, in seconds: ``0.0`` revalidates at every
 #: security checkpoint. Spelled ONCE here and imported by ``routers.py`` for its
@@ -572,7 +575,8 @@ def resolved_revalidation_window(value: object) -> float:
     if type(value) not in (int, float):
         raise _unusable_window_error(value)
     try:
-        window = float(value)
+        # Exactly an ``int`` or a ``float`` per the type check above.
+        window = float(cast("float", value))
     except OverflowError as exc:
         # Chained, not swallowed: the cause names WHY the number is unusable
         # ("int too large to convert to float") under the package's own error.
@@ -836,7 +840,7 @@ async def revalidate_operation_actor(handler: Any) -> bool:
             "the connection's cached actor.",
         )
         try:
-            websocket = handler.websocket  # type: ignore[attr-defined]
+            websocket = handler.websocket
         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
             raise
         except BaseException:
@@ -854,8 +858,8 @@ async def revalidate_operation_actor(handler: Any) -> bool:
         return False
 
     try:
-        consumer = handler.view  # type: ignore[attr-defined]
-        websocket = handler.websocket  # type: ignore[attr-defined]
+        consumer = handler.view
+        websocket = handler.websocket
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
         raise
     except BaseException:
@@ -960,7 +964,7 @@ async def send_revalidated_operation_frame(
     sibling operation on disconnect.
     """
     try:
-        consumer = websocket.ws_consumer  # type: ignore[attr-defined]
+        consumer = websocket.ws_consumer
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
         raise
     except BaseException:
@@ -1611,7 +1615,7 @@ async def _refreshed_actor(scope: Any) -> Any:
     return await get_user({"session": store})
 
 
-def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
+def build_revalidating_consumer_class(base_consumer_cls: type[GraphQLWSConsumer]) -> type:
     """Return a ``base_consumer_cls`` subclass that revalidates at both checkpoints.
 
     A pure factory: no cache, no soft-dependency guard, and no import of
@@ -1630,8 +1634,11 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
     ``__mro_entries__`` and is the correct shape here - it imports none of the
     three modules and tracks an upstream re-point automatically.
     """
+    # Each base is read off ``base_consumer_cls`` at run time (see above), so it has
+    # no static type to name here.
+    transport_ws_handler_base: Any = base_consumer_cls.graphql_transport_ws_handler_class
 
-    class _RevalidatingTransportWSHandler(base_consumer_cls.graphql_transport_ws_handler_class):
+    class _RevalidatingTransportWSHandler(transport_ws_handler_base):
         """``graphql-transport-ws``: revalidated admission, stoppable results."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1694,7 +1701,9 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
                 # subclasses included - no hand-maintained list can drift.
                 await _contain_message_loop_failure(self, exc, "graphql-transport-ws")
 
-    class _RevalidatingGraphQLWSHandler(base_consumer_cls.graphql_ws_handler_class):
+    graphql_ws_handler_base: Any = base_consumer_cls.graphql_ws_handler_class
+
+    class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):
         """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1723,7 +1732,9 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             except Exception as exc:
                 await _contain_message_loop_failure(self, exc, "legacy graphql-ws")
 
-    class _RevocationGatedWebSocketAdapter(base_consumer_cls.websocket_adapter_class):
+    websocket_adapter_base: Any = base_consumer_cls.websocket_adapter_class
+
+    class _RevocationGatedWebSocketAdapter(websocket_adapter_base):
         """The outbound checkpoint, on the seam both protocols share.
 
         One class-level ``send_json`` override, installed on the generated
@@ -1783,7 +1794,7 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
             "nothing after revocation" invariant.
             """
             try:
-                message_type = message.get("type")  # type: ignore[union-attr]
+                message_type = message.get("type")
             except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
                 raise
             except BaseException:
@@ -1805,9 +1816,9 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
                 return
             if message_type not in _INFORMATION_BEARING_FRAME_TYPES:
                 try:
-                    async with actor_lease(self.ws_consumer.scope):  # type: ignore[attr-defined]
+                    async with actor_lease(self.ws_consumer.scope):
                         try:
-                            revoked = self.ws_consumer._revocation.revoked  # type: ignore[attr-defined]
+                            revoked = self.ws_consumer._revocation.revoked
                         except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
                             raise
                         except BaseException:
@@ -1852,7 +1863,9 @@ def build_revalidating_consumer_class(base_consumer_cls: type) -> type:
                 )
                 return
 
-    class GraphQLWebSocketConsumer(base_consumer_cls):
+    consumer_base: Any = base_consumer_cls
+
+    class GraphQLWebSocketConsumer(consumer_base):
         """The package's WebSocket GraphQL consumer: upstream plus revalidation.
 
         Three ``super()``-delegating hooks - one per protocol for operation

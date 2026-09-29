@@ -81,7 +81,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from graphql import (
     DirectiveNode,
@@ -136,7 +136,7 @@ from ..utils.inputs import RELATION_MULTI
 from ..utils.policies import copy_policy
 from ..utils.private_state import PrivateAuthority
 from ..utils.typing import unwrap_non_null
-from .operation_state import _OperationBoundExtension
+from .operation_state import OperationState, _OperationBoundExtension
 
 __all__ = ("DjangoResourcePolicyExtension",)
 
@@ -933,7 +933,7 @@ def _field_definition(graphql_schema: Any, parent_type: Any, name: str) -> Any:
     return parent_type.fields.get(name)
 
 
-def _page_bound(policy: ResourcePolicy, node: FieldNode, variables: Mapping[str, Any]) -> int:
+def _page_bound(policy: ResourcePolicy, node: FieldNode, variables: dict[str, Any] | None) -> int:
     """Return the row bound one connection selection would fetch.
 
     A ``first`` / ``last`` argument narrows the bound; anything else - absent,
@@ -961,7 +961,7 @@ def _collection_rows(
     parent_type: Any,
     field_type: Any,
     node: FieldNode,
-    variables: Mapping[str, Any],
+    variables: dict[str, Any] | None,
 ) -> int | None:
     """Return the rows a field selection can fetch, or ``None`` when it is not a collection.
 
@@ -1140,7 +1140,8 @@ class _DocumentWalk:
         for var_def in definitions:
             name = var_def.variable.name.value
             if var_def.default_value is None or (
-                defaulted.get(name) is var_def and name in self.read
+                # A default still waiting on its use sites is what kept ``read`` a set.
+                defaulted.get(name) is var_def and name in cast("set[str]", self.read)
             ):
                 continue
             self.values.charge(
@@ -1368,7 +1369,7 @@ def restate_admission_verdict(execution_context: Any) -> None:
         execution_context.pre_execution_errors = [rejection]
 
 
-class DjangoResourcePolicyExtension(_OperationBoundExtension):
+class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
     """Enforce the schema's ``ResourcePolicy`` on every operation.
 
     ``schema.py::DjangoSchema`` builds one on every operation from the policy it
@@ -1525,7 +1526,11 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension):
             try:
                 # The ARMED snapshot, not the object it was resolved from: the
                 # scan and the seams that run under it must charge one policy.
-                scan_document_text(armed_resource_policy(), self.execution_context.query)
+                # ``cast``: the budget armed just above is what this reads back.
+                scan_document_text(
+                    cast("ResourcePolicy", armed_resource_policy()),
+                    self.execution_context.query,
+                )
                 yield
             finally:
                 end_resource_budget(scope)

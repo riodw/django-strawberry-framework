@@ -45,7 +45,7 @@ never resolved.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, NamedTuple, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast, get_origin
 
 import strawberry
 from django.db import models
@@ -80,6 +80,13 @@ from .operations import (
     non_delete_operation_error,
 )
 from .permissions import DjangoModelPermission, run_permission_classes
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import Protocol, TypeAlias, TypeVar
+
+    from strawberry.types.base import WithStrawberryObjectDefinition
+
+    from ..forms.sets import DjangoFormMutation
 
 #: Common Meta keys accepted by every write-flavor Mutation.Meta (fields, exclude, permission_classes).
 COMMON_WRITE_META_KEYS: frozenset[str] = frozenset(
@@ -243,7 +250,7 @@ def cached_build_input(
 
 
 def build_and_stash_input(
-    cls: type,
+    cls: WriteMutationClass,
     *,
     build: Callable[[], tuple[type, Any]],
     materialize: Callable[[str, type], None],
@@ -383,7 +390,7 @@ def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> Any:
 
 
 def resolve_backed_model_or_raise(
-    cls: type,
+    cls: type[DjangoMutation],
     meta: type,
     *,
     base_label: str,
@@ -413,7 +420,7 @@ def resolver_seams(
     async_name: str,
     *,
     with_id: bool = True,
-) -> tuple[Any, Any]:
+) -> tuple[classmethod[Any, ..., Any], classmethod[Any, ..., Any]]:
     """Build the ``(resolve_sync, resolve_async)`` classmethod pair a mutation base exposes.
 
     Every write-flavor base (``DjangoMutation`` / ``DjangoModelFormMutation`` /
@@ -433,9 +440,12 @@ def resolver_seams(
     ``resolve_sync, resolve_async = resolver_seams(...)`` so both land in the class
     ``__dict__``.
     """
+    # The two arms bind the same names to differently-shaped functions (the
+    # model-less arm has no ``id``), so the names are declared once up front.
+    resolve_sync: Callable[..., Any]
+    resolve_async: Callable[..., Any]
     if with_id:
 
-        @classmethod
         def resolve_sync(
             cls: type,
             info: Any,
@@ -446,7 +456,6 @@ def resolver_seams(
             """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
             return import_attr(module_path, sync_name)(cls, info, data=data, id=id)
 
-        @classmethod
         def resolve_async(
             cls: type,
             info: Any,
@@ -459,17 +468,15 @@ def resolver_seams(
 
     else:
 
-        @classmethod
         def resolve_sync(cls: type, info: Any, *, data: Any) -> Any:
             """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
             return import_attr(module_path, sync_name)(cls, info, data=data)
 
-        @classmethod
         def resolve_async(cls: type, info: Any, *, data: Any) -> Any:
             """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
             return import_attr(module_path, async_name)(cls, info, data=data)
 
-    return resolve_sync, resolve_async
+    return classmethod(resolve_sync), classmethod(resolve_async)
 
 
 # Per-finalize-pass build cache keyed by generated-input shape identity
@@ -613,7 +620,7 @@ def make_meta_validating_metaclass(
 
     class MetaValidatingMetaclass(type):
         def __new__(
-            cls: type,
+            cls: type[MetaValidatingMetaclass],
             name: str,
             bases: tuple,
             attrs: dict,
@@ -623,7 +630,11 @@ def make_meta_validating_metaclass(
             meta = attrs.get("Meta")
             if meta is None:
                 return new_class
-            new_class._mutation_meta = new_class._validate_meta(meta)
+            # Every class this metaclass builds declares the ``_validate_meta`` seam
+            # and the ``_mutation_meta`` slot it fills (the contract ``_MetaValidated``
+            # names); the metaclass itself declares neither.
+            validated = cast("_MetaValidated", new_class)
+            validated._mutation_meta = validated._validate_meta(meta)
             register(new_class)
             return new_class
 
@@ -793,7 +804,7 @@ class _ValidatedMutationMeta:
     def __init__(
         self,
         *,
-        model: type[models.Model],
+        model: type[models.Model] | None,
         operation: str,
         input_class: Any,
         partial_input_class: Any,
@@ -1002,12 +1013,20 @@ def model_backed_permission_and_lock(
 # Model-flavor metaclass: validate ``Meta`` + register onto the model declaration
 # ledger. Built by ``make_meta_validating_metaclass`` (the Decision-13 twin of
 # ``make_declaration_registry``) so the plain-form flavor instantiates the SAME
-# validate-then-register lifecycle over ``register_form_mutation``.
-DjangoMutationMetaclass = make_meta_validating_metaclass(
-    register_mutation,
-    name="DjangoMutationMetaclass",
-    module=__name__,
-)
+# validate-then-register lifecycle over ``register_form_mutation``. A type checker
+# cannot follow a factory-built metaclass into a ``metaclass=`` keyword, so it sees
+# the class statement below instead; the runtime binding is the factory product.
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+    class DjangoMutationMetaclass(type):
+        """The factory-built model-flavor metaclass, as a type checker sees it."""
+
+else:
+    DjangoMutationMetaclass = make_meta_validating_metaclass(
+        register_mutation,
+        name="DjangoMutationMetaclass",
+        module=__name__,
+    )
 
 
 class DjangoMutation(metaclass=DjangoMutationMetaclass):
@@ -1029,23 +1048,35 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete
     # subclass; the bind and the resolver read it. ``None`` on the abstract
-    # base (which carries no ``Meta``).
-    _mutation_meta: _ValidatedMutationMeta | None = None
+    # base (which carries no ``Meta``). A type checker sees the snapshot's own
+    # type, since the pipeline reads only a validated subclass's snapshot, never
+    # the abstract base's ``None``.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _mutation_meta: ClassVar[_ValidatedMutationMeta]
+    else:
+        _mutation_meta = None
 
     # Bind outputs. The phase-2.5 bind
     # stashes the resolved primary type, the materialized input class (create /
     # update; ``None`` for delete), and the materialized payload class name here;
     # ``DjangoMutationField`` reads them to synthesize the resolver signature +
-    # the ``strawberry.lazy`` payload return-ref. Left ``None`` until the bind runs.
-    _primary_type: type | None = None
-    _input_class: type | None = None
-    _payload_type_name: str | None = None
+    # the ``strawberry.lazy`` payload return-ref. Left ``None`` until the bind runs;
+    # a type checker sees the bound types, since only a bound mutation is resolved.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _primary_type: ClassVar[type]
+    else:
+        _primary_type = None
+    _input_class: ClassVar[type | None] = None
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        _payload_type_name: ClassVar[str]
+    else:
+        _payload_type_name = None
     # Bind-stashed reverse map the model decode rides
     # (``utils/write_values.py::decode_provided_fields``). ``None`` until bind
     # (and stays ``None`` for ``delete``, which has no input). Form / serializer
     # subclasses overwrite ``_input_field_specs`` with their own flavor map.
-    _input_field_specs: list | None = None
-    _model_fields_by_attr: dict | None = None
+    _input_field_specs: ClassVar[list | None] = None
+    _model_fields_by_attr: ClassVar[dict | None] = None
 
     @classmethod
     def _resolve_model(cls, meta: type) -> type[models.Model] | None:
@@ -1225,7 +1256,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # the ``data:`` argument. The model default is ``mutations.inputs``; the form
     # flavors override it to ``forms.inputs`` (a disjoint namespace). A class
     # attribute (not a classmethod) because it has no per-``Meta`` dependence.
-    input_module_path: str = INPUTS_MODULE_PATH
+    input_module_path: ClassVar[str] = INPUTS_MODULE_PATH
 
     @classmethod
     def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
@@ -1246,8 +1277,9 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             # dataclass, consumer overrides included) + the Django-field index
             # (``relation_field.null`` and the ``_provided_attr_names``
             # FK-to-field-name reversal, spec-036 M3-1).
+            # A model-backed snapshot always carries its validated model.
             cls._input_field_specs, cls._model_fields_by_attr = mutation_input_field_specs(
-                meta.model,
+                cast("type[models.Model]", meta.model),
                 input_cls,
             )
         return input_cls
@@ -1283,8 +1315,9 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 "id-only and materializes no input; input_type_name applies only to "
                 "create / update mutations.",
             )
+        # A model-backed snapshot always carries its validated model.
         return mutation_input_shape(
-            meta.model,
+            cast("type[models.Model]", meta.model),
             operation_kind,
             fields=meta.fields,
             exclude=meta.exclude,
@@ -1343,7 +1376,53 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         return run_permission_classes(self, info, operation, data, instance)
 
 
-def _resolve_primary_type(mutation_cls: type, model: type[models.Model]) -> type:
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
+    # A write-mutation declaration class of either ledger: the model-backed
+    # ``DjangoMutation`` family (model / ``ModelForm`` / serializer) or the
+    # model-less ``DjangoFormMutation``.
+    WriteMutationClass: TypeAlias = type[DjangoMutation] | type[DjangoFormMutation]
+
+    class _MetaValidated(Protocol):
+        """A class ``make_meta_validating_metaclass``'s product builds.
+
+        It declares the ``_validate_meta`` seam the metaclass calls with the nested
+        ``Meta`` and the ``_mutation_meta`` slot the result is stashed in.
+        """
+
+        _mutation_meta: object
+
+        def _validate_meta(self, meta: type) -> object: ...
+
+    # The payload object type one ledger's drain resolves: the primary
+    # ``DjangoType`` for the model-backed ledger, ``None`` for the model-less one.
+    _ObjectTypeT = TypeVar("_ObjectTypeT", bound="type | None")
+    _ObjectTypeT_contra = TypeVar("_ObjectTypeT_contra", bound="type | None", contravariant=True)
+
+    class _BoundDeclaration(Protocol[_ObjectTypeT_contra]):
+        """A registered declaration as the phase-2.5 drain reads and stashes it.
+
+        Registration follows the metaclass's validated-snapshot stash, so
+        ``_mutation_meta`` is always set; ``build_input`` accepts exactly the
+        object type its own ledger's ``resolve_object_type`` answers.
+        """
+
+        __name__: str
+        _mutation_meta: _ValidatedMutationMeta
+        _primary_type: type | None
+        _input_class: type | None
+        _payload_type_name: str | None
+
+        def build_input(
+            self,
+            meta: _ValidatedMutationMeta,
+            primary_type: _ObjectTypeT_contra,
+        ) -> type | None: ...
+
+
+def _resolve_primary_type(
+    mutation_cls: _BoundDeclaration[type],
+    model: type[models.Model],
+) -> type:
     """Resolve ``model``'s primary ``DjangoType`` for a mutation, or raise (spec-036 Decision 11).
 
     Distinguishes the two finalize-time error cases (spec-036 Error shapes):
@@ -1423,9 +1502,10 @@ def _materialize_input_for(
     # Edge cases #"Two mutations over one model") AND the generated name, so the
     # bind cache key and the generated type name cannot drift. The same
     # descriptor is handed to
-    # ``build_mutation_input`` so it does not re-walk the editable fields.
+    # ``build_mutation_input`` so it does not re-walk the editable fields. A
+    # model-backed snapshot always carries its validated model.
     shape = mutation_input_shape(
-        meta.model,
+        cast("type[models.Model]", meta.model),
         operation_kind,
         fields=meta.fields,
         exclude=meta.exclude,
@@ -1434,7 +1514,7 @@ def _materialize_input_for(
         _shape_build_cache,
         shape.cache_key,
         lambda: build_mutation_input(
-            meta.model,
+            cast("type[models.Model]", meta.model),
             operation_kind=operation_kind,
             primary_type=primary_type,
             fields=meta.fields,
@@ -1451,7 +1531,7 @@ def _materialize_merged_input(
     meta: _ValidatedMutationMeta,
     primary_type: type,
     operation_kind: str,
-    consumer_input: type,
+    consumer_input: type[WithStrawberryObjectDefinition],
 ) -> type:
     """Merge a consumer ``input_class`` with the generated remainder (spec-010).
 
@@ -1483,8 +1563,9 @@ def _materialize_merged_input(
     consumer_attrs = frozenset(
         field.python_name for field in consumer_input.__strawberry_definition__.fields
     )
+    # A model-backed snapshot always carries its validated model.
     shape = mutation_input_shape(
-        meta.model,
+        cast("type[models.Model]", meta.model),
         operation_kind,
         fields=meta.fields,
         exclude=meta.exclude,
@@ -1496,7 +1577,7 @@ def _materialize_merged_input(
         attr_name="input_class" if operation_kind == CREATE else "partial_input_class",
     )
     remainder = build_mutation_input(
-        meta.model,
+        cast("type[models.Model]", meta.model),
         operation_kind=operation_kind,
         primary_type=primary_type,
         fields=meta.fields,
@@ -1511,7 +1592,7 @@ def _materialize_merged_input(
 
 def _validate_relation_override_types(
     mutation_name: str,
-    consumer_input: type,
+    consumer_input: type[WithStrawberryObjectDefinition],
     shape: Any,
     *,
     attr_name: str,
@@ -1633,10 +1714,10 @@ def _strawberry_field_shape(field: Any) -> tuple[int, Any]:
 
 
 def bind_mutation_outputs(
-    mutation_cls: type,
+    mutation_cls: _BoundDeclaration[_ObjectTypeT],
     *,
     input_cls: type | None,
-    object_type: type | None,
+    object_type: _ObjectTypeT,
 ) -> None:
     """Build the payload, materialize it, and stash bind outputs on ``mutation_cls``.
 
@@ -1670,8 +1751,11 @@ def bind_mutation_outputs(
 def bind_write_declarations(
     *,
     cache: dict,
-    iterate: Callable[[], tuple[type, ...]],
-    resolve_object_type: Callable[[type, Any], type | None],
+    iterate: Callable[[], tuple[_BoundDeclaration[_ObjectTypeT], ...]],
+    resolve_object_type: Callable[
+        [_BoundDeclaration[_ObjectTypeT], _ValidatedMutationMeta],
+        _ObjectTypeT,
+    ],
 ) -> None:
     """Drain one write-declaration registry through the phase-2.5 bind.
 
@@ -1726,8 +1810,9 @@ def bind_mutations() -> None:
     bind_write_declarations(
         cache=_shape_build_cache,
         iterate=iter_mutations,
+        # A model-backed snapshot always carries its validated model.
         resolve_object_type=lambda mutation_cls, meta: _resolve_primary_type(
             mutation_cls,
-            meta.model,
+            cast("type[models.Model]", meta.model),
         ),
     )

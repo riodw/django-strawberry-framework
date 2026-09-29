@@ -939,12 +939,12 @@ def check_deadline(info: Any) -> None:
     # the key by hand: reject (the deadline HAS passed) and say the budget is
     # unknown rather than inventing a number for it.
     seconds = math.ceil(configured) if configured is not None else 0
-    budget = f"{configured} seconds" if configured is not None else "unknown"
+    budget_label = f"{configured} seconds" if configured is not None else "unknown"
     raise ResourceLimitExceeded(
         "execution_deadline_seconds",
         seconds,
         seconds + 1,
-        f"the operation exceeded its configured execution deadline ({budget}) "
+        f"the operation exceeded its configured execution deadline ({budget_label}) "
         "before this collection reached the database",
     )
 
@@ -1129,7 +1129,9 @@ def _attach_cleanup_note(primary_error: BaseException, note: str) -> None:
     try:
         notes = [*getattr(primary_error, "__notes__", ())]
         notes.append(note)
-        primary_error.__notes__ = notes
+        # mypy: typeshed declares BaseException.__notes__ only from 3.11; this spelling
+        # serves the 3.10 floor
+        primary_error.__notes__ = notes  # type: ignore[attr-defined]
     except Exception:
         pass
 

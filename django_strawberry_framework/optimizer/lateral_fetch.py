@@ -73,7 +73,7 @@ adaptation semantics and was the source of incorrect parent-key fidelity.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import EmptyResultSet, FullResultSet
 from django.db import connections
@@ -99,6 +99,11 @@ from .plans import (
     deferred_loading_of,
     order_entry_name_and_direction,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+
+    from ..keyset import KeysetSeek
 
 #: The stem prefix for synthesized lateral SQL table aliases and columns.
 #: Single root source of truth for the package-owned lateral SQL namespace.
@@ -170,7 +175,7 @@ class LateralWindowSpec:
     converter chains raw cursor rows must pass through.
     """
 
-    model: type
+    model: type[models.Model]
     db_table: str
     select_columns: tuple[tuple[str, str], ...]
     select_fields: tuple[Any, ...]
@@ -197,7 +202,7 @@ class LateralWindowSpec:
     # arithmetic). The seek's columns are the window's ``order_columns`` in
     # the same sequence (the ``cursor_field`` IS the order), which
     # ``build_lateral_sql`` relies on when rendering the seek.
-    keyset_seek: Any | None = None
+    keyset_seek: KeysetSeek | None = None
     # A single-table plain-column visibility WHERE (a target type's
     # ``get_queryset`` scope), cloned off the child query at plan time, or
     # ``None``. Only the DIRECT_FK non-keyset shape carries it (see
@@ -440,7 +445,8 @@ def _keyset_seek_sql(
     order), aligned index-for-index with the decoded cursor values -
     ``_build_lateral_spec`` guarantees the arity.
     """
-    seek = spec.keyset_seek
+    # Reached only for a spec that carries a seek.
+    seek = cast("KeysetSeek", spec.keyset_seek)
     values = [
         prepare_value(column.field, value) if prepare_value is not None else value
         for column, value in zip(seek.columns, seek.cursor.values, strict=True)
@@ -776,7 +782,8 @@ def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
     silently drops a filter that is NOT the seek (which would return wrong
     rows) and never double-applies one that is.
     """
-    seek = spec.keyset_seek
+    # Reached only for a spec that carries a seek.
+    seek = cast("KeysetSeek", spec.keyset_seek)
     plan = seek.plan()
     column_names = [column.field.column for column in seek.columns]
     if len(nodes) != 2 or len(column_names) != len(plan.values):

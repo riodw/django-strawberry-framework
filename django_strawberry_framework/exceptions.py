@@ -7,6 +7,8 @@ anywhere without circulars.
 
 from __future__ import annotations
 
+from typing import cast
+
 __all__ = (
     "ConfigurationError",
     "DjangoStrawberryFrameworkError",
@@ -31,7 +33,7 @@ def _safe_type_name(value: object) -> str:
         is_type = isinstance(value, type)
     except BaseException:
         is_type = False
-    sources = (value, type(value)) if is_type else (type(value),)
+    sources = (cast("type", value), type(value)) if is_type else (type(value),)
     for source in sources:
         try:
             name = source.__name__

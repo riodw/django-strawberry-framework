@@ -68,7 +68,7 @@ products ``Mutation`` + ``config/schema.py`` wiring + the live
 from __future__ import annotations
 
 import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import strawberry
 from django.conf import settings
@@ -132,6 +132,21 @@ from .inputs import EXCLUDED, FieldError, payload_object_slot
 from .operations import operation_takes_id
 from .permissions import _require_sync_bool_auth_result
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
+    from django.db import models
+
+    from ..auth.mutations import _SealedAuthHolderMeta
+    from .sets import DjangoMutation, WriteMutationClass
+
+    # A class ``authorize_or_raise`` / ``payload_cls_for`` receives: every
+    # write-mutation declaration, plus the auth surfaces' synthesized permission
+    # holders (zero-arg-constructible classes carrying ``check_permission`` and the
+    # bind outputs, built by ``_SealedAuthHolderMeta``).
+    _AuthorizedClass: TypeAlias = WriteMutationClass | _SealedAuthHolderMeta
+
+
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) ORM pipeline. The whole
 # pipeline runs synchronously even on the async surface (it executes inside one
@@ -143,7 +158,7 @@ _MUTATION_ASYNC_RECOURSE = sync_pipeline_recourse("DjangoMutation")
 
 
 def run_write_pipeline_sync(
-    mutation_cls: type,
+    mutation_cls: WriteMutationClass,
     info: Any,
     data: Any,
     id: Any,  # noqa: A002
@@ -208,6 +223,10 @@ def run_write_pipeline_sync(
     slot = None if primary_type is None else payload_object_slot(primary_type)
     model = None if primary_type is None else model_for(primary_type)
     needs_locate = primary_type is not None and operation_takes_id(meta.operation)
+    # ``primary_type`` / ``model`` are ``None`` only for the model-less plain form,
+    # which never locates (``needs_locate``), holds no located instance, and returns
+    # before the object-slot tail (``slot is None``); every read below sits on one of
+    # those model-backed paths, so each is cast to its non-``None`` type there.
 
     # The managed-transaction gate + the pinned write alias (mutation atomicity, shipped 0.0.14): the
     # completion-spanning ``DjangoSchema`` transaction must already be open on the
@@ -220,14 +239,14 @@ def run_write_pipeline_sync(
 
         instance = None
         if needs_locate:
-            node_id, id_error = coerce_lookup_id(id, primary_type, using=using)
+            node_id, id_error = coerce_lookup_id(id, cast("type", primary_type), using=using)
             if id_error is not None:
                 return _error_payload([id_error])
             # ``Meta.select_for_update`` (default True since the 0.0.14 concurrency hardening): a
             # base-manager ``SELECT ... FOR UPDATE`` on the update/delete locate, constrained by the
             # visibility queryset's pk subquery, inside this transaction.
             instance = locate_instance(
-                primary_type,
+                cast("type", primary_type),
                 node_id,
                 info,
                 alias=using,
@@ -237,7 +256,7 @@ def run_write_pipeline_sync(
                 return _error_payload([not_found_error()])
             # An instance-sensitive router answering differently now that the row
             # is known cannot be honored mid-pipeline - fail closed before writing.
-            check_instance_write_alias(model, using, instance)
+            check_instance_write_alias(cast("type[models.Model]", model), using, instance)
 
         # The IMMUTABLE authorization snapshot - captured immediately after the
         # locate, BEFORE the permission hook (the first consumer-controlled code)
@@ -285,7 +304,7 @@ def run_write_pipeline_sync(
                 )
                 if instance is not None and authorized_pk is not None:
                     reject_substituted_row(
-                        model,
+                        cast("type[models.Model]", model),
                         instance.pk,
                         authorized_pk,
                         message=(
@@ -318,19 +337,26 @@ def run_write_pipeline_sync(
             # spelling of the same row), never a ``str()`` comparison.
             if meta.operation == "update":
                 reject_substituted_row(
-                    model,
+                    cast("type[models.Model]", model),
                     saved.pk,
                     authorized_pk,
                     message=(
                         f"{mutation_cls.__name__}: the write step returned "
-                        f"{model.__name__} pk={_safe_arg_repr(saved.pk)}, but the located, "
+                        f"{cast('type[models.Model]', model).__name__} "
+                        f"pk={_safe_arg_repr(saved.pk)}, but the located, "
                         f"authorized row is pk={_safe_arg_repr(authorized_pk)}; an update must write "
                         "the row that was "
                         "authorized, never a substituted one."
                     ),
                 )
 
-            obj = refetch_optimized(primary_type, saved.pk, info, alias=using, force_load=False)
+            obj = refetch_optimized(
+                cast("type", primary_type),
+                saved.pk,
+                info,
+                alias=using,
+                force_load=False,
+            )
             if obj is None:
                 # The written row vanished between the save and the pk re-fetch (a
                 # concurrent delete this transaction could not see): a success payload
@@ -529,7 +555,8 @@ def _decode_single_relation_id(
     )
     if error is not None:
         return None, error
-    return pks[0], None
+    # The shared decoder answers ``pks`` exactly when it reports no error.
+    return cast("list[Any]", pks)[0], None
 
 
 def _decode_relation_id_list(
@@ -564,7 +591,8 @@ def _decode_relation_id_list(
     )
     if error is not None:
         return [], error
-    return pks, None
+    # The shared decoder answers ``pks`` exactly when it reports no error.
+    return cast("list[Any]", pks), None
 
 
 def _relation_null_error(field_name: str) -> FieldError:
@@ -624,7 +652,8 @@ def locate_instance(
     queryset = base_locked_queryset(model, alias, visible) if select_for_update else visible
     try:
         return queryset.get(pk=node_id)
-    except model.DoesNotExist:
+    # mypy: django-stubs omits DoesNotExist on the abstract Model base
+    except model.DoesNotExist:  # type: ignore[attr-defined]
         return None
 
 
@@ -658,7 +687,7 @@ def _provided_attr_names(
     return names
 
 
-def _unprovided_exclude(model: type, provided_attrs: set[str]) -> list[str]:
+def _unprovided_exclude(model: type[models.Model], provided_attrs: set[str]) -> list[str]:
     """Compute the ``full_clean(exclude=...)`` set for a partial update.
 
     The set of model fields the ``PartialInput`` did NOT provide, **minus any
@@ -688,7 +717,7 @@ def _unprovided_exclude(model: type, provided_attrs: set[str]) -> list[str]:
     return sorted(unprovided - keep_validating)
 
 
-def _unique_constraint_groups(model: type) -> list[set[str]]:
+def _unique_constraint_groups(model: type[models.Model]) -> list[set[str]]:
     """Return every uniqueness group's field-name set (spec-036).
 
     A group is the set of fields that participate in one uniqueness check: each
@@ -706,7 +735,10 @@ def _unique_constraint_groups(model: type) -> list[set[str]]:
     groups.extend(
         {field.name}
         for field in model._meta.get_fields()
-        if hasattr(field, "column") and getattr(field, "unique", False) and not field.primary_key
+        # Only a concrete ``Field`` carries a ``column``; a reverse ``*Rel`` has none.
+        if hasattr(field, "column")
+        and getattr(field, "unique", False)
+        and not cast("models.Field", field).primary_key
     )
     return groups
 
@@ -792,7 +824,7 @@ def build_payload(
 
 
 def _run_pipeline_sync(
-    mutation_cls: type,
+    mutation_cls: type[DjangoMutation],
     info: Any,
     data: Any,
     id: Any,  # noqa: A002
@@ -823,15 +855,16 @@ def _run_pipeline_sync(
             data,
             info,
             instance=instance,
-            specs=mutation_cls._input_field_specs,
-            model_fields=mutation_cls._model_fields_by_attr,
+            # A create / update has an input, so the bind stashed the decode's reverse maps.
+            specs=cast("list", mutation_cls._input_field_specs),
+            model_fields=cast("dict[str, Any]", mutation_cls._model_fields_by_attr),
         ),
         write_step=lambda instance, decoded: _model_write_step(instance, decoded),
     )
 
 
 def _model_decode_step(
-    model: type,
+    model: type[models.Model],
     data: Any,
     info: Any,
     *,
@@ -979,7 +1012,7 @@ def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
 
 
 def _run_delete(
-    mutation_cls: type,
+    mutation_cls: type[DjangoMutation],
     info: Any,
     id: Any,  # noqa: A002
 ) -> Any:
@@ -1009,7 +1042,7 @@ def _run_delete(
     )
 
 
-def _delete_write_step(mutation_cls: type, info: Any, instance: Any) -> Any:
+def _delete_write_step(mutation_cls: type[DjangoMutation], info: Any, instance: Any) -> Any:
     """Snapshot the authorized row, then delete it (spec-036 snapshot-before-delete).
 
     The snapshot is the optimizer-planned re-fetch fully materialized (relations
@@ -1100,7 +1133,7 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
 
 
 def authorize_or_raise(
-    mutation_cls: type,
+    mutation_cls: _AuthorizedClass,
     info: Any,
     operation: str,
     data: Any,
@@ -1266,7 +1299,7 @@ def _invalid_lookup_id_error() -> FieldError:
     return field_error("id", "Invalid id.", codes=FIELD_ERROR_CODE_INVALID)
 
 
-def payload_cls_for(mutation_cls: type) -> type:
+def payload_cls_for(mutation_cls: _AuthorizedClass) -> type:
     """Return the materialized ``<Name>Payload`` class for a bound mutation (all three pipelines).
 
     The bind stashes the payload class name on the mutation
@@ -1283,7 +1316,9 @@ def payload_cls_for(mutation_cls: type) -> type:
     """
     from . import inputs
 
-    return getattr(inputs, mutation_cls._payload_type_name)
+    # An auth permission holder reaching a pipeline is a bound ``login`` / ``logout``
+    # holder, whose payload name the auth bind stashed.
+    return getattr(inputs, cast("str", mutation_cls._payload_type_name))
 
 
 async def run_pipeline_async(

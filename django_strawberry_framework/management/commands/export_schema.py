@@ -1,6 +1,7 @@
 """manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol."""
 
 import pathlib
+from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from strawberry import Schema
@@ -25,7 +26,7 @@ class Command(BaseCommand):
             help="Write UTF-8 SDL to this file, overwriting it without prompting",
         )
 
-    def handle(self, *args: object, **options: object) -> None:
+    def handle(self, *args: object, **options: Any) -> None:
         """Resolve the dotted-path schema symbol and emit SDL.
 
         Routes through three branches: ``--path`` omitted prints SDL to

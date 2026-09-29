@@ -241,15 +241,17 @@ def _canonicalizes_to_utf8(encoding: object) -> bool:
     UTF-8 alias is accepted (``"utf8"``, ``"U8"``, an alias the package never
     heard of) and only codecs that genuinely canonicalize to UTF-8 are -
     ``utf-8-sig`` is a *different* codec and is refused. A non-string (a
-    consumer-set ``request.encoding`` is uncoerced, so ``b"utf-8"`` can arrive)
-    and an unknown name (``LookupError``) both mean "the package cannot prove
-    this is UTF-8", which is a rejection.
+    consumer-set ``request.encoding`` is uncoerced, so ``b"utf-8"`` can arrive),
+    an unknown name (``LookupError``) and a name ``codecs`` cannot even search
+    for (``ValueError``: an embedded NUL, or a lone surrogate's
+    ``UnicodeEncodeError``) all mean "the package cannot prove this is UTF-8",
+    which is a rejection.
     """
     if not isinstance(encoding, str):
         return False
     try:
         return codecs.lookup(encoding).name == _UTF8_CODEC_NAME
-    except LookupError:
+    except (LookupError, ValueError):
         return False
 
 

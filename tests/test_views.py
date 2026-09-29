@@ -2356,6 +2356,33 @@ def test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_ty
     assert excinfo.value.reason == _JSON_PARSE_REASON
 
 
+@pytest.mark.parametrize(
+    "encoding",
+    [pytest.param("utf-8\x00", id="embedded-nul"), pytest.param("\ud800", id="lone-surrogate")],
+)
+def test_an_unsearchable_effective_encoding_is_refused_rather_than_escaping_as_a_valueerror(
+    encoding,
+):
+    """A string ``codecs.lookup`` cannot search raises ``ValueError``, not ``LookupError``.
+
+    An embedded NUL raises ``ValueError`` and a lone surrogate raises
+    ``UnicodeEncodeError`` (a ``ValueError``) while the codec registry normalizes
+    the name, before any codec is looked up. Neither reaches the endpoint from the
+    wire: Django's own ``HttpRequest._set_content_type_params`` runs the same
+    lookup on a declared ``charset`` while building the request and fails there
+    first. The consumer-set ``request.encoding`` is the path that does reach it,
+    and it must end as the same controlled ``400`` as every other encoding the
+    package cannot prove is UTF-8, not an unhandled ``500``.
+    """
+    view = DjangoGraphQLView(schema=SCHEMA)
+
+    with pytest.raises(HTTPException) as excinfo:
+        view._enforce_multipart_form_encoding(_multipart_request(encoding=encoding))
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.reason == _JSON_PARSE_REASON
+
+
 def test_a_declared_utf8_charset_does_not_mask_a_middleware_set_request_encoding():
     """The two conditions are ``and``, not a fallback chain.
 

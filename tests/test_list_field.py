@@ -1999,7 +1999,7 @@ def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch):
         extra={},
         get_meta=lambda: Category._meta,
     )
-    qs_mock = SimpleNamespace(query=query_mock)
+    qs_mock = SimpleNamespace(model=Category, query=query_mock)
     assert _is_model_default_ordering_active(qs_mock) is False
 
     query_mock.default_ordering = True

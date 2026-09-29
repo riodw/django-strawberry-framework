@@ -1220,11 +1220,13 @@ class TestEffectiveConnectionOrder:
 
     def test_keyset_cursor_field_is_the_default_order_when_no_explicit_won(self):
         """A declared ``cursor_field`` IS the connection order with no explicit orderBy."""
-        assert effective_connection_order(("-number", "id"), (), Item) == ("-number", "id")
+        query = Item.objects.all().query
+        assert effective_connection_order(("-number", "id"), query, Item) == ("-number", "id")
 
     def test_explicit_orderby_beats_the_declared_cursor_field(self):
         """An explicit ``orderBy:`` keeps the shipped derivation even for a keyset target."""
-        assert effective_connection_order(("-number", "id"), ("name",), Item) == ("name", "id")
+        query = Item.objects.order_by("name").query
+        assert effective_connection_order(("-number", "id"), query, Item) == ("name", "id")
 
     def test_falls_back_to_meta_ordering_through_deterministic_order(self):
         """No explicit order: model ``Meta.ordering`` is honored, made total if needed.
@@ -1235,12 +1237,44 @@ class TestEffectiveConnectionOrder:
         """
         from apps.kanban.models import Card, Status
 
-        assert effective_connection_order(None, (), Status) == ("order", "id")
-        assert effective_connection_order(None, (), Card) == ("number",)
+        assert effective_connection_order(None, Status.objects.all().query, Status) == (
+            "order",
+            "id",
+        )
+        assert effective_connection_order(None, Card.objects.all().query, Card) == ("number",)
 
     def test_no_order_source_anywhere_appends_the_pk(self):
         """An unordered model with no explicit order paginates by the pk alone."""
-        assert effective_connection_order(None, (), Item) == ("id",)
+        assert effective_connection_order(None, Item.objects.all().query, Item) == ("id",)
+
+    def test_ordering_none_is_no_default_order(self):
+        """``Meta.ordering = None`` clears an abstract parent's order; the pk alone totals it.
+
+        Django accepts ``None`` and reads the option by truthiness, so it is no
+        default order rather than an iterable to unpack.
+        """
+        from apps.library.models import ReadingList, ReadingListEntry
+
+        assert ReadingListEntry._meta.ordering is None
+        query = ReadingListEntry.objects.all().query
+        assert effective_connection_order(None, query, ReadingListEntry) == ("id",)
+        assert effective_connection_order(None, ReadingList.objects.all().query, ReadingList) == (
+            "title",
+            "id",
+        )
+
+    def test_cleared_default_ordering_is_not_reapplied(self):
+        """A bare ``.order_by()`` turns ``Meta.ordering`` off, so the pk alone totals the page.
+
+        Django compiles no ``Meta.ordering`` once ``query.default_ordering`` is
+        cleared, so a connection over that source pages under the pk tiebreaker,
+        not the model order the consumer removed.
+        """
+        from apps.kanban.models import Status
+
+        query = Status.objects.order_by().query
+        assert query.default_ordering is False
+        assert effective_connection_order(None, query, Status) == ("id",)
 
 
 class TestReverseOrderBy:

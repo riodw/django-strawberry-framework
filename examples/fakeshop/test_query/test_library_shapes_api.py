@@ -30,6 +30,12 @@ One shape per planner rule, each read off the wire and off the SQL the request e
   ``Consignment.distributorRef`` plans one ``JOIN``, and its reverse
   ``consignmentItems`` loads through one prefetch on ``distributorRef_id``, the
   relation counts held at one and three parents.
+- A model with no default order at all: ``ReadingListEntry`` clears its abstract
+  parent's title ordering with ``ordering = None``, so a connection over entries
+  with no ``orderBy:`` pages in primary-key order at the root and inside the
+  nested window, while ``ReadingList`` keeps the title order it inherits; a
+  resolver returning ``ReadingList.objects.order_by()`` switches that inherited
+  order off, and its connection pages in primary-key order instead.
 """
 
 import pytest
@@ -490,3 +496,131 @@ def test_distributor_mixed_case_reverse_relation_loads_through_one_prefetch(dist
     consignment_sql = _sql_from_table(captured, "library_consignment")
     assert len(consignment_sql) == 1, captured.captured_queries
     assert '"distributorRef_id" IN (' in consignment_sql[0], consignment_sql[0]
+
+
+def _seed_reading_lists() -> tuple[models.ReadingList, models.ReadingList]:
+    """Two reading lists, each with entries added out of alphabetical order."""
+    classics = models.ReadingList.objects.create(title="Classics")
+    anthology = models.ReadingList.objects.create(title="Anthology")
+    for title in ("Solaris", "Dune", "Anathem"):
+        models.ReadingListEntry.objects.create(reading_list=classics, title=title)
+    models.ReadingListEntry.objects.create(reading_list=anthology, title="Kindred")
+    return classics, anthology
+
+
+@pytest.mark.django_db
+def test_reading_list_entries_connection_pages_in_primary_key_order_with_ordering_none():
+    """A root connection over an ``ordering = None`` model pages in primary-key order.
+
+    ``ReadingListEntry`` clears its abstract parent's ``Meta.ordering`` with
+    ``None``, which Django accepts and treats as no default order. With no
+    ``orderBy:`` and no ``Meta.cursor_field`` the connection's total order is the
+    pk tiebreaker alone: the entries come back in insertion order, not by title.
+    """
+    _seed_reading_lists()
+
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            """
+            query {
+              allLibraryReadingListEntriesConnection(first: 3) {
+                edges { node { title } }
+                pageInfo { hasNextPage }
+              }
+            }
+            """,
+        )
+
+    page = data["allLibraryReadingListEntriesConnection"]
+    assert [edge["node"]["title"] for edge in page["edges"]] == ["Solaris", "Dune", "Anathem"], (
+        page
+    )
+    assert page["pageInfo"]["hasNextPage"] is True, page
+    entry_sql = _sql_from_table(captured, "library_readinglistentry")
+    assert len(entry_sql) == 1, captured.captured_queries
+    assert 'ORDER BY "library_readinglistentry"."id" ASC' in entry_sql[0], entry_sql[0]
+
+
+@pytest.mark.django_db
+def test_reading_list_entries_nested_connection_windows_in_primary_key_order():
+    """The nested window over an ``ordering = None`` child orders each partition by pk.
+
+    Two parents so the nested planner builds its ``ROW_NUMBER() OVER (PARTITION
+    BY ...)`` window rather than the single-parent fast path. The child model
+    brings no default order, so the window orders by the pk tiebreaker alone;
+    the parent ``ReadingList`` keeps the ``title`` order it inherits, which is
+    why "Anthology" leads.
+    """
+    _seed_reading_lists()
+
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            """
+            query {
+              allLibraryReadingListsConnection {
+                edges {
+                  node {
+                    title
+                    entriesConnection(first: 2) {
+                      edges { node { title } }
+                      pageInfo { hasNextPage }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+        )
+
+    nodes = [edge["node"] for edge in data["allLibraryReadingListsConnection"]["edges"]]
+    pages = [
+        (
+            node["title"],
+            [edge["node"]["title"] for edge in node["entriesConnection"]["edges"]],
+            node["entriesConnection"]["pageInfo"]["hasNextPage"],
+        )
+        for node in nodes
+    ]
+    assert pages == [
+        ("Anthology", ["Kindred"], False),
+        ("Classics", ["Solaris", "Dune"], True),
+    ], pages
+    entry_sql = _sql_from_table(captured, "library_readinglistentry")
+    assert len(entry_sql) == 1, entry_sql
+    windowed = entry_sql[0].upper()
+    assert "ROW_NUMBER() OVER (" in windowed, entry_sql[0]
+    assert "PARTITION BY" in windowed, entry_sql[0]
+    assert 'ORDER BY "LIBRARY_READINGLISTENTRY"."ID" ASC' in windowed, entry_sql[0]
+
+
+@pytest.mark.django_db
+def test_reading_lists_connection_honors_a_cleared_default_ordering():
+    """A source whose ``.order_by()`` cleared ``Meta.ordering`` pages in primary-key order.
+
+    Django compiles no ``Meta.ordering`` once ``query.default_ordering`` is off,
+    so the connection's total order is the pk tiebreaker alone: "Classics"
+    (created first) leads, where the same model's plain connection leads with
+    "Anthology" under the inherited title order.
+    """
+    _seed_reading_lists()
+
+    with CaptureQueriesContext(connection) as captured:
+        data = assert_graphql_success(
+            """
+            query {
+              allLibraryReadingListsUnorderedConnection {
+                edges { node { title } }
+              }
+            }
+            """,
+        )
+
+    titles = [
+        edge["node"]["title"]
+        for edge in data["allLibraryReadingListsUnorderedConnection"]["edges"]
+    ]
+    assert titles == ["Classics", "Anthology"], titles
+    list_sql = _sql_from_table(captured, "library_readinglist")
+    assert len(list_sql) == 1, captured.captured_queries
+    assert 'ORDER BY "library_readinglist"."id" ASC' in list_sql[0], list_sql[0]
+    assert '"library_readinglist"."title" ASC' not in list_sql[0], list_sql[0]

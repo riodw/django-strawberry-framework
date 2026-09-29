@@ -1,6 +1,6 @@
 """FilterSet declarations for the library acceptance app.
 
-Twenty-four filtersets mirror the relation shape ``apps.library.schema`` exposes
+Twenty-six filtersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint. Inter-filterset references use
 the same-module unqualified-name form (e.g. ``RelatedFilter("ShelfFilter")``)
 so the lazy-resolution Layer-2 prefix-with-owner branch is exercised end
@@ -279,6 +279,22 @@ class ConsignmentFilter(FilterSet):
         fields = {"id": ["exact", "in"], "label": ["exact", "icontains"]}
 
 
+class ReadingListFilter(FilterSet):
+    """Reading-list filterset bound to ``ReadingListType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.ReadingList
+        fields = {"id": ["exact", "in"], "title": ["exact", "icontains"]}
+
+
+class ReadingListEntryFilter(FilterSet):
+    """Reading-list-entry filterset bound to ``ReadingListEntryType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.ReadingListEntry
+        fields = {"id": ["exact", "in"], "title": ["exact", "icontains"]}
+
+
 class VenueFilter(FilterSet):
     """Venue filterset bound to ``VenueType`` at finalize phase 2.5."""
 
@@ -433,6 +449,8 @@ __all__ = (
     "PatronProfileFilter",
     "PrintingFilter",
     "PublisherFilter",
+    "ReadingListEntryFilter",
+    "ReadingListFilter",
     "RepairTicketFilter",
     "SelfServeDeskFilter",
     "ShelfFilter",

@@ -490,6 +490,41 @@ class Consignment(models.Model):
         return self.label
 
 
+class TitledEntry(models.Model):
+    """Abstract base for catalogue records listed alphabetically by title."""
+
+    title = models.TextField()
+
+    class Meta:
+        abstract = True
+        ordering = ["title"]
+
+    def __str__(self):
+        return self.title
+
+
+class ReadingList(TitledEntry):
+    """A curated reading list, listed by title through the inherited ordering."""
+
+
+class ReadingListEntry(TitledEntry):
+    """One title on a reading list, kept in the order the curator added it.
+
+    The inherited title ordering would scramble the curator's sequence, so
+    ``ordering = None`` clears it - the Django idiom for dropping an abstract
+    parent's ``Meta.ordering`` - and the model carries no default order at all.
+    """
+
+    reading_list = models.ForeignKey(
+        ReadingList,
+        related_name="entries",
+        on_delete=models.CASCADE,
+    )
+
+    class Meta(TitledEntry.Meta):
+        ordering = None
+
+
 class Venue(models.Model):
     """A place the library lends from, the root of a multi-table inheritance chain.
 

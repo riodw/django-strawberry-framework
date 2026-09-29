@@ -1344,7 +1344,7 @@ def plan_connection_relation(
         list(
             effective_connection_order(
                 keyset_context.cursor_field if keyset_context is not None else None,
-                tuple(child_queryset.query.order_by),
+                child_queryset.query,
                 django_field.related_model,
             ),
         ),

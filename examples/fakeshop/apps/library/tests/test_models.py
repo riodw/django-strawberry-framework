@@ -26,6 +26,8 @@ from apps.library.models import (
     OpenVenue,
     Patron,
     ProxyBranch,
+    ReadingList,
+    ReadingListEntry,
     RepairTicket,
     SelfServeDesk,
     Shelf,
@@ -205,3 +207,16 @@ def test_distributor_mixed_case_names_are_its_django_names_and_columns():
     assert Consignment._meta.get_field("distributorRef").column == "distributorRef_id"
     assert list(distributor.consignmentItems.all()) == [consignment]
     assert Consignment.objects.get(pk=consignment.pk).distributorRef == distributor
+
+
+@pytest.mark.django_db
+def test_reading_list_entry_clears_its_abstract_parents_ordering_and_passes_checks():
+    """``ordering = None`` drops ``TitledEntry``'s title order; ``ReadingList`` keeps it."""
+    reading_list = ReadingList.objects.create(title="Classics")
+    entry = ReadingListEntry.objects.create(reading_list=reading_list, title="Solaris")
+
+    assert (str(reading_list), str(entry)) == ("Classics", "Solaris")
+    assert ReadingList._meta.ordering == ["title"]
+    assert ReadingListEntry._meta.ordering is None
+    assert ReadingListEntry.check() == []
+    assert list(reading_list.entries.all()) == [entry]

@@ -2608,8 +2608,8 @@ def test_finalize_queryset_hostile_meta_ordering_is_graphql_error():
 
 
 def test_finalize_queryset_hostile_effective_ordering_is_graphql_error():
-    """``effective = explicit or tuple(ordering)`` hostile is ``GraphQLError`` (cursor_field path)."""
-    # Create a cursor-field type so effective_connection_order returns cursor_field without reading meta
+    """A hostile model ordering is ``GraphQLError`` on the cursor_field path too."""
+    # A cursor-field type, so effective_connection_order would answer from the cursor field
     from apps.products.models import Category as ProdCategory
 
     from django_strawberry_framework.connection import _finalize_queryset
@@ -2651,10 +2651,11 @@ def test_finalize_queryset_hostile_effective_ordering_is_graphql_error():
         # Need pk for deterministic_order fallback if called, but cursor path won't call it
         _meta.pk = ProdCategory._meta.pk
 
-    # The definition carries the hostile model AND the declared cursor_field, so
-    # ``effective_connection_order`` answers from the cursor field without reading
-    # meta, and the effective line below is the first read of the hostile ordering.
-    with pytest.raises(GraphQLError, match="model ordering could not be read"):
+    # The definition carries the hostile model AND the declared cursor_field.
+    # ``effective_connection_order`` would answer from the cursor field without
+    # reading meta, but the applied-order read that decides whether to reorder
+    # reads it first.
+    with pytest.raises(GraphQLError, match="A connection's ordering could not be read"):
         _finalize_queryset(
             cursor_node,
             qs,

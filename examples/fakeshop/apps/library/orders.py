@@ -1,6 +1,6 @@
 """OrderSet declarations for library relation-graph and keyset-cursor acceptance coverage.
 
-Twenty-six ordersets mirror the relation shape ``apps.library.schema`` exposes
+Twenty-eight ordersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint; ``PeriodicalOrder`` and
 ``IssueOrder`` are the keyset-cursor ``orderBy:`` substrate: a root
 ``orderBy: {title: ASC}`` page over ``IssueOrder`` mints value cursors
@@ -361,6 +361,22 @@ class DeskShiftOrder(OrderSet):
         fields = ["id", "name"]
 
 
+class ReadingListOrder(OrderSet):
+    """Reading-list orderset bound to ``ReadingListType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.ReadingList
+        fields = ["id", "title"]
+
+
+class ReadingListEntryOrder(OrderSet):
+    """Reading-list-entry orderset bound to ``ReadingListEntryType`` at finalize phase 2.5."""
+
+    class Meta:
+        model = models.ReadingListEntry
+        fields = ["id", "title"]
+
+
 class DeskProfileOrder(OrderSet):
     """Desk-profile orderset bound to ``DeskProfileType`` at finalize phase 2.5."""
 
@@ -389,6 +405,8 @@ __all__ = (
     "PeriodicalOrder",
     "PrintingOrder",
     "PublisherOrder",
+    "ReadingListEntryOrder",
+    "ReadingListOrder",
     "RepairTicketOrder",
     "SelfServeDeskOrder",
     "ShelfOrder",

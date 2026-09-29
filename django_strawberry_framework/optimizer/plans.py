@@ -42,6 +42,7 @@ from django.db.models.functions import RowNumber
 
 from ..exceptions import OptimizerError
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
+from ..utils.querysets import applied_order
 from .join_taxonomy import WINDOWABLE_RELATION_KINDS, classify_relation_join
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -51,6 +52,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
     from django.db.models import QuerySet
     from django.db.models.expressions import Combinable, Expression, F, OrderBy
+    from django.db.models.sql.query import Query
 
     from ..keyset import KeysetSeek
     from ..utils.connections import WindowRangePlan
@@ -905,7 +907,7 @@ def ends_in_unique_column(effective: tuple[object, ...], model: type) -> bool:
 
 def effective_connection_order(
     cursor_field: tuple[str, ...] | None,
-    explicit: tuple[str | Combinable, ...],
+    query: Query,
     model: type[models.Model],
 ) -> tuple[str | Combinable, ...]:
     """Return the effective ORDER BY a connection paginates under by default.
@@ -921,15 +923,17 @@ def effective_connection_order(
       default order when no explicit ``orderBy:`` won (finalization validates
       it ends in a unique column, so ``deterministic_order`` would return it
       unchanged);
-    - otherwise the effective ordering is an explicit ``orderBy:`` or model
-      ``Meta.ordering``, made total by ``deterministic_order``. Django applies
-      ``_meta.ordering`` implicitly, so an empty ``explicit`` does NOT mean
-      unordered - reading ``explicit`` in isolation would drop ``Meta.ordering``
-      and rewrite ``ORDER BY name`` into ``ORDER BY pk``.
+    - otherwise the effective ordering is the one Django compiles for ``query``
+      (``utils/querysets.py::applied_order``: an explicit ``orderBy:``, else the
+      model's ``Meta.ordering`` while default ordering stands), made total by
+      ``deterministic_order``. Django applies ``Meta.ordering`` implicitly, so an
+      empty ``query.order_by`` does NOT mean unordered - reading it in isolation
+      would drop ``Meta.ordering`` and rewrite ``ORDER BY name`` into
+      ``ORDER BY pk``.
     """
-    if cursor_field is not None and not explicit:
+    if cursor_field is not None and not query.order_by:
         return tuple(cursor_field)
-    return deterministic_order(explicit or tuple(model._meta.ordering), model)
+    return deterministic_order(applied_order(query, model), model)
 
 
 def deterministic_order(

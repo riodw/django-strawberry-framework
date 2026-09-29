@@ -52,6 +52,13 @@ def _branches_manager_resolver(root: Any, info: Info) -> Any:
     return models.Branch.objects
 
 
+# Consumer ``resolver=`` whose bare ``.order_by()`` clears ``ReadingList``'s
+# inherited title ordering. Django then compiles no ``Meta.ordering`` for the
+# source, so the connection over it pages under the pk tiebreaker alone.
+def _reading_lists_without_default_order(root: Any, info: Info) -> Any:
+    return models.ReadingList.objects.order_by()
+
+
 # Consumer ``Prefetch`` children over a proxy-targeted relation
 # (``models.BranchNote.branch``, declared to ``models.ProxyBranch``). A source
 # queryset a ``DjangoListField`` receives is sealed before the visibility hook
@@ -597,6 +604,36 @@ class ConsignmentType(DjangoType):
         orderset_class = orders.ConsignmentOrder
 
 
+class ReadingListType(DjangoType):
+    """A reading list, listed by the title ordering it inherits from ``TitledEntry``.
+
+    ``entries`` keeps the Relay-node default and renders as a nested
+    connection whose child model carries no default order.
+    """
+
+    class Meta:
+        model = models.ReadingList
+        fields = ("id", "title", "entries")
+        interfaces = (relay.Node,)
+        filterset_class = filters.ReadingListFilter
+        orderset_class = orders.ReadingListOrder
+
+
+class ReadingListEntryType(DjangoType):
+    """A reading-list entry, whose model clears the inherited ordering with ``ordering = None``.
+
+    With no ``orderBy:`` and no ``Meta.cursor_field`` a connection over entries
+    pages in primary-key order, the curator's insertion sequence.
+    """
+
+    class Meta:
+        model = models.ReadingListEntry
+        fields = ("id", "title", "reading_list")
+        interfaces = (relay.Node,)
+        filterset_class = filters.ReadingListEntryFilter
+        orderset_class = orders.ReadingListEntryOrder
+
+
 class VenueType(DjangoType):
     """A venue, the parent of the multi-table inheritance chain.
 
@@ -838,6 +875,18 @@ class Query:
     # each published under the Django name it was declared with.
     all_library_distributors: list[DistributorType] = DjangoListField(DistributorType)
     all_library_consignments: list[ConsignmentType] = DjangoListField(ConsignmentType)
+    # The cleared-ordering surface: a model whose ``ordering = None`` drops its
+    # abstract parent's title order, read at the root and nested under its list,
+    # and a source whose bare ``.order_by()`` switches the inherited order off.
+    all_library_reading_lists_connection: DjangoConnection[ReadingListType] = (
+        DjangoConnectionField(ReadingListType)
+    )
+    all_library_reading_list_entries_connection: DjangoConnection[ReadingListEntryType] = (
+        DjangoConnectionField(ReadingListEntryType)
+    )
+    all_library_reading_lists_unordered_connection: DjangoConnection[ReadingListType] = (
+        DjangoConnectionField(ReadingListType, resolver=_reading_lists_without_default_order)
+    )
 
     # The inheritance and relation-shape surface.
     # Acceptance surface for the nullable Venue/RepairTicket cycle and three reverse relations

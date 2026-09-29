@@ -92,7 +92,7 @@ from asgiref.sync import sync_to_async
 from django.db import models, router
 from django.db.models import Prefetch, sql
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.expressions import RawSQL
+from django.db.models.expressions import Combinable, RawSQL
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.lookups import Lookup
 from django.db.models.query import (
@@ -290,6 +290,31 @@ def base_queryset(model: type[_ModelT], *, using: str | None = None) -> models.Q
         "models.QuerySet[_ModelT]",
         manager.using(using).all() if using is not None else manager.all(),
     )
+
+
+def default_order(query: sql.Query, model: type[models.Model]) -> tuple[str | Combinable, ...]:
+    """Return the ``Meta.ordering`` terms Django compiles for ``query`` when nothing explicit is set.
+
+    ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` reaches the
+    model's ordering only while ``query.default_ordering`` stands (a bare
+    ``.order_by()`` clears it) and reads the option by truthiness, so
+    ``Meta.ordering = None`` - the idiom for clearing an abstract parent's
+    ordering - is no default order, never an iterable. ``model`` is the caller's
+    model rather than ``query.get_meta()``, so a connection's plan-time and
+    resolve-time orders derive from one model read.
+    """
+    if not query.default_ordering:
+        return ()
+    return tuple(model._meta.ordering or ())
+
+
+def applied_order(query: sql.Query, model: type[models.Model]) -> tuple[str | Combinable, ...]:
+    """Return the ORDER BY terms Django compiles for ``query``: its explicit order, else ``default_order``.
+
+    An ``extra(order_by=...)`` ordering is outside this read; only the list
+    field's offset guard classifies it (``list_field.py::_selected_ordering``).
+    """
+    return tuple(query.order_by) or default_order(query, model)
 
 
 def initial_queryset(type_cls: type) -> models.QuerySet[models.Model]:

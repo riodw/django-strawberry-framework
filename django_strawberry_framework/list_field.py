@@ -97,6 +97,7 @@ from .utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     base_queryset,
+    default_order,
     is_async_only_iterable,
     prepared_resolver_source,
     reject_async_iterable_in_sync_context,
@@ -1156,10 +1157,9 @@ def _selected_ordering(queryset: models.QuerySet[models.Model]) -> tuple[str, tu
         return _ORDER_FROM_EXTRA, tuple(query.extra_order_by)
     if query.order_by:
         return _ORDER_FROM_EXPLICIT, tuple(query.order_by)
-    if query.default_ordering:
-        ordering = query.get_meta().ordering
-        if ordering:
-            return _ORDER_FROM_MODEL_DEFAULT, tuple(ordering)
+    ordering = default_order(query, queryset.model)
+    if ordering:
+        return _ORDER_FROM_MODEL_DEFAULT, ordering
     return _ORDER_FROM_NOTHING, ()
 
 

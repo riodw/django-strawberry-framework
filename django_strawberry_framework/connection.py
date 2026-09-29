@@ -116,6 +116,7 @@ from .utils.connections import (
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
+    applied_order,
     apply_filterset_async,
     apply_filterset_sync,
     apply_orderset_async,
@@ -1712,7 +1713,7 @@ def _finalize_queryset(
     target_model = definition.model
     cursor_field = definition.cursor_field
     try:
-        explicit = tuple(qs.query.order_by)
+        applied = applied_order(qs.query, target_model)
     except (
         TypeError,
         ValueError,
@@ -1721,13 +1722,13 @@ def _finalize_queryset(
         IndexError,
     ) as exc:
         raise GraphQLError(
-            "A connection resolver returned a QuerySet whose ordering could not be read "
-            f"({_safe_type_name(exc)}); a connection field manages its own ordering and "
-            "cannot paginate a source whose ordering is unreadable. Return a regular "
-            "QuerySet and let the connection's ordering logic handle it.",
+            f"A connection's ordering could not be read ({_safe_type_name(exc)}); a "
+            "connection field manages its own ordering and cannot paginate a source "
+            "whose ordering is unreadable. Return a regular QuerySet and let the "
+            "connection's ordering logic handle it.",
         ) from exc
     try:
-        ordered = effective_connection_order(cursor_field, explicit, target_model)
+        ordered = effective_connection_order(cursor_field, qs.query, target_model)
     except (
         TypeError,
         ValueError,
@@ -1739,19 +1740,7 @@ def _finalize_queryset(
             "A connection's ordering could not be resolved "
             f"({_safe_type_name(exc)}); check the connection's ordering configuration.",
         ) from exc
-    try:
-        effective = explicit or tuple(target_model._meta.ordering)
-    except (
-        TypeError,
-        ValueError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise GraphQLError(
-            f"A connection's model ordering could not be read ({_safe_type_name(exc)}).",
-        ) from exc
-    if ordered != effective:
+    if ordered != applied:
         try:
             qs = qs.order_by(*ordered)
         except (

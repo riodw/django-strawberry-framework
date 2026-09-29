@@ -1362,13 +1362,14 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # pair with their own ``resolver_seams(...)`` call (the eight
     # near-identical seam bodies single-sited as one factory). A type checker sees
     # the pair as the classmethods the factory builds, so a subclass may override
-    # either with a method.
+    # either with a method. ``Info`` is invariant in both parameters, so ``Any``
+    # there lets an override type ``info`` with its own context and root.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
 
         @classmethod
         def resolve_sync(
             cls,
-            info: Info[object, object],
+            info: Info[Any, Any],
             *,
             data: object,
             id: object,  # noqa: A002
@@ -1378,7 +1379,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         @classmethod
         def resolve_async(
             cls,
-            info: Info[object, object],
+            info: Info[Any, Any],
             *,
             data: object,
             id: object,  # noqa: A002

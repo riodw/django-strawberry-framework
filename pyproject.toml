@@ -94,8 +94,9 @@ dev = [
     "django-stubs>=6.0.9",
     "djangorestframework-stubs>=3.18.0",
     "mypy>=2.3.1",
-    # typeshed stubs for the soft dependencies the package subclasses: django-filter
-    # (the filters family) and channels (the WebSocket consumer and router). Each
+    # typeshed stubs for two libraries the package subclasses: django-filter (a hard
+    # dependency; the filters family) and channels (a soft one; the WebSocket consumer
+    # and router). Each
     # stub release names the upstream line it covers (``26.1.*`` / ``4.3.*``), so
     # bump it with the library. django-debug-toolbar ships its own ``py.typed``.
     "types-django-filter>=26.1.0.20260906",
@@ -240,9 +241,9 @@ multiline-quotes = "double"
 max-line-length = 110
 
 # mypy checks the shipped package (``py.typed`` makes its annotations public).
-# ``--strict`` minus ``disallow_any_explicit``, plus the optional checks below, and
-# the flags that keep suppressions honest: an unneeded ``# type: ignore`` or
-# redundant ``cast`` is itself an error. The Django plugin loads the fakeshop test
+# Every ``--strict`` flag plus the optional checks below. ``--strict`` includes the
+# flags that keep suppressions honest: an unneeded ``# type: ignore`` or redundant
+# ``cast`` is itself an error. The Django plugin loads the fakeshop test
 # settings, exactly as pytest does. Every dependency is typed (its own
 # ``py.typed``, django-stubs, or the typeshed stubs in the ``dev`` group), so no
 # module is exempt from import checking.
@@ -265,10 +266,13 @@ disallow_untyped_decorators = true
 disallow_untyped_defs = true
 # Every method that overrides a base (Strawberry, Django, graphql-core hooks included)
 # carries ``@override``, so an upstream rename that leaves an override orphaned fails here.
-# The rest of the list plus ``warn_unreachable`` / ``strict_equality_for_none`` make a
-# guard that its own annotations call dead an error: each such guard either narrows a
-# value typed as wide as what really arrives, or carries a commented ignore saying why
-# the contract stays narrow (GOAL.md "Trust boundary").
+# ``mutable-override`` rejects a subclass narrowing a mutable attribute's type, and
+# ``possibly-undefined`` a name some path leaves unbound. ``redundant-expr``,
+# ``truthy-bool``, ``truthy-iterable``, ``warn_unreachable`` and
+# ``strict_equality_for_none`` make a guard that its own annotations call dead an error:
+# each such guard either narrows a value typed as wide as what really arrives, or
+# carries a commented ignore saying why the contract stays narrow (GOAL.md "Trust
+# boundary").
 enable_error_code = [
     "explicit-override",
     "mutable-override",

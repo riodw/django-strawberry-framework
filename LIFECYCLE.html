@@ -386,7 +386,7 @@ const LIFECYCLE_DATA = {
               module: "relay.py + utils/querysets.py" },
             { title: "Id filter applied",
               detail: "Single: filter + get/first. Batch (nodes): one pk__in query per type, then re-interleaved 1:1 with the input ids — null holes, duplicates supported.",
-              module: "relay.py::_apply_node_filter / _order_nodes" },
+              module: "relay.py::_apply_node_filter / _apply_nodes_filter / _order_nodes" },
             { title: "Typename stamped, node returned", kind: "result",
               detail: "_stamp_node_type records the decode-resolved type so is_type_of picks the right __typename." },
           ],

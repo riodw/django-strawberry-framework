@@ -399,23 +399,27 @@ def _node_values(
 def _apply_node_filter(
     qs: models.QuerySet[_ModelT],
     id_attr: str,
-    *,
-    node_id: object = None,
-    node_ids: list[object] | None = None,
+    value: object,
 ) -> models.QuerySet[_ModelT]:
-    """Apply the Relay-id filter to ``qs`` (color-agnostic).
+    """Filter ``qs`` to the row whose id slot equals the coerced ``value`` (color-agnostic).
 
     The lazy ``.filter`` call is identical on sync and async paths; the
     terminal materialization is what differs (``.get``/``.first`` on the
-    sync path, ``.aget``/``.afirst`` on the async path).
+    sync path, ``.aget``/``.afirst`` on the async path). An id that coerced to
+    no value never reaches here: the caller answers it without a query.
     """
     # The stubs' plugin cannot resolve a lookup spelled as a runtime string, so a
     # ``filter(**{...})`` over one is typed ``Any``; it returns ``qs``'s own class.
-    if node_id is not None:
-        return cast("models.QuerySet[_ModelT]", qs.filter(**{id_attr: node_id}))
-    if node_ids is not None:
-        return cast("models.QuerySet[_ModelT]", qs.filter(**{f"{id_attr}__in": node_ids}))
-    return qs
+    return cast("models.QuerySet[_ModelT]", qs.filter(**{id_attr: value}))
+
+
+def _apply_nodes_filter(
+    qs: models.QuerySet[_ModelT],
+    id_attr: str,
+    values: list[object],
+) -> models.QuerySet[_ModelT]:
+    """Filter ``qs`` to the rows whose id slot is one of the coerced ``values``."""
+    return cast("models.QuerySet[_ModelT]", qs.filter(**{f"{id_attr}__in": values}))
 
 
 # Keep the GlobalID strategy helpers in this Relay foundation module; do not
@@ -981,7 +985,7 @@ def _resolve_node_default(
         _raise_if_required(cls, id_attr, node_id, required=required)
         return None
     qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_id=value)
+    qs = _apply_node_filter(qs, id_attr, value)
     return qs.get() if required else qs.first()
 
 
@@ -1006,7 +1010,7 @@ async def _resolve_node_async(
         _raise_if_required(cls, id_attr, node_id, required=required)
         return None
     qs = await apply_type_visibility_async(cls, initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_id=value)
+    qs = _apply_node_filter(qs, id_attr, value)
     return await (qs.aget() if required else qs.afirst())
 
 
@@ -1050,7 +1054,7 @@ def _resolve_nodes_default(
         return apply_type_visibility_sync(cls, initial_queryset(cls), info)
     values = _node_values(cls, id_attr, node_ids, required=required)
     qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_ids=[value for value in values if value is not None])
+    qs = _apply_nodes_filter(qs, id_attr, [value for value in values if value is not None])
     coerced_keys = [None if value is None else str(value) for value in values]
     return _order_nodes(cls, list(qs), coerced_keys, id_attr, required=required)
 
@@ -1075,7 +1079,7 @@ async def _resolve_nodes_async(
         return await apply_type_visibility_async(cls, initial_queryset(cls), info)
     values = _node_values(cls, id_attr, node_ids, required=required)
     qs = await apply_type_visibility_async(cls, initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_ids=[value for value in values if value is not None])
+    qs = _apply_nodes_filter(qs, id_attr, [value for value in values if value is not None])
     coerced_keys = [None if value is None else str(value) for value in values]
     results = [obj async for obj in qs]
     return _order_nodes(cls, results, coerced_keys, id_attr, required=required)

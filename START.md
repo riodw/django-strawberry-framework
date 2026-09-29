@@ -83,6 +83,7 @@ Never state a version from memory. Read it:
 | Python | `requires-python`, `pyproject.toml` | highest `Programming Language :: Python` classifier; CI "latest" cell |
 | Django | `Django>=` pin, `[project].dependencies` | resolved `django` in `uv.lock`; `Framework :: Django` classifiers = tested majors |
 | strawberry-graphql | `strawberry-graphql>=` pin (adjacent comment = why) | resolved entry, `uv.lock` |
+| graphql-core | `graphql-core>=` pin (adjacent comment = why) | resolved entry, `uv.lock`; `<3.3` cap in the same pin |
 | django-filter | `django-filter>=` pin | resolved entry, `uv.lock` |
 
 Exact point a floor run installs = policy in [docs/builder/BUILD.md][build] "Floor verification"; moves together with `pyproject.toml`.

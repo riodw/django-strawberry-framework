@@ -38,6 +38,12 @@ dependencies = [
     # engine-owned ``execution_context``. 0.316.0 materializes classes and
     # factories per operation on both execution colors.
     "strawberry-graphql>=0.316.0",
+    # Strawberry allows ``graphql-core<3.4.0``, but 3.3.0 rewrites execution into
+    # ``graphql.execution.executor`` and drops ``ExecutionContext`` from
+    # ``graphql.execution.execute``, which ``schema.py`` imports and
+    # ``_graphql_core_patches`` patches. Every 3.2.x release (3.2.0 through 3.2.13)
+    # carries each graphql-core name the package imports; the floor is Strawberry's own.
+    "graphql-core>=3.2.0,<3.3",
     "django-filter>=25.2",
     # ``typing_extensions.override`` marks every method that overrides a base
     # (``typing.override`` is 3.12+); 4.4.0 is the release that added it.

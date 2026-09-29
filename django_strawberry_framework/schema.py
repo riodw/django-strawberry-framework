@@ -77,6 +77,7 @@ from graphql import GraphQLError, located_error, parse
 from graphql.execution.execute import ExecutionContext
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.types.graphql import OperationType
+from typing_extensions import override
 
 from . import logger
 from .error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, resolve_error_policy
@@ -144,6 +145,7 @@ def _close_thread_connections() -> None:
 class DjangoMutationExecutionContext(ExecutionContext):
     """Hold each generated mutation field's transaction open through value completion."""
 
+    @override
     def execute_field(
         self,
         parent_type: GraphQLObjectType,
@@ -634,6 +636,7 @@ class _RefusedConfiguration(SchemaExtension):
     def __init__(self, message: str) -> None:
         self._message = message
 
+    @override
     def on_parse(self) -> Iterator[None]:
         """Answer the parse stage with the refusal instead of the document sent."""
         execution_context = self.execution_context
@@ -644,11 +647,13 @@ class _RefusedConfiguration(SchemaExtension):
         execution_context.validation_rules = ()
         execution_context.pre_execution_errors = [self._refusal()]
 
+    @override
     def on_validate(self) -> Iterator[None]:
         """Restate the refusal, before the check upstream makes inside this stage."""
         self.execution_context.pre_execution_errors = [self._refusal()]
         yield
 
+    @override
     def on_execute(self) -> NoReturn:
         """Refuse to begin executing, for a path that reached execution regardless."""
         raise self._refusal()
@@ -824,7 +829,10 @@ class DjangoSchema(strawberry.Schema):
         )
         super().__init__(*args, **kwargs)
 
-    @property
+    # mypy: a settable property overriding another module's attribute ignores
+    # its @override markers (both are present below)
+    @property  # type: ignore[explicit-override]
+    @override
     def extensions(self) -> tuple[Any, ...]:
         """The CONSUMER extension configuration this schema was accepted with.
 
@@ -853,6 +861,7 @@ class DjangoSchema(strawberry.Schema):
         return () if accepted is None else accepted
 
     @extensions.setter
+    @override
     def extensions(self, value: Iterable[object]) -> None:
         """Settle the accepted configuration, once, from the base constructor.
 
@@ -932,6 +941,7 @@ class DjangoSchema(strawberry.Schema):
         """
         return copy_policy(_enforcement(self).error_policy)
 
+    @override
     def get_extensions(self, sync: bool = False) -> list[SchemaExtension]:
         """Resolve the accepted entries into this operation's chain, or refuse it.
 
@@ -1035,6 +1045,7 @@ class DjangoSchema(strawberry.Schema):
                 )
         return _admitted_chain(resolved, sync=sync)
 
+    @override
     def create_extensions_runner(
         self,
         execution_context: StrawberryExecutionContext,
@@ -1060,6 +1071,7 @@ class DjangoSchema(strawberry.Schema):
             extensions=extensions,
         )
 
+    @override
     def execute_sync(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:
         """Run the operation synchronously and mask what is RETURNED.
 
@@ -1074,6 +1086,7 @@ class DjangoSchema(strawberry.Schema):
         """
         return self._masked_return(super().execute_sync(*args, **kwargs))
 
+    @override
     async def execute(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:
         """Run the operation asynchronously and mask what is RETURNED.
 
@@ -1128,6 +1141,7 @@ class DjangoSchema(strawberry.Schema):
             )
             return degraded_result(policy)
 
+    @override
     def _stream(
         self,
         execution_context: StrawberryExecutionContext,

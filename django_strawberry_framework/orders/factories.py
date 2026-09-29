@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from typing_extensions import override
+
 from ..utils.inputs import GeneratedInputArgumentsFactory, make_dynamic_set_getter
 from .inputs import _build_input_fields
 from .sets import OrderSet
@@ -97,6 +99,7 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory[OrderSet]):
     _related_attr = "related_orders"
     _related_target_attr = "orderset"
 
+    @override
     def _build_input_triples(
         self,
         set_cls: type[OrderSet],

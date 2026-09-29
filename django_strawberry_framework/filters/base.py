@@ -37,6 +37,7 @@ from django_filters.filters import BaseInFilter, BaseRangeFilter, FilterMethod
 from django_filters.utils import get_model_field
 from graphql import GraphQLError
 from strawberry import relay
+from typing_extensions import override
 
 from ..exceptions import (
     ConfigurationError,
@@ -411,6 +412,7 @@ class _RangeWidget(MultiWidget):
     def __init__(self, attrs: dict[str, object] | None = None) -> None:
         super().__init__((TextInput, TextInput), attrs)
 
+    @override
     def decompress(self, value: object) -> list[object]:
         """Split a two-element value, or two empty boxes when nothing is bound."""
         if isinstance(value, (list, tuple)) and len(value) == 2:
@@ -440,6 +442,7 @@ class RangeField(Field):
     ]
     widget = _RangeWidget
 
+    @override
     def to_python(self, value: object) -> object:
         """Collapse a missing widget pair to ``None`` so the filter is skipped."""
         if value in self.empty_values:
@@ -947,6 +950,7 @@ class _AbsentGlobalIDMultipleChoiceWidget(SelectMultiple):
     ``QueryDict`` instances.
     """
 
+    @override
     def value_from_datadict(
         self,
         data: Mapping[str, object],
@@ -982,17 +986,20 @@ class _GlobalIDMultipleChoiceField(MultipleChoiceField):
 
     widget = _AbsentGlobalIDMultipleChoiceWidget
 
-    def valid_value(self, value: object) -> bool:  # noqa: ARG002 - signature fixed by Django.
+    @override
+    def valid_value(self, value: object) -> bool:
         """Accept any value; GlobalID validation happens in the filter."""
         return True
 
     # mypy: upstream's list-only return cannot express the preserved omission.
+    @override
     def to_python(self, value: object) -> list[str] | None:  # type: ignore[override]
         """Preserve omission without bypassing ``Field.clean`` validation."""
         if value is None:
             return None
         return super().to_python(value)
 
+    @override
     def validate(self, value: object) -> None:
         """Validate omitted values through ``Field`` and lists through the parent."""
         if value is None:
@@ -1171,6 +1178,7 @@ class _RelationIdentityListField(Field):
 
     widget = _AbsentGlobalIDMultipleChoiceWidget
 
+    @override
     def to_python(self, value: object) -> list[object] | None:
         """Return ``None`` for omission and a list for a list or tuple; reject anything else.
 
@@ -1364,6 +1372,7 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
         """
         self._bind_owner(filterset)
 
+    @override
     def _validate_target(self, resolved: object) -> None:
         """The ``RelatedSetTargetMixin`` family gate: target must be a ``FilterSet``.
 

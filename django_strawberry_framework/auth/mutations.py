@@ -40,6 +40,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError
 from ..mutations.fields import (
@@ -236,6 +237,7 @@ class _AuthMutationMetaSnapshot:
         self.permission_classes = permission_classes
         self._sealed = True
 
+    @override
     def __setattr__(self, name: str, value: object) -> None:
         if getattr(self, "_sealed", False):
             raise ConfigurationError(
@@ -245,6 +247,7 @@ class _AuthMutationMetaSnapshot:
             )
         object.__setattr__(self, name, value)
 
+    @override
     def __delattr__(self, name: str) -> None:
         raise ConfigurationError(
             "The auth permission holder's validated snapshot is sealed; attributes cannot "
@@ -282,6 +285,7 @@ class _SealedAuthHolderMeta(_AuthHolderAttributes):
     one honored write; rebinding or deletion raises ``ConfigurationError``.
     """
 
+    @override
     def __setattr__(cls, name: str, value: object) -> None:  # noqa: N805 - a metaclass method's first argument is the class
         if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
             raise ConfigurationError(
@@ -290,6 +294,7 @@ class _SealedAuthHolderMeta(_AuthHolderAttributes):
             )
         super().__setattr__(name, value)
 
+    @override
     def __delattr__(cls, name: str) -> None:  # noqa: N805 - a metaclass method's first argument is the class
         if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
             raise ConfigurationError(
@@ -1318,12 +1323,14 @@ def _synthesize_register_rider(permission_classes: tuple[type, ...]) -> type[Dja
             permission_classes = rider_permission_classes
 
         @classmethod
+        @override
         def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
             """Pin the generated input's public name to ``RegisterInput`` (the name seam)."""
             del meta  # the register input name is fixed, not shape-derived.
             return _REGISTER_INPUT_NAME
 
         @classmethod
+        @override
         def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type:
             """Build the narrowed model-column input under the pinned ``RegisterInput`` name.
 
@@ -1356,24 +1363,26 @@ def _synthesize_register_rider(permission_classes: tuple[type, ...]) -> type[Dja
             return input_cls
 
         @classmethod
+        @override
         def resolve_sync(
             cls,
             info: Info[object, object],
             *,
             data: object,
-            id: object,  # noqa: A002
+            id: object,
         ) -> object:
             """The sync register entry: the shared skeleton with the password step pair."""
             del id  # create-only: the field dispatcher always passes UNSET.
             return _run_register_pipeline_sync(cls, info, data)
 
         @classmethod
+        @override
         async def resolve_async(
             cls,
             info: Info[object, object],
             *,
             data: object,
-            id: object,  # noqa: A002
+            id: object,
         ) -> object:
             """The async twin: the SAME sync body in one ``sync_to_async`` boundary."""
             del id  # create-only: the field dispatcher always passes UNSET.

@@ -69,6 +69,7 @@ from django.db.models.lookups import (
 from graphql import GraphQLError
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.types import Info
+from typing_extensions import override
 
 from .exceptions import (
     ConfigurationError,
@@ -329,6 +330,7 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
 
         super().__init__(msg, extensions=extensions)
 
+    @override
     def __reduce__(self) -> tuple[object, ...]:
         """Preserve constructor arguments and instance state across pickle roundtrips."""
         return (

@@ -59,6 +59,7 @@ from typing import TYPE_CHECKING
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from typing_extensions import override
 
 from django_strawberry_framework.utils.imports import require_optional_module
 
@@ -239,6 +240,7 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
         view = getattr(view_func, "view_class", None)
         setattr(request, _IS_GRAPHIQL, isinstance(view, type) and issubclass(view, BaseView))
 
+    @override
     def _postprocess(
         self,
         request: HttpRequest,

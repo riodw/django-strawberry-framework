@@ -70,6 +70,7 @@ from typing import Any, TypeGuard
 
 from django.db.models import QuerySet
 from graphql import GraphQLError
+from typing_extensions import override
 
 from .conf import resource_policy_setting
 from .exceptions import ConfigurationError, DjangoStrawberryFrameworkError, describe_value
@@ -157,6 +158,7 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
         self.charged = charged
         self.detail = detail
 
+    @override
     def __reduce__(self) -> tuple[object, ...]:
         """Preserve constructor arguments and instance state across pickle roundtrips."""
         return (

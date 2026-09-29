@@ -91,6 +91,7 @@ from django.conf import settings
 from django.utils.decorators import classonlymethod
 from django.views.decorators.csrf import csrf_protect
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
+from typing_extensions import override
 
 from django_strawberry_framework._boundary_ordering import (
     _BOUNDARY_ENFORCED,
@@ -403,6 +404,7 @@ class _RawBodyRequestAdapter(DjangoHTTPRequestAdapter):
     """
 
     @property
+    @override
     def body(self) -> bytes:
         """The raw request body, undecoded, for ``parse_json`` to decode strictly."""
         return self.request.body
@@ -536,6 +538,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
     max_request_body_bytes: int | None = None
 
     @classonlymethod
+    @override
     def as_view(cls, **initkwargs: Any) -> Any:  # noqa: N805 - Django's own signature
         """Return upstream's view callback, stamped with the ordering protocol.
 
@@ -781,6 +784,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
             if isinstance(value, str) and _REPLACEMENT_CHARACTER in value:
                 raise HTTPException(400, _JSON_PARSE_REASON)
 
+    @override
     def parse_json(self, data: str | bytes) -> object:
         """Decode a ``bytes`` request body as strict UTF-8, then delegate upstream.
 
@@ -1017,6 +1021,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
     #: async adapter already hands over raw bytes.
     request_adapter_class = _RawBodyRequestAdapter
 
+    @override
     def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
         """Enforce the request boundary, then run CSRF, then upstream's ``run``.
 
@@ -1029,6 +1034,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
         self._enforce_request_boundary_once(request)
         return _csrf_protected_run(request, super().run, args, kwargs)
 
+    @override
     def parse_multipart(self, request: SyncHTTPRequestAdapter) -> dict[str, str]:
         """Refuse lossily-decoded control documents, then delegate upstream.
 
@@ -1068,6 +1074,7 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):
     :func:`_run_after_csrf_check`.
     """
 
+    @override
     async def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
         """Enforce the request boundary, then run CSRF, then upstream's ``run``.
 
@@ -1079,6 +1086,7 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):
         self._enforce_request_boundary_once(request)
         return await _csrf_protected_async_run(request, super().run, args, kwargs)
 
+    @override
     async def parse_multipart(self, request: AsyncHTTPRequestAdapter) -> dict[str, str]:
         """Refuse lossily-decoded control documents, then delegate upstream.
 

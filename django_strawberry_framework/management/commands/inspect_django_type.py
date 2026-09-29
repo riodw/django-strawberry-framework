@@ -52,6 +52,7 @@ from strawberry.types.field import UNRESOLVED
 from strawberry.types.object_type import StrawberryObjectDefinition
 from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
+from typing_extensions import override
 
 from django_strawberry_framework.management.commands._imports import (
     import_module_symbol_or_command_error,
@@ -119,6 +120,7 @@ class Command(BaseCommand):
 
     help = "Inspect a DjangoType's resolved per-field GraphQL types"
 
+    @override
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the positional ``type`` argument and the optional ``--schema`` flag."""
         parser.add_argument("type", type=str, help="DjangoType name or fully-dotted object path")
@@ -131,6 +133,7 @@ class Command(BaseCommand):
             ),
         )
 
+    @override
     def handle(self, *args: object, **options: typing.Any) -> None:
         """Import the schema (if given), resolve the type, and print its field table."""
         schema = options.get("schema")

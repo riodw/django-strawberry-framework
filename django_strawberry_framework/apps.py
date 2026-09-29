@@ -1,6 +1,7 @@
 """Django ``AppConfig`` - registers the package and applies its upstream patches at app load."""
 
 from django.apps import AppConfig
+from typing_extensions import override
 
 
 class DjangoStrawberryFrameworkConfig(AppConfig):
@@ -9,6 +10,7 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
     name = "django_strawberry_framework"
     verbose_name = "Django Strawberry Framework"
 
+    @override
     def ready(self) -> None:
         """Apply the package's defensive upstream patches at app-load time.
 

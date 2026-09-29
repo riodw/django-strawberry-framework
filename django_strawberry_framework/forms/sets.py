@@ -45,6 +45,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django import forms
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_text
 from ..mutations.inputs import PARTIAL
@@ -554,6 +555,7 @@ class DjangoModelFormMutation(DjangoMutation):
     )
 
     @classmethod
+    @override
     def _resolve_model(cls, meta: type) -> type[models.Model] | None:
         """Resolve the model from ``Meta.form_class._meta.model`` (the ``036`` seam override).
 
@@ -567,6 +569,7 @@ class DjangoModelFormMutation(DjangoMutation):
         return resolve_meta_model(meta, key="form_class", meta_attr="_meta")
 
     @classmethod
+    @override
     def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
         """Validate a ``ModelForm``-mutation ``Meta`` at class creation (spec-038 Decision 6).
 
@@ -676,6 +679,7 @@ class DjangoModelFormMutation(DjangoMutation):
         _input_field_specs = None
 
     @classmethod
+    @override
     def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
         """Build + materialize the operation's form-derived input (the seam override).
 
@@ -714,6 +718,7 @@ class DjangoModelFormMutation(DjangoMutation):
     get_form = _default_get_form
 
     @classmethod
+    @override
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
         """Return the generated form-input class name (the name seam override).
 

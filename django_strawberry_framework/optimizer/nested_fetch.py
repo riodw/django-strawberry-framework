@@ -73,6 +73,7 @@ from typing import TYPE_CHECKING, ClassVar, Protocol, cast
 from django.db import models
 from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.connections import assert_window_fetch_mode_for
@@ -204,6 +205,7 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
         """Return the strategy's rows, or ``None`` for every unrecognized shape."""
         raise NotImplementedError  # pragma: no cover - subclasses always override.
 
+    @override
     def _fetch_all(self) -> None:
         if self._result_cache is None:
             rows = self._fetch_recognized_rows()

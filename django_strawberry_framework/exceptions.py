@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import cast
 
+from typing_extensions import override
+
 __all__ = (
     "ConfigurationError",
     "DjangoStrawberryFrameworkError",
@@ -234,6 +236,7 @@ class DjangoStrawberryFrameworkError(Exception):
       ``KeyboardInterrupt`` and break wire identity.
     """
 
+    @override
     def __str__(self) -> str:
         """Render ``str`` safely from the current args (see class docstring)."""
         try:
@@ -246,6 +249,7 @@ class DjangoStrawberryFrameworkError(Exception):
             )
         return rendered
 
+    @override
     def __repr__(self) -> str:
         """Render ``repr`` safely from the current args (see class docstring)."""
         try:
@@ -329,6 +333,7 @@ class PathResolutionError(ConfigurationError):
         self.field_path = field_path
         self.segment = segment
 
+    @override
     def __reduce__(self) -> tuple[object, ...]:
         """Preserve constructor arguments and instance state across pickle roundtrips."""
         return (self.__class__, (self.model, self.field_path, self.segment), self.__dict__)
@@ -371,6 +376,7 @@ class LookupValidationError(ConfigurationError):
         self.lookup_expr = lookup_expr
         self.part = part
 
+    @override
     def __reduce__(self) -> tuple[object, ...]:
         """Preserve constructor arguments and instance state across pickle roundtrips."""
         return (self.__class__, (self.terminal, self.lookup_expr, self.part), self.__dict__)

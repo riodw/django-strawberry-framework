@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from django.db import models
+from typing_extensions import override
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..utils.typing import ModelField
@@ -48,6 +49,7 @@ class PendingRelation:
 class _PendingRelationAnnotationMeta(type):
     """Metaclass that gives the sentinel a useful schema-construction error repr."""
 
+    @override
     def __repr__(cls) -> str:
         return (
             "<unfinalized DjangoType relation; call finalize_django_types() before constructing "

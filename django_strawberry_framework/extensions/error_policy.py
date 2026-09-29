@@ -77,6 +77,7 @@ from django.conf import settings
 from graphql import GraphQLError
 from graphql.execution import ExecutionResult as GraphQLExecutionResult
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
+from typing_extensions import override
 
 from .. import logger
 from ..error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, new_correlation_id
@@ -438,6 +439,7 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension[OperationState]):
                 )
                 self.execution_context.result = degraded_result(policy)
 
+    @override
     def on_operation(self) -> Iterator[None]:
         """Apply the policy to the completed result, once, at teardown.
 

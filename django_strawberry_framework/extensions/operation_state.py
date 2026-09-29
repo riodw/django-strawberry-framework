@@ -130,6 +130,7 @@ from weakref import ref
 
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.runner import SchemaExtensionsRunner
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError
 from ..utils.execution_mode import OperationMode, bind_operation_mode
@@ -509,7 +510,10 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
             ContextVar("django_strawberry_framework_operation_state", default=None),
         )
 
-    @property
+    # mypy: a settable property overriding another module's attribute ignores
+    # its @override markers (both are present below)
+    @property  # type: ignore[explicit-override]
+    @override
     def execution_context(self) -> Any:
         """The engine context of the operation this extension is answering here.
 
@@ -524,6 +528,7 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
         return None if state is None else state.execution_context
 
     @execution_context.setter
+    @override
     def execution_context(self, value: ExecutionContext | None) -> None:
         """Take the engine's assignment for the schemas it is the only signal for.
 
@@ -913,10 +918,12 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
             )
         return self._runner_scope
 
+    @override
     def operation(self) -> Any:
         """The operation scope, with this operation's bindings around it."""
         return _BoundScope(self._scope(), self._operation_states, super().operation())
 
+    @override
     def on_stream_result(self, result: object) -> Any:
         """The streaming-result scope, bound so the runner's contract is complete."""
         return _BoundScope(self._scope(), self._operation_states, super().on_stream_result(result))
@@ -938,6 +945,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         """Wrap ``source`` so every frame it yields is produced with this operation bound."""
         return _ResumedStream(self, source)
 
+    @override
     def get_extensions_results_sync(self) -> dict[str, object]:
         """Collect results with the operation's bindings in force.
 
@@ -950,6 +958,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         with _bound(self._scope(), self._operation_states):
             return super().get_extensions_results_sync()
 
+    @override
     async def get_extensions_results(self, ctx: ExecutionContext) -> dict[str, object]:
         """Collect results with the operation's bindings in force, on the async path."""
         with _bound(self._scope(), self._operation_states):

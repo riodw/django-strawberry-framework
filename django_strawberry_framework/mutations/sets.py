@@ -51,6 +51,7 @@ import strawberry
 from django.db import models
 from strawberry import relay
 from strawberry.types.base import StrawberryList
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name
 from ..registry import register_subsystem_clear, registry
@@ -664,6 +665,7 @@ def make_meta_validating_metaclass(
             register(new_class)
             return new_class
 
+        @override
         def __setattr__(cls, name: str, value: object) -> None:
             """Keep the validated ``Meta`` snapshot write-once (0.0.15 auth hardening).
 
@@ -681,6 +683,7 @@ def make_meta_validating_metaclass(
                 )
             super().__setattr__(name, value)
 
+        @override
         def __delattr__(cls, name: str) -> None:
             """Refuse deleting the validated ``Meta`` snapshot off a mutation class."""
             if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
@@ -902,6 +905,7 @@ class _ValidatedMutationMeta:
         # Seal LAST: every validated slot is set; from here on the record is
         self._sealed = True
 
+    @override
     def __setattr__(self, name: str, value: object) -> None:
         """Reject any attribute write on a sealed validated snapshot."""
         if getattr(self, "_sealed", False):
@@ -911,6 +915,7 @@ class _ValidatedMutationMeta:
             )
         object.__setattr__(self, name, value)
 
+    @override
     def __delattr__(self, name: str) -> None:
         raise ConfigurationError(
             "The validated mutation Meta snapshot is sealed; attributes cannot be deleted. "

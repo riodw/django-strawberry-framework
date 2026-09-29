@@ -625,6 +625,7 @@ dependencies = [
     { name = "django", version = "6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "django-filter" },
     { name = "strawberry-graphql" },
+    { name = "typing-extensions" },
 ]
 
 [package.dev-dependencies]
@@ -657,6 +658,7 @@ requires-dist = [
     { name = "django", specifier = ">=5.2.16" },
     { name = "django-filter", specifier = ">=25.2" },
     { name = "strawberry-graphql", specifier = ">=0.316.0" },
+    { name = "typing-extensions", specifier = ">=4.4.0" },
 ]
 
 [package.metadata.requires-dev]

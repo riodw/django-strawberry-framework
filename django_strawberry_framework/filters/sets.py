@@ -48,6 +48,7 @@ from django_filters.exceptions import FieldLookupError
 from django_filters.utils import get_model_field, resolve_field, try_dbfield
 from graphql import GraphQLError
 from strawberry import UNSET
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, PathResolutionError, _safe_arg_repr
 from ..optimizer.predicates import attach_exists, correlated_inner_root
@@ -2584,6 +2585,7 @@ class FilterSet(
         return _FORM_KEY_BY_PYTHON_ATTR.get(python_attr, python_attr)
 
     @classmethod
+    @override
     def _permission_fallback_path(cls, python_attr: str) -> str:
         """Map a lookup attr onto its django-filter form key (filter-family remap)."""
         return cls._form_key_for_python_attr(python_attr)
@@ -2858,12 +2860,14 @@ class FilterSet(
         return registry.get(child_model)
 
     @classmethod
+    @override
     def _check_permission_depth(cls, _depth: int) -> None:
         """Cap logical-branch nesting at ``_MAX_LOGIC_DEPTH``."""
         if _depth > cls._MAX_LOGIC_DEPTH:
             cls._raise_logic_depth_exceeded()
 
     @classmethod
+    @override
     def _run_logic_permission_checks(
         cls,
         input_value: object,

@@ -101,6 +101,7 @@ from django.conf import settings
 from django.db import connections
 from graphql import ExecutionResult as GraphQLExecutionResult
 from graphql import GraphQLError
+from typing_extensions import override
 
 from .. import logger
 from ..exceptions import ConfigurationError, describe_value
@@ -704,6 +705,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
             )
         _ACKNOWLEDGEMENT.settle(self, _AcceptedDisclosure(allow_unsafe_production))
 
+    @override
     def _new_operation_state(self, execution_context: "ExecutionContext") -> _DebugOperationState:
         """Build this operation's capture state."""
         return _DebugOperationState(execution_context)
@@ -744,6 +746,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         # closed without touching the operation.
         return self._acknowledged() or getattr(settings, "DEBUG", None) is True
 
+    @override
     def on_operation(self) -> Iterator[None]:
         """Bracket the operation with the debug cursor; assemble the payload at teardown.
 
@@ -810,6 +813,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
                 # contract).
                 self._stash_payload_if_executed(state)
 
+    @override
     def on_execute(self) -> Iterator[None]:
         """Stash the payload the moment graphql-core returns, before any operation teardown.
 
@@ -852,6 +856,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         if isinstance(result, GraphQLExecutionResult):
             state.payload = _build_payload(state.snapshots or [], result)
 
+    @override
     def get_results(self) -> dict[str, _DebugPayload]:
         """Return ``{"debug": <payload>}`` once the stash exists, else ``{}``.
 

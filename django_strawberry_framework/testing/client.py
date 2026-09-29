@@ -39,6 +39,7 @@ from asgiref.sync import sync_to_async
 from django.test import AsyncClient, Client, TestCase, TransactionTestCase
 from strawberry.test import BaseGraphQLTestClient
 from strawberry.test.client import Response as _EngineResponse
+from typing_extensions import override
 
 from django_strawberry_framework.conf import testing_endpoint_setting
 from django_strawberry_framework.exceptions import _safe_arg_repr
@@ -167,6 +168,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
 
         return response
 
+    @override
     def request(
         self,
         body: dict[str, object],
@@ -198,6 +200,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
         # narrows Client.post headers to Mapping[str, str]
         return self.client.post(url if url is not None else self.path, **kwargs)  # type: ignore[arg-type]
 
+    @override
     def _build_body(
         self,
         query: str,
@@ -385,6 +388,7 @@ class TestClient(_GraphQLTestClientBase[Client]):
     def __init__(self, path: str | None = None, client: Client | None = None) -> None:
         super().__init__(path, client if client is not None else Client())
 
+    @override
     def query(
         self,
         query: str,
@@ -481,6 +485,7 @@ class AsyncTestClient(_GraphQLTestClientBase[AsyncClient]):
     def __init__(self, path: str | None = None, client: AsyncClient | None = None) -> None:
         super().__init__(path, client if client is not None else AsyncClient())
 
+    @override
     async def query(
         self,
         query: str,

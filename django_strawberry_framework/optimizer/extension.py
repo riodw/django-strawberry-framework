@@ -44,6 +44,7 @@ from graphql.language.ast import (
 )
 from graphql.language.printer import print_ast
 from graphql.type.definition import GraphQLInterfaceType
+from typing_extensions import override
 
 from ..exceptions import _safe_arg_repr
 from ..extensions.operation_state import (
@@ -1018,6 +1019,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         self._cache_hits = 0
         self._cache_misses = 0
 
+    @override
     def _new_operation_state(
         self,
         execution_context: "ExecutionContext",
@@ -1092,6 +1094,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         self._cache_hits = 0
         self._cache_misses = 0
 
+    @override
     def on_execute(self) -> Iterator[None]:
         """Open this execution's frame, and close it however the operation ends.
 
@@ -1137,6 +1140,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         finally:
             _end_execution_frame(frame)
 
+    @override
     def resolve(
         self,
         _next: Callable[..., object],

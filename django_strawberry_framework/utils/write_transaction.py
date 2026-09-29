@@ -75,6 +75,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, transaction
 from django.db.models.fields.files import FieldFile
 from django.db.models.signals import pre_save
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
@@ -868,6 +869,7 @@ class _FileNameSnapshot(_ValueSnapshot):
     def __init__(self, name: str | None) -> None:
         self.name = name
 
+    @override
     def matches(self, current: object) -> bool:
         """Compare the database-relevant ``name``, not the descriptor object.
 
@@ -916,6 +918,7 @@ class _FieldFingerprint(_ValueSnapshot):
     def __init__(self, digest: str) -> None:
         self.digest = digest
 
+    @override
     def matches(self, current: object) -> bool:
         """Compare the RECOMPUTED fingerprint: a flat digest, never a deep walk."""
         return _field_fingerprint(current) == self.digest

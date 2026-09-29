@@ -60,6 +60,7 @@ from strawberry import relay
 from strawberry.relay.types import NodeIDPrivate
 from strawberry.types.auto import StrawberryAuto
 from strawberry.types.field import StrawberryField
+from typing_extensions import override
 
 from ..conf import RELAY_GLOBALID_STRATEGY_KEY
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_type_name
@@ -661,6 +662,7 @@ class DjangoType:
     # Installed alongside it by ``types/relay.py::install_is_type_of``.
     is_type_of: ClassVar[Callable[[object, object], bool]]
 
+    @override
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Collect model/type metadata without finalizing the Strawberry type."""
         super().__init_subclass__(**kwargs)

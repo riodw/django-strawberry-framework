@@ -32,6 +32,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, TypeVar
 
+from typing_extensions import override
+
 from .inputs import SCALAR, FieldConversionBase
 
 __all__ = [
@@ -54,6 +56,7 @@ class _MroContinue:
 
     __slots__ = ()
 
+    @override
     def __repr__(self) -> str:
         return "MRO_CONTINUE"
 

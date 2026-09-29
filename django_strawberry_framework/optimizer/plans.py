@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Count, Prefetch, Q, Window
 from django.db.models.functions import RowNumber
+from typing_extensions import override
 
 from ..exceptions import OptimizerError
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
@@ -136,6 +137,7 @@ class _IndexedList(list[_T]):
             if value not in self:
                 super().append(value)
 
+    @override
     def append(self, value: _T) -> None:
         """Append directly and keep the sidecar index useful for later helper calls."""
         super().append(value)
@@ -143,6 +145,7 @@ class _IndexedList(list[_T]):
         with contextlib.suppress(TypeError):
             self._seen.add(value if key is None else key(value))
 
+    @override
     def extend(self, values: Iterable[_T]) -> None:
         """Extend directly and keep the sidecar index useful for later helper calls."""
         for value in values:

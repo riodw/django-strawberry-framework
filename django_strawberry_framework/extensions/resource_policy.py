@@ -112,6 +112,7 @@ from graphql.language.source import Source
 from graphql.language.token_kind import TokenKind
 from graphql.utilities import value_from_ast_untyped
 from strawberry.extensions.base_extension import SchemaExtension
+from typing_extensions import override
 
 from ..mutations.fields import MUTATION_CLASS_MARKER
 from ..resource_policy import (
@@ -1534,6 +1535,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
             else (_PACKAGE_RESOURCE_POLICY)
         )
 
+    @override
     def on_operation(self) -> Iterator[None]:
         """Arm the policy, charge the document, and restore nested execution state.
 
@@ -1582,6 +1584,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
             finally:
                 end_resource_budget(scope)
 
+    @override
     def on_parse(self) -> Iterator[None]:
         """Charge the document's shape and every argument value, once it is parsed.
 
@@ -1643,6 +1646,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
             execution_context.validation_rules = ()
             execution_context.pre_execution_errors = [rejection]
 
+    @override
     def on_validate(self) -> Iterator[None]:
         """Restate a rejection an earlier validation hook's own result replaced.
 
@@ -1662,6 +1666,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         restate_admission_verdict(self.execution_context)
         yield
 
+    @override
     def on_execute(self) -> Iterator[None]:
         """Refuse to begin executing an operation the admission stage rejected.
 
@@ -1693,6 +1698,7 @@ class _AdmissionGuard(SchemaExtension):
     without moving any of them.
     """
 
+    @override
     def on_validate(self) -> Iterator[None]:
         """Put the recorded verdict back, last, before the pre-execution check reads it."""
         restate_admission_verdict(self.execution_context)

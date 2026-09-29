@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from django.db.models import QuerySet
+from typing_extensions import override
 
 from ..utils.connections import window_range_plan
 from . import logger
@@ -182,6 +183,7 @@ class SingleParentWindowQuerySet(RecognizedFetchQuerySet):
     _dst_spec_attr = "_dst_single_parent_spec"
     _dst_single_parent_spec: SingleParentWindowSpec | None = None
 
+    @override
     def _fetch_recognized_rows(self) -> list[models.Model] | None:
         return _fetch_single_parent_rows(self)
 

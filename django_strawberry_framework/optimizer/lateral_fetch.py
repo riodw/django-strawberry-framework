@@ -80,6 +80,7 @@ from django.db import connections
 from django.db.models import QuerySet
 from django.db.models.expressions import Col, Window
 from django.db.models.sql.where import AND, WhereNode
+from typing_extensions import override
 
 from ..keyset import keyset_seek_sql
 from ..utils.connections import assert_window_fetch_mode_for, window_range_plan
@@ -491,6 +492,7 @@ class LateralQuerySet(RecognizedFetchQuerySet):
     _dst_spec_attr = "_dst_lateral_spec"
     _dst_lateral_spec: LateralWindowSpec | None = None
 
+    @override
     def _fetch_recognized_rows(self) -> list[models.Model] | None:
         return _fetch_lateral_rows(self)
 

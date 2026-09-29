@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
+from typing_extensions import override
+
 from ..exceptions import (
     ConfigurationError,
     _safe_arg_repr,
@@ -110,6 +112,7 @@ class RelatedOrder(RelatedSetTargetMixin):
         """
         self._bind_owner(orderset)
 
+    @override
     def _validate_target(self, resolved: object) -> None:
         """The ``RelatedSetTargetMixin`` family gate: target must be an ``OrderSet``.
 

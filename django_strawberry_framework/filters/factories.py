@@ -35,6 +35,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from typing_extensions import override
+
 from ..utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
     GeneratedInputArgumentsFactory,
@@ -112,6 +114,7 @@ class FilterArgumentsFactory(GeneratedInputArgumentsFactory[FilterSet]):
     _related_attr = "related_filters"
     _related_target_attr = "filterset"
 
+    @override
     def _build_input_triples(
         self,
         set_cls: type[FilterSet],

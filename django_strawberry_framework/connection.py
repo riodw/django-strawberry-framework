@@ -58,6 +58,7 @@ from strawberry.relay.types import NodeIterableType
 from strawberry.relay.utils import should_resolve_list_connection_edges
 from strawberry.types import Info, get_object_definition
 from strawberry.utils.await_maybe import AwaitableOrValue
+from typing_extensions import override
 
 from .exceptions import ConfigurationError, _safe_class_name, _safe_type_name
 from .keyset import (
@@ -1245,6 +1246,7 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # ty
     _resolves_total_count: ClassVar[bool] = False
 
     @classmethod
+    @override
     def resolve_connection(
         cls,
         nodes: NodeIterableType[NodeType],

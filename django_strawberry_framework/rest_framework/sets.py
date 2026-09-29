@@ -62,6 +62,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from rest_framework import serializers
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..mutations.inputs import CREATE
@@ -516,6 +517,7 @@ class SerializerMutation(DjangoMutation):
     Meta: ClassVar[type[Any]]
 
     @classmethod
+    @override
     def _resolve_model(cls, meta: type) -> type[models.Model] | None:
         """Resolve the model from ``Meta.serializer_class.Meta.model`` (the ``036`` seam override).
 
@@ -531,6 +533,7 @@ class SerializerMutation(DjangoMutation):
         return resolve_meta_model(meta, key="serializer_class", meta_attr="Meta")
 
     @classmethod
+    @override
     def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
         """Validate a serializer-mutation ``Meta`` at class creation (spec-039 Decision 6).
 
@@ -797,6 +800,7 @@ class SerializerMutation(DjangoMutation):
         return _default_serializer_schema_fields(serializer_class)
 
     @classmethod
+    @override
     def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
         """Build + materialize the operation's serializer-derived input (the seam override).
 
@@ -903,6 +907,7 @@ class SerializerMutation(DjangoMutation):
         return input_cls
 
     @classmethod
+    @override
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
         """Return the generated serializer-input class name (the name seam override).
 

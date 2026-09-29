@@ -6,6 +6,7 @@ from typing import Any
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from strawberry import Schema
 from strawberry.printer import print_schema
+from typing_extensions import override
 
 from django_strawberry_framework.management.commands._imports import (
     import_module_symbol_or_command_error,
@@ -17,6 +18,7 @@ class Command(BaseCommand):
 
     help = "Export the GraphQL schema"
 
+    @override
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the positional schema argument and the optional --path flag."""
         parser.add_argument("schema", type=str, help="The schema location")
@@ -26,6 +28,7 @@ class Command(BaseCommand):
             help="Write UTF-8 SDL to this file, overwriting it without prompting",
         )
 
+    @override
     def handle(self, *args: object, **options: Any) -> None:
         """Resolve the dotted-path schema symbol and emit SDL.
 

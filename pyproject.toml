@@ -39,6 +39,9 @@ dependencies = [
     # factories per operation on both execution colors.
     "strawberry-graphql>=0.316.0",
     "django-filter>=25.2",
+    # ``typing_extensions.override`` marks every method that overrides a base
+    # (``typing.override`` is 3.12+); 4.4.0 is the release that added it.
+    "typing-extensions>=4.4.0",
 ]
 
 [project.urls]
@@ -244,6 +247,9 @@ disallow_incomplete_defs = true
 disallow_untyped_calls = true
 disallow_untyped_decorators = true
 disallow_untyped_defs = true
+# Every method that overrides a base (Strawberry, Django, graphql-core hooks included)
+# carries ``@override``, so an upstream rename that leaves an override orphaned fails here.
+enable_error_code = ["explicit-override"]
 extra_checks = true
 no_implicit_reexport = true
 strict_equality = true

@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Generic, TypeVar, ca
 
 import strawberry
 from django.db import models as django_models
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from .canonical import base_container_values, canonical_sort_key
@@ -1745,6 +1746,7 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
     _related_attr: ClassVar[str]
     _related_target_attr: ClassVar[str]
 
+    @override
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Allow the direct family factories; reject any deeper subclassing."""
         super().__init_subclass__(**kwargs)

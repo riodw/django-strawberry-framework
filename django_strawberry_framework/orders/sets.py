@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from django.db import models
 from strawberry import UNSET
+from typing_extensions import override
 
 from ..exceptions import ConfigurationError, PathResolutionError, _safe_arg_repr, _safe_type_name
 from ..sets_mixins import (
@@ -622,6 +623,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         return normalize_input_value(cls, input_value)
 
     @classmethod
+    @override
     def _prepare_permission_input(cls, _input_value: object) -> None:
         """Initialize direct-call provenance before active permission traversal.
 

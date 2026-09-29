@@ -56,7 +56,10 @@ from .base import (
     GlobalIDMultipleChoiceFilter,
     ListFilter,
     RangeFilter,
+    RelationPkFilter,
+    RelationPkMultipleFilter,
     TypedFilter,
+    relation_identity_column,
 )
 
 # Domain-local aliases for the shared generated-input substrate (the mechanics
@@ -341,6 +344,28 @@ def _scalar_from_model_field(model_field: ModelField | None) -> _TypeForm:
     return cast("_TypeForm", scalar_for_field(model_field))
 
 
+def _relation_identity_annotation(
+    filter_instance: Filter,
+    model_field: ModelField | None,
+) -> _TypeForm:
+    """Type a raw-pk relation leaf from the target's primary-key column.
+
+    The scalar comes from ``filters/base.py::relation_identity_column`` through the
+    shared ``SCALAR_MAP`` lookup, so the input agrees with how a ``DjangoType`` types
+    that key (``Int``, ``UUID``, ``BigInt``, ...). A raw-pk filter whose ``field_name``
+    resolves no relation on its ``FilterSet`` model has no column to type from.
+    """
+    column = relation_identity_column(model_field)
+    if column is None:
+        raise ConfigurationError(
+            f"{_safe_type_name(filter_instance)} on {_safe_arg_repr(filter_instance)} names "
+            f"{_safe_arg_repr(getattr(filter_instance, 'field_name', None))}, which is not a "
+            "relation to a model on its FilterSet; name a relation key in Meta.fields, or "
+            "filter the related row's own fields through a RelatedFilter.",
+        )
+    return _scalar_from_model_field(column)
+
+
 def _choice_enum_from_filter(
     filter_instance: ChoiceFilter,
     type_name: str,
@@ -427,6 +452,8 @@ def _element_annotation(
 _FILTER_INPUT_KIND_TYPES: tuple[type | tuple[type, ...], ...] = (
     GlobalIDMultipleChoiceFilter,
     GlobalIDFilter,
+    RelationPkMultipleFilter,
+    RelationPkFilter,
     BaseCSVFilter,
     (RangeFilter, _DjangoRangeFilter),
     (ListFilter, ArrayFilter),
@@ -469,7 +496,8 @@ def convert_filter_to_input_annotation(
 
     Implements the spec-027 Decision 4 conversion table. Kind order is
     ``_FILTER_INPUT_KIND_TYPES`` (most-specific first): Relay-aware primitives,
-    then Range / List / Array, then bare ``TypedFilter``, then
+    then the raw-pk relation pair (typed from the target key column), then
+    Range / List / Array, then bare ``TypedFilter``, then
     ``ChoiceFilter``, then the ``object`` catch-all (the original ``else``).
     ``method=...`` filters
     that expose no form field raise ``ConfigurationError``.
@@ -491,6 +519,12 @@ def convert_filter_to_input_annotation(
 
     def _gid(_filter: Filter) -> object:
         return str
+
+    def _pk_multi(matched: Filter) -> object:
+        return GenericAlias(list, (_relation_identity_annotation(matched, model_field),))
+
+    def _pk(matched: Filter) -> object:
+        return _relation_identity_annotation(matched, model_field)
 
     def _csv(matched: Filter) -> object:
         # django-filter expands ``Meta.fields`` ``in`` / ``range`` lookups
@@ -537,6 +571,8 @@ def convert_filter_to_input_annotation(
         isinstance_prechecks=_filter_input_prechecks(
             _gid_multi,
             _gid,
+            _pk_multi,
+            _pk,
             _csv,
             _range,
             _list,
@@ -599,6 +635,13 @@ def normalize_input_value(
     def _gid(_filter: Filter) -> object:
         return _encode_global_id_input(raw_value)
 
+    def _pk_multi(_filter: Filter) -> object:
+        _require_list_container(_filter, raw_value, "primary-key list")
+        return [_unwrap_enum_member(item) for item in raw_value]
+
+    def _pk(_filter: Filter) -> object:
+        return _unwrap_enum_member(raw_value)
+
     def _csv(_filter: Filter) -> object:
         # ``in`` / ``range`` generated CSV filters consume a list; unwrap
         # any enum members per element (parity with ``ListFilter`` below).
@@ -626,6 +669,8 @@ def normalize_input_value(
         isinstance_prechecks=_filter_input_prechecks(
             _gid_multi,
             _gid,
+            _pk_multi,
+            _pk,
             _csv,
             _range,
             _list,

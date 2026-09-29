@@ -1335,6 +1335,187 @@ def test_library_branches_not_filter_respects_root_visibility_over_http():
     )
 
 
+_SHELVES_BY_ALT_BRANCHES = """
+query ($ids: [Int!]) {
+  allLibraryShelves(filter: { altBranches: { exact: $ids } }) {
+    code
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_library_shelves_filter_by_forward_m2m_primary_keys_over_http():
+    """A forward M2M relation key over a non-Relay target takes a list of raw branch pks.
+
+    ``BranchType`` is not a Relay node, so ``altBranches: { exact: [Int!] }`` matches a
+    shelf related to ANY listed branch, once per shelf even when it matches through
+    both.
+    """
+    home = models.Branch.objects.create(name="Home", city="Boston")
+    first = models.Branch.objects.create(name="First", city="Boston")
+    second = models.Branch.objects.create(name="Second", city="Boston")
+    only_first = models.Shelf.objects.create(code="A-1", topic="general", branch=home)
+    only_second = models.Shelf.objects.create(code="B-2", topic="general", branch=home)
+    both = models.Shelf.objects.create(code="C-3", topic="general", branch=home)
+    models.Shelf.objects.create(code="D-4", topic="general", branch=home)
+    only_first.alt_branches.add(first)
+    only_second.alt_branches.add(second)
+    both.alt_branches.add(first, second)
+
+    _assert_graphql_data(
+        _SHELVES_BY_ALT_BRANCHES,
+        {"allLibraryShelves": [{"code": "A-1"}, {"code": "C-3"}]},
+        variables={"ids": [first.pk]},
+    )
+    _assert_graphql_data(
+        _SHELVES_BY_ALT_BRANCHES,
+        {"allLibraryShelves": [{"code": "A-1"}, {"code": "B-2"}, {"code": "C-3"}]},
+        variables={"ids": [first.pk, second.pk]},
+    )
+
+
+@pytest.mark.django_db
+def test_library_relation_key_is_no_existence_oracle_for_hidden_or_missing_rows_over_http():
+    """A hidden target pk and a missing one both reach the predicate: no validation error.
+
+    The anonymous request cannot see the ``city="restricted"`` branch, but a shelf the
+    request CAN see still matches by that branch's pk, exactly as a GlobalID relation
+    leaf matches by value; a pk no row carries matches nothing. Neither answers "Select
+    a valid choice", so the response never tells a hidden row from a missing one. An
+    explicit empty list matches nothing, and a missing member beside a real one is
+    dropped.
+    """
+    home = models.Branch.objects.create(name="Home", city="Boston")
+    visible = models.Branch.objects.create(name="Visible", city="Boston")
+    hidden = models.Branch.objects.create(name="Hidden", city="restricted")
+    near = models.Shelf.objects.create(code="A-1", topic="general", branch=home)
+    far = models.Shelf.objects.create(code="B-2", topic="general", branch=home)
+    near.alt_branches.add(visible)
+    far.alt_branches.add(hidden)
+    missing = hidden.pk + 1000
+
+    for ids, codes in (
+        ([hidden.pk], ["B-2"]),
+        ([missing], []),
+        ([], []),
+        ([missing, visible.pk], ["A-1"]),
+    ):
+        _assert_graphql_data(
+            _SHELVES_BY_ALT_BRANCHES,
+            {"allLibraryShelves": [{"code": code} for code in codes]},
+            variables={"ids": ids},
+        )
+
+
+@pytest.mark.django_db
+def test_library_relation_key_rejects_an_uncoercible_primary_key_at_the_wire_over_http():
+    """A value the target pk scalar cannot hold is a GraphQL input error, never a query."""
+    response = _post_graphql(
+        '{ allLibraryShelves(filter: { altBranches: { exact: ["not-a-pk"] } }) { code } }',
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("data") is None
+    (error,) = payload["errors"]
+    assert "Int" in error["message"]
+
+
+@pytest.mark.django_db
+def test_library_branches_filter_by_reverse_m2m_primary_keys_over_http():
+    """A reverse M2M relation key over a non-Relay target takes a list of raw shelf pks."""
+    home = models.Branch.objects.create(name="Home", city="Boston")
+    linked = models.Branch.objects.create(name="Linked", city="Boston")
+    models.Branch.objects.create(name="Unlinked", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=home)
+    shelf.alt_branches.add(linked)
+
+    _assert_graphql_data(
+        """
+        query ($ids: [Int!]) {
+          allLibraryBranches(filter: { altShelves: { exact: $ids } }) {
+            name
+          }
+        }
+        """,
+        {"allLibraryBranches": [{"name": "Linked"}]},
+        variables={"ids": [shelf.pk]},
+    )
+
+
+@pytest.mark.django_db
+def test_library_all_fields_filterset_sweeps_forward_relation_columns_only_over_http():
+    """``fields = "__all__"`` keeps forward single-column relations, never M2M or reverse ones."""
+    fields = _input_field_names("CirculationDeskFilterInputType")
+    assert {
+        "shelf",
+        "contentType",
+        "objectId",
+        "name",
+        "id",
+        "branch",
+    } <= fields
+    assert not fields & {
+        "genres",
+        "children",
+        "profile",
+        "tags",
+        "contentObject",
+    }
+    assert _input_field_names("CirculationDeskFilterShelfFilterInputType") == {"exact"}
+    assert _input_field_type("CirculationDeskFilterShelfFilterInputType", "exact") == {
+        "kind": "SCALAR",
+        "name": "Int",
+        "ofType": None,
+    }
+
+
+@pytest.mark.django_db
+def test_library_all_fields_filterset_filters_by_forward_relation_pks_over_http():
+    """The swept ``shelf`` (non-Relay target) and ``contentType`` (no ``DjangoType``) keys.
+
+    Both filter by the related row's raw pk. A desk on a ``topic="secret"`` shelf is
+    hidden from the anonymous request by the desk's own visibility cascade, so its
+    shelf's pk matches nothing, the same answer as a pk no shelf carries.
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    branch = models.Branch.objects.create(name="Home", city="Boston")
+    open_shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    other_shelf = models.Shelf.objects.create(code="B-2", topic="general", branch=branch)
+    secret_shelf = models.Shelf.objects.create(code="C-3", topic="secret", branch=branch)
+    book_type = ContentType.objects.get_for_model(models.Book)
+    models.CirculationDesk.objects.create(
+        name="Front",
+        branch=branch,
+        shelf=open_shelf,
+        content_type=book_type,
+        object_id=1,
+    )
+    models.CirculationDesk.objects.create(name="Back", branch=branch, shelf=other_shelf)
+    models.CirculationDesk.objects.create(name="Vault", branch=branch, shelf=secret_shelf)
+    query = """
+    query ($filter: CirculationDeskFilterInputType) {
+      allLibraryCirculationDesksFiltered(filter: $filter) {
+        name
+      }
+    }
+    """
+
+    for filter_input, names in (
+        ({"shelf": {"exact": open_shelf.pk}}, ["Front"]),
+        ({"shelf": {"exact": secret_shelf.pk}}, []),
+        ({"shelf": {"exact": secret_shelf.pk + 1000}}, []),
+        ({"contentType": {"exact": book_type.pk}}, ["Front"]),
+        ({"contentType": {"exact": book_type.pk + 1000}}, []),
+    ):
+        _assert_graphql_data(
+            query,
+            {"allLibraryCirculationDesksFiltered": [{"name": name} for name in names]},
+            variables={"filter": filter_input},
+        )
+
+
 @pytest.mark.django_db
 def test_library_books_filter_by_choice_enum():
     """Spec-027: choice-enum filter clause coerces via Strawberry enum."""

@@ -43,7 +43,7 @@ from django_filters import (
     MultipleChoiceFilter,
     NumberFilter,
 )
-from django_filters.filterset import UnknownFieldBehavior
+from django_filters.filterset import BaseFilterSet, UnknownFieldBehavior
 from graphql import GraphQLError
 
 from django_strawberry_framework import DjangoType
@@ -58,6 +58,8 @@ from django_strawberry_framework.filters import (
 from django_strawberry_framework.filters.base import (
     _GLOBALID_RELATION_PK_ATTR,
     IntegerInFilter,
+    RelationPkFilter,
+    RelationPkMultipleFilter,
     _GlobalIDMultipleChoiceField,
 )
 from django_strawberry_framework.filters.inputs import convert_filter_to_input_annotation
@@ -1129,6 +1131,24 @@ def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build():
     assert "gt" in message
 
 
+def test_framework_raw_pk_relation_unsupported_lookup_raises_at_build():
+    """An ordering lookup on a non-Relay relation key fails at build and points at RelatedFilter."""
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class BookFilter(FilterSet):
+            class Meta:
+                model = library_models.Book
+                fields = {"shelf": ["gt"]}
+
+    message = str(exc_info.value)
+    assert "BookFilter" in message
+    assert "'shelf'" in message
+    assert "'gt'" in message
+    assert "primary key" in message
+    assert "RelatedFilter" in message
+    assert "SCALAR_MAP" not in message
+
+
 def test_related_filter_target_relay_relation_unsupported_lookup_raises_at_build():
     """A RelatedFilter target declaring an unsupported relay-relation lookup fails at build.
 
@@ -1651,7 +1671,7 @@ def test_honored_override_runs_outer_with_no_reserved_alias():
 
 
 def test_filter_for_field_picks_scalar_filter_for_non_relay_target():
-    """A non-Relay `DjangoType` target returns whatever upstream produced (not GlobalIDFilter)."""
+    """A non-Relay `DjangoType` target yields the raw-pk pair, typed from the target pk column."""
 
     class ShelfType(DjangoType):
         class Meta:
@@ -1671,11 +1691,15 @@ def test_filter_for_field_picks_scalar_filter_for_non_relay_target():
 
     field = library_models.Book._meta.get_field("shelf")
     resolved = BookFilter.filter_for_field(field, "shelf")
-    assert not isinstance(resolved, GlobalIDFilter)
+    assert isinstance(resolved, RelationPkFilter)
+    assert convert_filter_to_input_annotation(resolved, field) == (int | None)
+    resolved_in = BookFilter.filter_for_field(field, "shelf", "in")
+    assert isinstance(resolved_in, RelationPkMultipleFilter)
+    assert convert_filter_to_input_annotation(resolved_in, field) == (list[int] | None)
 
 
-def test_filter_for_field_returns_default_when_target_model_not_registered():
-    """No registered `DjangoType` for the target -> upstream default unchanged."""
+def test_filter_for_field_types_raw_pk_when_target_model_not_registered():
+    """No registered `DjangoType` for the target -> the raw-pk filter, typed from the pk column."""
 
     class BookFilter(FilterSet):
         class Meta:
@@ -1684,7 +1708,8 @@ def test_filter_for_field_returns_default_when_target_model_not_registered():
 
     field = library_models.Book._meta.get_field("shelf")
     resolved = BookFilter.filter_for_field(field, "shelf")
-    assert not isinstance(resolved, GlobalIDFilter)
+    assert isinstance(resolved, RelationPkFilter)
+    assert convert_filter_to_input_annotation(resolved, field) == (int | None)
 
 
 @pytest.mark.parametrize(
@@ -8305,6 +8330,8 @@ def test_reverse_o2o_relation_generation_uses_package_reverse_o2o_provider():
     django-filter selects the package table's ``OneToOneRel`` entry and calls
     ``_reverse_o2o_extra`` to build the choice queryset from the reverse relation. This
     pins coverage of the package-owned reverse-O2O provider (the rarest relation kind).
+    The generated leaf is then the raw-pk ``RelationPkFilter`` (no ``DjangoType`` exposes
+    ``MembershipCard`` here), which drops the model-choice ``queryset`` kwarg.
     """
 
     class PatronFilter(FilterSet):
@@ -8312,9 +8339,12 @@ def test_reverse_o2o_relation_generation_uses_package_reverse_o2o_provider():
             model = library_models.Patron
             fields = {"card": ["exact"]}
 
+    field = library_models.Patron._meta.get_field("card")
+    _, params = BaseFilterSet.filter_for_lookup.__func__(PatronFilter, field, "exact")
+    assert params["queryset"].model is library_models.MembershipCard
     leaf = PatronFilter.get_filters()["card"]
-    assert isinstance(leaf, ModelChoiceFilter)
-    assert leaf.field.queryset.model is library_models.MembershipCard
+    assert isinstance(leaf, RelationPkFilter)
+    assert "queryset" not in leaf.extra
 
 
 def test_replacement_shadow_does_not_contaminate_other_filtersets():

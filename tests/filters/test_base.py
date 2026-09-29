@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from apps.library import models
 from django.core.exceptions import ValidationError
-from django.http import QueryDict
+from django.http import HttpRequest, QueryDict
 from graphql import GraphQLError
 from strawberry import relay
 
@@ -42,10 +42,13 @@ from django_strawberry_framework.filters.base import (
     _GLOBALID_RELATION_PK_ATTR,
     IntegerInFilter,
     IntegerRangeFilter,
+    RelationPkFilter,
+    RelationPkMultipleFilter,
     _accepted_globalid_type_names,
     _decode_and_validate_global_id,
     _relation_uses_non_pk_to_field,
     _target_definition_for,
+    relation_identity_column,
     resolve_globalid_target_definition,
 )
 from django_strawberry_framework.registry import registry
@@ -1605,3 +1608,135 @@ def test_decode_global_id_hostile_repr_still_raises_the_coded_error():
         _decode_and_validate_global_id(Hostile(), GlobalIDFilter(field_name="id"))
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
     assert "unprintable" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Raw-primary-key relation filters (non-Relay targets)
+# ---------------------------------------------------------------------------
+
+
+def test_relation_identity_column_follows_a_relation_valued_primary_key():
+    """A target whose own key is a one-to-one types by the column that key points at.
+
+    ``Annotation.profile`` targets ``PatronProfile``, whose primary key IS its
+    ``patron`` one-to-one, so the raw identity is ``Patron.id``.
+    """
+    column = relation_identity_column(models.Annotation._meta.get_field("profile"))
+    assert column is models.Patron._meta.pk
+
+
+def test_relation_identity_column_is_none_without_a_resolved_relation():
+    """A plain column, and a relation with no resolved target model, have no identity column."""
+    from types import SimpleNamespace
+
+    assert relation_identity_column(models.Book._meta.get_field("title")) is None
+    assert relation_identity_column(SimpleNamespace(is_relation=True, related_model=None)) is None
+
+
+@pytest.mark.django_db
+def test_relation_pk_filters_generated_for_non_pk_to_field_match_by_target_pk():
+    """A raw-pk ``favorite_genre`` key (FK on ``to_field="name"``) matches the genre's pk.
+
+    No ``DjangoType`` exposes ``Genre`` here, so both leaves are raw-pk filters carrying
+    the pk-qualification marker; the value is the target's primary key, never its
+    ``name``.
+    """
+    alpha, beta, _gamma = _seed_favorite_genre_profiles("ALPHA", "BETA", "GAMMA")
+
+    class ProfileFilter(FilterSet):
+        class Meta:
+            model = models.PatronProfile
+            fields = {"favorite_genre": ["exact", "in"]}
+
+    exact_leaf = ProfileFilter.base_filters["favorite_genre"]
+    in_leaf = ProfileFilter.base_filters["favorite_genre__in"]
+    assert isinstance(exact_leaf, RelationPkFilter)
+    assert isinstance(in_leaf, RelationPkMultipleFilter)
+    assert getattr(exact_leaf, _GLOBALID_RELATION_PK_ATTR) is True
+    assert getattr(in_leaf, _GLOBALID_RELATION_PK_ATTR) is True
+
+    def codes(data):
+        filterset = ProfileFilter(
+            data=data,
+            queryset=models.PatronProfile.objects.order_by("postal_code"),
+            request=HttpRequest(),
+        )
+        return list(filterset.qs.values_list("postal_code", flat=True))
+
+    assert codes({"favorite_genre": alpha.pk}) == ["ALPHA-zip"]
+    assert codes({"favorite_genre__in": [alpha.pk, beta.pk]}) == ["ALPHA-zip", "BETA-zip"]
+
+
+@pytest.mark.django_db
+def test_relation_pk_filters_drop_a_value_the_target_column_cannot_hold():
+    """An uncoercible key identifies no row: ``exact`` matches nothing, ``in`` drops it.
+
+    The GraphQL scalar rejects such a value at the wire, so only a direct caller reaches
+    this; the verdict is still "no row", never django-filter's empty-value skip.
+    """
+    branch = models.Branch.objects.create(name="Home", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    models.Book.objects.create(title="Kept", shelf=shelf)
+
+    class BookShelfFilter(FilterSet):
+        class Meta:
+            model = models.Book
+            fields = {"shelf": ["exact", "in"]}
+
+    def titles(data):
+        filterset = BookShelfFilter(
+            data=data,
+            queryset=models.Book.objects.order_by("id"),
+            request=HttpRequest(),
+        )
+        return list(filterset.qs.values_list("title", flat=True))
+
+    assert titles({"shelf": "not-a-pk"}) == []
+    assert titles({"shelf__in": ["not-a-pk"]}) == []
+    assert titles({"shelf__in": ["not-a-pk", shelf.pk]}) == ["Kept"]
+
+
+@pytest.mark.django_db
+def test_relation_pk_list_field_skips_existence_checks_and_rejects_a_non_list():
+    """The list form field accepts a pk no row carries, and refuses a scalar with a coded error.
+
+    django-filter's ``ModelMultipleChoiceField`` answered "Select a valid choice" for the
+    missing pk, which told it apart from a pk the target's ``get_queryset`` hides.
+    """
+
+    class BookGenreFilter(FilterSet):
+        class Meta:
+            model = models.Book
+            fields = {"genres": ["exact"]}
+
+    def form(data):
+        return BookGenreFilter(
+            data=data,
+            queryset=models.Book.objects.all(),
+            request=HttpRequest(),
+        ).form
+
+    missing = form({"genres": [987654]})
+    assert missing.is_valid(), missing.errors
+    assert missing.cleaned_data["genres"] == [987654]
+    scalar = form({"genres": "5"})
+    assert not scalar.is_valid()
+    assert scalar.errors.as_data()["genres"][0].code == "invalid_list"
+
+
+@pytest.mark.django_db
+def test_unbound_relation_pk_filters_apply_the_value_uncoerced():
+    """A filter with no parent filterset has no model to read a column from: value as given."""
+    branch = models.Branch.objects.create(name="Home", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    other = models.Shelf.objects.create(code="B-2", topic="general", branch=branch)
+    models.Book.objects.create(title="Kept", shelf=shelf)
+    models.Book.objects.create(title="Other", shelf=other)
+    books = models.Book.objects.order_by("id")
+
+    single = RelationPkFilter(field_name="shelf", lookup_expr="exact")
+    many = RelationPkMultipleFilter(field_name="shelf", lookup_expr="in")
+    assert list(single.filter(books, shelf.pk).values_list("title", flat=True)) == ["Kept"]
+    assert list(many.filter(books, [other.pk]).values_list("title", flat=True)) == ["Other"]
+    assert single.filter(books, None) is books
+    assert many.filter(books, None) is books

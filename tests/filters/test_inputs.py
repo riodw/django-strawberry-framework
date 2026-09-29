@@ -41,6 +41,7 @@ from django_strawberry_framework.filters import (
     _helper_referenced_filtersets,
     filter_input_type,
 )
+from django_strawberry_framework.filters.base import RelationPkFilter, RelationPkMultipleFilter
 from django_strawberry_framework.filters.inputs import (
     _FILTER_INPUT_KIND_TYPES,
     INPUTS_MODULE_PATH,
@@ -1067,6 +1068,37 @@ def test_filter_convert_and_normalize_ride_shared_kind_table():
     exc = _unexpected_filter_dispatch(object())
     assert isinstance(exc, ConfigurationError)
     assert "internal: filter input dispatch" in str(exc)
+
+
+def test_convert_raw_pk_relation_filters_type_from_the_target_key_column():
+    """The raw-pk pair types from the target key column, through a one-to-one primary key.
+
+    ``Annotation.profile`` targets ``PatronProfile``, whose key is its ``patron``
+    one-to-one: the input is ``Patron.id``'s ``Int`` (a list for the multi-valued class).
+    """
+    relation = library_models.Annotation._meta.get_field("profile")
+    single = RelationPkFilter(field_name="profile", lookup_expr="exact")
+    many = RelationPkMultipleFilter(field_name="profile", lookup_expr="in")
+    assert convert_filter_to_input_annotation(single, relation) == (int | None)
+    assert convert_filter_to_input_annotation(many, relation) == (list[int] | None)
+    assert normalize_input_value(many, (3, 4)) == [3, 4]
+    with pytest.raises(ConfigurationError, match="primary-key list"):
+        normalize_input_value(many, 3)
+
+
+def test_convert_raw_pk_filter_on_a_non_relation_names_the_leaf_and_related_filter():
+    """A raw-pk filter whose ``field_name`` is not a relation fails at input build.
+
+    The message names the leaf and points at ``RelatedFilter``, never at ``SCALAR_MAP``.
+    """
+    leaf = RelationPkFilter(field_name="title", lookup_expr="exact")
+    with pytest.raises(ConfigurationError) as exc_info:
+        convert_filter_to_input_annotation(leaf, library_models.Book._meta.get_field("title"))
+    message = str(exc_info.value)
+    assert "RelationPkFilter" in message
+    assert "'title'" in message
+    assert "RelatedFilter" in message
+    assert "SCALAR_MAP" not in message
 
 
 def test_normalize_input_value_typed_filter_unwraps_none_enum_value():

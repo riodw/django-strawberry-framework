@@ -26,6 +26,7 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     RelatedFilter,
 )
+from django_strawberry_framework.filters.base import RelationPkFilter, RelationPkMultipleFilter
 from django_strawberry_framework.filters.factories import (
     _RESERVED_FACTORY_KEYS,
     FilterArgumentsFactory,
@@ -327,30 +328,37 @@ def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_relay_t
 
 @pytest.mark.django_db
 def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_relay_target():
-    """A non-Relay target -> runtime filter is upstream's default (NumberFilter for PK FK)."""
+    """A non-Relay target -> raw-pk runtime filters and a pk-typed input bag.
+
+    ``Shelf`` is exposed by a non-Relay ``DjangoType``, so the ``shelf`` key filters by
+    the shelf's primary key: ``RelationPkFilter`` for ``exact`` and
+    ``RelationPkMultipleFilter`` for ``in``, and the built input types them from the
+    target's ``AutoField`` column (``Int`` / ``[Int!]``), never a model-choice shape.
+    """
 
     class ShelfTypeNon(DjangoType):
         class Meta:
             model = library_models.Shelf
 
-    class ShelfFilterNon(FilterSet):
-        class Meta:
-            model = library_models.Shelf
-            fields = {"code": ["exact"]}
-
     class BookFilterNon(FilterSet):
-        shelf = RelatedFilter(ShelfFilterNon, field_name="shelf")
-
         class Meta:
             model = library_models.Book
-            fields = {"title": ["exact"]}
+            fields = {"title": ["exact"], "shelf": ["exact", "in"]}
 
     field = library_models.Book._meta.get_field("shelf")
-    runtime_filter = BookFilterNon.filter_for_field(field, "shelf")
-    # Non-Relay target -> upstream default (NOT GlobalIDFilter).
-    from django_strawberry_framework.filters import GlobalIDFilter
+    assert isinstance(BookFilterNon.filter_for_field(field, "shelf"), RelationPkFilter)
+    assert isinstance(
+        BookFilterNon.filter_for_field(field, "shelf", "in"),
+        RelationPkMultipleFilter,
+    )
 
-    assert not isinstance(runtime_filter, GlobalIDFilter)
+    input_cls = FilterArgumentsFactory(BookFilterNon).arguments
+    fields = {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    bag_annotation = fields["shelf"].type_annotation.annotation
+    (bag_cls,) = [arg for arg in get_args(bag_annotation) if arg is not type(None)]
+    bag = {f.python_name: f for f in bag_cls.__strawberry_definition__.fields}
+    assert bag["exact"].type_annotation.annotation == (int | None)
+    assert bag["in_"].type_annotation.annotation == (list[int] | None)
 
 
 # ---------------------------------------------------------------------------

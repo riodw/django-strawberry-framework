@@ -99,6 +99,8 @@ from .base import (
     ListFilter,
     RangeFilter,
     RelatedFilter,
+    RelationPkFilter,
+    RelationPkMultipleFilter,
     _relation_uses_non_pk_to_field,
 )
 from .inputs import (
@@ -190,9 +192,10 @@ def _lookups_for_field(model_field: ModelField | None) -> list[str]:
 # ``ModelChoiceField`` / ``ModelMultipleChoiceField``). Upstream's relation
 # defaults stamp them into ``extra`` (``queryset`` + ``to_field_name`` per
 # ``FILTER_FOR_DBFIELD_DEFAULTS``; ``empty_label`` / ``null_label`` /
-# ``null_value`` ride along on single-valued relations). The Relay-aware
-# GlobalID replacements back onto plain ``CharField`` /
-# ``_GlobalIDMultipleChoiceField`` form fields, which reject every one of
+# ``null_value`` ride along on single-valued relations). The package relation
+# replacements (GlobalID and raw-pk) back onto plain ``CharField`` / ``Field`` /
+# ``_GlobalIDMultipleChoiceField`` / ``_RelationIdentityListField`` form
+# fields, which reject every one of
 # these at ``Field.__init__`` -- forwarding them crashes form-field
 # construction before any predicate can run.
 _MODEL_CHOICE_ONLY_EXTRAS = frozenset(
@@ -206,15 +209,27 @@ _MODEL_CHOICE_ONLY_EXTRAS = frozenset(
 )
 
 
+# The package primitives a relation key in ``Meta.fields`` is converted to: the
+# GlobalID pair for a Relay-node target, the raw-primary-key pair otherwise. A
+# relation leaf whose generated filter is one of these is rebuilt by
+# ``FilterSet.filter_for_field`` as a ``package_replacement``.
+_RELATION_IDENTITY_FILTER_CLASSES: tuple[type[Filter], ...] = (
+    GlobalIDFilter,
+    GlobalIDMultipleChoiceFilter,
+    RelationPkFilter,
+    RelationPkMultipleFilter,
+)
+
+
 def _strip_model_choice_extras(extra: Mapping[str, object]) -> dict[str, object]:
     """Return ``extra`` without the model-choice-only constructor kwargs.
 
-    Used by both flat GlobalID replacement sites (``FilterSet.filter_for_field``'s
-    Relay-relation branch and ``FilterSet.filter_for_lookup``'s relation return)
-    when a model-choice default is swapped for a GlobalID filter class whose form
-    field cannot accept model-choice kwargs. GlobalID decode + type validation
-    replace the model-choice ``queryset`` membership check, so dropping the
-    kwargs loses no validation.
+    Used by both flat relation replacement sites (``FilterSet.filter_for_field``'s
+    relation branch and ``FilterSet.filter_for_lookup``'s relation return) when a
+    model-choice default is swapped for a GlobalID or raw-pk filter class whose form
+    field cannot accept model-choice kwargs. Dropping the model-choice ``queryset``
+    membership check is deliberate: it validated existence against the target's
+    default manager, which tells a missing row from one ``get_queryset`` hides.
     """
     return {key: value for key, value in extra.items() if key not in _MODEL_CHOICE_ONLY_EXTRAS}
 
@@ -656,6 +671,8 @@ _MULTIPLE_CHOICE_PROFILE = _FilterFamilyProfile("multiple_choice")
 _MODEL_MULTIPLE_CHOICE_PROFILE = _FilterFamilyProfile("model_multiple_choice")
 _GLOBALID_PROFILE = _FilterFamilyProfile("globalid")
 _GLOBALID_MULTIPLE_PROFILE = _FilterFamilyProfile("globalid_multiple")
+_RELATION_PK_PROFILE = _FilterFamilyProfile("relation_pk")
+_RELATION_PK_MULTIPLE_PROFILE = _FilterFamilyProfile("relation_pk_multiple")
 
 # Every distinct family identity, in a stable order -- the CLOSED set a registered class or
 # a structurally-recognized dynamic CSV class may resolve to. The structurally-recognized
@@ -670,6 +687,8 @@ _ALL_FAMILY_PROFILES: tuple[_FilterFamilyProfile, ...] = (
     _MODEL_MULTIPLE_CHOICE_PROFILE,
     _GLOBALID_PROFILE,
     _GLOBALID_MULTIPLE_PROFILE,
+    _RELATION_PK_PROFILE,
+    _RELATION_PK_MULTIPLE_PROFILE,
 )
 
 
@@ -687,6 +706,9 @@ _FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
         # Package Relay-GlobalID relation families.
         GlobalIDMultipleChoiceFilter: _GLOBALID_MULTIPLE_PROFILE,
         GlobalIDFilter: _GLOBALID_PROFILE,
+        # Package raw-primary-key relation families (the non-Relay target siblings).
+        RelationPkMultipleFilter: _RELATION_PK_MULTIPLE_PROFILE,
+        RelationPkFilter: _RELATION_PK_PROFILE,
         # Package typed sequence / integer families. Their effective ``.filter``
         # (including a consumer ``method=`` install that swaps in a custom
         # ``FilterMethod``) is signed by the core descriptor pair; a set ``method``
@@ -1552,8 +1574,10 @@ class FilterSet(
         `relay.Node` produces `GlobalIDMultipleChoiceFilter` for
         multi-valued relations (M2M / reverse FK / reverse M2M) and
         `GlobalIDFilter` for single-valued relations (forward FK /
-        OneToOne); non-Relay targets and non-relation fields defer to the
-        upstream default unchanged.
+        OneToOne); a non-Relay target, or a model no `DjangoType` exposes,
+        produces the raw-primary-key pair `RelationPkMultipleFilter` /
+        `RelationPkFilter` on the same cardinality split. Non-relation
+        fields defer to the upstream default unchanged.
 
         Own-PK branch (spec-027 Decision 4): when ``field`` is the
         owning model's primary key AND the owning ``DjangoType`` itself
@@ -1595,26 +1619,24 @@ class FilterSet(
         )
         effective_origin = default_origin
         # A consumer ``filter_for_lookup`` override owns the wire shape when
-        # this package would otherwise apply its Relay conversion. Scalar
-        # overrides intentionally retain the framework-origin stamp: the class
-        # capability gate still refuses optimization, while the candidate row
-        # remains available for the fail-closed metadata contract.
+        # this package would otherwise apply its identity conversion (the
+        # own-PK GlobalID, or a relation key's GlobalID / raw-pk primitive).
+        # Scalar overrides intentionally retain the framework-origin stamp: the
+        # class capability gate still refuses optimization, while the candidate
+        # row remains available for the fail-closed metadata contract.
         lookup_seam_overridden = (
             getattr(cls.filter_for_lookup, "__func__", None)
             is not cast("MethodType", FilterSet.filter_for_lookup).__func__
         )
-        relation_target = (
-            cls._resolve_relation_target_type(field, field_name)
-            if getattr(field, "is_relation", False)
-            else None
-        )
-        relay_policy_field = cls._is_own_pk_under_relay_owner(field) or (
-            relation_target is not None and implements_relay_node(relation_target)
+        identity_policy_field = cls._is_own_pk_under_relay_owner(field) or getattr(
+            field,
+            "is_relation",
+            False,
         )
         if (
             effective_origin == "framework_default"
             and lookup_seam_overridden
-            and relay_policy_field
+            and identity_policy_field
         ):
             effective_origin = "override_generated"
         framework_added_distinct = (
@@ -1680,42 +1702,39 @@ class FilterSet(
             )
             _stamp(own_pk_replacement, "package_replacement")
             return own_pk_replacement
-        target_type = cls._resolve_relation_target_type(field, field_name)
-        if target_type is None or not implements_relay_node(target_type):
-            return default
-        if default.lookup_expr == "isnull":
-            # A relation null test stays the upstream Boolean, mirroring the own-PK
-            # ``isnull`` pass-through above. ``filter_for_lookup`` already kept the
-            # ``BooleanField`` default, so ``default`` is correctly shaped and already
-            # stamped ``framework_default``; converting it would emit a GlobalID-shaped
-            # input for a null test (a LIST on the multi-valued side) that raises at
-            # bind. No ``__pk`` marker applies -- a Boolean never reads it. The Boolean
-            # leaf stays eligible for the correlated-``EXISTS`` adapter exactly like any
-            # non-Relay to-many ``isnull`` (the adapter compiles the null semantics
-            # inside the pk-correlated inner root, row-preservingly).
+        if not getattr(field, "is_relation", False) or not isinstance(
+            default,
+            _RELATION_IDENTITY_FILTER_CLASSES,
+        ):
+            # A non-relation leaf, or a relation null test: ``filter_for_lookup``
+            # kept the upstream ``BooleanField`` default for ``isnull``, mirroring the
+            # own-PK ``isnull`` pass-through above, so ``default`` is correctly shaped
+            # and already stamped ``framework_default``. No ``__pk`` marker applies --
+            # a Boolean never reads it. The Boolean leaf stays eligible for the
+            # correlated-``EXISTS`` adapter exactly like any to-many ``isnull`` (the
+            # adapter compiles the null semantics inside the pk-correlated inner root,
+            # row-preservingly).
             return default
         # Preserve the lookup-aware class ``filter_for_lookup`` already chose rather
         # than independently reselecting by cardinality.
         # ``super().filter_for_field`` builds ``default`` from the class OUR
-        # ``filter_for_lookup`` returned for this (field, lookup) pair, and control
-        # only reaches here once ``field`` is confirmed a Relay-node relation, so
-        # ``type(default)`` is already the correct Relay primitive:
-        # ``GlobalIDMultipleChoiceFilter`` for an ``in`` lookup (a forward FK ``in``
-        # is list-shaped over the wire) and the cardinality-selected class
-        # (``GlobalIDFilter`` / ``GlobalIDMultipleChoiceFilter``) for every other
-        # lookup. Re-calling ``_relay_filter_class_for_field`` dropped a forward-FK
-        # ``in`` back to the scalar ``GlobalIDFilter`` and rejected the list.
-        relay_filter_class = type(default)
-        relay_replacement = relay_filter_class(
+        # ``filter_for_lookup`` returned for this (field, lookup) pair, so
+        # ``type(default)`` is already the correct identity primitive: the
+        # list-shaped class for an ``in`` lookup (a forward FK ``in`` is list-shaped
+        # over the wire) and the cardinality-selected class for every other lookup,
+        # a GlobalID one for a Relay-node target and a raw-pk one otherwise.
+        # Re-selecting by cardinality alone dropped a forward-FK ``in`` back to the
+        # scalar class and rejected the list.
+        identity_replacement = type(default)(
             field_name=default.field_name,
             lookup_expr=default.lookup_expr,
             distinct=requires_distinct,
             **_strip_model_choice_extras(default.extra),
         )
-        _stamp(relay_replacement, "package_replacement")
+        _stamp(identity_replacement, "package_replacement")
         # A forward FK/O2O bound on a NON-pk ``to_field`` stores and joins on that
-        # ``to_field`` column, but a Relay GlobalID carries the target's PK. Set the
-        # BOOLEAN pk-qualification flag so the GlobalID filter DERIVES the
+        # ``to_field`` column, but a Relay GlobalID and a raw-pk leaf both carry the
+        # target's PK. Set the BOOLEAN pk-qualification flag so the filter DERIVES the
         # ``<relation>__pk`` path from its LIVE ``field_name`` at filter time (see
         # ``base.py::_relation_uses_non_pk_to_field`` / ``_GLOBALID_RELATION_PK_ATTR``).
         # A boolean (not a frozen absolute path) survives ``_expand_related_filter``'s
@@ -1724,8 +1743,8 @@ class FilterSet(
         # common FK-to-pk / M2M / reverse case is not marked and keeps the raw
         # ``{field_name__lookup_expr: node_id}`` predicate byte-identical.
         if _relation_uses_non_pk_to_field(field):
-            setattr(relay_replacement, _GLOBALID_RELATION_PK_ATTR, True)
-        return relay_replacement
+            setattr(identity_replacement, _GLOBALID_RELATION_PK_ATTR, True)
+        return identity_replacement
 
     @classmethod
     def _generation_origin_for_field(
@@ -1913,7 +1932,9 @@ class FilterSet(
         (own-PK branch per spec-027 Decision 4). For relation fields a
         Relay-Node-shaped target maps to a ``(GlobalIDFilter, params)``
         pair (or ``GlobalIDMultipleChoiceFilter`` for multi-valued
-        relations); a non-Relay target passes the upstream return through.
+        relations); a non-Relay target, or a model no ``DjangoType``
+        exposes, maps to the raw-primary-key pair (``RelationPkFilter`` /
+        ``RelationPkMultipleFilter``) on the same split.
 
         Ownership is decided FIRST: a consumer-selected relation override
         (``Meta.filter_overrides`` or a shadowed ``FILTER_DEFAULTS``) is
@@ -1923,14 +1944,14 @@ class FilterSet(
         framework default (``_generation_origin_for_field(...) ==
         "framework_default"``)::
 
-            exact  -> GlobalIDFilter / GlobalIDMultipleChoiceFilter by cardinality
-            in     -> GlobalIDMultipleChoiceFilter (a list of GlobalIDs)
-            isnull -> upstream BooleanFilter (a null test is never a GlobalID)
+            exact  -> scalar / list identity class by cardinality
+            in     -> list identity class (a list of GlobalIDs or primary keys)
+            isnull -> upstream BooleanFilter (a null test is never an identity)
             other  -> ConfigurationError at generation time
 
-        A GlobalID carries no ordering / pattern / range semantics, so any
-        lookup outside ``{exact, in, isnull}`` on a framework-owned Relay
-        relation is a corrupt wire shape rejected here at build time -- never
+        An identity carries no ordering / pattern / range semantics, so any
+        lookup outside ``{exact, in, isnull}`` on a framework-owned relation
+        key is a corrupt wire shape rejected here at build time -- never
         a resolver-time Django ``FieldError`` -- mirroring the own-PK branch
         above. Raising in this classmethod also covers
         ``filter_for_field``: ``super().filter_for_field`` calls
@@ -1986,15 +2007,12 @@ class FilterSet(
                 # as a raw ``OverflowError``. Sibling of the ``in`` reroute above.
                 return IntegerRangeFilter, params
             return default_class, params
-        target_type = cls._resolve_relation_target_type(field, getattr(field, "name", None))
-        if target_type is None or not implements_relay_node(target_type):
-            return default_class, params
-        # Resolve OWNERSHIP before any Relay transformation. A
-        # consumer that selected its OWN relation filter -- via ``Meta.filter_overrides``
-        # or a shadowed class-level ``FILTER_DEFAULTS`` -- owns the wire shape under
-        # the plan's byte-for-byte rule; the framework must NOT silently replace that
-        # selection with a package GlobalID primitive. ``super().filter_for_lookup``
-        # already returned the consumer's class in ``default_class``, so returning it
+        # Resolve OWNERSHIP before any identity transformation. A consumer that
+        # selected its OWN relation filter -- via ``Meta.filter_overrides`` or a
+        # shadowed class-level ``FILTER_DEFAULTS`` -- owns the wire shape under the
+        # plan's byte-for-byte rule; the framework must NOT silently replace that
+        # selection with a package primitive. ``super().filter_for_lookup`` already
+        # returned the consumer's class in ``default_class``, so returning it
         # unchanged both preserves the consumer's filter AND keeps the leaf
         # consumer-origin (the ``_generation_origin_for_field`` oracle stamps
         # ``override_generated`` on ``filter_for_field``'s ``default``, so it is
@@ -2002,42 +2020,54 @@ class FilterSet(
         if cls._generation_origin_for_field(field, lookup_type) != "framework_default":
             return default_class, params
         if lookup_type == "isnull":
-            # A null test is a Boolean predicate, never a GlobalID, regardless of
+            # A null test is a Boolean predicate, never an identity, regardless of
             # relation cardinality. ``super().filter_for_lookup`` already selected the
-            # ``BooleanField`` default for ``isnull``; converting it to a GlobalID would
-            # emit a nonsensical GlobalID-shaped input for a null test (a LIST input on
-            # the multi-valued side) that raises ``ValueError`` at bind. Mirror the
-            # own-PK ``isnull`` pass-through; the branches below convert
-            # only the equality (``exact``) and membership (``in``) wire shapes.
+            # ``BooleanField`` default for ``isnull``; converting it would emit an
+            # identity-shaped input for a null test (a LIST input on the multi-valued
+            # side) that raises at bind. Mirror the own-PK ``isnull`` pass-through;
+            # the branches below convert only the equality (``exact``) and membership
+            # (``in``) wire shapes.
             return default_class, params
+        # The identity a relation key filters by: a GlobalID when the owner-aware
+        # target type is a Relay node, otherwise the raw target primary key. The raw
+        # pair also covers a target model no ``DjangoType`` exposes, and replaces
+        # django-filter's model-choice default, whose ``ModelChoiceField`` would
+        # validate existence against the target's default manager (an existence
+        # oracle for rows ``get_queryset`` hides) and has no GraphQL input shape.
+        target_type = cls._resolve_relation_target_type(field, getattr(field, "name", None))
+        relay_target = target_type is not None and implements_relay_node(target_type)
+        many_side = is_many_side_relation_kind(relation_kind(field))
         if lookup_type == "in":
-            # A relay-relation ``in`` lookup consumes a LIST of GlobalIDs, so it must
-            # keep the multi-choice primitive regardless of relation cardinality -- a
-            # forward, single-valued FK ``in`` is still list-shaped over the wire
-            # This mirrors the own-PK ``in`` branch above; a
-            # cardinality-only reselection dropped a forward-FK ``in`` back to the
-            # scalar ``GlobalIDFilter`` and rejected the list at decode time. Relation
-            # cardinality still decides every non-``in`` (exact) shape below.
-            return GlobalIDMultipleChoiceFilter, _strip_model_choice_extras(params)
+            # A relation ``in`` lookup consumes a LIST of identities, so it keeps the
+            # list-shaped primitive regardless of relation cardinality -- a forward,
+            # single-valued FK ``in`` is still list-shaped over the wire. This mirrors
+            # the own-PK ``in`` branch above; a cardinality-only reselection dropped a
+            # forward-FK ``in`` back to the scalar class and rejected the list.
+            list_class = GlobalIDMultipleChoiceFilter if relay_target else RelationPkMultipleFilter
+            return list_class, _strip_model_choice_extras(params)
         if lookup_type == "exact":
-            # The only remaining GlobalID wire shape: equality on a single
-            # GlobalID, cardinality-selected (``GlobalIDFilter`` for a forward
-            # FK / O2O, ``GlobalIDMultipleChoiceFilter`` for a many-side relation).
-            return cls._relay_filter_class_for_field(field), _strip_model_choice_extras(params)
-        # Exhaustive classification: a PROVEN framework-default
-        # Relay relation supports ONLY ``exact`` / ``in`` / ``isnull`` (handled above).
-        # Any other lookup -- pattern (``icontains``), ordering (``gt`` / ``lt``),
-        # range -- has no GlobalID semantics, so converting it to a GlobalID wire
-        # shape emits an input that fails only when the query executes (a Django
-        # ``FieldError`` such as "Unsupported lookup 'icontains' for ForeignKey").
-        # Reject it here at generation time, mirroring the own-PK branch above. This
-        # also fails ``filter_for_field`` closed: ``super().filter_for_field`` calls
-        # this classmethod, so the raise propagates before a corrupt leaf is built.
+            # Equality on one identity, cardinality-selected: the scalar class for a
+            # forward FK / O2O / reverse O2O, the list class for a many-side relation.
+            if relay_target:
+                return cls._relay_filter_class_for_field(field), _strip_model_choice_extras(params)
+            pk_class = RelationPkMultipleFilter if many_side else RelationPkFilter
+            return pk_class, _strip_model_choice_extras(params)
+        # Exhaustive classification: a PROVEN framework-default relation key
+        # supports ONLY ``exact`` / ``in`` / ``isnull`` (handled above). Any other
+        # lookup -- pattern (``icontains``), ordering (``gt`` / ``lt``), range --
+        # has no identity semantics, so converting it emits an input that fails only
+        # when the query executes (a Django ``FieldError`` such as "Unsupported
+        # lookup 'icontains' for ForeignKey"). Reject it here at generation time,
+        # mirroring the own-PK branch above. This also fails ``filter_for_field``
+        # closed: ``super().filter_for_field`` calls this classmethod, so the raise
+        # propagates before a corrupt leaf is built.
         field_name = getattr(field, "name", "<relation>")
+        identity = "a GlobalID" if relay_target else "the related row's primary key"
         raise ConfigurationError(
             f"{cls.__name__}: lookup {lookup_type!r} is not supported on the "
-            f"GlobalID relation {field_name!r}; a GlobalID relation supports "
-            "only 'exact', 'in', and 'isnull'. Remove it from Meta.fields.",
+            f"relation key {field_name!r} in Meta.fields; a relation key filters by "
+            f"{identity} and supports only 'exact', 'in', and 'isnull'. Filter on the "
+            "related row's own fields through a RelatedFilter instead.",
         )
 
     @classmethod
@@ -2098,11 +2128,10 @@ class FilterSet(
 
         Consults `_owner_definition.related_target_for(...)` when the
         finalizer phase-2.5 binding has landed; otherwise falls back to
-        `registry.get(field.related_model)`. Non-relation fields
-        return `None`.
+        `registry.get(field.related_model)`. The caller
+        (`filter_for_lookup`) passes relation fields only; a field with no
+        `related_model` resolves to `None`.
         """
-        if not getattr(field, "is_relation", False):
-            return None
         owner = cls._owner_definition
         if owner is not None and field_name is not None:
             # Owner-aware path (finalizer phase-2.5 binding has landed): resolve

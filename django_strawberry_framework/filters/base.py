@@ -11,6 +11,9 @@ five parity-floor primitives (spec-027 Decision 4):
 - `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`: ports of the matching
   Graphene primitive with the decode step substituted to
   `strawberry.relay.GlobalID.from_id(value)` per spec-027 Decision 4.
+- `RelationPkFilter` / `RelationPkMultipleFilter`: their raw-primary-key
+  siblings for a relation key whose target is not a Relay node (or has no
+  `DjangoType`), typed and coerced through `relation_identity_column`.
 - `LazyRelatedClassMixin`: re-exported from the package-root
   `sets_mixins` module (shared with the future order / aggregate sets);
   imported here so `RelatedFilter` and the `filters` public surface keep
@@ -251,7 +254,9 @@ def _globalid_multiple_choice_values(value: object) -> list[object]:
 
 # Private instance-attribute slot a generated GlobalID RELATION filter carries a
 # BOOLEAN flag under, set ``True`` when, and only when, its forward FK/O2O binds
-# on a NON-pk ``to_field``. ``filter_for_field`` stamps the flag via
+# on a NON-pk ``to_field``. The raw-pk siblings (``RelationPkFilter`` /
+# ``RelationPkMultipleFilter``) carry the same flag, because their value is the
+# target's primary key too. ``filter_for_field`` stamps the flag via
 # ``_relation_uses_non_pk_to_field``; ``GlobalIDFilter.filter`` /
 # ``GlobalIDMultipleChoiceFilter.filter`` read it and DERIVE the pk-qualified path
 # ``f"{self.field_name}__pk"`` at filter time from the LIVE ``field_name``. Storing
@@ -1068,6 +1073,148 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         # single-value ``in`` (shared derivation, one home).
         pk_field_name = _marked_pk_field_name(self)
         return _apply_lookup_predicate(self, qs, node_ids, field_name=pk_field_name)
+
+
+def relation_identity_column(relation: object) -> ConcreteField | None:
+    """Return the concrete column that types and coerces a relation leaf's raw identity.
+
+    A relation key in ``Meta.fields`` whose target is not a Relay node filters by the
+    related row's primary key. The GraphQL input scalar and the value coercion both read
+    that key's column: ``relation.related_model._meta.pk``, followed through any
+    relation-valued primary key (a multi-table-inheritance child's parent link, a
+    one-to-one used as the key) down to the column that actually stores the value.
+    ``None`` for a non-relation, or a relation whose target is not a resolved model.
+    """
+    if not getattr(relation, "is_relation", False):
+        return None
+    related_model = getattr(relation, "related_model", None)
+    column = getattr(getattr(related_model, "_meta", None), "pk", None)
+    while isinstance(column, models.ForeignKey):
+        column = column.target_field
+    return column if isinstance(column, models.Field) else None
+
+
+def _relation_identity_column_for(filter_instance: Filter) -> ConcreteField | None:
+    """Resolve the bound filter's relation through its FilterSet model, then its identity column.
+
+    Reads the LIVE ``field_name`` against the owning filterset's model, the same walk
+    ``IntegerInFilter.filter`` uses, so an expanded leaf whose ``field_name`` was rebased
+    under a ``RelatedFilter`` prefix resolves the terminal relation. An unbound filter
+    (no parent filterset) has no model to walk and returns ``None``.
+    """
+    parent = getattr(filter_instance, "parent", None)
+    model = getattr(getattr(parent, "_meta", None), "model", None)
+    field_name = getattr(filter_instance, "field_name", None)
+    if model is None or not field_name:
+        return None
+    return relation_identity_column(get_model_field(model, field_name))
+
+
+def _coerce_relation_identity(filter_instance: Filter, value: object) -> object:
+    """Coerce one raw identity value through the target key column; ``None`` if it names no row.
+
+    A value the column cannot hold (out of range, wrong shape) identifies no row, the
+    same verdict ``_coerce_int_in_members`` gives an integer ``in`` member. An unbound
+    filter has no column and passes the value through unchanged.
+    """
+    column = _relation_identity_column_for(filter_instance)
+    if column is None:
+        return value
+    return coerce_field_value_or_none(column, value)
+
+
+class _RelationIdentityListField(Field):
+    """Form field for a list of raw relation identities: no choice set, no existence check.
+
+    django-filter's ``ModelMultipleChoiceField`` validates every member against the target
+    model's default manager, which answers "Select a valid choice" for a key that exists
+    nowhere and an empty match for one the target's ``get_queryset`` hides: an existence
+    oracle for hidden rows. This field only preserves the list; coercion happens in
+    ``RelationPkMultipleFilter.filter``, where a key that names no row simply matches
+    nothing, exactly as a GlobalID relation leaf treats it. Omission stays ``None`` (the
+    widget keeps an absent key distinct from ``[]``).
+    """
+
+    widget = _AbsentGlobalIDMultipleChoiceWidget
+
+    def to_python(self, value: object) -> list[object] | None:
+        """Return ``None`` for omission and a list for a list or tuple; reject anything else.
+
+        The rejection reuses ``MultipleChoiceField``'s ``invalid_list`` code, so a form
+        error reads the same as it does for django-filter's list-valued fields.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, (list, tuple)):
+            raise ValidationError("Enter a list of values.", code="invalid_list")
+        return list(value)
+
+
+class RelationPkFilter(Filter):
+    """Single raw-primary-key filter for a relation leaf whose target is not a Relay node.
+
+    The non-Relay sibling of ``GlobalIDFilter``: ``FilterSet.filter_for_lookup`` selects
+    it for ``exact`` on a single-valued relation (forward FK, one-to-one) when the target
+    type is not a Relay node or no ``DjangoType`` exposes the target model. The input is
+    the target's primary key typed from its column (``relation_identity_column``). The
+    form field is django-filter's plain ``Field``, never a ``ModelChoiceField``, so a key
+    for a missing row and one ``get_queryset`` hides are indistinguishable: both reach the
+    predicate and match by value.
+    """
+
+    def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
+        """Coerce the key through the target column and apply one relation predicate.
+
+        ``None`` is omission. A key the column cannot hold identifies no row and matches
+        nothing (every row under ``exclude``), never django-filter's empty-value skip. A
+        forward relation bound on a non-pk ``to_field`` carries the
+        ``_GLOBALID_RELATION_PK_ATTR`` marker and compiles against ``<relation>__pk``,
+        so the value is always the target's primary key.
+        """
+        if value is None:
+            return qs
+        coerced = _coerce_relation_identity(self, value)
+        if coerced is None:
+            return _match_none_queryset(self, qs)
+        return _apply_lookup_predicate(self, qs, coerced, field_name=_marked_pk_field_name(self))
+
+
+class RelationPkMultipleFilter(Filter):
+    """List-valued raw-primary-key sibling of ``RelationPkFilter``.
+
+    Selected for ``in`` on any relation and for ``exact`` on a multi-valued one (reverse
+    FK, forward or reverse M2M) when the target is not a Relay node. The README membership
+    rules hold: every member is coerced through the target key column and a member that
+    names no row is dropped, an all-dropped list matches no rows, and an explicit ``[]``
+    matches nothing. Omission (``None``) is the no-constraint path.
+    """
+
+    field_class = _RelationIdentityListField
+
+    def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
+        """Coerce every member and apply ONE ``<relation>__in`` predicate over the survivors.
+
+        ``exact`` on a multi-valued relation and ``in`` on any relation both mean "related
+        to at least one of these rows", which a single ``__in`` over one join expresses
+        for both (and for its ``exclude`` complement). The non-pk ``to_field`` marker
+        qualifies the path with ``__pk`` exactly as on ``RelationPkFilter``.
+        """
+        if value is None:
+            return qs
+        members = _materialize_list_shaped_values(
+            value,
+            message="Invalid filter value: expected a list of primary keys.",
+            code=FILTER_INVALID_ERROR_CODE,
+        )
+        kept = [
+            coerced
+            for coerced in (_coerce_relation_identity(self, member) for member in members)
+            if coerced is not None
+        ]
+        if not kept:
+            return _match_none_queryset(self, qs)
+        field_name = _marked_pk_field_name(self) or self.field_name
+        return _apply_lookups(self, qs, {f"{field_name}__in": kept})
 
 
 def _filter_set_class() -> type[FilterSet]:

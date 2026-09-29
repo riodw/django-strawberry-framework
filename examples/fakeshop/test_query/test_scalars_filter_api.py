@@ -8,7 +8,10 @@ these tests exercise it on the INPUT side via the filtersets wired in
 counterpart to the library/products own-PK ``GlobalIDMultipleChoiceFilter``
 path. ``ScalarSpecimenFilter.tag`` (a ``RelatedFilter`` onto a type whose
 ``get_queryset`` filters ``active=True``) exercises related-branch
-visibility through a relation traversal. ``price_span`` is a declared
+visibility through a relation traversal. The self-referential ``parent`` /
+``children`` relation keys filter by raw ``Int`` specimen pks (the target type is
+not a Relay node): one pk or a list for the forward key, a list for the reverse
+one, with the README membership rules on every list. ``price_span`` is a declared
 ``RangeFilter`` on both specimen filtersets: its nested input type is scoped
 per owning filterset and the ``range`` lookup applies over the wire.
 """
@@ -196,4 +199,73 @@ def test_scalars_filter_by_price_span_range():
         }
         """,
         {"allScalarSpecimens": [{"label": "mid"}]},
+    )
+
+
+_BY_PARENT = """
+query ($filter: ScalarSpecimenFilterInputType) {
+  allScalarSpecimens(filter: $filter) {
+    label
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_scalars_filter_by_forward_fk_primary_key_exact_and_in():
+    """``parent`` takes one raw pk for ``exact`` and a list for ``in``; ``isNull`` stays Boolean."""
+    root_a = _seed_specimen("root-a")
+    root_b = _seed_specimen("root-b")
+    _seed_specimen("child-a", parent=root_a)
+    _seed_specimen("child-b", parent=root_b)
+
+    for filter_input, labels in (
+        ({"parent": {"exact": root_a.pk}}, ["child-a"]),
+        ({"parent": {"in": [root_a.pk, root_b.pk]}}, ["child-a", "child-b"]),
+        ({"parent": {"isNull": True}}, ["root-a", "root-b"]),
+    ):
+        _assert_graphql_data(
+            _BY_PARENT,
+            {"allScalarSpecimens": [{"label": label} for label in labels]},
+            variables={"filter": filter_input},
+        )
+
+
+@pytest.mark.django_db
+def test_scalars_forward_fk_primary_key_follows_the_membership_rules():
+    """A missing pk matches nothing, beside a real one it is dropped, and ``in: []`` is empty.
+
+    None of these is a validation error: the relation key never checks that the target
+    row exists, so a missing pk and one the caller cannot see answer alike.
+    """
+    root = _seed_specimen("root")
+    _seed_specimen("child", parent=root)
+    missing = root.pk + 1000
+
+    for filter_input, labels in (
+        ({"parent": {"exact": missing}}, []),
+        ({"parent": {"in": [missing]}}, []),
+        ({"parent": {"in": [missing, root.pk]}}, ["child"]),
+        ({"parent": {"in": []}}, []),
+    ):
+        _assert_graphql_data(
+            _BY_PARENT,
+            {"allScalarSpecimens": [{"label": label} for label in labels]},
+            variables={"filter": filter_input},
+        )
+
+
+@pytest.mark.django_db
+def test_scalars_filter_by_reverse_fk_primary_keys():
+    """``children`` (the reverse FK) takes a list of raw child pks."""
+    root_a = _seed_specimen("root-a")
+    root_b = _seed_specimen("root-b")
+    child_a = _seed_specimen("child-a", parent=root_a)
+    child_b = _seed_specimen("child-b", parent=root_b)
+    _seed_specimen("child-a2", parent=root_a)
+
+    _assert_graphql_data(
+        _BY_PARENT,
+        {"allScalarSpecimens": [{"label": "root-a"}, {"label": "root-b"}]},
+        variables={"filter": {"children": {"exact": [child_a.pk, child_b.pk]}}},
     )

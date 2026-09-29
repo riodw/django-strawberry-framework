@@ -1008,6 +1008,27 @@ class Query:
         return queryset
 
     @strawberry.field
+    def all_library_circulation_desks_filtered(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters.CirculationDeskFilter) | None = None,  # noqa: A002
+    ) -> list[CirculationDeskType]:
+        """Acceptance surface for the whole-set ``"__all__"`` filter sweep over every relation kind.
+
+        ``CirculationDeskFilter`` declares ``fields = "__all__"``, so its ``shelf`` and
+        ``contentType`` keys filter by the related row's primary key (``ShelfType`` is not
+        a Relay node and no ``DjangoType`` exposes ``ContentType``). The desk's own
+        ``get_queryset`` cascade runs first.
+        """
+        queryset = CirculationDeskType.get_queryset(
+            models.CirculationDesk.objects.order_by("id"),
+            info,
+        )
+        if filter is not None:
+            queryset = filters.CirculationDeskFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
     def all_library_books(
         self,
         info: strawberry.Info,

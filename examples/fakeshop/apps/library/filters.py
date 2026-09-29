@@ -40,7 +40,11 @@ def _validate_email_must_have_at_sign(value: str) -> None:
 
 
 class BranchFilter(FilterSet):
-    """Branch filterset bound to ``BranchType`` at finalize phase 2.5."""
+    """Branch filterset bound to ``BranchType`` at finalize phase 2.5.
+
+    ``alt_shelves`` is a relation key over a reverse many-to-many whose target
+    (``ShelfType``) is not a Relay node, so it filters by a list of shelf primary keys.
+    """
 
     shelves = RelatedFilter(
         "ShelfFilter",
@@ -54,11 +58,16 @@ class BranchFilter(FilterSet):
             "id": ["exact", "in"],
             "name": ["exact", "icontains"],
             "city": ["exact", "icontains"],
+            "alt_shelves": ["exact"],
         }
 
 
 class ShelfFilter(FilterSet):
-    """Shelf filterset bound to ``ShelfType`` at finalize phase 2.5."""
+    """Shelf filterset bound to ``ShelfType`` at finalize phase 2.5.
+
+    ``alt_branches`` is a relation key over a forward many-to-many whose target
+    (``BranchType``) is not a Relay node, so it filters by a list of branch primary keys.
+    """
 
     branch = RelatedFilter("BranchFilter", field_name="branch")
     books = RelatedFilter("BookFilter", field_name="books")
@@ -69,6 +78,7 @@ class ShelfFilter(FilterSet):
             "id": ["exact", "in"],
             "code": ["exact", "icontains"],
             "topic": ["exact", "icontains"],
+            "alt_branches": ["exact"],
         }
 
 
@@ -330,13 +340,20 @@ class BranchSignageFilter(FilterSet):
 
 
 class CirculationDeskFilter(FilterSet):
-    """Circulation-desk filterset bound to ``CirculationDeskType`` at finalize phase 2.5."""
+    """Circulation-desk filterset bound to ``CirculationDeskType`` at finalize phase 2.5.
+
+    The whole-set ``"__all__"`` sweep over the model carrying every relation kind: it
+    keeps the forward single-column relations (``shelf``, and ``content_type``, whose
+    target model no ``DjangoType`` exposes) as primary-key ``exact`` leaves and never
+    includes the many-to-many ``genres`` or a reverse relation. The declared ``branch``
+    ``RelatedFilter`` takes the place of the swept ``branch`` leaf.
+    """
 
     branch = RelatedFilter("BranchFilter", field_name="branch")
 
     class Meta:
         model = models.CirculationDesk
-        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
+        fields = "__all__"
 
 
 class DeskShiftFilter(FilterSet):

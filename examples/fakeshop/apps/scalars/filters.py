@@ -23,6 +23,13 @@ declares a custom ``get_queryset`` (``active=True``) -- so the related
 branch also exercises the ``get_queryset`` visibility hook through a
 relation traversal.
 
+``ScalarSpecimenFilter`` also names the self-referential relation itself: ``parent``
+(forward foreign key) takes one specimen primary key for ``exact`` and a list for ``in``,
+and ``children`` (its reverse) takes a list. ``ScalarSpecimenType`` is not a Relay node,
+so these relation keys filter by the raw ``Int`` primary key rather than a GlobalID. They
+are listed lookup by lookup: a per-field ``"__all__"`` would also ask for the ordering
+lookups a relation key does not support.
+
 ``price_span`` on both specimen filtersets is a declared ``RangeFilter``
 over the ``price`` column (the acceptance surface for per-filterset
 scoped range input names). ``Meta.fields`` ``price: "__all__"`` still
@@ -66,6 +73,8 @@ class ScalarSpecimenFilter(FilterSet):
             "external_id": "__all__",
             "signed_big": "__all__",
             "unsigned_big": "__all__",
+            "parent": ["exact", "in", "isnull"],
+            "children": ["exact"],
         }
 
 

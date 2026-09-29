@@ -1020,7 +1020,7 @@ def _candidate_metadata_for(
     )
 
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
 
     class _FilterSetMetaclassBase(filterset.FilterSetMetaclass):
         """The class attributes upstream's metaclass ``__new__`` sets on every class it builds.
